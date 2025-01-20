@@ -37,3 +37,11 @@ class Upload(UpdatableBaseModel, table=True):
         if isinstance(self.meta, dict):
             return DocumentMetadata(**self.meta)
         return DocumentMetadata()
+
+    def set_metadata(self, metadata: DocumentMetadata):
+        self.meta = metadata.model_dump()
+
+    def get_metadata(self) -> DocumentMetadata | None:
+        if isinstance(self.meta, dict):
+            return DocumentMetadata(**self.meta)
+        return DocumentMetadata()
