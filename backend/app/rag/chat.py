@@ -875,6 +875,7 @@ class ChatService:
             chat_params = {
                 "goal": goal,
                 "response_format": response_format,
+                "namespace_name": "Default",
             }
             res = requests.post(stream_chat_api_url, json=chat_params, stream=True)
 
