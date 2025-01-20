@@ -102,3 +102,7 @@ class IndexService:
         graph_store.close_session()
 
         return
+
+    def build_playbook_kg_index_for_chunk(self, session: Session, db_chunk: Type[DBChunk]):
+        pass
+    

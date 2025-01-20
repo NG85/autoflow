@@ -1,47 +1,19 @@
-name: tidb-ai
+name: aptsell
 
 services:
   redis:
     image: registry.cn-beijing.aliyuncs.com/pingcap-ee/redis:6.0.16
+    ports:
+      - "6379:6379"
     restart: always
     volumes:
-      - ./redis-data:/data
+      - /Users/gaona/redis-data:/data
     command: ["redis-server", "--loglevel", "warning"]
 
-  backend:
-    image: registry.cn-beijing.aliyuncs.com/pingcap-ee/tidb.ai-backend:0.4.0
-    restart: always
-    depends_on:
-      - redis
-    ports:
-      - "8000:80"
-    env_file:
-      - .env
-    volumes:
-      - ./data:/shared/data
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "6"
 
-  frontend:
-    image: registry.cn-beijing.aliyuncs.com/pingcap-ee/tidb.ai-frontend:0.4.0
-    restart: always
-    depends_on:
-      - backend
-    ports:
-      - 3000:3000
-    environment:
-      BASE_URL: http://backend
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "6"
 
   background:
-    image: registry.cn-beijing.aliyuncs.com/pingcap-ee/tidb.ai-backend:0.4.0
+    image: aptsell:local
     restart: always
     depends_on:
       - redis
@@ -50,33 +22,10 @@ services:
     env_file:
       - .env
     volumes:
-      - ./data:/shared/data
+      - /Users/gaona/data:/shared/data
     command: /usr/bin/supervisord
     logging:
       driver: json-file
       options:
         max-size: "50m"
         max-file: "6"
-
-  local-embedding-reranker:
-    image: registry.cn-beijing.aliyuncs.com/pingcap-ee/tidb.ai-local-embedding-reranker:v4-with-cache
-    ports:
-      - 5001:5001
-    environment:
-      - HF_ENDPOINT=https://hf-mirror.com
-      - PRE_LOAD_DEFAULT_EMBEDDING_MODEL=true
-      # If you want to pre-load the default reranker model, change the following environment to true
-      - PRE_LOAD_DEFAULT_RERANKER_MODEL=false
-      - TRANSFORMERS_OFFLINE=1
-    # volumes:
-    #  - ./local-embedding-reranker:/root/.cache/huggingface
-    # If you are using NVIDIA GPU, you can uncomment the following lines to enable GPU support
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
-    profiles:
-      - local-embedding-reranker

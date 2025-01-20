@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from typing import Generator, IO
 from pypdf import PdfReader
 
-from app.models import Document, Upload
+from app.models import Document, Upload, DocumentMetadata
 from app.file_storage import default_file_storage
 from app.types import MimeTypes
 from .base import BaseDataSource
@@ -49,6 +49,15 @@ class FileDataSource(BaseDataSource):
                 else:
                     content = f.read()
                     mime_type = upload.mime_type
+
+            if isinstance(upload.meta, list):
+                meta = [
+                    {**item, **upload.meta} if isinstance(item, dict) else item 
+                    for item in upload.meta
+                ]
+            else:
+                meta = upload.meta
+                
             document = Document(
                 name=upload.name,
                 hash=hash(content),
@@ -59,6 +68,7 @@ class FileDataSource(BaseDataSource):
                 user_id=self.user_id,
                 source_uri=upload.path,
                 last_modified_at=upload.created_at,
+                meta=meta,
             )
             yield document
 

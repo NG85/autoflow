@@ -1,14 +1,17 @@
+import json
+import logging
 import os
 import time
-from typing import List
-from fastapi import APIRouter, UploadFile, HTTPException, status
+from typing import List, Optional
+from fastapi import APIRouter, Form, UploadFile, HTTPException, status
 
 from app.api.deps import SessionDep, CurrentSuperuserDep
 from app.file_storage import default_file_storage
 from app.utils.uuid6 import uuid7
-from app.models import Upload
+from app.models import Upload, DocumentCategory, DocumentMetadata
 from app.types import MimeTypes
 from app.site_settings import SiteSetting
+from typing import List, Optional
 
 router = APIRouter()
 
@@ -24,11 +27,23 @@ SUPPORTED_FILE_TYPES = {
 }
 
 
+logger = logging.getLogger(__name__)
+
 @router.post("/admin/uploads")
 def upload_files(
-    session: SessionDep, user: CurrentSuperuserDep, files: List[UploadFile]
+    session: SessionDep, user: CurrentSuperuserDep, files: List[UploadFile], meta: Optional[str] = Form(None)
 ) -> List[Upload]:
     uploads = []
+    metadata_dict = json.loads(meta) if meta else {}
+    
+    # 创建 DocumentMetadata 对象
+    document_metadata = DocumentMetadata(
+        category=metadata_dict.get("category", DocumentCategory.GENERAL),
+        description=metadata_dict.get("description", None),
+        tags=metadata_dict.get("tags", None),
+    )
+    
+    logger.info(f"document_metadata: {document_metadata}")
     for file in files:
         if not file.filename:
             raise HTTPException(
@@ -54,15 +69,16 @@ def upload_files(
             )
         file_path = f"uploads/{user.id.hex}/{int(time.time())}-{uuid7().hex}{file_ext}"
         default_file_storage.save(file_path, file.file)
-        uploads.append(
-            Upload(
-                name=file.filename,
-                size=default_file_storage.size(file_path),
-                path=file_path,
-                mime_type=SUPPORTED_FILE_TYPES[file_ext],
-                user_id=user.id,
-            )
+        upload = Upload(
+            name=file.filename,
+            size=default_file_storage.size(file_path),
+            path=file_path,
+            mime_type=SUPPORTED_FILE_TYPES[file_ext],
+            user_id=user.id,
         )
+        upload.set_metadata(document_metadata)
+        uploads.append(upload)
+        
     session.add_all(uploads)
     session.commit()
     return uploads

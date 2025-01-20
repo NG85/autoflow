@@ -1,6 +1,6 @@
 website:
   title:
-    default: "TiDB.AI"
+    default: "APTSell"
     data_type: str
     description: "The title of the website."
     client: true

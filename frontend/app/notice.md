@@ -1,1 +1,0 @@
-Deprecating `react-hook-form`. Use `@tanstack/form` instead.

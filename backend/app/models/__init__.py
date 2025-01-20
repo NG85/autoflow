@@ -15,7 +15,7 @@ from .staff_action_log import StaffActionLog
 from .chat_engine import ChatEngine, ChatEngineUpdate
 from .chat import Chat, ChatUpdate, ChatVisibility
 from .chat_message import ChatMessage
-from .document import Document, DocIndexTaskStatus
+from .document import Document, DocIndexTaskStatus, DocumentCategory, DocumentMetadata
 from .chunk import Chunk, KgIndexStatus
 from .auth import User, UserSession
 from .api_key import ApiKey, PublicApiKey

@@ -3,7 +3,7 @@ from typing import Optional
 from datetime import datetime
 
 from llama_index.core.schema import Document as LlamaDocument
-from pydantic import ConfigDict
+from pydantic import ConfigDict, BaseModel
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlmodel import (
     Field,
@@ -25,6 +25,17 @@ class DocIndexTaskStatus(str, enum.Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+class DocumentCategory(str, enum.Enum):
+    GENERAL = "general"
+    PLAYBOOK = "playbook"
+
+
+class DocumentMetadata(BaseModel):
+    category: DocumentCategory = DocumentCategory.GENERAL
+    description: Optional[str] = None
+    tags: Optional[list[str]] = None
 
 
 class Document(UpdatableBaseModel, table=True):

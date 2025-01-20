@@ -1,6 +1,7 @@
 from uuid import UUID
 from typing import Optional
 
+from sqlalchemy import JSON
 from sqlmodel import (
     Field,
     Column,
@@ -10,7 +11,7 @@ from sqlmodel import (
 
 from app.models.base import UpdatableBaseModel
 from app.types import MimeTypes
-
+from app.models.document import DocumentMetadata
 
 class Upload(UpdatableBaseModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -25,5 +26,14 @@ class Upload(UpdatableBaseModel, table=True):
             "primaryjoin": "Upload.user_id == User.id",
         },
     )
+    meta: dict = Field(default={}, sa_column=Column(JSON))
 
     __tablename__ = "uploads"
+
+    def set_metadata(self, metadata: DocumentMetadata):
+        self.meta = metadata.model_dump()
+
+    def get_metadata(self) -> DocumentMetadata | None:
+        if isinstance(self.meta, dict):
+            return DocumentMetadata(**self.meta)
+        return None

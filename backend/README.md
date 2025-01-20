@@ -1,4 +1,4 @@
-# Backend of tidb.ai
+# Backend of aptsell
 
 
 ## Development

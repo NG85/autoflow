@@ -1,9 +1,9 @@
 [project]
-name = "tidb-ai-python"
-version = "0.2.9"
-description = "AutoFlow Python Backend"
+name = "aptsell-ai-python"
+version = "0.0.1"
+description = "APTSell Python Backend"
 authors = [
-    { name = "wd0517", email = "me@wangdi.ink" }
+    { name = "zensolst", email = "admin@zensolst.com" }
 ]
 dependencies = [
     "fastapi>=0.115.6",
