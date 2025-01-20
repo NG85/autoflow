@@ -29,27 +29,3 @@ class SolvingRelation(PlaybookRelationship):
         default=None,
         description="How effectively the feature solves the pain point (e.g., 'High', 'Medium', 'Low')"
     )
-
-# class ContentRelationType(str, Enum):
-#     """Types of relationships that Content can have"""
-#     DOCUMENTS = "documents"          # Content -> documents -> Feature
-#     DEMONSTRATES = "demonstrates"    # Content -> demonstrates -> Feature
-#     REFERENCES = "references"        # Content -> references -> Feature
-#     SUPPORTS = "supports"           # Content -> supports -> SalesPitch
-#     REINFORCES = "reinforces"       # Content -> reinforces -> SalesPitch
-
-
-# class ContentRelationship(PlaybookRelationship):
-#     """Base class for content-specific relationships"""
-    
-#     relation_type: ContentRelationType = Field(
-#         description="Type of the content relationship"
-#     )
-#     relevance: Optional[float] = Field(
-#         default=None,
-#         description="Relevance score of the content to the target (0.0 to 1.0)"
-#     )
-#     context: Optional[str] = Field(
-#         default=None,
-#         description="Additional context about how the content relates to the target"
-#     )
