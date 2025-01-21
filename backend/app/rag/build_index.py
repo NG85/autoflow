@@ -7,7 +7,7 @@ from llama_index.core.llms.llm import LLM
 from llama_index.core.node_parser import SentenceSplitter
 from sqlmodel import Session
 
-from app.models.knowledge_base import KnowledgeBase
+from app.models.knowledge_base import IndexMethod, KnowledgeBase
 from app.rag.knowledge_base.index_store import (
     get_kb_tidb_vector_store,
     get_kb_tidb_graph_store,
@@ -93,6 +93,7 @@ class IndexService:
         graph_index: KnowledgeGraphIndex = KnowledgeGraphIndex.from_existing(
             dspy_lm=self._dspy_lm,
             kg_store=graph_store,
+            index_method=IndexMethod.KNOWLEDGE_GRAPH
         )
 
         node = db_chunk.to_llama_text_node()
@@ -104,5 +105,26 @@ class IndexService:
         return
 
     def build_playbook_kg_index_for_chunk(self, session: Session, db_chunk: Type[DBChunk]):
-        pass
+        """Build Playbook knowledge graph index from chunk.
+
+        Build playbook knowledge graph index will do the following:
+        1. load TextNode from `chunks` table.
+        2. extract playbook customized entities and relations from TextNode.
+        3. insert playbook customized entities and relations into `entities` and `relations` table.
+        """
+
+        graph_store = get_kb_tidb_graph_store(session, self._knowledge_base)
+        graph_index: KnowledgeGraphIndex = KnowledgeGraphIndex.from_existing(
+            dspy_lm=self._dspy_lm,
+            kg_store=graph_store,
+            index_method=IndexMethod.PLAYBOOK_KG
+        )
+
+        node = db_chunk.to_llama_text_node()
+        logger.info(f"Start building playbook knowledge graph index for chunk #{db_chunk.id}.")
+        graph_index.insert_nodes([node])
+        logger.info(f"Finish building playbook knowledge graph index for chunk #{db_chunk.id}.")
+        graph_store.close_session()
+
+        return
     

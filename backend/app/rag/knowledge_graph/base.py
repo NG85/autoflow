@@ -22,6 +22,8 @@ from app.rag.knowledge_graph.prerequisite import PrerequisiteAnalyzer
 from app.rag.types import MyCBEventType
 from app.core.config import settings
 from app.core.db import Scoped_Session
+from app.models.knowledge_base import IndexMethod
+from app.rag.knowledge_graph.playbook.playbook_extractor import PlaybookExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -81,10 +83,12 @@ class KnowledgeGraphIndex(BaseIndex[IndexLPG]):
         transformations: Optional[List[TransformComponent]] = None,
         storage_context: Optional[StorageContext] = None,
         show_progress: bool = False,
+        index_method: IndexMethod = IndexMethod.KNOWLEDGE_GRAPH,
         **kwargs: Any,
     ) -> None:
         self._dspy_lm = dspy_lm
         self._kg_store = kg_store
+        self._index_method = index_method
         self._intents = IntentAnalyzer(
             dspy_lm=dspy_lm,
             complied_program_path=settings.COMPLIED_INTENT_ANALYSIS_PROGRAM_PATH,
@@ -130,7 +134,13 @@ class KnowledgeGraphIndex(BaseIndex[IndexLPG]):
         if len(nodes) == 0:
             return nodes
 
-        extractor = SimpleGraphExtractor(dspy_lm=self._dspy_lm)
+        if self._index_method == IndexMethod.PLAYBOOK_KG:
+            logger.info("Using PlaybookExtractor to build playbook knowledge graph index")
+            extractor = PlaybookExtractor(dspy_lm=self._dspy_lm)
+        else:
+            logger.info("Using SimpleGraphExtractor to build knowledge graph index")
+            extractor = SimpleGraphExtractor(dspy_lm=self._dspy_lm)
+
         for node in nodes:
             entities_df, rel_df = extractor.extract(
                 text=node.get_content(),

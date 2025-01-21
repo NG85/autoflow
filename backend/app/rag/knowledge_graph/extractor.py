@@ -120,11 +120,12 @@ class Extractor(dspy.Module):
 
     def forward(self, text):
         with dspy.settings.context(lm=self.dspy_lm):
+            logger.info(f"Text: {text}")
             pred_graph = self.prog_graph(
                 text=text,
                 config=self.get_llm_output_config(),
             )
-
+            logger.info(f"Base Extractor Pred Graph: {pred_graph}")
             # extract the covariates
             entities_for_covariates = [
                 EntityCovariateInput(

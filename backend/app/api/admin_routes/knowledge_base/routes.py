@@ -15,6 +15,7 @@ from .models import (
     KnowledgeBaseItem,
     KnowledgeBaseCreate,
     KnowledgeBaseUpdate,
+    RetryFailedTasksRequest,
     VectorIndexError,
     KGIndexError,
 )
@@ -30,11 +31,13 @@ from app.exceptions import (
 )
 from app.models import (
     KnowledgeBase,
+    IndexMethod,
 )
 from app.models.data_source import DataSource
 from app.tasks import (
     build_kg_index_for_chunk,
     build_index_for_document,
+    build_playbook_kg_index_for_chunk,
 )
 from app.repositories import knowledge_base_repo, data_source_repo
 from app.tasks.knowledge_base import (
@@ -246,28 +249,45 @@ def retry_failed_tasks(
     session: SessionDep,
     user: CurrentSuperuserDep,
     kb_id: int,
+    request: RetryFailedTasksRequest = None, 
 ) -> dict:
     try:
         kb = knowledge_base_repo.must_get(session, kb_id)
+        document_count = 0
+        chunk_count = 0
+        
+        index_method = request.index_method if request else [
+            IndexMethod.VECTOR,
+            IndexMethod.KNOWLEDGE_GRAPH,
+        ]
+        if IndexMethod.VECTOR in index_method:
+            # Retry failed vector index tasks.
+            document_ids = knowledge_base_repo.set_failed_documents_status_to_pending(
+                session, kb
+            )
+            for document_id in document_ids:
+                build_index_for_document.delay(kb_id, document_id)
+            document_count = len(document_ids)
+            logger.info(f"Triggered {document_count} documents to rebuilt vector index.")
 
-        # Retry failed vector index tasks.
-        document_ids = knowledge_base_repo.set_failed_documents_status_to_pending(
-            session, kb
-        )
-        for document_id in document_ids:
-            build_index_for_document.delay(kb_id, document_id)
-        logger.info(f"Triggered {len(document_ids)} documents to rebuilt vector index.")
+        if IndexMethod.KNOWLEDGE_GRAPH in index_method:
+            # Retry failed kg index tasks.
+            chunk_ids = knowledge_base_repo.set_failed_chunks_status_to_pending(session, kb)
+            for chunk_id in chunk_ids:
+                build_kg_index_for_chunk.delay(kb_id, chunk_id)
+            chunk_count = len(chunk_ids)
+            logger.info(f"Triggered {chunk_count} chunks to rebuilt knowledge graph index.")
 
-        # Retry failed kg index tasks.
-        chunk_ids = knowledge_base_repo.set_failed_chunks_status_to_pending(session, kb)
-        for chunk_id in chunk_ids:
-            build_kg_index_for_chunk.delay(kb_id, chunk_id)
-        logger.info(
-            f"Triggered {len(chunk_ids)} chunks to rebuilt knowledge graph index."
-        )
+        if IndexMethod.PLAYBOOK_KG in index_method:
+            # Retry failed playbook kg index tasks
+            chunk_ids = knowledge_base_repo.set_failed_playbook_chunks_status_to_pending(session, kb)
+            for chunk_id in chunk_ids:
+                build_playbook_kg_index_for_chunk.delay(kb_id, chunk_id)
+            chunk_count = len(chunk_ids)
+            logger.info(f"Triggered {chunk_count} chunks to rebuilt playbook knowledge graph index.")
 
         return {
-            "detail": f"Triggered reindex {len(document_ids)} documents and {len(chunk_ids)} chunks of knowledge base #{kb_id}."
+            "detail": f"Triggered reindex {document_count} documents and {chunk_count} chunks of knowledge base #{kb_id}."
         }
     except KBNotFound as e:
         raise e

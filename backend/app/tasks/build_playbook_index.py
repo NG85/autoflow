@@ -7,10 +7,9 @@ from app.celery import app as celery_app
 from app.core.db import engine
 from app.models import (
     Document as DBDocument,
-    DocIndexTaskStatus,
-    KgIndexStatus,
+    DocumentCategory,
 )
-from app.models.chunk import get_kb_chunk_model
+from app.models.chunk import PlaybookKgIndexStatus, get_kb_chunk_model
 from app.models.knowledge_base import IndexMethod
 from app.rag.build_index import IndexService
 from app.rag.knowledge_base.config import get_kb_llm, get_kb_embed_model
@@ -25,6 +24,9 @@ def build_playbook_index_for_document(self, knowledge_base_id: int, document_id:
     # Pre-check before building index.
     with Session(engine, expire_on_commit=False) as session:
         kb = knowledge_base_repo.must_get(session, knowledge_base_id)
+        if IndexMethod.PLAYBOOK_KG not in kb.index_methods:
+            logger.info(f"Knowledge base #{knowledge_base_id} does not have playbook index method")
+            return
 
         # Check document.
         db_document = session.get(DBDocument, document_id)
@@ -32,35 +34,13 @@ def build_playbook_index_for_document(self, knowledge_base_id: int, document_id:
             logger.error(f"Document #{document_id} is not found")
             return
 
-        if db_document.index_status not in (
-            DocIndexTaskStatus.PENDING,
-            DocIndexTaskStatus.NOT_STARTED,
-        ):
-            logger.info(f"Document #{document_id} is not in pending state")
+        if db_document.get_metadata().category != DocumentCategory.PLAYBOOK:
+            logger.error(f"Document #{document_id} is not playbook category")
             return
-
-        # Init knowledge base index service。
-        try:
-            llm = get_kb_llm(session, kb)
-            embed_model = get_kb_embed_model(session, kb)
-            index_service = IndexService(llm, embed_model, kb)
-        except ValueError as e:
-            # LLM may not be available yet(eg. bootstrapping), retry after specified time
-            logger.warning(
-                f"Failed to init index service for document #{document_id} (retry task after 1 minute): {e}"
-            )
-            raise self.retry(countdown=60)
-
-        db_document.index_status = DocIndexTaskStatus.RUNNING
-        session.add(db_document)
-        session.commit()
-
+        
+    
     # Build knowledge graph index for playbook.
     with Session(engine, expire_on_commit=False) as session:
-        kb = knowledge_base_repo.must_get(session, knowledge_base_id)
-        if IndexMethod.KNOWLEDGE_GRAPH not in kb.index_methods:
-            return
-
         chunk_repo = ChunkRepo(get_kb_chunk_model(kb))
         chunks = chunk_repo.get_document_chunks(session, document_id)
         for chunk in chunks:
@@ -79,41 +59,41 @@ def build_playbook_kg_index_for_chunk(knowledge_base_id: int, chunk_id: UUID):
             logger.error(f"Chunk #{chunk_id} is not found")
             return
 
-        if db_chunk.index_status not in (
-            KgIndexStatus.PENDING,
-            KgIndexStatus.NOT_STARTED,
+        if db_chunk.playbook_index_status not in (
+            PlaybookKgIndexStatus.PENDING,
+            PlaybookKgIndexStatus.NOT_STARTED,
         ):
             logger.info(f"Chunk #{chunk_id} is not in pending state")
             return
-
+        
         # Init knowledge base index service。
         llm = get_kb_llm(session, kb)
         embed_model = get_kb_embed_model(session, kb)
         index_service = IndexService(llm, embed_model, kb)
 
-        db_chunk.index_status = KgIndexStatus.RUNNING
+        db_chunk.playbook_index_status = PlaybookKgIndexStatus.RUNNING
         session.add(db_chunk)
         session.commit()
 
     try:
-        with Session(engine) as index_session:
-            index_service.build_kg_index_for_chunk(index_session, db_chunk)
+        with Session(engine) as playbook_index_session:
+            index_service.build_playbook_kg_index_for_chunk(playbook_index_session, db_chunk)
 
         with Session(engine) as session:
-            db_chunk.index_status = KgIndexStatus.COMPLETED
+            db_chunk.playbook_index_status = PlaybookKgIndexStatus.COMPLETED
             session.add(db_chunk)
             session.commit()
             logger.info(
-                f"Built knowledge graph index for chunk #{chunk_id} successfully."
+                f"Built playbook knowledge graph index for chunk #{chunk_id} successfully."
             )
     except Exception:
         with Session(engine) as session:
             error_msg = traceback.format_exc()
             logger.error(
-                f"Failed to build knowledge graph index for chunk #{chunk_id}",
+                f"Failed to build playbook knowledge graph index for chunk #{chunk_id}",
                 exc_info=True,
             )
-            db_chunk.index_status = KgIndexStatus.FAILED
-            db_chunk.index_result = error_msg
+            db_chunk.playbook_index_status = PlaybookKgIndexStatus.FAILED
+            db_chunk.playbook_index_result = error_msg
             session.add(db_chunk)
             session.commit()

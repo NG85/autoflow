@@ -82,3 +82,12 @@ class Document(UpdatableBaseModel, table=True):
             text=self.content,
             metadata=self.meta,
         )
+
+    def set_metadata(self, metadata: DocumentMetadata):
+        self.meta = metadata.model_dump()
+
+
+    def get_metadata(self) -> DocumentMetadata:
+        if isinstance(self.meta, dict):
+            return DocumentMetadata(**self.meta)
+        return DocumentMetadata()

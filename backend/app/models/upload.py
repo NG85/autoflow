@@ -36,4 +36,4 @@ class Upload(UpdatableBaseModel, table=True):
     def get_metadata(self) -> DocumentMetadata | None:
         if isinstance(self.meta, dict):
             return DocumentMetadata(**self.meta)
-        return None
+        return DocumentMetadata()

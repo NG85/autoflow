@@ -1,44 +1,41 @@
 from typing import Any, Mapping
-from jsonschema import Validator
 from pydantic import Field
 
-from backend.app.rag.knowledge_graph.schema import EntityWithID
+from app.rag.knowledge_graph.schema import Entity
 
-class Persona(EntityWithID):
-    """Represents a persona entity in the knowledge graph with industry and optional role information."""
-
+class Persona(Entity):
+    """Represents a persona entity in the knowledge graph with detailed business characteristics."""
+    
     metadata: Mapping[str, Any] = Field(
         description=(
-            "The covariates (which is a comprehensive json TREE, the first field is always: 'topic', "
-            "the fields after are always: 'industry', 'role'(optional)) to claim the entity."
+            "The covariates to claim the persona entity including:\n"
+            "- topic: Always 'persona'\n"
+            "- industry: Target industry of the persona\n"
+            "- role: (optional) Specific role or position"
         ),
-        json_schema={
-            "type": "object",
+        json_schema_extra={
             "required": ["topic", "industry"],
             "properties": {
                 "topic": {"type": "string"},
                 "industry": {"type": "string"},
-                "role": {"type": "string"}
+                "role": {"type": "string"},
             }
         }
     )
-   
-    @Validator('metadata')
-    def validate_persona_metadata(cls, v):
-        if 'industry' not in v:
-            raise ValueError("metadata missing required persona field: industry")
-        return v
 
-class PainPoint(EntityWithID):
-    """Represents a pain point or challenge faced by users."""
+   
+class PainPoint(Entity):
+    """Represents a pain point entity with comprehensive business impact analysis."""
     
     metadata: Mapping[str, Any] = Field(
         description=(
-            "The covariates (which is a comprehensive json TREE, the first field is always: 'topic', "
-            "the fields after are always: 'scenario', 'impact', 'severity'(optional)) to claim the entity."
+            "The covariates to claim the pain point entity including:\n"
+            "- topic: Always 'pain_point'\n"
+            "- scenario: Specific context or situation\n"
+            "- impact: Business or operational impact\n"
+            "- severity: (optional) Level of severity"
         ),
-        json_schema={
-            "type": "object",
+        json_schema_extra={
             "required": ["topic", "scenario", "impact"],
             "properties": {
                 "topic": {"type": "string"},
@@ -49,24 +46,18 @@ class PainPoint(EntityWithID):
         }
     )
 
-    @Validator('metadata')
-    def validate_painpoint_metadata(cls, v):
-        required_fields = {'scenario', 'impact'}
-        missing_fields = required_fields - set(v.keys())
-        if missing_fields:
-            raise ValueError(f"metadata missing required painpoint fields: {missing_fields}")
-        return v
 
-class Feature(EntityWithID):
-    """Represents a product feature or capability."""
+class Feature(Entity):
+    """Represents a product/service feature with detailed technical and business benefits."""
 
     metadata: Mapping[str, Any] = Field(
         description=(
-            "The covariates (which is a comprehensive json TREE, the first field is always: 'topic', "
-            "the fields after are always: 'benefits' (type List[str]), 'technical_details' (type Dict[str])) to claim the entity."
+            "The covariates to claim the feature entity including:\n"
+            "- topic: Always 'feature'\n"
+            "- benefits: List of specific business benefits\n"
+            "- technical_details: Technical specifications and requirements"
         ),
-        json_schema={
-            "type": "object",
+        json_schema_extra={
             "required": ["topic", "benefits"],
             "properties": {
                 "topic": {"type": "string"},
@@ -79,8 +70,25 @@ class Feature(EntityWithID):
         }
     )
 
-    @Validator('metadata')
-    def validate_feature_metadata(cls, v):
-        if 'benefits' not in v:
-            raise ValueError("metadata missing required feature field: benefits")
-        return v
+
+class Content(Entity):
+    """Represents sales content with detailed targeting and usage information."""
+    
+    metadata: Mapping[str, Any] = Field(
+        description=(
+            "The covariates to claim the content entity including:\n"
+            "- topic: Always 'content'\n"
+            "- content_type: Type of sales material\n"
+            "- target_audience: List of intended personas\n"
+            "- use_case: Specific usage scenarios"
+        ),
+        json_schema_extra={
+            "required": ["topic", "content_type", "target_audience"],
+            "properties": {
+                "topic": {"type": "string"},
+                "content_type": {"type": "string"},
+                "target_audience": {"type": "array"},
+                "use_case": {"type": "string"}
+            }
+        }
+    )

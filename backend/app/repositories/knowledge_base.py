@@ -22,7 +22,7 @@ from app.models import (
     KnowledgeBaseDataSource,
 )
 from app.models.chat_engine import ChatEngine
-from app.models.chunk import get_kb_chunk_model
+from app.models.chunk import PlaybookKgIndexStatus, get_kb_chunk_model
 from app.models.data_source import DataSource
 from app.models.knowledge_base import IndexMethod
 from app.repositories.base_repo import BaseRepo
@@ -202,6 +202,23 @@ class KnowledgeBaseRepo(BaseRepo):
         session.exec(stmt)
         session.commit()
 
+
+    def batch_update_playbook_chunk_status(
+        self,
+        session: Session,
+        chunk_model: Type[Chunk],
+        chunk_ids: list[int],
+        status: PlaybookKgIndexStatus,
+    ):
+        stmt = (
+            update(chunk_model)
+            .where(chunk_model.id.in_(chunk_ids))
+            .values(playbook_index_status=status)
+        )
+        session.exec(stmt)
+        session.commit()
+        
+        
     def set_failed_chunks_status_to_pending(
         self, session: Session, kb: KnowledgeBase
     ) -> list[int]:
@@ -215,6 +232,24 @@ class KnowledgeBaseRepo(BaseRepo):
         # Update status.
         self.batch_update_chunk_status(
             session, chunk_model, chunk_ids, KgIndexStatus.PENDING
+        )
+
+        return chunk_ids
+    
+    
+    def set_failed_playbook_chunks_status_to_pending(
+        self, session: Session, kb: KnowledgeBase
+    ) -> list[int]:
+        chunk_model = get_kb_chunk_model(kb)
+        stmt = select(chunk_model.id).where(
+            chunk_model.document.has(Document.knowledge_base_id == kb.id),
+            chunk_model.playbook_index_status == PlaybookKgIndexStatus.FAILED,
+        )
+        chunk_ids = session.exec(stmt).all()
+
+        # Update playbook chunk status.
+        self.batch_update_playbook_chunk_status(
+            session, chunk_model, chunk_ids, PlaybookKgIndexStatus.PENDING
         )
 
         return chunk_ids

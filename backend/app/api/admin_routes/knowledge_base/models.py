@@ -120,3 +120,7 @@ class RetrievalRequest(BaseModel):
     query: str
     chat_engine: str = "default"
     top_k: Optional[int] = 5
+
+
+class RetryFailedTasksRequest(BaseModel):
+    index_method: list[IndexMethod]
