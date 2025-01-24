@@ -9,11 +9,10 @@ from sqlmodel import (
     Column,
     DateTime,
     JSON,
-    SmallInteger,
     Relationship as SQLRelationship,
 )
 
-from .base import UUIDBaseModel, UpdatableBaseModel
+from .base import IntEnumType, UUIDBaseModel, UpdatableBaseModel
 
 
 class ChatVisibility(int, enum.Enum):
@@ -43,7 +42,11 @@ class Chat(UUIDBaseModel, UpdatableBaseModel, table=True):
     browser_id: str = Field(max_length=50, nullable=True)
     origin: str = Field(max_length=256, default=None, nullable=True)
     visibility: ChatVisibility = Field(
-        sa_column=Column(SmallInteger, default=ChatVisibility.PRIVATE, nullable=False)
+        sa_column=Column(
+            IntEnumType(ChatVisibility),
+            nullable=False,
+            default=ChatVisibility.PRIVATE,
+        )
     )
 
     __tablename__ = "chats"
