@@ -15,7 +15,7 @@ from app.api.deps import SessionDep, OptionalUserDep, CurrentUserDep
 from app.repositories import chat_repo
 from app.models import Chat, ChatUpdate
 from app.rag.chat import (
-    ChatService,
+    ChatFlow,
     ChatEvent,
     user_can_view_chat,
     user_can_edit_chat,
@@ -77,7 +77,7 @@ def chats(
     browser_id = request.state.browser_id
 
     try:
-        chat_svc = ChatService(
+        chat_flow = ChatFlow(
             db_session=session,
             user=user,
             browser_id=browser_id,
@@ -102,7 +102,7 @@ def chats(
 
     if chat_request.stream:
         return StreamingResponse(
-            chat_svc.chat(),
+            chat_flow.chat(),
             media_type="text/event-stream",
             headers={
                 "X-Content-Type-Options": "nosniff",
@@ -111,7 +111,8 @@ def chats(
     else:
         trace, sources, content = None, [], ""
         chat_id, message_id = None, None
-        for m in chat_svc.chat():
+        # TODO: maybe we can wrap following code in the chat() method, and using "yield from" to return the values.
+        for m in chat_flow.chat():
             if not isinstance(m, ChatEvent):
                 continue
             if m.event_type == ChatEventType.MESSAGE_ANNOTATIONS_PART:

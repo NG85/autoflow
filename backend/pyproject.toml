@@ -75,6 +75,7 @@ universal = true
 dev-dependencies = [
     "pre-commit>=4.0.1",
     "ruff>=0.8.6",
+    "pytest-asyncio>=0.25.2",
 ]
 
 [tool.ruff.lint]

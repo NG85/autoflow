@@ -7,10 +7,8 @@ from app.api.admin_routes.knowledge_base.graph.models import (
     SynopsisEntityCreate,
     EntityUpdate,
     RelationshipUpdate,
+    KBRetrieveKnowledgeGraphRequest,
     GraphSearchRequest,
-    KnowledgeRequest,
-    KnowledgeNeighborRequest,
-    KnowledgeChunkRequest,
 )
 from app.api.deps import SessionDep
 from app.exceptions import KBNotFound, InternalServerError
@@ -18,9 +16,15 @@ from app.models import (
     EntityPublic,
     RelationshipPublic,
 )
+from app.rag.retrievers.knowledge_graph.schema import (
+    KnowledgeGraphRetrievalResult,
+)
 from app.rag.knowledge_base.index_store import (
     get_kb_tidb_graph_editor,
     get_kb_tidb_graph_store,
+)
+from app.rag.retrievers.knowledge_graph.simple_retriever import (
+    KnowledgeGraphSimpleRetriever,
 )
 from app.repositories import knowledge_base_repo
 
@@ -195,18 +199,39 @@ def update_relationship(
         raise e
 
 
-@router.post("/admin/knowledge_bases/{kb_id}/graph/search")
-def search_graph(session: SessionDep, kb_id: int, request: GraphSearchRequest):
+@router.post("/admin/knowledge_bases/{kb_id}/graph/retrieve")
+def retrieve_kb_knowledge_graph(
+    db_session: SessionDep, kb_id: int, request: KBRetrieveKnowledgeGraphRequest
+) -> KnowledgeGraphRetrievalResult:
+    try:
+        retriever = KnowledgeGraphSimpleRetriever(
+            db_session=db_session,
+            knowledge_base_id=kb_id,
+            config=request.retrival_config.knowledge_graph,
+        )
+        knowledge_graph = retriever.retrieve_knowledge_graph(request.query)
+        return KnowledgeGraphRetrievalResult(
+            entities=knowledge_graph.entities,
+            relationships=knowledge_graph.relationships,
+        )
+    except KBNotFound as e:
+        raise e
+    except Exception as e:
+        # TODO: throw InternalServerError
+        raise e
+
+
+@router.post("/admin/knowledge_bases/{kb_id}/graph/search", deprecated=True)
+def legacy_search_graph(session: SessionDep, kb_id: int, request: GraphSearchRequest):
     try:
         kb = knowledge_base_repo.must_get(session, kb_id)
         graph_store = get_kb_tidb_graph_store(session, kb)
-        entities, relations, _ = graph_store.retrieve_with_weight(
+        entities, relations = graph_store.retrieve_with_weight(
             request.query,
             [],
             request.depth,
             request.include_meta,
             request.with_degree,
-            False,
             request.relationship_meta_filters,
         )
         return {
@@ -218,69 +243,3 @@ def search_graph(session: SessionDep, kb_id: int, request: GraphSearchRequest):
     except Exception as e:
         # TODO: throw InternalServerError
         raise e
-
-
-@router.post("/admin/knowledge_bases/{kb_id}/graph/knowledge")
-def retrieve_knowledge(session: SessionDep, kb_id: int, request: KnowledgeRequest):
-    try:
-        kb = knowledge_base_repo.must_get(session, kb_id)
-        graph_store = get_kb_tidb_graph_store(session, kb)
-        data = graph_store.retrieve_graph_data(
-            request.query,
-            request.top_k,
-            request.similarity_threshold,
-        )
-        return {
-            "entities": data["entities"],
-            "relationships": data["relationships"],
-        }
-    except KBNotFound as e:
-        raise e
-    except Exception as e:
-        logger.exception(e)
-        raise InternalServerError()
-
-
-@router.post("/admin/knowledge_bases/{kb_id}/graph/knowledge/neighbors")
-def retrieve_knowledge_neighbors(
-    session: SessionDep, kb_id: int, request: KnowledgeNeighborRequest
-):
-    try:
-        kb = knowledge_base_repo.must_get(session, kb_id)
-        graph_store = get_kb_tidb_graph_store(session, kb)
-        data = graph_store.retrieve_neighbors(
-            request.entities_ids,
-            request.query,
-            request.max_depth,
-            request.max_neighbors,
-            request.similarity_threshold,
-        )
-        return data
-    except KBNotFound as e:
-        raise e
-    except Exception as e:
-        logger.exception(e)
-        raise InternalServerError()
-
-
-@router.post("/admin/knowledge_bases/{kb_id}/graph/knowledge/chunks")
-def retrieve_knowledge_chunks(
-    session: SessionDep, kb_id: int, request: KnowledgeChunkRequest
-):
-    try:
-        kb = knowledge_base_repo.must_get(session, kb_id)
-        graph_store = get_kb_tidb_graph_store(session, kb)
-        data = graph_store.get_chunks_by_relationships(request.relationships_ids)
-        if not data:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="No chunks found for the given relationships",
-            )
-        return data
-    except KBNotFound as e:
-        raise e
-    except HTTPException as e:
-        raise e
-    except Exception as e:
-        logger.exception(e)
-        raise InternalServerError()

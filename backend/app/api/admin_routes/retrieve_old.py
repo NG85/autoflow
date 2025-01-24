@@ -14,7 +14,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-@router.get("/admin/retrieve/documents")
+@router.get("/admin/retrieve/documents", deprecated=True)
 def retrieve_documents(
     session: SessionDep,
     user: CurrentSuperuserDep,
@@ -42,7 +42,7 @@ def retrieve_documents(
         raise InternalServerError()
 
 
-@router.get("/admin/embedding_retrieve")
+@router.get("/admin/embedding_retrieve", deprecated=True)
 def embedding_retrieve(
     session: SessionDep,
     user: CurrentSuperuserDep,
@@ -71,7 +71,7 @@ def embedding_retrieve(
         raise InternalServerError()
 
 
-@router.post("/admin/embedding_retrieve")
+@router.post("/admin/embedding_retrieve", deprecated=True)
 def embedding_search(
     session: SessionDep,
     user: CurrentSuperuserDep,

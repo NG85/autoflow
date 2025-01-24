@@ -1,5 +1,6 @@
 import os
 from typing import Optional
+
 from llama_index.core.llms.llm import LLM
 from llama_index.llms.azure_openai import AzureOpenAI
 from llama_index.llms.openai import OpenAI
@@ -17,7 +18,7 @@ from app.repositories.llm import llm_repo
 from app.rag.llms.provider import LLMProvider
 
 
-def get_llm(
+def resolve_llm(
     provider: LLMProvider,
     model: str,
     config: dict,
@@ -97,11 +98,33 @@ def get_llm(
             raise ValueError(f"Got unknown LLM provider: {provider}")
 
 
+def get_llm_by_id(session: Session, llm_id: int) -> Optional[LLM]:
+    db_llm = llm_repo.get(session, llm_id)
+    if not db_llm:
+        return None
+    return resolve_llm(
+        db_llm.provider,
+        db_llm.model,
+        db_llm.config,
+        db_llm.credentials,
+    )
+
+
+def must_get_llm_by_id(session: Session, llm_id: int) -> LLM:
+    db_llm = llm_repo.must_get(session, llm_id)
+    return resolve_llm(
+        db_llm.provider,
+        db_llm.model,
+        db_llm.config,
+        db_llm.credentials,
+    )
+
+
 def get_default_llm(session: Session) -> Optional[LLM]:
     db_llm = llm_repo.get_default(session)
     if not db_llm:
         return None
-    return get_llm(
+    return resolve_llm(
         db_llm.provider,
         db_llm.model,
         db_llm.config,
@@ -111,9 +134,16 @@ def get_default_llm(session: Session) -> Optional[LLM]:
 
 def must_get_default_llm(session: Session) -> LLM:
     db_llm = llm_repo.must_get_default(session)
-    return get_llm(
+    return resolve_llm(
         db_llm.provider,
         db_llm.model,
         db_llm.config,
         db_llm.credentials,
     )
+
+
+def get_llm_or_default(session: Session, llm_id: Optional[int]) -> LLM:
+    if llm_id is None:
+        return must_get_default_llm(session)
+    else:
+        return must_get_llm_by_id(session, llm_id)

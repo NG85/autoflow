@@ -595,8 +595,10 @@ pysbd==0.3.4
     # via ragas
 pytest==8.2.2
     # via deepeval
+    # via pytest-asyncio
     # via pytest-repeat
     # via pytest-xdist
+pytest-asyncio==0.25.2
 pytest-repeat==0.9.3
     # via deepeval
 pytest-xdist==3.6.1

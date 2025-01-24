@@ -1,24 +1,23 @@
 import logging
 import dspy
 
-from typing import Dict, Optional
-from pydantic import BaseModel
+from typing import Optional, List, Mapping, Any
+from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from llama_index.core.postprocessor.types import BaseNodePostprocessor
 from llama_index.core.llms.llm import LLM
 
 from app.utils.dspy import get_dspy_lm_by_llama_llm
-from app.rag.llms.resolver import get_default_llm, get_llm
-from app.rag.rerankers.resolver import get_default_reranker_model, get_reranker_model
+from app.rag.llms.resolver import get_default_llm, resolve_llm
+from app.rag.rerankers.resolver import get_default_reranker_model, resolve_reranker
 from app.rag.postprocessors import get_metadata_post_filter, MetadataFilters
 
-
 from app.models import (
-    ChatEngine as DBChatEngine,
     LLM as DBLLM,
     RerankerModel as DBRerankerModel,
     KnowledgeBase,
+    ChatEngine as DBChatEngine,
 )
 from app.repositories import chat_engine_repo, knowledge_base_repo
 from app.rag.default_prompt import (
@@ -57,7 +56,9 @@ class KnowledgeGraphOption(BaseModel):
     include_meta: bool = True
     with_degree: bool = False
     using_intent_search: bool = True
-    relationship_meta_filters: Optional[Dict] = None
+    enable_metadata_filter: bool = False
+    metadata_filters: Optional[Mapping[str, Any]] = None
+    relationship_meta_filters: Optional[dict] = None  # To be deprecated.
 
 
 class ExternalChatEngine(BaseModel):
@@ -71,8 +72,9 @@ class LinkedKnowledgeBase(BaseModel):
 
 class KnowledgeBaseOption(BaseModel):
     linked_knowledge_base: LinkedKnowledgeBase
-    # TODO: Support multiple knowledge base retrieve.
-    # linked_knowledge_bases: List[LinkedKnowledgeBase]
+    linked_knowledge_bases: Optional[List[LinkedKnowledgeBase]] = Field(
+        default_factory=list
+    )
 
 
 class ChatEngineConfig(BaseModel):
@@ -82,6 +84,7 @@ class ChatEngineConfig(BaseModel):
     knowledge_base: Optional[KnowledgeBaseOption] = None
     knowledge_graph: KnowledgeGraphOption = KnowledgeGraphOption()
     vector_search: VectorSearchOption = VectorSearchOption()
+
     post_verification_url: Optional[str] = None
     post_verification_token: Optional[str] = None
     external_engine_config: Optional[ExternalChatEngine] = None
@@ -126,7 +129,7 @@ class ChatEngineConfig(BaseModel):
     def get_llama_llm(self, session: Session) -> LLM:
         if not self._db_llm:
             return get_default_llm(session)
-        return get_llm(
+        return resolve_llm(
             self._db_llm.provider,
             self._db_llm.model,
             self._db_llm.config,
@@ -140,7 +143,7 @@ class ChatEngineConfig(BaseModel):
     def get_fast_llama_llm(self, session: Session) -> LLM:
         if not self._db_fast_llm:
             return get_default_llm(session)
-        return get_llm(
+        return resolve_llm(
             self._db_fast_llm.provider,
             self._db_fast_llm.model,
             self._db_fast_llm.config,
@@ -159,7 +162,7 @@ class ChatEngineConfig(BaseModel):
             return get_default_reranker_model(session, top_n)
 
         top_n = self._db_reranker.top_n if top_n is None else top_n
-        return get_reranker_model(
+        return resolve_reranker(
             self._db_reranker.provider,
             self._db_reranker.model,
             top_n,
