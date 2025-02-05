@@ -15,14 +15,19 @@ class ExtractPlaybookTriplet(dspy.Signature):
 
     1. Extract Key Entities:
       - First, identify all significant nouns, proper nouns, and technical terms that represent:
-         * Personas (who): Organizations or departments that are potential customers
+        * Personas (who): Organizations or departments that are potential customers, which may include specific roles within those organizations or departments
           Examples:
           - "Enterprise IT Department in Healthcare"
           - "Bank's Security Operations Team"
           - "Manufacturing Company's R&D Division"
+          - "Marketing Manager in Financial Services"
         * Pain Points (what): challenges, problems, needs
         * Features (how): solutions, capabilities, functionalities
-      
+      - Important Guidelines: 
+        - Exclude technical terms or product names (e.g., "TiDB", "TiKV", "TiCDC") from being classified as personas.
+        - Classify as a feature if the entity name contains keywords like "system", "service", "tool", or "platform".
+        - Classify as a persona if the entity name contains keywords like "Department", "Team", "Manager", or "Director".
+        
       For each entity type, extract required metadata:
       
       Persona Entities (Organizations and their key roles):
@@ -69,50 +74,62 @@ class ExtractPlaybookTriplet(dspy.Signature):
           Example: "REST API support", "256-bit encryption"
   
     2. Establish Relationships:
-      - Carefully examine how entities interact with each other
-      - Focus on clear and direct relationships that are explicitly stated in the text
-      - Ensure relationship descriptions are comprehensive and include all required elements
-      - Follow strict relationship hierarchy: Persona -> Pain Point -> Feature
-      - DO NOT create any cross-level or reverse relationships
+      - ONLY establish relationships in these two patterns: 
+        1. Persona experiences Pain Point
+        2. Pain Point is addressed/solved/resolved by Feature
       
-      Valid relationship patterns and required description elements:
-      
-      1. Persona -> Pain Point (ONLY this direction):
-        Description must include:
-        * How severely this pain point affects the persona
-        * How frequently they encounter this issue
-        * What business impact it has on their operations
-        * Their priority level for addressing this pain point
+      For each relationship, provide:
+
+      A. "Persona experiences Pain Point":
+        - Must include:
+          * Which specific pain point this persona faces
+          * Impact severity and frequency
+          * Business consequences
+          * Priority level
         Example: "Enterprise IT Directors frequently encounter system integration challenges, causing severe operational disruptions weekly, resulting in 20% productivity loss, making this a top priority issue."
       
-      2. Pain Point -> Feature (ONLY this direction):
-        Description must include:
-        * How effectively the feature addresses the problem
-        * What implementation effort is required
-        * Expected time to realize benefits
-        * Key success criteria
-        Example: "The automated integration feature completely eliminates manual integration work, requires minimal setup effort of 2-3 days, delivers immediate productivity gains, with success measured by 90% reduction in integration time."
+      B. "Pain Point is addressed by Feature":
+        - Must include:
+          * How this feature addresses/solves the pain point
+          * Solution effectiveness
+          * Implementation requirements
+          * Time to value
+          * Success metrics
+        Example: "The integration challenges are addressed by the automated integration system, achieving 90% reduction in integration time, requiring only 2-3 days setup, and delivering immediate productivity gains."
 
-      INVALID relationships (DO NOT CREATE):
-      - Feature -> Pain Point (wrong direction)
-      - Pain Point -> Persona (wrong direction)
-      - Persona -> Feature (cross-level)
-      - Feature -> Persona (cross-level and wrong direction)
+      CRITICAL RULES:
+      * DO: 
+        - Create relationships in this sequence ONLY:
+          Persona -> experiences -> Pain Point
+          Pain Point -> is addressed by -> Feature
+        - Ensure each relationship forms part of a complete chain
+        
+       * DO NOT:
+        - Create direct Persona-to-Feature relationships
+        - Create reverse relationships (e.g. Feature solves Pain Point)
+        - Skip any steps in the sequence
+        - Create any other types of relationships
+        - Create isolated relationships that don't connect to a complete chain
   
     3. Quality Guidelines:
+      - Do not mark as a valid entity if classified as `persona` but lacking required metadata (e.g., `industry`, `persona_type`).
+      - An entity must have all required metadata fields to be considered valid; if only the `topic` is identified, it is not valid.
+      - An entity must have at least one associated relationship to be considered valid; if isolated, it is not valid.
       - Extract all meaningful entities and relationships from the text in one pass
       - Ensure all extracted information is factual and verifiable within the text
       - Use consistent terminology across entities and relationships
       - Make descriptions specific, quantifiable, and actionable where possible
       - For Persona entities:
+        * If an entity is classified as `persona` but lacks other required metadata (e.g., `industry`, `persona_type`), do not mark it as a valid entity.
         * Use clear, descriptive names that combine industry and type
         * Use standard industry terms and role titles
         * Properly classify roles into management levels when available
         * Include only verifiable metadata from the text
       - For Relationships:
-        * Strictly follow the hierarchy: Persona -> Pain Point -> Feature
+        * Strictly follow the sequence: Persona experiences Pain Point, Pain Point is addressed by Feature
         * Never create cross-level relationships (e.g., Persona -> Feature)
-        * Never create reverse relationships (e.g., Pain Point -> Persona)
+        * Never create reverse relationships (e.g., Feature -> Painpoint)
+        * Never skip steps in the sequence
         * Ensure each relationship description includes all required elements
         * Use quantifiable metrics and specific timeframes when available
         * Maintain consistent terminology with entity descriptions
