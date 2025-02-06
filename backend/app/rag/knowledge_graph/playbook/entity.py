@@ -11,29 +11,25 @@ class Persona(Entity):
             "The covariates to claim the persona entity including:\n"
             "- topic: Always 'persona'\n"
             "- industry: Target industry of the organization\n"
-            "- persona_type: Type of the organization or department\n"
-            "  Example: 'Enterprise Company', 'IT Department', 'Security Team'\n"
-            "- roles: (optional) List of key roles within this persona, each with:\n"
-            "  * title: Role description or job title\n"
-            "  * level: One of ['c_level', 'middle_management', 'operational_staff']"
+            "- persona_type: Type of organization or department (e.g., 'Enterprise Company', 'IT Department', 'Security Team')\n"
+            "- role: (Optional) Object containing role information:\n"
+            "  - title: Job position or title (use 'Unspecified Role' if not explicitly mentioned)\n"
+            "  - level: One of ['c_level', 'middle_management', 'operational_staff']"
         ),
         json_schema_extra={
-            "required": ["topic", "industry", "persona_type"],
+            "required": ["topic", "industry", "persona_type", "role", "role_level"],
             "properties": {
                 "topic": {"type": "string", "const": "persona"},
                 "industry": {"type": "string"},
                 "persona_type": {"type": "string"},
-                "roles": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "required": ["title", "level"],
-                        "properties": {
-                            "title": {"type": "string"},
-                            "level": {
-                                "type": "string",
-                                "enum": ["c_level", "middle_management", "operational_staff"]
-                            }
+                "role": {
+                    "type": "object",
+                    "required": ["title", "level"],
+                    "properties": {
+                        "title": {"type": "string"},
+                        "level": {
+                            "type": "string",
+                            "enum": ["c_level", "middle_management", "operational_staff"]
                         }
                     }
                 }
@@ -73,7 +69,7 @@ class Feature(Entity):
             "The covariates to claim the feature entity including:\n"
             "- topic: Always 'feature'\n"
             "- benefits: List of specific business benefits\n"
-            "- technical_details: Technical specifications and requirements"
+            "- technical_details: (optional) Technical specifications and requirements"
         ),
         json_schema_extra={
             "required": ["topic", "benefits"],

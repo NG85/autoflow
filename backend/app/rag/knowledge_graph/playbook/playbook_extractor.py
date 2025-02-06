@@ -14,44 +14,36 @@ class ExtractPlaybookTriplet(dspy.Signature):
     Follow these Step-by-Step Analysis:
 
     1. Extract Key Entities:
-      - First, identify all significant nouns, proper nouns, and technical terms that represent:
-        * Personas (who): Organizations or departments that are potential customers, which may include specific roles within those organizations or departments
+      First, identify significant entities from the text:
+        * Personas (who): Organizations or departments that are potential customers
           Examples:
           - "Enterprise IT Department in Healthcare"
           - "Bank's Security Operations Team"
           - "Manufacturing Company's R&D Division"
           - "Marketing Manager in Financial Services"
-        * Pain Points (what): challenges, problems, needs
-        * Features (how): solutions, capabilities, functionalities
-      - Important Guidelines: 
-        - Exclude technical terms or product names (e.g., "TiDB", "TiKV", "TiCDC") from being classified as personas.
-        - Classify as a feature if the entity name contains keywords like "system", "service", "tool", or "platform".
-        - Classify as a persona if the entity name contains keywords like "Department", "Team", "Manager", or "Director".
-        
+        * Pain Points (what): Business challenges, problems, needs
+        * Features (how): Solutions, capabilities, functionalities
+
+      Important Classification Rules:
+        - Technical terms (e.g., "TiDB", "TiKV") should never be classified as personas
+        - Terms containing "system", "service", "tool", "platform" should be classified as features
+        - Terms containing "Department", "Team", "Manager", "Director" should be classified as personas
+        - Generic terms without clear classification should be excluded
+      
       For each entity type, extract required metadata:
       
       Persona Entities (Organizations and their key roles):
         Required metadata:
           - topic: Must be "persona"
           - industry: Target industry sector
-            Examples: "Healthcare", "Financial Services", "Manufacturing"
+            Example: "Healthcare", "Financial Services"
           - persona_type: Type of organization or department
-            Examples:
-            - Organization types: "Enterprise Company", "Tech Startup"
-            - Department types: "IT Department", "Security Team"
+            Example: "Enterprise Company", "IT Department"
         Optional metadata:
-          - roles: List of key decision makers and stakeholders
-            Format: [
-              {
-                "title": "Role description",
-                "level": "c_level|middle_management|operational_staff"
-              }
-            ]
-            Examples:
-            - IT Department roles:
-              * {"title": "Chief Technology Officer", "level": "c_level"}
-              * {"title": "IT Infrastructure Manager", "level": "middle_management"}
-              * {"title": "System Administrator", "level": "operational_staff"}
+          - role: Object containing role information (omit if not clear from text)
+            If present, must include both:
+            - title: Job position or title
+            - level: Must be exactly one of: ["c_level", "middle_management", "operational_staff"]
       
       Pain Point Entities (What problems need solving):
         Required metadata:
@@ -67,73 +59,84 @@ class ExtractPlaybookTriplet(dspy.Signature):
       Feature Entities (What solutions we offer):
         Required metadata:
           - topic: Must be "feature"
-          - benefits: List of specific business benefits
+          - benefits: Array of specific business benefits
             Example: ["Reduces integration time by 70%"]
         Optional metadata:
-          - technical_details: Technical specifications
-          Example: "REST API support", "256-bit encryption"
-  
+          - technical_details: Technical specifications as key-value pairs
+            Example: {"api_support": "REST API"}
+            
     2. Establish Relationships:
-      - ONLY establish relationships in these two patterns: 
+      Valid Relationship Patterns:
         1. Persona experiences Pain Point
-        2. Pain Point is addressed/solved/resolved by Feature
+        2. Pain Point is addressed by Feature
       
-      For each relationship, provide:
-
+      Required Elements for Each Relationship Type:
       A. "Persona experiences Pain Point":
-        - Must include:
-          * Which specific pain point this persona faces
-          * Impact severity and frequency
-          * Business consequences
-          * Priority level
-        Example: "Enterprise IT Directors frequently encounter system integration challenges, causing severe operational disruptions weekly, resulting in 20% productivity loss, making this a top priority issue."
+        Must include these core elements in description:
+        - Problem identification
+        - Impact on business operations (with metrics if possible)
+        - Frequency or pattern of occurrence
+        Example: "Enterprise IT Directors face system integration challenges weekly, resulting in 20% productivity loss."
       
       B. "Pain Point is addressed by Feature":
-        - Must include:
-          * How this feature addresses/solves the pain point
-          * Solution effectiveness
-          * Implementation requirements
-          * Time to value
-          * Success metrics
-        Example: "The integration challenges are addressed by the automated integration system, achieving 90% reduction in integration time, requiring only 2-3 days setup, and delivering immediate productivity gains."
+        Must include these core elements in description:
+        - Solution mechanism
+        - Effectiveness (with metrics if possible)
+        - Time to value
+        Example: "The integration challenges are resolved through automated integration, reducing integration time by 90% with immediate productivity gains after 2-day setup."
 
-      CRITICAL RULES:
-      * DO: 
-        - Create relationships in this sequence ONLY:
-          Persona -> experiences -> Pain Point
-          Pain Point -> is addressed by -> Feature
-        - Ensure each relationship forms part of a complete chain
-        
-       * DO NOT:
-        - Create direct Persona-to-Feature relationships
-        - Create reverse relationships (e.g. Feature solves Pain Point)
-        - Skip any steps in the sequence
-        - Create any other types of relationships
-        - Create isolated relationships that don't connect to a complete chain
-  
+      Critical Rules for Relationships:
+        - Must follow exact sequence: Persona -> Pain Point -> Feature
+        - Each relationship must be part of a complete chain
+        - No direct Persona-to-Feature relationships
+        - No reverse relationships
+        - No relationships between same entity types
+        - Both source and target entities must exist and be valid
+        - Must use exact entity names in relationships
+          
     3. Quality Guidelines:
-      - Do not mark as a valid entity if classified as `persona` but lacking required metadata (e.g., `industry`, `persona_type`).
-      - An entity must have all required metadata fields to be considered valid; if only the `topic` is identified, it is not valid.
-      - An entity must have at least one associated relationship to be considered valid; if isolated, it is not valid.
-      - Extract all meaningful entities and relationships from the text in one pass
-      - Ensure all extracted information is factual and verifiable within the text
-      - Use consistent terminology across entities and relationships
-      - Make descriptions specific, quantifiable, and actionable where possible
-      - For Persona entities:
-        * If an entity is classified as `persona` but lacks other required metadata (e.g., `industry`, `persona_type`), do not mark it as a valid entity.
-        * Use clear, descriptive names that combine industry and type
-        * Use standard industry terms and role titles
-        * Properly classify roles into management levels when available
-        * Include only verifiable metadata from the text
-      - For Relationships:
-        * Strictly follow the sequence: Persona experiences Pain Point, Pain Point is addressed by Feature
-        * Never create cross-level relationships (e.g., Persona -> Feature)
-        * Never create reverse relationships (e.g., Feature -> Painpoint)
-        * Never skip steps in the sequence
-        * Ensure each relationship description includes all required elements
-        * Use quantifiable metrics and specific timeframes when available
-        * Maintain consistent terminology with entity descriptions
-  
+      Entity Validation Rules:
+        - Every entity MUST have a valid "topic" field with exact values: "persona", "pain_point", or "feature"
+        - Each entity type must include ALL required metadata fields:
+          * Persona entities:
+            - Required: topic, industry, persona_type
+            - Optional: role (if present, must contain both title and level)
+          * Pain Point entities:
+            - Required: topic, scenario, impact
+            - Optional: severity
+          * Feature entities:
+            - Required: topic, benefits (as array of strings)
+            - Optional: technical_details (as key-value pairs)
+        
+      Data Quality Rules:
+        - All metadata values must be factual and verifiable within the source text
+        - Use consistent terminology across entities and relationships
+        - Make descriptions specific and quantifiable where possible
+        - An entity without all required metadata fields is invalid and should be excluded
+        - An entity must have at least one associated relationship to be considered valid
+        
+      Relationship Rules:
+        - Follow strict sequence: Persona -> Pain Point -> Feature
+        - Each relationship must form part of a complete chain
+        - Never create direct Persona-to-Feature relationships
+        - Never create reverse relationships
+        - Never skip steps in the sequence
+        - Both source and target entities must be valid
+        - Relationship descriptions must be specific and verifiable
+        - Must use exact entity names in relationships
+        
+      Format Requirements:
+        - All string values should be properly formatted and meaningful
+        - Arrays (like benefits) must be properly formatted as lists
+        - Objects (like technical_details) must be properly formatted as key-value pairs
+        - Maintain consistent data types as specified in entity definitions:
+          * String fields: industry, persona_type, scenario, impact, severity
+          * Array fields: benefits
+          * Object fields: technical_details, role (if present)
+          * Enum fields: role.level must be one of ["c_level", "middle_management", "operational_staff"]
+        - Empty or null values are not allowed for required fields
+        - All field names must exactly match the schema definition
+
     Please only response in JSON format:
     {
         "knowledge": {
@@ -164,15 +167,6 @@ class ExtractPlaybookTriplet(dspy.Signature):
 class ExtractPlaybookCovariate(dspy.Signature):
     """Please carefully review the provided text and entities list. Extract detailed metadata for each entity based on its type.
     
-    For each entity:
-    1. Identify the entity type (persona, pain_point, or feature)
-    2. Extract all required metadata fields for that type
-    3. Add relevant optional metadata if clearly present in the text
-    4. Ensure all metadata values are:
-       - Specific and meaningful
-       - Factual and verifiable in the text
-       - Properly formatted according to the field type
-    
     Required metadata structure by entity type:
 
     1. Persona entities:
@@ -180,37 +174,50 @@ class ExtractPlaybookCovariate(dspy.Signature):
             "topic": "persona",  # Must be first field
             "industry": "specific industry name",  # Required
             "persona_type": "organization or department type",  # Required
-            "roles": [  # Optional
-                {
-                    "title": "specific role title",
-                    "level": "c_level|middle_management|operational_staff"
-                }
-            ]
+            "role": {  # Optional object
+                "title": "specific job title",  # Required if role is present
+                "level": "c_level|middle_management|operational_staff"  # Required if role is present
+            }
         }
 
     2. Pain Point entities:
         {
-            "topic": "pain_point",  # Must be first field
+            "topic": "pain_point",  # Must be exact value
             "scenario": "specific context",  # Required
             "impact": "quantifiable business impact",  # Required
             "severity": "Critical|High|Medium|Low"  # Optional
         }
-
+        
     3. Feature entities:
         {
-            "topic": "feature",  # Must be first field
-            "benefits": ["specific business benefit 1", "benefit 2"],  # Required
-            "technical_details": "specific technical specifications"  # Optional
+            "topic": "feature",  # Must be exact value
+            "benefits": ["specific business benefit 1", "benefit 2"],  # Required, must be array
+            "technical_details": {  # Optional
+                "key1": "value1",
+                "key2": "value2"
+            }
         }
 
     Requirements:
-    - Each covariate must be a JSON tree structure
-    - "topic" must always be the first field with exact values: "persona", "pain_point", or "feature"
-    - All required fields must be included based on entity type
-    - Optional fields should only be included if explicitly supported by the text
-    - All values must be specific and verifiable in the source text
-    - Each covariate must be correctly linked to its corresponding entity
-
+    1. Field Requirements:
+       - Each entity must have all required fields for its type
+       - Optional fields should only be included if clear information is present in the text
+       - The 'role' object for Personas must include both title and level if present
+       - Empty or null values are not allowed for required fields
+    
+    2. Data Quality:
+       - All values must be specific and verifiable in the source text
+       - Use consistent terminology across all metadata
+       - Make values quantifiable where possible
+       - Avoid generic or vague descriptions
+    
+    3. Format Rules:
+       - String values must be properly formatted and meaningful
+       - Arrays must be properly formatted as lists
+       - Objects must be properly formatted as key-value pairs
+       - Field names must exactly match the schema definition
+       - Maintain consistent data types as specified
+    
     Please only response in JSON format.
     """
     
