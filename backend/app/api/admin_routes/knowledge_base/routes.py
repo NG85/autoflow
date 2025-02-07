@@ -256,11 +256,11 @@ def retry_failed_tasks(
         document_count = 0
         chunk_count = 0
         
-        index_method = request.index_method if request else [
+        index_methods = request.index_methods if request else [
             IndexMethod.VECTOR,
             IndexMethod.KNOWLEDGE_GRAPH,
         ]
-        if IndexMethod.VECTOR in index_method:
+        if IndexMethod.VECTOR in index_methods:
             # Retry failed vector index tasks.
             document_ids = knowledge_base_repo.set_failed_documents_status_to_pending(
                 session, kb
@@ -270,7 +270,7 @@ def retry_failed_tasks(
             document_count = len(document_ids)
             logger.info(f"Triggered {document_count} documents to rebuilt vector index.")
 
-        if IndexMethod.KNOWLEDGE_GRAPH in index_method:
+        if IndexMethod.KNOWLEDGE_GRAPH in index_methods:
             # Retry failed kg index tasks.
             chunk_ids = knowledge_base_repo.set_failed_chunks_status_to_pending(session, kb)
             for chunk_id in chunk_ids:
@@ -278,7 +278,7 @@ def retry_failed_tasks(
             chunk_count = len(chunk_ids)
             logger.info(f"Triggered {chunk_count} chunks to rebuilt knowledge graph index.")
 
-        if IndexMethod.PLAYBOOK_KG in index_method:
+        if IndexMethod.PLAYBOOK_KG in index_methods:
             # Retry failed playbook kg index tasks
             chunk_ids = knowledge_base_repo.set_failed_playbook_chunks_status_to_pending(session, kb)
             for chunk_id in chunk_ids:

@@ -123,4 +123,4 @@ class RetrievalRequest(BaseModel):
 
 
 class RetryFailedTasksRequest(BaseModel):
-    index_method: list[IndexMethod]
+    index_methods: list[IndexMethod]

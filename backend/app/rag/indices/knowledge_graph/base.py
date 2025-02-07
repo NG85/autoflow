@@ -68,6 +68,7 @@ class KnowledgeGraphIndex(BaseIndex[IndexLPG]):
         transformations: Optional[List[TransformComponent]] = None,
         storage_context: Optional[StorageContext] = None,
         show_progress: bool = False,
+        index_method: IndexMethod = IndexMethod.VECTOR,
         **kwargs: Any,
     ) -> "KnowledgeGraphIndex":
         return cls(
@@ -78,6 +79,7 @@ class KnowledgeGraphIndex(BaseIndex[IndexLPG]):
             transformations=transformations,
             storage_context=storage_context,
             show_progress=show_progress,
+            index_method=index_method,
             **kwargs,
         )
 
