@@ -1,4 +1,5 @@
 import logging
+import json
 from copy import deepcopy
 import pandas as pd
 import dspy
@@ -120,12 +121,12 @@ class Extractor(dspy.Module):
 
     def forward(self, text):
         with dspy.settings.context(lm=self.dspy_lm):
-            logger.info(f"Text: {text}")
             pred_graph = self.prog_graph(
                 text=text,
                 config=self.get_llm_output_config(),
             )
-            logger.info(f"Base Extractor Pred Graph: {pred_graph}")
+                    
+            logger.info(f"Predicted graph output: {pred_graph}")
             # extract the covariates
             entities_for_covariates = [
                 EntityCovariateInput(
@@ -135,11 +136,17 @@ class Extractor(dspy.Module):
                 for entity in pred_graph.knowledge.entities
             ]
 
-            pred_covariates = self.prog_covariates(
-                text=text,
-                entities=entities_for_covariates,
-                config=self.get_llm_output_config(),
-            )
+            try:
+                pred_covariates = self.prog_covariates(
+                    text=text,
+                    entities=entities_for_covariates,
+                    config=self.get_llm_output_config(),
+                )
+                logger.info((f"Debug: prog_covariates output before JSON parsing: {pred_covariates}"))
+            except Exception as e:
+                logger.error(f"Error in prog_covariates: {e}")
+                logger.error(f"Debug: prog_covariates raw output: {self.prog_covariates(text=text)}")  # 额外调用一次获取返回值
+                raise e
 
             # replace the entities with the covariates
             for entity in pred_graph.knowledge.entities:
@@ -159,7 +166,9 @@ class SimpleGraphExtractor:
             self.extract_prog.load(complied_extract_program_path)
 
     def extract(self, text: str, node: BaseNode):
+        logger.info(f"Extracting knowledge graph from text: {text}")
         pred = self.extract_prog(text=text)
+        logger.info(f"Debug: pred output: {pred}")
         metadata = get_relation_metadata_from_node(node)
         return self._to_df(
             pred.knowledge.entities, pred.knowledge.relationships, metadata

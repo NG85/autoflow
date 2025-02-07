@@ -9,7 +9,7 @@ from app.rag.knowledge_graph.schema import EntityCovariateInput, EntityCovariate
 logger = logging.getLogger(__name__)
 
 class ExtractPlaybookTriplet(dspy.Signature):
-    """Carefully analyze the provided text to identify sales and marketing related entities and their relationships.
+    """Carefully analyze the provided text to identify sales related entities and their relationships.
     
     Follow these Step-by-Step Analysis:
 
@@ -139,30 +139,28 @@ class ExtractPlaybookTriplet(dspy.Signature):
 
     Please only response in JSON format:
     {
-        "knowledge": {
-            "entities": [
-                {
-                    "name": "entity name (specific and meaningful)",
-                    "description": "detailed description in complete sentences",
-                    "metadata": {
-                        "topic": "persona|pain_point|feature",
-                        ... // required and optional metadata fields
-                    }
+        "entities": [
+            {
+                "name": "entity name (specific and meaningful)",
+                "description": "detailed description in complete sentences",
+                "metadata": {
+                    "topic": "persona|pain_point|feature",
+                    ... // required and optional metadata fields
                 }
-            ],
-            "relationships": [
-                {
-                    "source_entity": "source entity name",
-                    "target_entity": "target entity name",
-                    "relationship_desc": "comprehensive description including all required elements"
-                }
-            ]
-        }
+            }
+        ],
+        "relationships": [
+            {
+                "source_entity": "source entity name",
+                "target_entity": "target entity name",
+                "relationship_desc": "comprehensive description including all required elements"
+            }
+        ]
     }
     """
 
-    text = dspy.InputField(desc="text to extract sales and marketing related entities and relationships")
-    knowledge: KnowledgeGraph = dspy.OutputField(desc="Graph representation of the sales and marketing knowledge.")
+    text = dspy.InputField(desc="a paragraph of text to extract sales related entities and relationships to form a knowledge graph")
+    knowledge: KnowledgeGraph = dspy.OutputField(desc="Graph representation of the sales knowledge extracted from the text.")
 
 class ExtractPlaybookCovariate(dspy.Signature):
     """Please carefully review the provided text and entities list. Extract detailed metadata for each entity based on its type.
@@ -221,7 +219,7 @@ class ExtractPlaybookCovariate(dspy.Signature):
     Please only response in JSON format.
     """
     
-    text = dspy.InputField(desc="text to extract covariates for the entities")
+    text = dspy.InputField(desc="a paragraph of text to extract covariates to claim the entities.")
     entities: List[EntityCovariateInput] = dspy.InputField(desc="List of entities identified in the text")
     covariates: List[EntityCovariateOutput] = dspy.OutputField(desc="Detailed metadata for each entity")
 
