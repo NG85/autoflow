@@ -1,7 +1,7 @@
 from typing import Any, Mapping
 from pydantic import Field
 
-from app.rag.knowledge_graph.schema import Entity
+from app.rag.indices.knowledge_graph.schema import Entity
 
 class Persona(Entity):
     """Represents a persona entity in the knowledge graph with detailed business characteristics."""

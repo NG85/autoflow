@@ -28,7 +28,7 @@ website:
         href: "https://tidb.ai/docs/changelog"
       - text: "Powered by TiDB Vector"
         href: "https://tidb.cloud/ai"
-      - text: "© 2024 PingCAP"
+      - text: "© 2025 PingCAP"
         href: "https://pingcap.com"
     data_type: list
     description: "The footer links on the homepage."

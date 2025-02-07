@@ -11,6 +11,8 @@ from llama_index.core.schema import BaseNode, TransformComponent
 import llama_index.core.instrumentation as instrument
 from app.rag.indices.knowledge_graph.extractor import SimpleGraphExtractor
 from app.rag.indices.knowledge_graph.graph_store import KnowledgeGraphStore
+from app.models.knowledge_base import IndexMethod
+from app.rag.indices.knowledge_graph.playbook.playbook_extractor import PlaybookExtractor
 
 
 logger = logging.getLogger(__name__)
@@ -83,8 +85,14 @@ class KnowledgeGraphIndex(BaseIndex[IndexLPG]):
         """Insert nodes to the index struct."""
         if len(nodes) == 0:
             return nodes
+ 
+        if self._index_method == IndexMethod.PLAYBOOK_KG:
+            logger.info("Using PlaybookExtractor to build playbook knowledge graph index")
+            extractor = PlaybookExtractor(dspy_lm=self._dspy_lm)
+        else:
+            logger.info("Using SimpleGraphExtractor to build knowledge graph index")
+            extractor = SimpleGraphExtractor(dspy_lm=self._dspy_lm)
 
-        extractor = SimpleGraphExtractor(dspy_lm=self._dspy_lm)
         for node in nodes:
             entities_df, rel_df = extractor.extract(
                 text=node.get_content(),

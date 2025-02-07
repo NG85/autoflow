@@ -3,8 +3,8 @@ from typing import List, Optional
 import dspy
 from dspy.functional import TypedPredictor
 
-from app.rag.knowledge_graph.extractor import SimpleGraphExtractor
-from app.rag.knowledge_graph.schema import EntityCovariateInput, EntityCovariateOutput, KnowledgeGraph
+from app.rag.indices.knowledge_graph.extractor import SimpleGraphExtractor
+from app.rag.indices.knowledge_graph.schema import EntityCovariateInput, EntityCovariateOutput, KnowledgeGraph
 
 logger = logging.getLogger(__name__)
 
