@@ -29,41 +29,6 @@ class ExtractPlaybookTriplet(dspy.Signature):
         - Terms containing "system", "service", "tool", "platform" should be classified as features
         - Terms containing "Department", "Team", "Manager", "Director" should be classified as personas
         - Generic terms without clear classification should be excluded
-      
-      For each entity type, extract required metadata:
-      
-      Persona Entities (Organizations and their key roles):
-        Required metadata:
-          - topic: Must be "persona"
-          - industry: Target industry sector
-            Example: "Healthcare", "Financial Services"
-          - persona_type: Type of organization or department
-            Example: "Enterprise Company", "IT Department"
-        Optional metadata:
-          - role: Object containing role information (omit if not clear from text)
-            If present, must include both:
-            - title: Job position or title
-            - level: Must be exactly one of: ["c_level", "middle_management", "operational_staff"]
-      
-      Pain Point Entities (What problems need solving):
-        Required metadata:
-          - topic: Must be "pain_point"
-          - scenario: Specific context where the problem occurs
-            Example: "During system integration"
-          - impact: Business or operational impact
-            Example: "20% decrease in productivity"
-        Optional metadata:
-          - severity: Impact level on business operations
-            Example: "Critical", "High", "Medium", "Low"
-      
-      Feature Entities (What solutions we offer):
-        Required metadata:
-          - topic: Must be "feature"
-          - benefits: Array of specific business benefits
-            Example: ["Reduces integration time by 70%"]
-        Optional metadata:
-          - technical_details: Technical specifications as key-value pairs
-            Example: {"api_support": "REST API"}
             
     2. Establish Relationships:
       Valid Relationship Patterns:
@@ -95,26 +60,12 @@ class ExtractPlaybookTriplet(dspy.Signature):
         - Must use exact entity names in relationships
           
     3. Quality Guidelines:
-      Entity Validation Rules:
-        - Every entity MUST have a valid "topic" field with exact values: "persona", "pain_point", or "feature"
-        - Each entity type must include ALL required metadata fields:
-          * Persona entities:
-            - Required: topic, industry, persona_type
-            - Optional: role (if present, must contain both title and level)
-          * Pain Point entities:
-            - Required: topic, scenario, impact
-            - Optional: severity
-          * Feature entities:
-            - Required: topic, benefits (as array of strings)
-            - Optional: technical_details (as key-value pairs)
-        
-      Data Quality Rules:
-        - All metadata values must be factual and verifiable within the source text
-        - Use consistent terminology across entities and relationships
-        - Make descriptions specific and quantifiable where possible
-        - An entity without all required metadata fields is invalid and should be excluded
-        - An entity must have at least one associated relationship to be considered valid
-        
+      Basic Entity Information:
+        - Each entity MUST have:
+          * name: Clear, specific identifier
+          * description: Detailed description in complete sentences
+          * metadata.topic: Must be exactly one of: "persona", "pain_point", or "feature"
+       
       Relationship Rules:
         - Follow strict sequence: Persona -> Pain Point -> Feature
         - Each relationship must form part of a complete chain
@@ -124,18 +75,6 @@ class ExtractPlaybookTriplet(dspy.Signature):
         - Both source and target entities must be valid
         - Relationship descriptions must be specific and verifiable
         - Must use exact entity names in relationships
-        
-      Format Requirements:
-        - All string values should be properly formatted and meaningful
-        - Arrays (like benefits) must be properly formatted as lists
-        - Objects (like technical_details) must be properly formatted as key-value pairs
-        - Maintain consistent data types as specified in entity definitions:
-          * String fields: industry, persona_type, scenario, impact, severity
-          * Array fields: benefits
-          * Object fields: technical_details, role (if present)
-          * Enum fields: role.level must be one of ["c_level", "middle_management", "operational_staff"]
-        - Empty or null values are not allowed for required fields
-        - All field names must exactly match the schema definition
 
     Please only response in JSON format:
     {
@@ -144,8 +83,7 @@ class ExtractPlaybookTriplet(dspy.Signature):
                 "name": "entity name (specific and meaningful)",
                 "description": "detailed description in complete sentences",
                 "metadata": {
-                    "topic": "persona|pain_point|feature",
-                    ... // required and optional metadata fields
+                    "topic": "persona|pain_point|feature"
                 }
             }
         ],
@@ -169,7 +107,7 @@ class ExtractPlaybookCovariate(dspy.Signature):
 
     1. Persona entities:
         {
-            "topic": "persona",  # Must be first field
+            "topic": "persona",  # Must be first field and keep unchanged from input
             "industry": "specific industry name",  # Required
             "persona_type": "organization or department type",  # Required
             "role": {  # Optional object
@@ -180,7 +118,7 @@ class ExtractPlaybookCovariate(dspy.Signature):
 
     2. Pain Point entities:
         {
-            "topic": "pain_point",  # Must be exact value
+            "topic": "pain_point",  # Must be first field and keep unchanged from input
             "scenario": "specific context",  # Required
             "impact": "quantifiable business impact",  # Required
             "severity": "Critical|High|Medium|Low"  # Optional
@@ -188,7 +126,7 @@ class ExtractPlaybookCovariate(dspy.Signature):
         
     3. Feature entities:
         {
-            "topic": "feature",  # Must be exact value
+            "topic": "feature",  # Must be first field and keep unchanged from input
             "benefits": ["specific business benefit 1", "benefit 2"],  # Required, must be array
             "technical_details": {  # Optional
                 "key1": "value1",
@@ -198,6 +136,7 @@ class ExtractPlaybookCovariate(dspy.Signature):
 
     Requirements:
     1. Field Requirements:
+       - topic field must be first and keep the value from input entity unchanged
        - Each entity must have all required fields for its type
        - Optional fields should only be included if clear information is present in the text
        - The 'role' object for Personas must include both title and level if present

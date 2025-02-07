@@ -48,10 +48,12 @@ class KnowledgeGraphIndex(BaseIndex[IndexLPG]):
         nodes: Optional[Sequence[BaseNode]] = None,
         # parent class params
         callback_manager: Optional[CallbackManager] = None,
+        index_method: IndexMethod = IndexMethod.VECTOR,
         **kwargs: Any,
     ) -> None:
         self._dspy_lm = dspy_lm
         self._kg_store = kg_store
+        self._index_method = index_method
         super().__init__(
             nodes=nodes,
             callback_manager=callback_manager,
