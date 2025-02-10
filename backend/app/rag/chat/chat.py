@@ -39,7 +39,7 @@ from app.models import (
 from app.core.config import settings
 from app.models.entity import get_kb_entity_model
 from app.models.recommend_question import RecommendQuestion
-from app.rag.chat_stream_protocol import (
+from app.rag.chat.stream_protocol import (
     ChatStreamMessagePayload,
     ChatStreamDataPayload,
     ChatEvent,
@@ -68,7 +68,7 @@ from app.rag.indices.knowledge_graph.graph_store import (
 )
 from app.rag.knowledge_base.selector import KBSelectMode
 from app.rag.utils import parse_goal_response_format
-from app.rag.chat_config import (
+from app.rag.chat.config import (
     ChatEngineConfig,
     KnowledgeGraphOption,
     KnowledgeBaseOption,

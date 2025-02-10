@@ -7,7 +7,7 @@ from typing import List, Optional, Dict, Tuple, Literal
 from llama_index.core import QueryBundle
 from llama_index.core.async_utils import run_async_tasks
 from llama_index.core.base.base_retriever import BaseRetriever
-from llama_index.core.callbacks import CallbackManager, EventPayload
+from llama_index.core.callbacks import CallbackManager
 from llama_index.core.llms import LLM
 from llama_index.core.schema import NodeWithScore
 from llama_index.core.tools import ToolMetadata
@@ -80,19 +80,10 @@ class MultiKBFusionRetriever(BaseRetriever):
             else:
                 results = self._run_sync_queries(queries)
 
-        return self._fusion(results)
+        return self._fusion(query_bundle.query_str, results)
 
     def _gen_sub_queries(self, query_bundle: QueryBundle) -> List[QueryBundle]:
-        with self.callback_manager.event(
-            MyCBEventType.INTENT_DECOMPOSITION,
-            payload={EventPayload.QUERY_STR: query_bundle.query_str},
-        ) as event:
-            queries = self._query_decomposer.decompose(query_bundle.query_str)
-            event.on_end(
-                payload={
-                    "subqueries": queries,
-                }
-            )
+        queries = self._query_decomposer.decompose(query_bundle.query_str)
         return [QueryBundle(r.question) for r in queries.questions]
 
     def _run_async_queries(
@@ -125,6 +116,6 @@ class MultiKBFusionRetriever(BaseRetriever):
 
     @abstractmethod
     def _fusion(
-        self, results: Dict[Tuple[str, int], List[NodeWithScore]]
+        self, query: str, results: Dict[Tuple[str, int], List[NodeWithScore]]
     ) -> List[NodeWithScore]:
         """fusion method"""
