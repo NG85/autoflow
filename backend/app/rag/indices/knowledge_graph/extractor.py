@@ -1,5 +1,4 @@
 import logging
-import json
 from copy import deepcopy
 import pandas as pd
 import dspy
@@ -14,6 +13,7 @@ from app.rag.indices.knowledge_graph.schema import (
     EntityCovariateInput,
     EntityCovariateOutput,
 )
+from app.models.enums import GraphType
 
 logger = logging.getLogger(__name__)
 
@@ -158,16 +158,17 @@ class Extractor(dspy.Module):
 
 class SimpleGraphExtractor:
     def __init__(
-        self, dspy_lm: dspy.LM, complied_extract_program_path: Optional[str] = None
+        self, dspy_lm: dspy.LM, complied_extract_program_path: Optional[str] = None, graph_type: GraphType = GraphType.general
     ):
+        self.graph_type = graph_type
         self.extract_prog = Extractor(dspy_lm=dspy_lm)
         if complied_extract_program_path is not None:
             self.extract_prog.load(complied_extract_program_path)
 
     def extract(self, text: str, node: BaseNode):
-        logger.info(f"Extracting knowledge graph from text: {text}")
+        logger.info(f"Extracting {self.graph_type} knowledge graph from text")
         pred = self.extract_prog(text=text)
-        logger.info(f"Debug: pred output: {pred}")
+        logger.info(f"pred output: {pred}")
         metadata = get_relation_metadata_from_node(node)
         return self._to_df(
             pred.knowledge.entities, pred.knowledge.relationships, metadata

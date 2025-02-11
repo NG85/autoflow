@@ -26,7 +26,6 @@ PHONY_KNOWLEDGE_BASE_ID = 0
 class IndexMethod(str, enum.Enum):
     KNOWLEDGE_GRAPH = "knowledge_graph"
     VECTOR = "vector"
-    PLAYBOOK_KG = "playbook_kg"
 
 class KnowledgeBaseDataSource(SQLModel, table=True):
     knowledge_base_id: int = Field(primary_key=True, foreign_key="knowledge_bases.id")

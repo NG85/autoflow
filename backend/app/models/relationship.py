@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional, Any, List, Dict, Type
 from uuid import UUID
 
-from sqlalchemy import Column, Text, JSON, DateTime
+from sqlalchemy import Column, Enum, Text, JSON, DateTime
 from sqlmodel import (
     SQLModel,
     Field,
@@ -14,6 +14,7 @@ from tidb_vector.sqlalchemy import VectorType
 from app.core.config import settings
 from app.models.knowledge_base import KnowledgeBase
 from app.models.entity import get_kb_entity_model, Entity
+from app.models.enums import GraphType
 from app.models.patch.sql_model import SQLModel as PatchSQLModel
 from app.models.knowledge_base_scoped.registry import get_kb_scoped_registry
 from app.models.knowledge_base_scoped.table_naming import (
@@ -32,7 +33,10 @@ class RelationshipBase(SQLModel):
     last_modified_at: Optional[datetime] = Field(sa_column=Column(DateTime))
     document_id: Optional[int] = Field(default=None, nullable=True)
     chunk_id: Optional[UUID] = Field(default=None, nullable=True)
-
+    graph_type: GraphType = Field(
+        default=GraphType.general,
+        sa_column=Column(Enum(GraphType), nullable=False, server_default=GraphType.general.value)
+    )
 
 # Notice: DO NOT forget to modify the definition in `get_kb_chunk_model` to
 # keep the table structure on both sides consistent.
@@ -121,7 +125,11 @@ def get_kb_relationship_model(kb: KnowledgeBase) -> Type[SQLModel]:
                 VectorType(vector_dimension), comment="hnsw(distance=cosine)"
             )
         )
-
+        graph_type: GraphType = Field(
+            default=GraphType.general,
+            sa_column=Column(Enum(GraphType), nullable=False, server_default=GraphType.general.value)
+        )
+        
         def __hash__(self):
             return hash(self.id)
 

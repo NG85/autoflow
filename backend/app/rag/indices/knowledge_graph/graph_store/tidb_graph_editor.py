@@ -16,6 +16,7 @@ from app.rag.indices.knowledge_graph.graph_store.helpers import (
     get_query_embedding,
 )
 from app.staff_action import create_staff_action_log
+from app.models.enums import GraphType
 
 
 # TODO: CRUD operations should move to TiDBGraphStore
@@ -28,9 +29,11 @@ class TiDBGraphEditor:
         entity_db_model: Type[SQLModel],
         relationship_db_model: Type[SQLModel],
         embed_model: Optional[EmbedType] = None,
+        graph_type: GraphType = GraphType.general,
     ):
         self._entity_db_model = entity_db_model
         self._relationship_db_model = relationship_db_model
+        self._graph_type = graph_type
 
         if embed_model:
             self._embed_model = resolve_embed_model(embed_model)
@@ -215,6 +218,7 @@ class TiDBGraphEditor:
             embed_model=self._embed_model,
             entity_db_model=self._entity_db_model,
             relationship_db_model=self._relationship_db_model,
+            graph_type=self._graph_type,
         )
         for related_entity in session.exec(
             select(self._entity_db_model).where(

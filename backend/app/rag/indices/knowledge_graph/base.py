@@ -13,6 +13,7 @@ from app.rag.indices.knowledge_graph.extractor import SimpleGraphExtractor
 from app.rag.indices.knowledge_graph.graph_store import KnowledgeGraphStore
 from app.models.knowledge_base import IndexMethod
 from app.rag.indices.knowledge_graph.playbook.playbook_extractor import PlaybookExtractor
+from app.models.enums import GraphType
 
 
 logger = logging.getLogger(__name__)
@@ -48,12 +49,12 @@ class KnowledgeGraphIndex(BaseIndex[IndexLPG]):
         nodes: Optional[Sequence[BaseNode]] = None,
         # parent class params
         callback_manager: Optional[CallbackManager] = None,
-        index_method: IndexMethod = IndexMethod.VECTOR,
+        graph_type: GraphType = GraphType.general,
         **kwargs: Any,
     ) -> None:
         self._dspy_lm = dspy_lm
         self._kg_store = kg_store
-        self._index_method = index_method
+        self._graph_type = graph_type
         super().__init__(
             nodes=nodes,
             callback_manager=callback_manager,
@@ -70,7 +71,7 @@ class KnowledgeGraphIndex(BaseIndex[IndexLPG]):
         transformations: Optional[List[TransformComponent]] = None,
         storage_context: Optional[StorageContext] = None,
         show_progress: bool = False,
-        index_method: IndexMethod = IndexMethod.VECTOR,
+        graph_type: GraphType = GraphType.general,
         **kwargs: Any,
     ) -> "KnowledgeGraphIndex":
         return cls(
@@ -81,7 +82,7 @@ class KnowledgeGraphIndex(BaseIndex[IndexLPG]):
             transformations=transformations,
             storage_context=storage_context,
             show_progress=show_progress,
-            index_method=index_method,
+            graph_type=graph_type,
             **kwargs,
         )
 
@@ -90,7 +91,7 @@ class KnowledgeGraphIndex(BaseIndex[IndexLPG]):
         if len(nodes) == 0:
             return nodes
  
-        if self._index_method == IndexMethod.PLAYBOOK_KG:
+        if self._graph_type == GraphType.playbook:
             logger.info("Using PlaybookExtractor to build playbook knowledge graph index")
             extractor = PlaybookExtractor(dspy_lm=self._dspy_lm)
         else:

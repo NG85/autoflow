@@ -13,8 +13,9 @@ from app.api.admin_routes.models import (
     UserDescriptor,
 )
 from app.exceptions import KBNoVectorIndexConfigured
-from app.models import KgIndexStatus
+from app.models.chunk import KgIndexStatus
 from app.models.knowledge_base import IndexMethod
+from app.models.enums import GraphType
 
 
 class KnowledgeBaseCreate(BaseModel):
@@ -123,4 +124,4 @@ class RetrievalRequest(BaseModel):
 
 
 class RetryFailedTasksRequest(BaseModel):
-    index_methods: list[IndexMethod]
+    graph_types: list[GraphType]

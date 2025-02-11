@@ -38,7 +38,7 @@ def upload_files(
     
     # 创建 DocumentMetadata 对象
     document_metadata = DocumentMetadata(
-        category=metadata_dict.get("category", DocumentCategory.GENERAL),
+        category=metadata_dict.get("category", DocumentCategory.PLAYBOOK),
         description=metadata_dict.get("description", None),
         tags=metadata_dict.get("tags", None),
     )

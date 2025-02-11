@@ -9,7 +9,7 @@ from sqlmodel import (
     Text,
 )
 from tidb_vector.sqlalchemy import VectorType
-from sqlalchemy import Index
+from sqlalchemy import Index, Enum
 
 from app.core.config import settings
 from app.models.knowledge_base import KnowledgeBase
@@ -19,6 +19,7 @@ from app.models.knowledge_base_scoped.table_naming import (
     get_kb_vector_dims,
 )
 from app.models.patch.sql_model import SQLModel as PatchSQLModel
+from app.models.enums import GraphType
 
 
 class EntityType(str, enum.Enum):
@@ -35,7 +36,10 @@ class EntityBase(SQLModel):
     meta: List | Dict = Field(default={}, sa_column=Column(JSON))
     entity_type: EntityType = EntityType.original
     synopsis_info: List | Dict | None = Field(default=None, sa_column=Column(JSON))
-
+    graph_type: GraphType = Field(
+        default=GraphType.general,
+        sa_column=Column(Enum(GraphType), nullable=False, server_default=GraphType.general.value)
+    )
 
 # Notice: DO NOT forget to modify the definition in `get_kb_chunk_model` to
 # keep the table structure on both sides consistent.
@@ -81,6 +85,7 @@ def get_kb_entity_model(kb: KnowledgeBase) -> Type[SQLModel]:
         __tablename__ = entities_table_name
         __table_args__ = (
             Index("idx_entity_type", "entity_type"),
+            Index("idx_graph_type", "graph_type"),
             Index("idx_entity_name", "name"),
             {"extend_existing": True},
         )
@@ -100,6 +105,10 @@ def get_kb_entity_model(kb: KnowledgeBase) -> Type[SQLModel]:
             sa_column=Column(
                 VectorType(vector_dimension), comment="hnsw(distance=cosine)"
             )
+        )
+        graph_type: GraphType = Field(
+            default=GraphType.general,
+            sa_column=Column(Enum(GraphType), nullable=False, server_default=GraphType.general.value)
         )
 
         def __hash__(self):

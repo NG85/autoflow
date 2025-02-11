@@ -19,6 +19,7 @@ from app.models import (
     Chunk as DBChunk,
 )
 from app.utils.dspy import get_dspy_lm_by_llama_llm
+from app.models.enums import GraphType
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +96,7 @@ class IndexService:
         graph_index: KnowledgeGraphIndex = KnowledgeGraphIndex.from_existing(
             dspy_lm=self._dspy_lm,
             kg_store=graph_store,
-            index_method=IndexMethod.KNOWLEDGE_GRAPH
+            graph_type=GraphType.general
         )
 
         node = db_chunk.to_llama_text_node()
@@ -115,11 +116,11 @@ class IndexService:
         3. insert playbook customized entities and relations into `entities` and `relations` table.
         """
 
-        graph_store = get_kb_tidb_graph_store(session, self._knowledge_base)
+        graph_store = get_kb_tidb_graph_store(session, self._knowledge_base, graph_type="playbook")
         graph_index: KnowledgeGraphIndex = KnowledgeGraphIndex.from_existing(
             dspy_lm=self._dspy_lm,
             kg_store=graph_store,
-            index_method=IndexMethod.PLAYBOOK_KG
+            graph_type=GraphType.playbook
         )
 
         node = db_chunk.to_llama_text_node()

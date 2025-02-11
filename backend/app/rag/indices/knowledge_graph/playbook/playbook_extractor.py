@@ -5,6 +5,7 @@ from dspy.functional import TypedPredictor
 
 from app.rag.indices.knowledge_graph.extractor import SimpleGraphExtractor
 from app.rag.indices.knowledge_graph.schema import EntityCovariateInput, EntityCovariateOutput, KnowledgeGraph
+from app.models.enums import GraphType
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +167,7 @@ class ExtractPlaybookCovariate(dspy.Signature):
 class PlaybookExtractor(SimpleGraphExtractor):
     """Extractor for sales playbook knowledge graph, using customized prompts for playbook entities and relationships"""
     def __init__(self, dspy_lm: dspy.LM, complied_extract_program_path: Optional[str] = None):
-      super().__init__(dspy_lm, complied_extract_program_path)
+      super().__init__(dspy_lm, complied_extract_program_path, GraphType.playbook)
       # Replace the default extractor with Playbook specific extractor
       self.extract_prog.prog_graph = TypedPredictor(ExtractPlaybookTriplet)
       self.extract_prog.prog_covariates = TypedPredictor(ExtractPlaybookCovariate)

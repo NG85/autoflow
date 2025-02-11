@@ -9,6 +9,7 @@ from app.rag.knowledge_base.index_store import (
 )
 from app.repositories.embedding_model import embed_model_repo
 from app.repositories.llm import llm_repo
+from app.models.enums import GraphType
 
 from .models import (
     KnowledgeBaseDetail,
@@ -31,7 +32,6 @@ from app.exceptions import (
 )
 from app.models import (
     KnowledgeBase,
-    IndexMethod,
 )
 from app.models.data_source import DataSource
 from app.tasks import (
@@ -255,12 +255,12 @@ def retry_failed_tasks(
         kb = knowledge_base_repo.must_get(session, kb_id)
         document_count = 0
         chunk_count = 0
+        playbook_chunk_count = 0
         
-        index_methods = request.index_methods if request else [
-            IndexMethod.VECTOR,
-            IndexMethod.KNOWLEDGE_GRAPH,
+        graph_types = request.graph_types if request else [
+            GraphType.general
         ]
-        if IndexMethod.VECTOR in index_methods:
+        if GraphType.general in graph_types:
             # Retry failed vector index tasks.
             document_ids = knowledge_base_repo.set_failed_documents_status_to_pending(
                 session, kb
@@ -268,26 +268,52 @@ def retry_failed_tasks(
             for document_id in document_ids:
                 build_index_for_document.delay(kb_id, document_id)
             document_count = len(document_ids)
-            logger.info(f"Triggered {document_count} documents to rebuilt vector index.")
+            logger.info(f"Triggered {document_count} documents to rebuild vector index.")
 
-        if IndexMethod.KNOWLEDGE_GRAPH in index_methods:
             # Retry failed kg index tasks.
             chunk_ids = knowledge_base_repo.set_failed_chunks_status_to_pending(session, kb)
             for chunk_id in chunk_ids:
                 build_kg_index_for_chunk.delay(kb_id, chunk_id)
             chunk_count = len(chunk_ids)
-            logger.info(f"Triggered {chunk_count} chunks to rebuilt knowledge graph index.")
+            logger.info(f"Triggered {chunk_count} chunks to rebuild knowledge graph index.")
 
-        if IndexMethod.PLAYBOOK_KG in index_methods:
+        if GraphType.playbook in request.graph_types:
             # Retry failed playbook kg index tasks
-            chunk_ids = knowledge_base_repo.set_failed_playbook_chunks_status_to_pending(session, kb)
-            for chunk_id in chunk_ids:
+            playbook_chunk_ids = knowledge_base_repo.set_failed_playbook_chunks_status_to_pending(session, kb)
+            for chunk_id in playbook_chunk_ids:
                 build_playbook_kg_index_for_chunk.delay(kb_id, chunk_id)
-            chunk_count = len(chunk_ids)
-            logger.info(f"Triggered {chunk_count} chunks to rebuilt playbook knowledge graph index.")
+            playbook_chunk_count = len(playbook_chunk_ids)
+            logger.info(f"Triggered {playbook_chunk_count} chunks to rebuild playbook knowledge graph index.")
 
         return {
-            "detail": f"Triggered reindex {document_count} documents and {chunk_count} chunks of knowledge base #{kb_id}."
+            "detail": f"Triggered reindex {document_count} documents, {chunk_count} chunks and {playbook_chunk_count} playbook chunks of knowledge base #{kb_id}."
+        }
+    except KBNotFound as e:
+        raise e
+    except Exception as e:
+        logger.exception(e)
+        raise InternalServerError()
+
+
+@router.post("/admin/knowledge_bases/{kb_id}/build-playbook-graph-index")
+def build_playbook_failed_chunks_graph_index(
+    session: SessionDep,
+    user: CurrentSuperuserDep,
+    kb_id: int,
+) -> dict:
+    try:
+        kb = knowledge_base_repo.must_get(session, kb_id)
+        chunk_count = 0
+        chunk_ids = knowledge_base_repo.prepare_chunks_to_build_playbook_index(session, kb)
+        
+        for chunk_id in chunk_ids:
+            build_playbook_kg_index_for_chunk.delay(kb_id, chunk_id)
+    
+        chunk_count = len(chunk_ids)
+        logger.info(f"Triggered {chunk_count} chunks to build playbook knowledge graph index.")
+
+        return {
+            "detail": f"Triggered index {chunk_count} chunks of playbook knowledge base #{kb_id}."
         }
     except KBNotFound as e:
         raise e

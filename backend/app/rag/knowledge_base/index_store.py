@@ -3,7 +3,7 @@ from sqlmodel import Session
 
 from app.models import KnowledgeBase
 from app.models.chunk import get_kb_chunk_model
-from app.models.entity import get_kb_entity_model
+from app.models.entity import GraphType, get_kb_entity_model
 from app.rag.knowledge_base.config import get_kb_dspy_llm, get_kb_embed_model
 from app.models.relationship import get_kb_relationship_model
 from app.rag.indices.knowledge_graph.graph_store import TiDBGraphStore, TiDBGraphEditor
@@ -22,7 +22,7 @@ def init_kb_tidb_vector_store(session: Session, kb: KnowledgeBase) -> TiDBVector
     return vector_store
 
 
-def get_kb_tidb_graph_store(session: Session, kb: KnowledgeBase) -> TiDBGraphStore:
+def get_kb_tidb_graph_store(session: Session, kb: KnowledgeBase, graph_type: GraphType = GraphType.general) -> TiDBGraphStore:
     dspy_lm = get_kb_dspy_llm(session, kb)
     embed_model = get_kb_embed_model(session, kb)
     entity_model = get_kb_entity_model(kb)
@@ -37,6 +37,7 @@ def get_kb_tidb_graph_store(session: Session, kb: KnowledgeBase) -> TiDBGraphSto
         entity_db_model=entity_model,
         relationship_db_model=relationship_model,
         chunk_db_model=chunk_model,
+        graph_type=graph_type,
     )
     return graph_store
 

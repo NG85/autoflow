@@ -10,7 +10,6 @@ from app.models import (
     DocumentCategory,
 )
 from app.models.chunk import PlaybookKgIndexStatus, get_kb_chunk_model
-from app.models.knowledge_base import IndexMethod
 from app.rag.build_index import IndexService
 from app.rag.knowledge_base.config import get_kb_llm, get_kb_embed_model
 from app.repositories import knowledge_base_repo
@@ -24,9 +23,6 @@ def build_playbook_index_for_document(self, knowledge_base_id: int, document_id:
     # Pre-check before building index.
     with Session(engine, expire_on_commit=False) as session:
         kb = knowledge_base_repo.must_get(session, knowledge_base_id)
-        if IndexMethod.PLAYBOOK_KG not in kb.index_methods:
-            logger.info(f"Knowledge base #{knowledge_base_id} does not have playbook index method")
-            return
 
         # Check document.
         db_document = session.get(DBDocument, document_id)

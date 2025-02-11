@@ -13,7 +13,7 @@ import sqlalchemy
 from sqlmodel import Session, asc, func, select, text, SQLModel
 from sqlalchemy.orm import aliased, defer, joinedload
 from tidb_vector.sqlalchemy import VectorAdaptor
-from sqlalchemy import or_, desc
+from sqlalchemy import and_, or_, desc
 
 from app.core.db import engine
 from app.rag.indices.knowledge_graph.graph_store.helpers import (
@@ -42,6 +42,7 @@ from app.models import (
     Chunk as DBChunk,
 )
 from app.models import EntityType
+from app.models.enums import GraphType
 
 logger = logging.getLogger(__name__)
 
@@ -90,13 +91,14 @@ class TiDBGraphStore(KnowledgeGraphStore):
         entity_db_model: Type[SQLModel] = DBEntity,
         relationship_db_model: Type[SQLModel] = DBRelationship,
         chunk_db_model: Type[SQLModel] = DBChunk,
+        graph_type: GraphType = GraphType.general,
     ):
         self._session = session
         self._owns_session = session is None
         if self._session is None:
             self._session = Session(engine)
         self._dspy_lm = dspy_lm
-
+        self._graph_type = graph_type
         if embed_model:
             self._embed_model = resolve_embed_model(embed_model)
         else:
@@ -203,12 +205,15 @@ class TiDBGraphStore(KnowledgeGraphStore):
         if (
             self._session.exec(
                 select(self._relationship_model).where(
-                    self._relationship_model.meta["chunk_id"] == chunk_id
+                    and_(
+                        self._relationship_model.meta["chunk_id"] == chunk_id,
+                        self._relationship_model.meta["graph_type"] == self._graph_type
+                    )
                 )
             ).first()
             is not None
         ):
-            logger.info(f"{chunk_id} already exists in the relationship table, skip.")
+            logger.info(f"{chunk_id} already exists in the relationship table for {self._graph_type}, skip.")
             return
 
         entities_name_map = defaultdict(list)
@@ -302,6 +307,7 @@ class TiDBGraphStore(KnowledgeGraphStore):
             meta=relationship_metadata,
             document_id=relationship_metadata.get("document_id"),
             chunk_id=relationship_metadata.get("chunk_id"),
+            graph_type=self._graph_type,
         )
         self._session.add(relationship_object)
         if commit:
@@ -335,6 +341,7 @@ class TiDBGraphStore(KnowledgeGraphStore):
             .filter(
                 self._entity_model.name == entity.name
                 and self._entity_model.entity_type == entity_type
+                and self._entity_model.graph_type == self._graph_type
             )
             .prefix_with(hint)
             .order_by(asc("distance"))
@@ -378,7 +385,7 @@ class TiDBGraphStore(KnowledgeGraphStore):
                     db_obj.meta_vec = get_entity_metadata_embedding(
                         db_obj.meta, self._embed_model
                     )
-
+                    db_obj.graph_type = self._graph_type
                     self._session.add(db_obj)
                     if commit:
                         self._session.commit()
@@ -401,6 +408,7 @@ class TiDBGraphStore(KnowledgeGraphStore):
             meta_vec=get_entity_metadata_embedding(entity.metadata, self._embed_model),
             synopsis_info=synopsis_info_str,
             entity_type=entity_type,
+            graph_type=self._graph_type,
         )
         self._session.add(db_obj)
         if commit:
@@ -412,6 +420,10 @@ class TiDBGraphStore(KnowledgeGraphStore):
         return db_obj
 
     def _try_merge_entities(self, entities: List[Entity]) -> Entity:
+        if len(set(e.graph_type for e in entities)) > 1:
+            logger.info("Entities have different graph_types, skipping merge")
+            return None
+        
         logger.info(f"Trying to merge entities: {entities[0].name}")
         try:
             with dspy.settings.context(lm=self._dspy_lm):
@@ -1018,7 +1030,10 @@ class TiDBGraphStore(KnowledgeGraphStore):
 
         relationships = session.exec(
             select(self._relationship_model).where(
-                self._relationship_model.id.in_(relationships_ids)
+                and_(
+                    self._relationship_model.id.in_(relationships_ids),
+                    self._relationship_model.graph_type == self._graph_type
+                )
             )
         ).all()
 

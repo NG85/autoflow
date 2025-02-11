@@ -1,7 +1,7 @@
 from typing import List, Optional, Type
 from datetime import datetime, UTC
 
-from sqlalchemy import delete
+from sqlalchemy import and_, delete, or_
 from sqlalchemy.orm.attributes import flag_modified
 from sqlmodel import select, Session, func, update
 from fastapi_pagination import Params, Page
@@ -261,6 +261,34 @@ class KnowledgeBaseRepo(BaseRepo):
 
         return chunk_ids
 
+    
+    def prepare_chunks_to_build_playbook_index(
+        self, session: Session, kb: KnowledgeBase
+    ) -> list[int]:
+        chunk_model = get_kb_chunk_model(kb)
+        stmt = select(chunk_model.id).where(
+            chunk_model.document.has(
+                and_(
+                    Document.knowledge_base_id == kb.id,
+                    func.json_unquote(
+                        func.json_extract(Document.meta, "$.category")
+                    ) == "playbook"
+                )
+            ),
+            or_(
+                chunk_model.playbook_index_status == PlaybookKgIndexStatus.FAILED,
+                chunk_model.playbook_index_status == PlaybookKgIndexStatus.NOT_STARTED
+            )
+        )
+        chunk_ids = session.exec(stmt).all()
+
+        # Update playbook chunk status.
+        self.batch_update_playbook_chunk_status(
+            session, chunk_model, chunk_ids, PlaybookKgIndexStatus.PENDING
+        )
+
+        return chunk_ids
+
     def list_vector_index_built_errors(
         self,
         session: Session,
@@ -316,6 +344,46 @@ class KnowledgeBaseRepo(BaseRepo):
                 chunk_model.document_id == Document.id,
                 Document.knowledge_base_id == kb.id,
                 chunk_model.index_status == KgIndexStatus.FAILED,
+            )
+            .order_by(chunk_model.id.desc())
+        )
+
+        return paginate(
+            session,
+            query,
+            params,
+            transformer=lambda rows: [
+                KGIndexError(
+                    document_id=row[0],
+                    document_name=row[1],
+                    source_uri=row[2],
+                    chunk_id=row[3],
+                    error=row[4],
+                )
+                for row in rows
+            ],
+        )
+
+    def list_playbook_kg_index_built_errors(
+        self,
+        session: Session,
+        kb: KnowledgeBase,
+        params: Params | None = Params(),
+    ) -> Page[KGIndexError]:
+        chunk_model = get_kb_chunk_model(kb)
+        query = (
+            select(
+                Document.id,
+                Document.name,
+                chunk_model.source_uri,
+                chunk_model.id,
+                chunk_model.playbook_index_result,
+            )
+            .join(Document)
+            .where(
+                chunk_model.document_id == Document.id,
+                Document.knowledge_base_id == kb.id,
+                chunk_model.playbook_index_status == PlaybookKgIndexStatus.FAILED,
             )
             .order_by(chunk_model.id.desc())
         )
