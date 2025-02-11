@@ -1,8 +1,8 @@
 import logging
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi_pagination import Params, Page
-
+from app.api.deps import SessionDep, CurrentSuperuserDep
 from app.rag.knowledge_base.index_store import (
     init_kb_tidb_vector_store,
     init_kb_tidb_graph_store,
@@ -20,20 +20,20 @@ from .models import (
     VectorIndexError,
     KGIndexError,
 )
-from app.api.deps import SessionDep, CurrentSuperuserDep
 from app.exceptions import (
     InternalServerError,
-    KBException,
-    KBNotFound,
-    KBNoVectorIndexConfigured,
-    DefaultLLMNotFound,
-    DefaultEmbeddingModelNotFound,
     KBIsUsedByChatEngines,
 )
 from app.models import (
+    DataSource,
     KnowledgeBase,
 )
-from app.models.data_source import DataSource
+from app.repositories import (
+    embed_model_repo,
+    llm_repo,
+    data_source_repo,
+    knowledge_base_repo,
+)
 from app.tasks import (
     build_kg_index_for_chunk,
     build_index_for_document,
@@ -42,7 +42,6 @@ from app.tasks import (
     build_vector_index_for_relationship,
     build_playbook_kg_index_for_chunk,
 )
-from app.repositories import knowledge_base_repo, data_source_repo
 from app.tasks.knowledge_base import (
     import_documents_for_knowledge_base,
     stats_for_knowledge_base,
@@ -99,12 +98,8 @@ def create_knowledge_base(
         import_documents_for_knowledge_base.delay(knowledge_base.id)
 
         return knowledge_base
-    except KBNoVectorIndexConfigured as e:
-        raise e
-    except DefaultLLMNotFound as e:
-        raise e
-    except DefaultEmbeddingModelNotFound as e:
-        raise e
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(e)
         raise InternalServerError()
@@ -127,8 +122,8 @@ def get_knowledge_base(
 ) -> KnowledgeBaseDetail:
     try:
         return knowledge_base_repo.must_get(session, knowledge_base_id)
-    except KBNotFound as e:
-        raise e
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(e)
         raise InternalServerError()
@@ -145,10 +140,8 @@ def update_knowledge_base_setting(
         knowledge_base = knowledge_base_repo.must_get(session, knowledge_base_id)
         knowledge_base = knowledge_base_repo.update(session, knowledge_base, update)
         return knowledge_base
-    except KBNotFound as e:
-        raise e
-    except KBNoVectorIndexConfigured as e:
-        raise e
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(e)
         raise InternalServerError()
@@ -161,8 +154,8 @@ def list_kb_linked_chat_engines(
     try:
         kb = knowledge_base_repo.must_get(session, kb_id)
         return knowledge_base_repo.list_linked_chat_engines(session, kb.id)
-    except KBNotFound as e:
-        raise e
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(e)
         raise InternalServerError()
@@ -187,8 +180,8 @@ def delete_knowledge_base(session: SessionDep, user: CurrentSuperuserDep, kb_id:
         purge_knowledge_base_related_resources.apply_async(args=[kb_id], countdown=5)
 
         return {"detail": f"Knowledge base #{kb_id} is deleted successfully"}
-    except KBException as e:
-        raise e
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(e)
         raise InternalServerError()
@@ -206,8 +199,8 @@ def get_knowledge_base_index_overview(
         stats_for_knowledge_base.delay(knowledge_base.id)
 
         return knowledge_base_repo.get_index_overview(session, knowledge_base)
-    except KBNotFound as e:
-        raise e
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(e)
         raise InternalServerError()
@@ -223,8 +216,8 @@ def list_kb_vector_index_errors(
     try:
         kb = knowledge_base_repo.must_get(session, kb_id)
         return knowledge_base_repo.list_vector_index_built_errors(session, kb, params)
-    except KBNotFound as e:
-        raise e
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(e)
         raise InternalServerError()
@@ -240,8 +233,8 @@ def list_kb_kg_index_errors(
     try:
         kb = knowledge_base_repo.must_get(session, kb_id)
         return knowledge_base_repo.list_kg_index_built_errors(session, kb, params)
-    except KBNotFound as e:
-        raise e
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(e)
         raise InternalServerError()
@@ -256,9 +249,6 @@ def retry_failed_tasks(
 ) -> dict:
     try:
         kb = knowledge_base_repo.must_get(session, kb_id)
-        document_count = 0
-        chunk_count = 0
-        playbook_chunk_count = 0
         
         graph_types = request.graph_types if request else [
             GraphType.general
@@ -270,29 +260,29 @@ def retry_failed_tasks(
             )
             for document_id in document_ids:
                 build_index_for_document.delay(kb_id, document_id)
-            document_count = len(document_ids)
-            logger.info(f"Triggered {document_count} documents to rebuild vector index.")
+            logger.info(f"Triggered {len(document_ids)} documents to rebuild vector index.")
 
             # Retry failed kg index tasks.
             chunk_ids = knowledge_base_repo.set_failed_chunks_status_to_pending(session, kb)
             for chunk_id in chunk_ids:
                 build_kg_index_for_chunk.delay(kb_id, chunk_id)
-            chunk_count = len(chunk_ids)
-            logger.info(f"Triggered {chunk_count} chunks to rebuild knowledge graph index.")
+            logger.info(f"Triggered {len(chunk_ids)} chunks to rebuild knowledge graph index.")
 
         if GraphType.playbook in graph_types:
             # Retry failed playbook kg index tasks
             playbook_chunk_ids = knowledge_base_repo.set_failed_playbook_chunks_status_to_pending(session, kb)
             for chunk_id in playbook_chunk_ids:
                 build_playbook_kg_index_for_chunk.delay(kb_id, chunk_id)
-            playbook_chunk_count = len(playbook_chunk_ids)
-            logger.info(f"Triggered {playbook_chunk_count} chunks to rebuild playbook knowledge graph index.")
+            logger.info(f"Triggered {len(playbook_chunk_ids)} chunks to rebuild playbook knowledge graph index.")
 
         return {
-            "detail": f"Triggered reindex {document_count} documents, {chunk_count} chunks and {playbook_chunk_count} playbook chunks of knowledge base #{kb_id}."
+            "detail": f"Triggered reindex {len(document_ids)} documents, {len(chunk_ids)} chunks and {len(playbook_chunk_ids)} playbook chunks of knowledge base #{kb_id}.",
+            "reindex_document_ids": document_ids,
+            "reindex_chunk_ids": chunk_ids,
+            "reindex_playbook_chunk_ids": playbook_chunk_ids,
         }
-    except KBNotFound as e:
-        raise e
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(e)
         raise InternalServerError()
@@ -306,20 +296,18 @@ def build_playbook_failed_chunks_graph_index(
 ) -> dict:
     try:
         kb = knowledge_base_repo.must_get(session, kb_id)
-        chunk_count = 0
         chunk_ids = knowledge_base_repo.prepare_chunks_to_build_playbook_index(session, kb)
         
         for chunk_id in chunk_ids:
             build_playbook_kg_index_for_chunk.delay(kb_id, chunk_id)
-    
-        chunk_count = len(chunk_ids)
-        logger.info(f"Triggered {chunk_count} chunks to build playbook knowledge graph index.")
+        logger.info(f"Triggered {len(chunk_ids)} chunks to build playbook knowledge graph index.")
 
         return {
-            "detail": f"Triggered index {chunk_count} chunks of playbook knowledge base #{kb_id}."
+            "detail": f"Triggered index {len(chunk_ids)} chunks of playbook knowledge base #{kb_id}.",
+            "index_playbook_chunk_ids": chunk_ids,
         }
-    except KBNotFound as e:
-        raise e
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(e)
         raise InternalServerError()
@@ -341,10 +329,11 @@ def build_entity_vectors(
         logger.info(f"Triggered {len(entity_ids)} entities to build vector embeddings.")
 
         return {
-            "detail": f"Triggered vector embedding generation for {len(entity_ids)} entities of knowledge base #{kb_id}."
+            "detail": f"Triggered vector embedding generation for {len(entity_ids)} entities of knowledge base #{kb_id}.",
+            "vector_index_entity_ids": entity_ids,
         }
-    except KBNotFound as e:
-        raise e
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(e)
         raise InternalServerError()
@@ -358,18 +347,19 @@ def build_relationship_vectors(
 ) -> dict:
     try:
         kb = knowledge_base_repo.must_get(session, kb_id)            
-        relationship_ids = knowledge_base_repo.get_relationships_to_build_vector_index(session, kb)
+        relation_ids = knowledge_base_repo.get_relationships_to_build_vector_index(session, kb)
                 
-        for relationship_id in relationship_ids:
-            build_vector_index_for_relationship.delay(kb_id, relationship_id)
+        for relation_id in relation_ids:
+            build_vector_index_for_relationship.delay(kb_id, relation_id)
         
-        logger.info(f"Triggered {len(relationship_ids)} relationships to build vector embeddings.")
+        logger.info(f"Triggered {len(relation_ids)} relations to build vector embeddings.")
 
         return {
-            "detail": f"Triggered vector embedding generation for {len(relationship_ids)} relationships of knowledge base #{kb_id}."
+            "detail": f"Triggered vector embedding generation for {len(relation_ids)} relations of knowledge base #{kb_id}.",
+            "vector_index_relation_ids": relation_ids,
         }
-    except KBNotFound as e:
-        raise e
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(e)
         raise InternalServerError()
@@ -392,10 +382,11 @@ def build_chunk_vectors(
         logger.info(f"Triggered {len(chunk_ids)} chunks to build vector embeddings.")
 
         return {
-            "detail": f"Triggered vector embedding generation for {len(chunk_ids)} chunks of knowledge base #{kb_id}."
+            "detail": f"Triggered vector embedding generation for {len(chunk_ids)} chunks of knowledge base #{kb_id}.",
+            "vector_index_chunk_ids": chunk_ids,
         }
-    except KBNotFound as e:
-        raise e
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(e)
         raise InternalServerError()
