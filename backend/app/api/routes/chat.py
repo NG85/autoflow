@@ -1,24 +1,24 @@
 import logging
 from uuid import UUID
-from typing import List, Optional
+from typing import List, Optional, Annotated
 from http import HTTPStatus
 
 from pydantic import (
     BaseModel,
     field_validator,
 )
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from fastapi.responses import StreamingResponse
 from fastapi_pagination import Params, Page
-
 from app.api.deps import SessionDep, OptionalUserDep, CurrentUserDep
 from app.rag.chat.chat_flow_playbook import PlaybookChatFlow
 from app.rag.retrievers.knowledge_graph.schema import KnowledgeGraphRetrievalResult
 from app.repositories import chat_repo
 from app.models import Chat, ChatUpdate
 
+from app.rag.chat.chat_service import get_final_chat_result
+from app.models import Chat, ChatUpdate, ChatFilters
 from app.rag.chat.chat_service import (
-    get_final_chat_result,
     user_can_view_chat,
     user_can_edit_chat,
     get_chat_message_subgraph,
@@ -99,10 +99,11 @@ def list_chats(
     request: Request,
     session: SessionDep,
     user: OptionalUserDep,
+    filters: Annotated[ChatFilters, Query()],
     params: Params = Depends(),
 ) -> Page[Chat]:
     browser_id = request.state.browser_id
-    return chat_repo.paginate(session, user, browser_id, params)
+    return chat_repo.paginate(session, user, browser_id, filters, params)
 
 
 @router.get("/chats/{chat_id}")

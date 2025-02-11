@@ -1,9 +1,9 @@
 from datetime import date
 from pydantic import BaseModel
 from fastapi import APIRouter
-
 from app.api.deps import CurrentSuperuserDep, SessionDep
 from app.repositories import chat_repo
+
 
 router = APIRouter()
 

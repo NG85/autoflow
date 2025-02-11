@@ -9,11 +9,13 @@ from .feedback import (
     Feedback,
     FeedbackType,
     AdminFeedbackPublic,
+    FeedbackFilters,
+    FeedbackOrigin,
 )
 from .semantic_cache import SemanticCache
 from .staff_action_log import StaffActionLog
 from .chat_engine import ChatEngine, ChatEngineUpdate
-from .chat import Chat, ChatUpdate, ChatVisibility
+from .chat import Chat, ChatUpdate, ChatVisibility, ChatFilters, ChatOrigin
 from .chat_message import ChatMessage
 from .document import Document, DocIndexTaskStatus, DocumentCategory, DocumentMetadata
 from .chunk import Chunk, KgIndexStatus
