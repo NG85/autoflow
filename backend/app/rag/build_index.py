@@ -173,10 +173,10 @@ class IndexService:
             # Generate embedding for description using the same helper function
             if db_relationship.description:
                 description_embedding = get_relationship_description_embedding(
-                    db_relationship.source_entity_name,
-                    db_relationship.source_entity_description,
-                    db_relationship.target_entity_name,
-                    db_relationship.target_entity_description,
+                    db_relationship.source_entity.name,
+                    db_relationship.source_entity.description,
+                    db_relationship.target_entity.name,
+                    db_relationship.target_entity.description,
                     db_relationship.description,
                     self._embed_model
                 )
