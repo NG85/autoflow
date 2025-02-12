@@ -5,6 +5,8 @@ from .knowledge_base import (
 from .build_index import (
     build_index_for_document,
     build_kg_index_for_chunk,
+    build_vector_index_for_chunk,
+    build_vector_index_for_entity,
 )
 from .build_playbook_index import (
     build_playbook_index_for_document,
@@ -21,4 +23,6 @@ __all__ = [
     "add_evaluation_task",
     "build_playbook_index_for_document",
     "build_playbook_kg_index_for_chunk",
+    "build_vector_index_for_chunk",
+    "build_vector_index_for_entity",
 ]

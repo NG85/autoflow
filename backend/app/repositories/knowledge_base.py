@@ -1,7 +1,7 @@
 from typing import List, Optional, Type
 from datetime import datetime, UTC
 
-from sqlalchemy import and_, delete, or_
+from sqlalchemy import UUID, and_, delete, or_
 from sqlalchemy.orm.attributes import flag_modified
 from sqlmodel import select, Session, func, update
 from fastapi_pagination import Params, Page
@@ -28,7 +28,7 @@ from app.models.knowledge_base import IndexMethod
 from app.repositories.base_repo import BaseRepo
 from app.repositories.chunk import ChunkRepo
 from app.repositories.graph import get_kb_graph_repo
-
+from app.models.entity import get_kb_entity_model
 
 class KnowledgeBaseRepo(BaseRepo):
     model_cls = KnowledgeBase
@@ -193,7 +193,34 @@ class KnowledgeBaseRepo(BaseRepo):
             session, failed_document_ids, DocIndexTaskStatus.PENDING
         )
         return failed_document_ids
-
+    
+    def get_entities_to_build_vector_index(
+        self, session: Session, kb: KnowledgeBase
+    ) -> list[int]:
+        entity_model = get_kb_entity_model(kb)
+        
+        stmt = select(entity_model.id).where(
+                or_(
+                    entity_model.description_vec == None,
+                    entity_model.meta_vec == None
+                )
+            )
+        entity_ids = session.exec(stmt).all()        
+            
+        return entity_ids
+    
+    def get_chunks_to_build_vector_index(
+        self, session: Session, kb: KnowledgeBase
+    ) -> list[UUID]:
+        chunk_model = get_kb_chunk_model(kb)
+        
+        stmt = select(chunk_model.id).where(
+                chunk_model.embedding == None,
+            )
+        chunk_ids = session.exec(stmt).all()        
+            
+        return chunk_ids
+    
     def batch_update_chunk_status(
         self,
         session: Session,

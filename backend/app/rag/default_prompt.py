@@ -432,3 +432,14 @@ Follow-up question:
 
 Goal:
 """
+
+DEFAULT_ANALYZE_QUESTION_TYPE_PROMPT = """
+Analyze if the following question is related to sales scenarios that need to:
+1. Understand user persona
+2. Identify business pain points
+3. Recommend suitable solutions
+
+Question: {{question}}
+
+Only respond with "true" or "false".
+"""

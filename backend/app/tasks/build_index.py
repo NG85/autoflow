@@ -16,6 +16,7 @@ from app.rag.build_index import IndexService
 from app.rag.knowledge_base.config import get_kb_llm, get_kb_embed_model
 from app.repositories import knowledge_base_repo
 from app.repositories.chunk import ChunkRepo
+from app.models.entity import get_kb_entity_model
 
 logger = get_task_logger(__name__)
 
@@ -142,3 +143,63 @@ def build_kg_index_for_chunk(knowledge_base_id: int, chunk_id: UUID):
             db_chunk.index_result = error_msg
             session.add(db_chunk)
             session.commit()
+
+
+
+@celery_app.task
+def build_vector_index_for_entity(knowledge_base_id: int, entity_id: int):
+    with Session(engine, expire_on_commit=False) as session:
+        kb = knowledge_base_repo.must_get(session, knowledge_base_id)
+        
+        # Get entity model for this knowledge base
+        entity_model = get_kb_entity_model(kb)
+        db_entity = session.get(entity_model, entity_id)
+        if db_entity is None:
+            logger.error(f"Entity #{entity_id} is not found")
+            return
+            
+        # Init knowledge base index service
+        llm = get_kb_llm(session, kb)
+        embed_model = get_kb_embed_model(session, kb)
+        index_service = IndexService(llm, embed_model, kb)
+
+    try:
+        with Session(engine) as index_session:
+            index_service.build_vector_index_for_entity(index_session, db_entity)
+            
+        logger.info(f"Built vector embeddings for entity #{entity_id} successfully.")
+    except Exception:
+        error_msg = traceback.format_exc()
+        logger.error(
+            f"Failed to build vector embeddings for entity #{entity_id}",
+            exc_info=True,
+        )
+        
+@celery_app.task
+def build_vector_index_for_chunk(knowledge_base_id: int, chunk_id: UUID):
+    with Session(engine, expire_on_commit=False) as session:
+        kb = knowledge_base_repo.must_get(session, knowledge_base_id)
+        
+        # Get chunk model for this knowledge base
+        chunk_model = get_kb_chunk_model(kb)
+        db_chunk = session.get(chunk_model, chunk_id)
+        if db_chunk is None:
+            logger.error(f"Chunk #{chunk_id} is not found")
+            return
+            
+        # Init knowledge base index service
+        llm = get_kb_llm(session, kb)
+        embed_model = get_kb_embed_model(session, kb)
+        index_service = IndexService(llm, embed_model, kb)
+
+    try:
+        with Session(engine) as index_session:
+            index_service.build_vector_index_for_chunk(index_session, db_chunk)
+            
+        logger.info(f"Built vector embeddings for chunk #{chunk_id} successfully.")
+    except Exception:
+        error_msg = traceback.format_exc()
+        logger.error(
+            f"Failed to build vector embeddings for chunk #{chunk_id}",
+            exc_info=True,
+        )

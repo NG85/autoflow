@@ -37,6 +37,8 @@ from app.models.data_source import DataSource
 from app.tasks import (
     build_kg_index_for_chunk,
     build_index_for_document,
+    build_vector_index_for_chunk,
+    build_vector_index_for_entity,
     build_playbook_kg_index_for_chunk,
 )
 from app.repositories import knowledge_base_repo, data_source_repo
@@ -314,6 +316,57 @@ def build_playbook_failed_chunks_graph_index(
 
         return {
             "detail": f"Triggered index {chunk_count} chunks of playbook knowledge base #{kb_id}."
+        }
+    except KBNotFound as e:
+        raise e
+    except Exception as e:
+        logger.exception(e)
+        raise InternalServerError()
+
+
+@router.post("/admin/knowledge_bases/{kb_id}/build-entity-vectors")
+def build_entity_vectors(
+    session: SessionDep,
+    user: CurrentSuperuserDep,
+    kb_id: int,
+) -> dict:
+    try:
+        kb = knowledge_base_repo.must_get(session, kb_id)            
+        entity_ids = knowledge_base_repo.get_entities_to_build_vector_index(session, kb)
+                
+        for entity_id in entity_ids:
+            build_vector_index_for_entity.delay(kb_id, entity_id)
+        
+        logger.info(f"Triggered {len(entity_ids)} entities to build vector embeddings.")
+
+        return {
+            "detail": f"Triggered vector embedding generation for {len(entity_ids)} entities of knowledge base #{kb_id}."
+        }
+    except KBNotFound as e:
+        raise e
+    except Exception as e:
+        logger.exception(e)
+        raise InternalServerError()
+ 
+    
+@router.post("/admin/knowledge_bases/{kb_id}/build-chunk-vectors")
+def build_chunk_vectors(
+    session: SessionDep,
+    user: CurrentSuperuserDep,
+    kb_id: int,
+) -> dict:
+    try:
+        kb = knowledge_base_repo.must_get(session, kb_id)
+        # Retry failed vector index tasks.
+        chunk_ids = knowledge_base_repo.get_chunks_to_build_vector_index(
+            session, kb
+        )
+        for chunk_id in chunk_ids:
+            build_vector_index_for_chunk.delay(kb_id, chunk_id)
+        logger.info(f"Triggered {len(chunk_ids)} chunks to build vector embeddings.")
+
+        return {
+            "detail": f"Triggered vector embedding generation for {len(chunk_ids)} chunks of knowledge base #{kb_id}."
         }
     except KBNotFound as e:
         raise e

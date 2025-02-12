@@ -61,7 +61,7 @@ from app.rag.retrievers.chunk.schema import (
 )
 
 from app.rag.knowledge_base.config import get_kb_embed_model
-from app.rag.knowledge_base.index_store import get_kb_tidb_graph_editor
+from app.rag.knowledge_base.index_store import get_kb_tidb_graph_editor, get_kb_tidb_graph_store
 from app.rag.indices.knowledge_graph.graph_store import (
     legacy_tidb_graph_editor,
     TiDBGraphEditor,
@@ -88,6 +88,7 @@ from app.repositories.llm import llm_repo
 from app.site_settings import SiteSetting
 from app.exceptions import ChatNotFound
 from app.utils.jinja2 import get_prompt_by_jinja2_template
+from app.models.enums import GraphType
 
 logger = logging.getLogger(__name__)
 
@@ -523,71 +524,55 @@ class ChatFlow:
         annotation_silent: bool = False,
     ) -> Generator[ChatEvent, None, Tuple[KnowledgeGraphRetrievalResult, str]]:
         """
-        Search the knowledge graph for relevant entities, relationships, and chunks.
-        Args:
-            kg_config: KnowledgeGraphOption
-            annotation_silent: bool, if True, do not send annotation events
-
-        Returns:
-            KnowledgeGraphRetrievalResult: The retrieved knowledge graph.
-            str: graph_knowledges_context
+        Query knowledge graph in two layers:
+        1. First query the playbook layer to find the persona->pain point->feature chain
+        2. For the found feature, query the base layer to get related content
         """
-        # For forward compatibility of chat engine config.
-        enable_metadata_filter = kg_config.enable_metadata_filter or (
-            kg_config.relationship_meta_filters is not None
-        )
-        metadata_filters = (
-            kg_config.metadata_filters or kg_config.relationship_meta_filters
-        )
-
-        kg_retriever = KnowledgeGraphFusionRetriever(
-            db_session=self.db_session,
-            knowledge_base_ids=self.knowledge_base_ids,
-            llm=self._llm,
-            use_query_decompose=kg_config.using_intent_search,
-            use_async=True,
-            kb_select_mode=KBSelectMode.SINGLE_SECTION,
-            config=KnowledgeGraphRetrieverConfig(
-                depth=kg_config.depth,
-                include_metadata=kg_config.include_meta,
-                with_degree=kg_config.with_degree,
-                enable_metadata_filter=enable_metadata_filter,
-                metadata_filters=metadata_filters,
-            ),
-            callback_manager=self.callback_manager,
-        )
-
-        if kg_config.using_intent_search:
+        # 1. Analyze the type of user question
+        question_type = yield from self._analyze_question_type()
+        
+        if question_type == "playbook":
             if not annotation_silent:
                 yield ChatEvent(
                     event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
                     payload=ChatStreamMessagePayload(
                         state=ChatMessageSate.KG_RETRIEVAL,
-                        display="Identifying The Question's Intents and Perform Knowledge Graph Search",
+                        display="Searching Sales Knowledge Graph for Relevant Context",
                     ),
                 )
-
-            with self.callback_manager.event(
-                MyCBEventType.GRAPH_SEMANTIC_SEARCH,
-                payload={EventPayload.QUERY_STR: self.user_question},
-            ) as event:
-                knowledge_graph = kg_retriever.retrieve_knowledge_graph(
-                    self.user_question
-                )
+                
+            # Sales scenario question: Query two layers of knowledge graphs (playbook + base)
+            # 1. Query playbook knowledge graph
+            playbook_kg = self._search_playbook_knowledge_graph(kg_config)
+            
+            # 2. Extract features from playbook results
+            features = self._extract_features_from_playbook(playbook_kg)
+            base_kg = self._search_base_knowledge_graph(
+                query=" OR ".join(features),
+                kg_config=kg_config,
+                use_intent_search=False  # Directly use feature query
+            )
+                    
+            # 3. Merge the results of two layers of knowledge graphs
+            merged_kg = self._merge_knowledge_graphs(playbook_kg, base_kg)
+            
+            # 4. Generate context template
+            if kg_config.using_intent_search:
                 kg_context_template = get_prompt_by_jinja2_template(
                     self.chat_engine_config.llm.intent_graph_knowledge,
-                    # For forward compatibility considerations.
-                    sub_queries=knowledge_graph.to_subqueries_dict(),
+                    sub_queries=merged_kg.to_subqueries_dict(),
                 )
-                knowledge_graph_context = kg_context_template.template
-
-                event.on_end(
-                    payload={
-                        "knowledge_graph": knowledge_graph,
-                        "knowledge_graph_context": knowledge_graph_context,
-                    }
+            else:
+                kg_context_template = get_prompt_by_jinja2_template(
+                    self.chat_engine_config.llm.normal_graph_knowledge,
+                    entities=merged_kg.entities,
+                    relationships=merged_kg.relationships,
                 )
+                    
+            return merged_kg, kg_context_template.template
+   
         else:
+            # General question: Keep the original logic
             if not annotation_silent:
                 yield ChatEvent(
                     event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
@@ -596,32 +581,130 @@ class ChatFlow:
                         display="Searching the Knowledge Graph for Relevant Context",
                     ),
                 )
-
-            with self.callback_manager.event(
-                MyCBEventType.RETRIEVE_FROM_GRAPH,
-                payload={EventPayload.QUERY_STR: self.user_question},
-            ) as event:
-                knowledge_graph = kg_retriever.retrieve_knowledge_graph(
-                    self.user_question
+          
+            knowledge_graph = self._search_base_knowledge_graph(
+                query=self.user_question,
+                kg_config=kg_config,
+                use_intent_search=kg_config.using_intent_search
+            )
+            
+            if kg_config.using_intent_search:
+                kg_context_template = get_prompt_by_jinja2_template(
+                    self.chat_engine_config.llm.intent_graph_knowledge,
+                    sub_queries=knowledge_graph.to_subqueries_dict(),
                 )
+            else:
                 kg_context_template = get_prompt_by_jinja2_template(
                     self.chat_engine_config.llm.normal_graph_knowledge,
                     entities=knowledge_graph.entities,
                     relationships=knowledge_graph.relationships,
                 )
-                knowledge_graph_context = kg_context_template.template
+                
+            return knowledge_graph, kg_context_template.template
 
-                event.on_end(
-                    payload={
-                        "knowledge_graph": knowledge_graph,
-                        "knowledge_graph_context": knowledge_graph_context,
-                    }
+    def _analyze_question_type(self, annotation_silent: bool = False) -> Generator[ChatEvent, None, str]:
+        """
+        Analyze the type of user question, determine if playbook knowledge graph needs to be queried
+        """
+        if not annotation_silent:
+            yield ChatEvent(
+                event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
+                payload=ChatStreamMessagePayload(
+                    state=ChatMessageSate.KG_RETRIEVAL,
+                    display="Analyzing Question Type",
+                ),
+            )
+ 
+        with self.callback_manager.event(
+            MyCBEventType.ANALYZE_QUESTION,
+            payload={EventPayload.QUERY_STR: self.user_question},
+        ) as event:
+            is_playbook = self._fast_llm.predict(
+                get_prompt_by_jinja2_template(
+                    self.chat_engine_config.llm.analyze_question_type_prompt,
+                    question=self.user_question,
                 )
+            )
+            question_type = "playbook" if is_playbook.lower() == "true" else "general"
+            event.on_end(payload={"question_type": question_type})
+            
+        return question_type
 
-        return (
-            knowledge_graph,
-            knowledge_graph_context,
+    def _search_playbook_knowledge_graph(
+        self, 
+        kg_config: KnowledgeGraphOption
+    ) -> KnowledgeGraphRetrievalResult:
+        """Query playbook knowledge graph"""
+        kg_retriever = KnowledgeGraphFusionRetriever(
+            db_session=self.db_session,
+            knowledge_base_ids=self.knowledge_base_ids,
+            llm=self._llm,
+            use_query_decompose=kg_config.using_intent_search,
+            use_async=True,
+            config=KnowledgeGraphRetrieverConfig(
+                depth=kg_config.depth,
+                include_metadata=kg_config.include_meta,
+                with_degree=kg_config.with_degree,
+                enable_metadata_filter=kg_config.enable_metadata_filter,
+                metadata_filters=kg_config.metadata_filters,
+                graph_type=GraphType.playbook,  # 明确指定使用 playbook 图谱
+            ),
+            callback_manager=self.callback_manager,
         )
+        return kg_retriever.retrieve_knowledge_graph(self.user_question)
+
+    def _search_base_knowledge_graph(
+        self,
+        query: str,
+        kg_config: KnowledgeGraphOption,
+        use_intent_search: bool,
+    ) -> KnowledgeGraphRetrievalResult:
+        """Search base knowledge graph"""
+        kg_retriever = KnowledgeGraphFusionRetriever(
+            db_session=self.db_session,
+            knowledge_base_ids=self.knowledge_base_ids,
+            llm=self._llm,
+            use_query_decompose=use_intent_search,
+            use_async=True,
+            config=KnowledgeGraphRetrieverConfig(
+                depth=kg_config.depth,
+                include_metadata=kg_config.include_meta,
+                with_degree=kg_config.with_degree,
+                enable_metadata_filter=kg_config.enable_metadata_filter,
+                metadata_filters=kg_config.metadata_filters,
+                graph_type=GraphType.general,  # Explicitly specify the use of the base graph
+            ),
+            callback_manager=self.callback_manager,
+        )
+        return kg_retriever.retrieve_knowledge_graph(query)
+
+    def _extract_features_from_playbook(
+        self,
+        playbook_kg: KnowledgeGraphRetrievalResult
+    ) -> List[str]:
+        """Extract features from playbook knowledge graph"""
+        features = []
+        for entity in playbook_kg.entities:
+            if entity.metadata.get("topic") == "feature":
+                features.append(entity.name)
+        return features
+    
+    def _merge_knowledge_graphs(
+        self,
+        playbook_kg: KnowledgeGraphRetrievalResult,
+        base_kg: KnowledgeGraphRetrievalResult
+    ) -> KnowledgeGraphRetrievalResult:
+        """Merge the results of two layers of knowledge graphs"""
+        merged_kg = KnowledgeGraphRetrievalResult()
+        # Merge entities, avoiding duplicates
+        entity_map = {}
+        for entity in playbook_kg.entities + base_kg.entities:
+            if entity.name not in entity_map:
+                entity_map[entity.name] = entity
+        merged_kg.entities = list(entity_map.values())
+        # Merge relationships
+        merged_kg.relationships = playbook_kg.relationships + base_kg.relationships
+        return merged_kg
 
     def _refine_user_question(
         self,

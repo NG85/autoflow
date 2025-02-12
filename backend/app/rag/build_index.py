@@ -17,9 +17,11 @@ from app.core.config import settings
 from app.models import (
     Document as DBDocument,
     Chunk as DBChunk,
+    Entity as DBEntity,
 )
 from app.utils.dspy import get_dspy_lm_by_llama_llm
 from app.models.enums import GraphType
+from app.rag.indices.knowledge_graph.graph_store.helpers import get_entity_description_embedding, get_entity_metadata_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +83,78 @@ class IndexService:
         vector_store.close_session()
 
         return
+   
+    def build_vector_index_for_chunk(
+        self, session: Session, db_chunk: DBChunk
+    ):
+        """
+        Build vector index from existing chunks.
 
+        Build vector index will do the following:
+        1. Convert existing chunk to TextNode.
+        2. Insert TextNode into vector index.
+        """
+        if db_chunk.embedding is not None: 
+            logger.info(f"embedding for chunk #{db_chunk.id} already exists, skip building vector index.")
+            return
+        
+        # vector_store = get_kb_tidb_vector_store(session, self._knowledge_base)
+
+        logger.info(f"Start building vector index for chunk #{db_chunk.id}.")
+        
+        # Generate embedding for chunk text
+        embedding = self._embed_model.get_text_embedding(db_chunk.text)
+        
+        # Update chunk with new embedding
+        db_chunk.embedding = embedding
+        session.add(db_chunk)
+        session.commit()
+
+        
+        logger.info(f"Finish building vector index for chunk #{db_chunk.id}.")
+        # vector_store.close_session()
+
+        return
+  
+    def build_vector_index_for_entity(
+        self, session: Session, db_entity: DBEntity
+    ):
+        """
+        Build vector embeddings for entity's description and meta fields.
+        
+        This will:
+        1. Generate embeddings for description and meta text
+        2. Update entity with new embeddings
+        """
+        logger.info(f"Start building vector embeddings for entity #{db_entity.id}")
+        
+        try:
+            # Generate embedding for description using the same helper function
+            if db_entity.name and db_entity.description:
+                description_embedding = get_entity_description_embedding(
+                    db_entity.name,
+                    db_entity.description,
+                    self._embed_model
+                )
+                db_entity.description_vec = description_embedding
+            
+            # Generate embedding for meta using the same helper function
+            if db_entity.meta:
+                meta_embedding = get_entity_metadata_embedding(
+                    db_entity.meta,
+                    self._embed_model
+                )
+                db_entity.meta_vec = meta_embedding
+            
+            # Update entity in database
+            session.add(db_entity)
+            session.commit()
+            
+            logger.info(f"Finished building vector embeddings for entity #{db_entity.id}")
+        except Exception as e:
+            logger.error(f"Failed to build vector embeddings for entity #{db_entity.id}: {str(e)}")
+            raise
+        
     # TODO: move to ./indices/knowledge_graph
     def build_kg_index_for_chunk(self, session: Session, db_chunk: Type[DBChunk]):
         """Build knowledge graph index from chunk.
