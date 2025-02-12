@@ -29,6 +29,7 @@ from app.repositories.base_repo import BaseRepo
 from app.repositories.chunk import ChunkRepo
 from app.repositories.graph import get_kb_graph_repo
 from app.models.entity import get_kb_entity_model
+from app.models.relationship import get_kb_relationship_model
 
 class KnowledgeBaseRepo(BaseRepo):
     model_cls = KnowledgeBase
@@ -208,6 +209,18 @@ class KnowledgeBaseRepo(BaseRepo):
         entity_ids = session.exec(stmt).all()        
             
         return entity_ids
+
+    def get_relationships_to_build_vector_index(
+        self, session: Session, kb: KnowledgeBase
+    ) -> list[int]:
+        relationship_model = get_kb_relationship_model(kb)
+        
+        stmt = select(relationship_model.id).where(
+            relationship_model.description_vec == None
+        )
+        relationship_ids = session.exec(stmt).all()        
+            
+        return relationship_ids
     
     def get_chunks_to_build_vector_index(
         self, session: Session, kb: KnowledgeBase

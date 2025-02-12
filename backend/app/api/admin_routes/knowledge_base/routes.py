@@ -39,6 +39,7 @@ from app.tasks import (
     build_index_for_document,
     build_vector_index_for_chunk,
     build_vector_index_for_entity,
+    build_vector_index_for_relationship,
     build_playbook_kg_index_for_chunk,
 )
 from app.repositories import knowledge_base_repo, data_source_repo
@@ -341,6 +342,31 @@ def build_entity_vectors(
 
         return {
             "detail": f"Triggered vector embedding generation for {len(entity_ids)} entities of knowledge base #{kb_id}."
+        }
+    except KBNotFound as e:
+        raise e
+    except Exception as e:
+        logger.exception(e)
+        raise InternalServerError()
+ 
+    
+@router.post("/admin/knowledge_bases/{kb_id}/build-relationship-vectors")
+def build_relationship_vectors(
+    session: SessionDep,
+    user: CurrentSuperuserDep,
+    kb_id: int,
+) -> dict:
+    try:
+        kb = knowledge_base_repo.must_get(session, kb_id)            
+        relationship_ids = knowledge_base_repo.get_relationships_to_build_vector_index(session, kb)
+                
+        for relationship_id in relationship_ids:
+            build_vector_index_for_relationship.delay(kb_id, relationship_id)
+        
+        logger.info(f"Triggered {len(relationship_ids)} relationships to build vector embeddings.")
+
+        return {
+            "detail": f"Triggered vector embedding generation for {len(relationship_ids)} relationships of knowledge base #{kb_id}."
         }
     except KBNotFound as e:
         raise e

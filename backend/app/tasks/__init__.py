@@ -7,6 +7,7 @@ from .build_index import (
     build_kg_index_for_chunk,
     build_vector_index_for_chunk,
     build_vector_index_for_entity,
+    build_vector_index_for_relationship,
 )
 from .build_playbook_index import (
     build_playbook_index_for_document,
@@ -25,4 +26,5 @@ __all__ = [
     "build_playbook_kg_index_for_chunk",
     "build_vector_index_for_chunk",
     "build_vector_index_for_entity",
+    "build_vector_index_for_relationship",
 ]

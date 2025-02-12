@@ -18,10 +18,11 @@ from app.models import (
     Document as DBDocument,
     Chunk as DBChunk,
     Entity as DBEntity,
+    Relationship as DBRelationship,
 )
 from app.utils.dspy import get_dspy_lm_by_llama_llm
 from app.models.enums import GraphType
-from app.rag.indices.knowledge_graph.graph_store.helpers import get_entity_description_embedding, get_entity_metadata_embedding
+from app.rag.indices.knowledge_graph.graph_store.helpers import get_entity_description_embedding, get_entity_metadata_embedding, get_relationship_description_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -154,8 +155,42 @@ class IndexService:
         except Exception as e:
             logger.error(f"Failed to build vector embeddings for entity #{db_entity.id}: {str(e)}")
             raise
+         
+
+    def build_vector_index_for_relationship(
+        self, session: Session, db_relationship: DBRelationship
+    ):
+        """
+        Build vector embeddings for relationship's description field.
         
-    # TODO: move to ./indices/knowledge_graph
+        This will:
+        1. Generate embeddings for description text
+        2. Update relationship with new embeddings
+        """
+        logger.info(f"Start building vector embeddings for relationship #{db_relationship.id}")
+        
+        try:
+            # Generate embedding for description using the same helper function
+            if db_relationship.description:
+                description_embedding = get_relationship_description_embedding(
+                    db_relationship.source_entity_name,
+                    db_relationship.source_entity_description,
+                    db_relationship.target_entity_name,
+                    db_relationship.target_entity_description,
+                    db_relationship.description,
+                    self._embed_model
+                )
+                db_relationship.description_vec = description_embedding
+            
+            # Update relationship in database
+            session.add(db_relationship)
+            session.commit()
+            
+            logger.info(f"Finished building vector embeddings for relationship #{db_relationship.id}")
+        except Exception as e:
+            logger.error(f"Failed to build vector embeddings for relationship #{db_relationship.id}: {str(e)}")
+            raise
+
     def build_kg_index_for_chunk(self, session: Session, db_chunk: Type[DBChunk]):
         """Build knowledge graph index from chunk.
 

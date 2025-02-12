@@ -74,7 +74,7 @@ class Settings(BaseSettings):
             raise ValueError("SENTRY_PROFILES_SAMPLE_RATE must be between 0 and 1")
         return self
 
-    LOCAL_FILE_STORAGE_PATH: str = "/Users/gaona/data"
+    LOCAL_FILE_STORAGE_PATH: str = "/shared/data"
 
     TIDB_HOST: str = "127.0.0.1"
     TIDB_PORT: int = 4000
@@ -85,8 +85,8 @@ class Settings(BaseSettings):
 
     ENABLE_QUESTION_CACHE: bool = False
 
-    CELERY_BROKER_URL: str = "redis://127.0.0.1:6379/0"
-    CELERY_RESULT_BACKEND: str = "redis://127.0.0.1:6379/0"
+    CELERY_BROKER_URL: str = "redis://redis:6379/0"
+    CELERY_RESULT_BACKEND: str = "redis://redis:6379/0"
 
     # TODO: move below config to `option` table, it should be configurable by staff in console
     TIDB_AI_CHAT_ENDPOINT: str = "https://af.aptsell.ai/api/v1/chats"

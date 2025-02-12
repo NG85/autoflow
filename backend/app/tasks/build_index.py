@@ -17,6 +17,7 @@ from app.rag.knowledge_base.config import get_kb_llm, get_kb_embed_model
 from app.repositories import knowledge_base_repo
 from app.repositories.chunk import ChunkRepo
 from app.models.entity import get_kb_entity_model
+from app.models.relationship import get_kb_relationship_model
 
 logger = get_task_logger(__name__)
 
@@ -145,7 +146,6 @@ def build_kg_index_for_chunk(knowledge_base_id: int, chunk_id: UUID):
             session.commit()
 
 
-
 @celery_app.task
 def build_vector_index_for_entity(knowledge_base_id: int, entity_id: int):
     with Session(engine, expire_on_commit=False) as session:
@@ -175,6 +175,37 @@ def build_vector_index_for_entity(knowledge_base_id: int, entity_id: int):
             exc_info=True,
         )
         
+
+@celery_app.task
+def build_vector_index_for_relationship(knowledge_base_id: int, relationship_id: int):
+    with Session(engine, expire_on_commit=False) as session:
+        kb = knowledge_base_repo.must_get(session, knowledge_base_id)
+        
+        # Get relationship model for this knowledge base
+        relationship_model = get_kb_relationship_model(kb)
+        db_relationship = session.get(relationship_model, relationship_id)
+        if db_relationship is None:
+            logger.error(f"Relationship #{relationship_id} is not found")
+            return
+            
+        # Init knowledge base index service
+        llm = get_kb_llm(session, kb)
+        embed_model = get_kb_embed_model(session, kb)
+        index_service = IndexService(llm, embed_model, kb)
+
+    try:
+        with Session(engine) as index_session:
+            index_service.build_vector_index_for_relationship(index_session, db_relationship)
+            
+        logger.info(f"Built vector embeddings for relationship #{relationship_id} successfully.")
+    except Exception:
+        error_msg = traceback.format_exc()
+        logger.error(
+            f"Failed to build vector embeddings for relationship #{relationship_id}",
+            exc_info=True,
+        )
+
+
 @celery_app.task
 def build_vector_index_for_chunk(knowledge_base_id: int, chunk_id: UUID):
     with Session(engine, expire_on_commit=False) as session:
