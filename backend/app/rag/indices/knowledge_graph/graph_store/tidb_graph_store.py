@@ -420,10 +420,6 @@ class TiDBGraphStore(KnowledgeGraphStore):
         return db_obj
 
     def _try_merge_entities(self, entities: List[Entity]) -> Entity:
-        if len(set(e.graph_type for e in entities)) > 1:
-            logger.info("Entities have different graph_types, skipping merge")
-            return None
-        
         logger.info(f"Trying to merge entities: {entities[0].name}")
         try:
             with dspy.settings.context(lm=self._dspy_lm):

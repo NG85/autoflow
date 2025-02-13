@@ -280,7 +280,7 @@ def retry_failed_tasks(
             chunk_count = len(chunk_ids)
             logger.info(f"Triggered {chunk_count} chunks to rebuild knowledge graph index.")
 
-        if GraphType.playbook in request.graph_types:
+        if GraphType.playbook in graph_types:
             # Retry failed playbook kg index tasks
             playbook_chunk_ids = knowledge_base_repo.set_failed_playbook_chunks_status_to_pending(session, kb)
             for chunk_id in playbook_chunk_ids:
