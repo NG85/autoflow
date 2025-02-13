@@ -33,14 +33,36 @@ logger = logging.getLogger(__name__)
 def upload_files(
     session: SessionDep, user: CurrentSuperuserDep, files: List[UploadFile], meta: Optional[str] = Form(None)
 ) -> List[Upload]:
+    """Upload files with metadata.
+
+    For competitor documents, the required metadata format is:
+    ```json
+    {
+        "doc_owner": "competitor",
+        "product_name": "MongoDB Atlas",     # Required: Name of the competitor product
+        "company_name": "MongoDB Inc.",      # Required: Name of the company
+        "product_category": "Cloud Database" # Required: Product category
+    }
+    ```
+    """
+    
     uploads = []
     metadata_dict = json.loads(meta) if meta else {}
     
-    # 创建 DocumentMetadata 对象
+    # Check required fields for competitor documents
+    if metadata_dict.get("doc_owner") == "competitor":
+        required_fields = ["product_name", "company_name", "product_category"]
+        missing_fields = [field for field in required_fields if not metadata_dict.get(field)]
+        if missing_fields:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Missing required fields for competitor document: {', '.join(missing_fields)}"
+            )
+    
+    # Create DocumentMetadata object
     document_metadata = DocumentMetadata(
-        category=metadata_dict.get("category", DocumentCategory.PLAYBOOK),
-        description=metadata_dict.get("description", None),
-        tags=metadata_dict.get("tags", None),
+        category=metadata_dict.pop("category", DocumentCategory.PLAYBOOK),
+        **metadata_dict
     )
     
     logger.info(f"document_metadata: {document_metadata}")

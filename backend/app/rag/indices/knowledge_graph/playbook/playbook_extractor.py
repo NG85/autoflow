@@ -1,9 +1,11 @@
 import logging
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import dspy
 from dspy.functional import TypedPredictor
+import pandas as pd
+from llama_index.core.schema import BaseNode
 
-from app.rag.indices.knowledge_graph.extractor import SimpleGraphExtractor
+from app.rag.indices.knowledge_graph.extractor import SimpleGraphExtractor, get_relation_metadata_from_node
 from app.rag.indices.knowledge_graph.schema import EntityCovariateInput, EntityCovariateOutput, KnowledgeGraph
 from app.models.enums import GraphType
 
@@ -171,3 +173,114 @@ class PlaybookExtractor(SimpleGraphExtractor):
       # Replace the default extractor with Playbook specific extractor
       self.extract_prog.prog_graph = TypedPredictor(ExtractPlaybookTriplet)
       self.extract_prog.prog_covariates = TypedPredictor(ExtractPlaybookCovariate)
+      
+          
+    def _get_competitor_info(self, node: BaseNode) -> Optional[dict]:
+        """Extract competitor information from document metadata"""
+        metadata = node.metadata or {}
+        if metadata.get("doc_owner") == "competitor":
+            return {
+                "name": metadata.get("product_name"),
+                "company": metadata.get("company_name"),
+                "category": metadata.get("product_category")
+            }
+        return None
+
+    def _create_competitor_feature_relationship(
+        self,
+        competitor_entity: dict,
+        feature: dict,
+        base_metadata: dict
+    ) -> dict:
+        """Create an enhanced competitor-feature relationship."""
+        # Extract feature benefits for richer description
+        feature_benefits = feature.get("meta", {}).get("benefits", [])
+        benefits_text = ", ".join(feature_benefits) if feature_benefits else "no specific benefits listed"
+        
+        # Create richer relationship description
+        relationship_desc = (
+            f"Competitor product {competitor_entity['name']} by {competitor_entity['meta']['company']} "
+            f"provides feature: {feature['name']}. "
+            f"Benefits include: {benefits_text}"
+        )
+        
+        # Enhance metadata with relationship-specific info
+        relationship_metadata = {
+            **base_metadata,
+            "relationship_type": "competitor_feature",
+            "competitor_category": competitor_entity["meta"]["category"],
+            "feature_source": competitor_entity["name"]
+        }
+  
+        return {
+            "source_entity": competitor_entity["name"],
+            "source_entity_description": competitor_entity["description"],
+            "target_entity": feature["name"],
+            "target_entity_description": feature["description"],
+            "relationship_desc": relationship_desc,
+            "meta": relationship_metadata
+        }      
+      
+    def extract(
+        self,
+        text: str,
+        node: BaseNode,
+    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """Extract entities and relationships from text with document metadata context"""
+        competitor_info = self._get_competitor_info(node)        
+        entities_df, rel_df = super().extract(text, node)
+  
+        if competitor_info:
+            logger.info(f"Competitor raw info: {competitor_info}")
+            
+            # 1. Create competitor entity
+            competitor_entity = {
+                "name": competitor_info["name"],
+                "description": f"Competitor product {competitor_info['name']} by {competitor_info['company']}",
+                "meta": {
+                    "topic": "competitor",
+                    "name": competitor_info["name"],
+                    "company": competitor_info["company"],
+                    "category": competitor_info["category"]
+                }
+            }
+            
+            entities_df = pd.concat([
+                entities_df,
+                pd.DataFrame([competitor_entity])
+            ], ignore_index=True)
+            
+            # 2. Ensure all entities have valid metadata
+            entities_df["meta"] = entities_df["meta"].apply(
+                lambda x: x if isinstance(x, dict) else {}
+            )
+            
+            # 3. Mark competitor features
+            feature_mask = entities_df["meta"].apply(
+                lambda x: x.get("topic") == "feature"
+            )
+            if feature_mask.any():
+                entities_df.loc[feature_mask, "meta"] = entities_df.loc[feature_mask, "meta"].apply(
+                    lambda x: {**x, "source": competitor_info["name"]}
+                )
+            
+                # 4. Add Competitor Product-Feature relationship
+                feature_entities = entities_df[feature_mask]
+                competitor_product_feature_relations = []
+                metadata = get_relation_metadata_from_node(node)
+                logger.info(f"Get relation metadata from node: {metadata}")
+                for _, feature in feature_entities.iterrows():
+                  competitor_product_feature_relations.append(
+                    self._create_competitor_feature_relationship(
+                      competitor_entity,
+                      feature,
+                      metadata
+                  ))
+                
+                if competitor_product_feature_relations:
+                    rel_df = pd.concat([
+                        rel_df,
+                        pd.DataFrame(competitor_product_feature_relations)
+                    ], ignore_index=True)
+        
+        return entities_df, rel_df

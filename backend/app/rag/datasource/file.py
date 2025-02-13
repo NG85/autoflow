@@ -58,6 +58,14 @@ class FileDataSource(BaseDataSource):
             else:
                 meta = upload.meta
                 
+            # If the document is a competitor document, add the necessary metadata
+            if meta.get("doc_owner") == "competitor":
+                meta.update({
+                    "product_name": meta.get("product_name", "Unknown Product"),
+                    "company_name": meta.get("company_name", "Unknown Company"),
+                    "product_category": meta.get("product_category", "Unknown Category")
+                })
+                
             document = Document(
                 name=upload.name,
                 hash=hash(content),

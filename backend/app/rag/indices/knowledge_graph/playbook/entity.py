@@ -68,6 +68,7 @@ class Feature(Entity):
         description=(
             "The covariates to claim the feature entity including:\n"
             "- topic: Always 'feature'\n"
+            "- source: Product source ('own' or competitor product name), defaults to 'own' for backward compatibility\n"
             "- benefits: List of specific business benefits\n"
             "- technical_details: (optional) Technical specifications and requirements"
         ),
@@ -75,11 +76,35 @@ class Feature(Entity):
             "required": ["topic", "benefits"],
             "properties": {
                 "topic": {"type": "string"},
+                "source": {"type": "string", "default": "own"},
                 "benefits": {"type": "array", "items": {"type": "string"}},
                 "technical_details": {
                     "type": "object",
                     "additionalProperties": {"type": "string"}
                 }
+            }
+        }
+    )
+
+
+class Competitor(Entity):
+    """Represents a competitor product entity."""
+    
+    metadata: Mapping[str, Any] = Field(
+        description=(
+            "The covariates to claim the competitor product entity including:\n"
+            "- topic: Always 'competitor'\n"
+            "- name: Product name (e.g., 'MongoDB Atlas', 'Oracle Database')\n"
+            "- company: Company that owns the product\n"
+            "- category: Product category (e.g., 'Database', 'Data Migration Tool')\n"
+        ),
+        json_schema_extra={
+            "required": ["topic", "name", "company", "category"],
+            "properties": {
+                "topic": {"type": "string", "const": "competitor"},
+                "name": {"type": "string"},
+                "company": {"type": "string"},
+                "category": {"type": "string"}
             }
         }
     )

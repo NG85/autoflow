@@ -34,8 +34,8 @@ class DocumentCategory(str, enum.Enum):
 
 class DocumentMetadata(BaseModel):
     category: DocumentCategory = DocumentCategory.GENERAL
-    description: Optional[str] = None
-    tags: Optional[list[str]] = None
+    class Config:
+        extra = "allow"
 
 
 class Document(UpdatableBaseModel, table=True):
