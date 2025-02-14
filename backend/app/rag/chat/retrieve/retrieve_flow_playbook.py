@@ -5,11 +5,11 @@ from llama_index.core.schema import NodeWithScore
 from app.rag.chat.retrieve.retrieve_flow import RetrieveFlow
 from app.rag.retrievers.knowledge_graph.schema import (
     KnowledgeGraphRetrievalResult,
-    GraphType,
 )
 from app.rag.retrievers.knowledge_graph.fusion_retriever import (
     KnowledgeGraphRetrieverConfig,
 )
+from app.models.enums import GraphType
 
 logger = logging.getLogger(__name__)
 
