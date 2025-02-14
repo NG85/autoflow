@@ -11,9 +11,42 @@ services:
     command: ["redis-server", "--loglevel", "warning"]
 
 
+  backend:
+    image: registry.cn-beijing.aliyuncs.com/aptsell/aptsell.ai-backend:0.1.2
+    restart: always
+    depends_on:
+      - redis
+    ports:
+      - "8000:80"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/shared/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "6"
+
+
+  frontend:
+    image: registry.cn-beijing.aliyuncs.com/aptsell/aptsell.ai-frontend:0.1.0
+    restart: always
+    depends_on:
+      - backend
+    ports:
+      - 3000:3000
+    environment:
+      BASE_URL: http://backend
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "6"
+
 
   background:
-    image: aptsell:local
+    image: registry.cn-beijing.aliyuncs.com/aptsell/aptsell.ai-backend:0.1.2
     restart: always
     depends_on:
       - redis
@@ -22,7 +55,7 @@ services:
     env_file:
       - .env
     volumes:
-      - /Users/gaona/data:/Users/gaona/data
+      - ./data:/shared/data
     command: /usr/bin/supervisord
     logging:
       driver: json-file

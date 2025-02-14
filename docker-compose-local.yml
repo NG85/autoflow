@@ -1,0 +1,31 @@
+name: aptsell
+
+services:
+  redis:
+    image: registry.cn-beijing.aliyuncs.com/pingcap-ee/redis:6.0.16
+    ports:
+      - "6379:6379"
+    restart: always
+    volumes:
+      - /Users/gaona/redis-data:/data
+    command: ["redis-server", "--loglevel", "warning"]
+
+
+
+  background:
+    image: aptsell:local
+    restart: always
+    depends_on:
+      - redis
+    ports:
+      - "5555:5555"
+    env_file:
+      - .env
+    volumes:
+      - /Users/gaona/data:/Users/gaona/data
+    command: /usr/bin/supervisord
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "6"
