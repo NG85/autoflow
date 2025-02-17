@@ -13,8 +13,8 @@ from app.api.admin_routes.models import (
     UserDescriptor,
 )
 from app.exceptions import KBNoVectorIndexConfigured
-from app.models.chunk import KgIndexStatus
-from app.models.knowledge_base import IndexMethod
+from app.models import KgIndexStatus
+from app.models.knowledge_base import IndexMethod, GeneralChunkingConfig, ChunkingConfig
 from app.models.enums import GraphType
 
 
@@ -26,6 +26,7 @@ class KnowledgeBaseCreate(BaseModel):
     )
     llm_id: Optional[int] = None
     embedding_model_id: Optional[int] = None
+    chunking_config: ChunkingConfig = Field(default_factory=GeneralChunkingConfig)
     data_sources: list[KBDataSourceCreate] = Field(default_factory=list)
 
     @field_validator("name")
@@ -46,6 +47,7 @@ class KnowledgeBaseCreate(BaseModel):
 class KnowledgeBaseUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    chunking_config: Optional[ChunkingConfig] = None
 
 
 class KnowledgeBaseDetail(BaseModel):
@@ -55,12 +57,13 @@ class KnowledgeBaseDetail(BaseModel):
 
     id: int
     name: str
-    description: str
+    description: Optional[str] = None
     documents_total: int
     data_sources_total: int
     # Notice: By default, SQLModel will not serialize list type relationships.
     # https://github.com/fastapi/sqlmodel/issues/37#issuecomment-2093607242
     data_sources: list[KBDataSource]
+    chunking_config: Optional[ChunkingConfig] = None
     index_methods: list[IndexMethod]
     llm_id: int | None = None
     llm: LLMDescriptor | None = None
@@ -78,7 +81,7 @@ class KnowledgeBaseItem(BaseModel):
 
     id: int
     name: str
-    description: str
+    description: Optional[str] = None
     documents_total: int
     data_sources_total: int
     index_methods: list[IndexMethod]

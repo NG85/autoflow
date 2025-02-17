@@ -11,7 +11,6 @@ from sqlmodel import (
 from tidb_vector.sqlalchemy import VectorType
 from sqlalchemy import Index, Enum
 
-from app.core.config import settings
 from app.models.knowledge_base import KnowledgeBase
 from app.models.knowledge_base_scoped.registry import get_kb_scoped_registry
 from app.models.knowledge_base_scoped.table_naming import (
@@ -19,6 +18,7 @@ from app.models.knowledge_base_scoped.table_naming import (
     get_kb_vector_dims,
 )
 from app.models.patch.sql_model import SQLModel as PatchSQLModel
+from app.core.config import settings
 from app.models.enums import GraphType
 
 
@@ -41,7 +41,7 @@ class EntityBase(SQLModel):
         sa_column=Column(Enum(GraphType), nullable=False, server_default=GraphType.general.value)
     )
 
-# Notice: DO NOT forget to modify the definition in `get_kb_chunk_model` to
+# Notice: DO NOT forget to modify the definition in `get_kb_entity_model` to
 # keep the table structure on both sides consistent.
 class Entity(EntityBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)

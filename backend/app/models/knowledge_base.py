@@ -1,8 +1,9 @@
 import enum
 from datetime import datetime
-from typing import Optional
+from typing import Dict, Optional, Union
 from uuid import UUID
 
+from pydantic import BaseModel
 from sqlalchemy import JSON, func
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlmodel import (
@@ -12,13 +13,21 @@ from sqlmodel import (
     Relationship as SQLRelationship,
     SQLModel,
 )
-
+from llama_index.core.node_parser.text.sentence import (
+    DEFAULT_PARAGRAPH_SEP,
+    SENTENCE_CHUNK_OVERLAP,
+)
+from app.rag.node_parser.file.markdown import (
+    DEFAULT_CHUNK_HEADER_LEVEL,
+    DEFAULT_CHUNK_SIZE,
+)
 from app.api.admin_routes.models import KnowledgeBaseDescriptor
 from app.exceptions import KBDataSourceNotFound
 from app.models.auth import User
 from app.models.data_source import DataSource
 from app.models.embed_model import EmbeddingModel
 from app.models.llm import LLM
+from app.types import MimeTypes
 
 # For compatibility with old code, define a fake knowledge base id.
 PHONY_KNOWLEDGE_BASE_ID = 0
@@ -35,10 +44,87 @@ class KnowledgeBaseDataSource(SQLModel, table=True):
     __tablename__ = "knowledge_base_datasources"
 
 
+# Chunking Settings.
+
+
+class ChunkSplitter(str, enum.Enum):
+    SENTENCE_SPLITTER = "SentenceSplitter"
+    MARKDOWN_NODE_PARSER = "MarkdownNodeParser"
+
+
+class SentenceSplitterOptions(BaseModel):
+    chunk_size: int = Field(
+        description="The token chunk size for each chunk.",
+        default=1000,
+        gt=0,
+    )
+    chunk_overlap: int = Field(
+        description="The overlap size for each chunk.",
+        default=SENTENCE_CHUNK_OVERLAP,
+        gt=0,
+    )
+    paragraph_separator: str = Field(
+        description="The paragraph separator for splitting the text.",
+        default=DEFAULT_PARAGRAPH_SEP,
+    )
+
+
+class MarkdownNodeParserOptions(BaseModel):
+    chunk_size: int = Field(
+        description="The token chunk size for each chunk.",
+        default=1000,
+        gt=0,
+    )
+    chunk_header_level: int = Field(
+        description="The header level to split on",
+        default=DEFAULT_CHUNK_HEADER_LEVEL,
+        ge=1,
+        le=6,
+    )
+
+
+class ChunkSplitterConfig(BaseModel):
+    splitter: ChunkSplitter = Field(default=ChunkSplitter.SENTENCE_SPLITTER)
+    splitter_options: Union[SentenceSplitterOptions, MarkdownNodeParserOptions] = (
+        Field()
+    )
+
+
+class ChunkingMode(str, enum.Enum):
+    GENERAL = "general"
+    ADVANCED = "advanced"
+
+
+class BaseChunkingConfig(BaseModel):
+    mode: ChunkingMode = Field(default=ChunkingMode.GENERAL)
+
+
+class GeneralChunkingConfig(BaseChunkingConfig):
+    mode: ChunkingMode = Field(default=ChunkingMode.GENERAL)
+    chunk_size: int = Field(default=DEFAULT_CHUNK_SIZE, gt=0)
+    chunk_overlap: int = Field(default=SENTENCE_CHUNK_OVERLAP, gt=0)
+    paragraph_separator: str = Field(default=DEFAULT_PARAGRAPH_SEP)
+
+
+class AdvancedChunkingConfig(BaseChunkingConfig):
+    mode: ChunkingMode = Field(default=ChunkingMode.ADVANCED)
+    rules: Dict[MimeTypes, ChunkSplitterConfig] = Field(default_factory=list)
+
+
+ChunkingConfig = Union[GeneralChunkingConfig | AdvancedChunkingConfig]
+
+# Knowledge Base Model
+
+
 class KnowledgeBase(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(max_length=255, nullable=False)
-    description: str = Field(sa_column=Column(MEDIUMTEXT))
+    description: Optional[str] = Field(sa_column=Column(MEDIUMTEXT), default=None)
+
+    # The config for chunking, the process to break down the document into smaller chunks.
+    chunking_config: Dict = Field(
+        sa_column=Column(JSON), default=GeneralChunkingConfig().model_dump()
+    )
 
     # Data sources config.
     data_sources: list["DataSource"] = SQLRelationship(
@@ -63,10 +149,6 @@ class KnowledgeBase(SQLModel, table=True):
             "foreign_keys": "KnowledgeBase.embedding_model_id",
         },
     )
-
-    # TODO: Support knowledge-base level retrieval config.
-
-    # TODO: Store the statistics of the knowledge base.
     documents_total: int = Field(default=0)
     data_sources_total: int = Field(default=0)
 

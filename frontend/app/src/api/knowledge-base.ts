@@ -48,7 +48,7 @@ export type KnowledgeBaseIndexMethod = 'vector' | 'knowledge_graph';
 
 export interface CreateKnowledgeBaseParams {
   name: string;
-  description: string;
+  description?: string | null;
   index_methods: KnowledgeBaseIndexMethod[];
   llm_id?: number | null;
   embedding_model_id?: number | null;
@@ -57,13 +57,13 @@ export interface CreateKnowledgeBaseParams {
 
 export interface UpdateKnowledgeBaseParams {
   name?: string;
-  description?: string;
+  description?: string | null;
 }
 
 export interface KnowledgeBaseSummary {
   id: number;
   name: string;
-  description: string;
+  description: string | null;
   index_methods: KnowledgeBaseIndexMethod[];
   documents_total?: number;
   data_sources_total?: number;
@@ -94,7 +94,7 @@ export type KnowledgeGraphDocumentChunk = z.infer<typeof knowledgeGraphDocumentC
 const knowledgeBaseSummarySchema = z.object({
   id: z.number(),
   name: z.string(),
-  description: z.string(),
+  description: z.string().nullable(),
   index_methods: z.enum(['vector', 'knowledge_graph']).array(),
   documents_total: z.number().optional(),
   data_sources_total: z.number().optional(),

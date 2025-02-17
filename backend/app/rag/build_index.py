@@ -1,25 +1,32 @@
 import logging
-from typing import Optional, Type
+from typing import List, Optional, Type
 
 from llama_index.core import VectorStoreIndex
 from llama_index.core.embeddings.utils import EmbedType
 from llama_index.core.llms.llm import LLM
 from llama_index.core.node_parser import SentenceSplitter
-from sqlmodel import Session
+from llama_index.core.schema import TransformComponent
 
-from app.models.knowledge_base import IndexMethod, KnowledgeBase
+from sqlmodel import Session
+from app.models.knowledge_base import (
+    IndexMethod,
+    ChunkSplitter,
+    ChunkingMode,
+    KnowledgeBase,
+    SentenceSplitterOptions,
+    GeneralChunkingConfig,
+    ChunkSplitterConfig,
+    MarkdownNodeParserOptions,
+    AdvancedChunkingConfig,
+)
 from app.rag.knowledge_base.index_store import (
     get_kb_tidb_vector_store,
     get_kb_tidb_graph_store,
 )
 from app.rag.indices.knowledge_graph import KnowledgeGraphIndex
-from app.core.config import settings
-from app.models import (
-    Document as DBDocument,
-    Chunk as DBChunk,
-    Entity as DBEntity,
-    Relationship as DBRelationship,
-)
+from app.models import Document, Chunk, Entity, Relationship
+from app.rag.node_parser.file.markdown import MarkdownNodeParser
+from app.types import MimeTypes
 from app.utils.dspy import get_dspy_lm_by_llama_llm
 from app.models.enums import GraphType
 from app.rag.indices.knowledge_graph.graph_store.helpers import get_entity_description_embedding, get_entity_metadata_embedding, get_relationship_description_embedding
@@ -45,7 +52,7 @@ class IndexService:
 
     # TODO: move to ./indices/vector_search
     def build_vector_index_for_document(
-        self, session: Session, db_document: Type[DBDocument]
+        self, session: Session, db_document: Type[Document]
     ):
         """
         Build vector index and graph index from document.
@@ -56,37 +63,82 @@ class IndexService:
         3. embedding text nodes.
         4. Insert nodes into `chunks` table.
         """
-
-        if db_document.mime_type.lower() == "text/markdown":
-            # spliter = MarkdownNodeParser()
-            # TODO: FIX MarkdownNodeParser
-            spliter = SentenceSplitter(
-                chunk_size=settings.EMBEDDING_MAX_TOKENS,
-            )
-        else:
-            spliter = SentenceSplitter(
-                chunk_size=settings.EMBEDDING_MAX_TOKENS,
-            )
-
-        _transformations = [spliter]
-
         vector_store = get_kb_tidb_vector_store(session, self._knowledge_base)
+        transformations = self._get_transformations(db_document)
         vector_index = VectorStoreIndex.from_vector_store(
             vector_store,
             embed_model=self._embed_model,
-            transformations=_transformations,
+            transformations=transformations,
         )
 
-        document = db_document.to_llama_document()
-        logger.info(f"Start building vector index for document #{document.doc_id}.")
-        vector_index.insert(document, source_uri=db_document.source_uri)
-        logger.info(f"Finish building vector index for document #{document.doc_id}.")
+        llama_document = db_document.to_llama_document()
+        logger.info(f"Start building vector index for document #{db_document.id}.")
+        vector_index.insert(llama_document, source_uri=db_document.source_uri)
+        logger.info(f"Finish building vector index for document #{db_document.id}.")
         vector_store.close_session()
 
         return
    
+    def _get_transformations(
+        self, db_document: Type[Document]
+    ) -> List[TransformComponent]:
+        transformations = []
+
+        chunking_config_dict = self._knowledge_base.chunking_config
+        mode = (
+            chunking_config_dict["mode"]
+            if "mode" in chunking_config_dict
+            else ChunkingMode.GENERAL
+        )
+
+        if mode == ChunkingMode.ADVANCED:
+            chunking_config = AdvancedChunkingConfig.model_validate(
+                chunking_config_dict
+            )
+            rules = chunking_config.rules
+        else:
+            chunking_config = GeneralChunkingConfig.model_validate(chunking_config_dict)
+            rules = {
+                MimeTypes.PLAIN_TXT: ChunkSplitterConfig(
+                    splitter=ChunkSplitter.SENTENCE_SPLITTER,
+                    splitter_options=SentenceSplitterOptions(
+                        chunk_size=chunking_config.chunk_size,
+                        chunk_overlap=chunking_config.chunk_overlap,
+                        paragraph_separator=chunking_config.paragraph_separator,
+                    ),
+                ),
+                MimeTypes.MARKDOWN: ChunkSplitterConfig(
+                    splitter=ChunkSplitter.MARKDOWN_NODE_PARSER,
+                    splitter_options=MarkdownNodeParserOptions(
+                        chunk_size=chunking_config.chunk_size,
+                    ),
+                ),
+            }
+
+        # Chunking
+        mime_type = db_document.mime_type
+        if mime_type not in rules:
+            raise RuntimeError(
+                f"Can not chunking for the document in {db_document.mime_type} format"
+            )
+
+        rule = rules[mime_type]
+        match rule.splitter:
+            case ChunkSplitter.MARKDOWN_NODE_PARSER:
+                options = MarkdownNodeParserOptions.model_validate(
+                    rule.splitter_options
+                )
+                transformations.append(MarkdownNodeParser(**options.model_dump()))
+            case ChunkSplitter.SENTENCE_SPLITTER:
+                options = SentenceSplitterOptions.model_validate(rule.splitter_options)
+                transformations.append(SentenceSplitter(**options.model_dump()))
+            case _:
+                raise ValueError(f"Unsupported chunking splitter type: {rule.splitter}")
+
+        return transformations
+
     def build_vector_index_for_chunk(
-        self, session: Session, db_chunk: DBChunk
+        self, session: Session, db_chunk: Chunk
     ):
         """
         Build vector index from existing chunks.
@@ -118,7 +170,7 @@ class IndexService:
         return
   
     def build_vector_index_for_entity(
-        self, session: Session, db_entity: DBEntity
+        self, session: Session, db_entity: Entity
     ):
         """
         Build vector embeddings for entity's description and meta fields.
@@ -158,7 +210,7 @@ class IndexService:
          
 
     def build_vector_index_for_relationship(
-        self, session: Session, db_relationship: DBRelationship
+        self, session: Session, db_relationship: Relationship
     ):
         """
         Build vector embeddings for relationship's description field.
@@ -191,7 +243,7 @@ class IndexService:
             logger.error(f"Failed to build vector embeddings for relationship #{db_relationship.id}: {str(e)}")
             raise
 
-    def build_kg_index_for_chunk(self, session: Session, db_chunk: Type[DBChunk]):
+    def build_kg_index_for_chunk(self, session: Session, db_chunk: Type[Chunk]):
         """Build knowledge graph index from chunk.
 
         Build knowledge graph index will do the following:
@@ -215,7 +267,7 @@ class IndexService:
 
         return
 
-    def build_playbook_kg_index_for_chunk(self, session: Session, db_chunk: Type[DBChunk]):
+    def build_playbook_kg_index_for_chunk(self, session: Session, db_chunk: Type[Chunk]):
         """Build Playbook knowledge graph index from chunk.
 
         Build playbook knowledge graph index will do the following:

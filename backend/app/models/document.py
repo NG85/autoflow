@@ -27,6 +27,11 @@ class DocIndexTaskStatus(str, enum.Enum):
     FAILED = "failed"
 
 
+class ContentFormat(str, enum.Enum):
+    TEXT = "text"
+    MARKDOWN = "markdown"
+
+
 class DocumentCategory(str, enum.Enum):
     GENERAL = "general"
     PLAYBOOK = "playbook"

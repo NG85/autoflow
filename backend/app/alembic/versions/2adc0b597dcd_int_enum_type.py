@@ -14,7 +14,7 @@ from app.models.chat import ChatVisibility
 
 # revision identifiers, used by Alembic.
 revision = "2adc0b597dcd"
-down_revision = "a54f966436ce"
+down_revision = "313b78f69ef0"
 branch_labels = None
 depends_on = None
 

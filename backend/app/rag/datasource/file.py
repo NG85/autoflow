@@ -46,9 +46,13 @@ class FileDataSource(BaseDataSource):
                 elif upload.mime_type == MimeTypes.XLSX:
                     content = extract_text_from_xlsx(f)
                     mime_type = MimeTypes.PLAIN_TXT
+                elif upload.mime_type == MimeTypes.MARKDOWN:
+                    content = f.read()
+                    mime_type = MimeTypes.MARKDOWN
                 else:
                     content = f.read()
                     mime_type = upload.mime_type
+
 
             if isinstance(upload.meta, list):
                 meta = [
