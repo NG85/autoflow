@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from fastapi.responses import StreamingResponse
 from fastapi_pagination import Params, Page
 from app.api.deps import SessionDep, OptionalUserDep, CurrentUserDep
-from app.rag.chat.chat_flow_playbook import PlaybookChatFlow
+from app.rag.chat.chat_flow import ChatFlow
 from app.rag.retrievers.knowledge_graph.schema import KnowledgeGraphRetrievalResult
 from app.repositories import chat_repo
 from app.models import Chat, ChatUpdate
@@ -67,7 +67,7 @@ def chats(
     browser_id = request.state.browser_id
 
     try:
-        chat_flow = PlaybookChatFlow(
+        chat_flow = ChatFlow(
             db_session=session,
             user=user,
             browser_id=browser_id,

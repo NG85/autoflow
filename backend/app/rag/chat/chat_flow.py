@@ -21,6 +21,7 @@ from app.models import (
     ChatMessage as DBChatMessage,
 )
 from app.rag.chat.config import ChatEngineConfig
+from app.rag.chat.playbook import QuestionAnalysisResult
 from app.rag.chat.retrieve.retrieve_flow import SourceDocument, RetrieveFlow
 from app.rag.chat.stream_protocol import (
     ChatEvent,
@@ -197,6 +198,14 @@ class ChatFlow:
         ctx = langfuse_instrumentor_context.get().copy()
         db_user_message, db_assistant_message = yield from self._chat_start()
         langfuse_instrumentor_context.get().update(ctx)
+
+        # Analyze the user question to determine if it is related to sales.
+        analysis_result = yield from self.chat_playbook._analyze_question_and_enhance(
+            user_question=self.user_question,
+            annotation_silent=True
+        )
+
+        self.user_question = analysis_result.enhanced_question or self.user_question
 
         # 1. Retrieve Knowledge graph related to the user question.
         (
@@ -788,3 +797,46 @@ class ChatFlow:
             logger.error(f"Failed to parse goal and response format: {e}")
 
         return goal, response_format
+
+
+    def _analyze_question_and_enhance(self,
+        user_question: str,
+        annotation_silent: bool = False,
+    ) -> Generator[ChatEvent, None, QuestionAnalysisResult]:
+        """Analyze the question type and enhance it"""
+        with self._trace_manager.span(
+            name="analyze_question_and_enhance",
+            input={"user_question": user_question},
+        ) as span:
+            
+            if not annotation_silent:
+                yield ChatEvent(
+                    event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
+                    payload=ChatStreamMessagePayload(
+                        state=ChatMessageSate.KG_RETRIEVAL,
+                        display="Analyzing Question and Enhancing",
+                    ),
+                )
+
+            # Analyze the question
+            analysis_result = self._fast_llm.predict(
+                get_prompt_by_jinja2_template(
+                    self.engine_config.llm.analyze_question_and_enhance_prompt,
+                    question=user_question,
+                )
+            )
+                       
+            try:
+                result = QuestionAnalysisResult.model_validate_json(analysis_result)
+                logger.info(f"Question analysis result: {result}")
+            except Exception as e:
+                logger.error(f"Failed to parse question analysis result: {e}")
+                # Return default result
+                result = QuestionAnalysisResult(
+                    is_sales_related=False,
+                    enhanced_question=user_question,
+                    related_aspects=[]
+                )
+
+            span.end(output=result.model_dump())
+            return result

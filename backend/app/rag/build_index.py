@@ -276,7 +276,7 @@ class IndexService:
         3. insert playbook customized entities and relations into `entities` and `relations` table.
         """
 
-        graph_store = get_kb_tidb_graph_store(session, self._knowledge_base, graph_type="playbook")
+        graph_store = get_kb_tidb_graph_store(session, self._knowledge_base, graph_type=GraphType.playbook)
         graph_index: KnowledgeGraphIndex = KnowledgeGraphIndex.from_existing(
             dspy_lm=self._dspy_lm,
             kg_store=graph_store,

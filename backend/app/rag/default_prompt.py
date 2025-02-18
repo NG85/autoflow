@@ -433,13 +433,72 @@ Follow-up question:
 Goal:
 """
 
-DEFAULT_ANALYZE_QUESTION_TYPE_PROMPT = """
-Analyze if the following question is related to sales scenarios that need to:
-1. Understand user persona
-2. Identify business pain points
-3. Recommend suitable solutions
+DEFAULT_ANALYZE_QUESTION_AND_ENHANCE_PROMPT = """
+Determine if the following question belongs to sales/pre-sales related consultation. The question is proposed by internal sales, pre-sales, or other related personnel who are preparing for customer communication or handling customer inquiries.
+
+Sales/pre-sales related questions are characterized by:
+1. Preparation questions for better serving customers
+2. Focus on the "Persona (customer persona) - Pain Point (customer pain point) - Feature (product feature)" framework
+3. Seek the best way to handle customer inquiries
+4. Collect competitive information
+5. Improve the effectiveness of sales/pre-sales work
+
+Common scenarios include but are not limited to:
+
+1. Persona (customer persona) related:
+   - The focus and decision factors of specific industry customers
+   - The demand differences of different roles (e.g., CTO, architect, DBA)
+   - The typical needs of different size enterprises
+   - The technical stack and architecture characteristics of target customers
+   Examples: "What are the typical needs of internet companies?"
+
+2. Pain Point (customer pain point) related:
+   - The common business pain points in the industry
+   - The typical technical challenges in different scenarios
+   - The difficulties faced by customers in upgrading
+   - The problems in operation, cost, and performance
+   Examples: "What is the biggest technical challenge for e-commerce customers during Double 11?"
+
+3. Feature (product feature) related:
+   - The mapping relationship between product features and customer pain points
+   - The differentiated competitive advantages of features
+   - The best practices and typical scenarios of features
+   - The application value of new features
+   Examples: "How does our distributed transaction feature solve the pain points of the financial industry?"
+
+4. Solution consultation:
+   - Verify the feasibility of specific solutions
+   - The differences in solutions for different personas
+   - The design of solutions combining pain points
+   - The best practices of feature combinations
+   Examples: "What is the best architecture for the transformation of traditional bank core systems?"
+
+5. Business related:
+   - The pricing strategies for different size customers
+   - The ROI analysis for specific pain points
+   - The authorization方式 of feature modules
+   - The implementation cycle and resource planning
+   Examples: "What is the typical budget for a complete solution for the financial industry?"
+
+6. Competitor response:
+   - The competitive strategies for different customer personas
+   - The differentiated advantages for specific pain points
+   - The competitive comparison at the feature level
+   - The competitive analysis at the solution level
+   Examples: "What is the core advantage of our solution compared to competitor A in the financial scenario?"
+
+In contrast, non-sales related internal issues are usually:
+1. Focus on specific technical implementation details
+2. About the use or maintenance of internal systems
+3. Daily work process consultation
+Examples: "How to configure the parameters of the test environment?"
+
+Please return the analysis result in the following JSON format:
+{
+    "is_sales_related": true/false,  # Whether the question is related to sales
+    "enhanced_question": "",         # The enhanced question, supplemented with necessary context and analysis
+    "related_aspects": []            # The related aspects to consider together
+}
 
 Question: {{question}}
-
-Only respond with "true" or "false".
 """
