@@ -207,6 +207,19 @@ class ChatFlow:
 
         self.user_question = analysis_result.enhanced_question or self.user_question
 
+        # If competitor info is needed, add competitor knowledge base
+        if analysis_result.needs_competitor_info:
+            yield ChatEvent(
+                event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
+                payload=ChatStreamMessagePayload(
+                    state=ChatMessageSate.KG_RETRIEVAL,
+                    display="Retrieving Competitor Information",
+                ),
+            )
+            
+            # TODO: Move competitor knowledge base id to config
+            self.retrieve_flow.knowledge_bases.extend([240001])
+                
         # 1. Retrieve Knowledge graph related to the user question.
         (
             knowledge_graph,

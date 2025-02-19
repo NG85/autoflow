@@ -498,7 +498,17 @@ Please return the analysis result in the following JSON format:
     "is_sales_related": true/false,  # Whether the question is related to sales
     "enhanced_question": "",         # The enhanced question, supplemented with necessary context and analysis
     "related_aspects": []            # The related aspects to consider together
+    "needs_competitor_info": false,    # Whether competitor information is needed
+    "needs_technical_details": false,  # Whether technical details are needed
+    "competitor_names": [],           # List of specific competitor names mentioned or implied
+    "feature_names": []              # List of specific features mentioned or implied
 }
+
+When analyzing:
+1. For competitor_names: Include only when the question explicitly mentions or implies comparison with specific competitors
+2. For feature_names: Include specific features that are directly relevant to the question
+3. Set needs_competitor_info to true if the question involves competitive analysis or comparison
+4. Set needs_technical_details to true if detailed feature explanation or technical comparison is needed
 
 Question: {{question}}
 """
