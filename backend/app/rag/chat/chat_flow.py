@@ -200,7 +200,7 @@ class ChatFlow:
         langfuse_instrumentor_context.get().update(ctx)
 
         # Analyze the user question to determine if it is related to sales.
-        analysis_result = yield from self.chat_playbook._analyze_question_and_enhance(
+        analysis_result = yield from self._analyze_question_and_enhance(
             user_question=self.user_question,
             annotation_silent=True
         )
