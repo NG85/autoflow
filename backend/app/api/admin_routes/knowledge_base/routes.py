@@ -254,6 +254,11 @@ def retry_failed_tasks(
         graph_types = request.graph_types if request else [
             GraphType.general
         ]
+        
+        document_ids = []
+        chunk_ids = []
+        playbook_chunk_ids = []
+        
         if GraphType.general in graph_types:
             # Retry failed vector index tasks.
             document_ids = knowledge_base_repo.set_failed_documents_status_to_pending(
