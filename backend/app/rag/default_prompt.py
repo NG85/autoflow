@@ -476,19 +476,23 @@ Analyze if the following question is related to competitors or competitive produ
    - Cost-benefit analysis of switching
    Examples: "What are the key considerations when migrating from Oracle to TiDB?"
 
-Please return the analysis result in the following JSON format:
+Your response must be a valid JSON object with the following structure:
 {
-    "is_competitor_related": true/false,  # Whether the question involves competitors
-    "competitor_focus": "",               # The main competitive aspect being discussed (e.g., "performance comparison", "migration", "feature comparison")
-    "competitor_names": [],               # List of specific competitors mentioned or implied
-    "comparison_aspects": [],             # List of aspects being compared (e.g., "performance", "cost")
-    "needs_technical_details": false      # Whether technical comparison is needed
+    "is_competitor_related": boolean,     // Must be true or false
+    "competitor_focus": string,           // e.g., "performance_comparison", "migration", "feature_comparison", "market_positioning", "cost_comparison"
+    "competitor_names": string[],         // Array of strings, empty array if none
+    "comparison_aspects": string[],       // Array of strings, empty array if none
+    "needs_technical_details": boolean    // Must be true or false
 }
 
-When analyzing:
-1. For competitor_names: Include only explicitly mentioned or clearly implied competitors
-2. For comparison_aspects: List specific aspects that are being compared
-3. Set needs_technical_details to true if detailed technical comparison is required
+Rules for JSON output:
+1. All fields are required
+2. competitor_focus must be "none" if is_competitor_related is false
+3. Arrays must be empty [] if no relevant items exist
+4. Boolean values must be true or false (not strings)
+5. No comments allowed in the final JSON output
+6. No trailing commas
+7. Use double quotes for strings
 
 Question: {{question}}
 """

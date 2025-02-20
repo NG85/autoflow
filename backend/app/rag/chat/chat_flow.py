@@ -244,7 +244,7 @@ class ChatFlow:
             knowledge_graph_context=knowledge_graph_context,
         )
 
-        if not analysis_result.needs_competitor_info:
+        if not analysis_result.is_competitor_related:
             logger.info(f"Restore the original knowledge base since the question is not competitor related")
             self.retrieve_flow.knowledge_bases = self.backup_knowledge_bases
              
