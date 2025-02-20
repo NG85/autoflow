@@ -31,7 +31,7 @@ from app.rag.default_prompt import (
     DEFAULT_FURTHER_QUESTIONS_PROMPT,
     DEFAULT_GENERATE_GOAL_PROMPT,
     DEFAULT_CLARIFYING_QUESTION_PROMPT,
-    DEFAULT_ANALYZE_QUESTION_AND_ENHANCE_PROMPT,
+    DEFAULT_ANALYZE_COMPETITOR_RELATED_PROMPT,
 )
 
 
@@ -47,8 +47,7 @@ class LLMOption(BaseModel):
     refine_prompt: str = DEFAULT_REFINE_PROMPT
     further_questions_prompt: str = DEFAULT_FURTHER_QUESTIONS_PROMPT
     generate_goal_prompt: str = DEFAULT_GENERATE_GOAL_PROMPT
-    analyze_question_and_enhance_prompt: str = DEFAULT_ANALYZE_QUESTION_AND_ENHANCE_PROMPT
-
+    analyze_competitor_related_prompt: str = DEFAULT_ANALYZE_COMPETITOR_RELATED_PROMPT
 class VectorSearchOption(VectorSearchRetrieverConfig):
     pass
 

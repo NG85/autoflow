@@ -62,4 +62,5 @@ class ChatMessageSate(int, enum.Enum):
     REFINE_QUESTION = 3
     SEARCH_RELATED_DOCUMENTS = 4
     GENERATE_ANSWER = 5
+    ANALYZE_COMPETITOR_RELATED = 6
     FINISHED = 9

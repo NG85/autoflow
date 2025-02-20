@@ -433,82 +433,62 @@ Follow-up question:
 Goal:
 """
 
-DEFAULT_ANALYZE_QUESTION_AND_ENHANCE_PROMPT = """
-Determine if the following question belongs to sales/pre-sales related consultation. The question is proposed by internal sales, pre-sales, or other related personnel who are preparing for customer communication or handling customer inquiries.
+DEFAULT_ANALYZE_COMPETITOR_RELATED_PROMPT = """\
+Current Date: {{current_date}}
+---------------------
+The prerequisite questions and their relevant knowledge for the user's main question.
+---------------------
 
-Sales/pre-sales related questions are characterized by:
-1. Preparation questions for better serving customers
-2. Focus on the "Persona (customer persona) - Pain Point (customer pain point) - Feature (product feature)" framework
-3. Seek the best way to handle customer inquiries
-4. Collect competitive information
-5. Improve the effectiveness of sales/pre-sales work
+{{graph_knowledges}}
 
-Common scenarios include but are not limited to:
+---------------------
 
-1. Persona (customer persona) related:
-   - The focus and decision factors of specific industry customers
-   - The demand differences of different roles (e.g., CTO, architect, DBA)
-   - The typical needs of different size enterprises
-   - The technical stack and architecture characteristics of target customers
-   Examples: "What are the typical needs of internet companies?"
+Chat history:
 
-2. Pain Point (customer pain point) related:
-   - The common business pain points in the industry
-   - The typical technical challenges in different scenarios
-   - The difficulties faced by customers in upgrading
-   - The problems in operation, cost, and performance
-   Examples: "What is the biggest technical challenge for e-commerce customers during Double 11?"
+{{chat_history}}
 
-3. Feature (product feature) related:
-   - The mapping relationship between product features and customer pain points
-   - The differentiated competitive advantages of features
-   - The best practices and typical scenarios of features
-   - The application value of new features
-   Examples: "How does our distributed transaction feature solve the pain points of the financial industry?"
+---------------------
 
-4. Solution consultation:
-   - Verify the feasibility of specific solutions
-   - The differences in solutions for different personas
-   - The design of solutions combining pain points
-   - The best practices of feature combinations
-   Examples: "What is the best architecture for the transformation of traditional bank core systems?"
+Task:
+Analyze if the following question is related to competitors or competitive products. A competitor-related question typically involves:
 
-5. Business related:
-   - The pricing strategies for different size customers
-   - The ROI analysis for specific pain points
-   - The authorization方式 of feature modules
-   - The implementation cycle and resource planning
-   Examples: "What is the typical budget for a complete solution for the financial industry?"
+1. Direct competitor mentions:
+   - Explicit mentions of competitor names (e.g., Oracle, MySQL, OceanBase)
+   - References to competitor products or services
+   - Questions about competitor features or capabilities
 
-6. Competitor response:
-   - The competitive strategies for different customer personas
-   - The differentiated advantages for specific pain points
-   - The competitive comparison at the feature level
-   - The competitive analysis at the solution level
-   Examples: "What is the core advantage of our solution compared to competitor A in the financial scenario?"
+2. Comparative analysis:
+   - Feature comparisons between products
+   - Performance benchmarks
+   - Cost comparisons
+   - Architecture differences
+   Examples: "How does TiDB's performance compare to OceanBase?"
 
-In contrast, non-sales related internal issues are usually:
-1. Focus on specific technical implementation details
-2. About the use or maintenance of internal systems
-3. Daily work process consultation
-Examples: "How to configure the parameters of the test environment?"
+3. Competitive positioning:
+   - Market positioning questions
+   - Competitive advantages/disadvantages
+   - Product differentiation
+   Examples: "What are TiDB's unique advantages over traditional RDBMSs?"
+
+4. Migration scenarios:
+   - Questions about migrating from competitor products
+   - Migration challenges and solutions
+   - Cost-benefit analysis of switching
+   Examples: "What are the key considerations when migrating from Oracle to TiDB?"
 
 Please return the analysis result in the following JSON format:
 {
-    "is_sales_related": true/false,  # Whether the question is related to sales
-    "enhanced_question": "",         # The enhanced question, supplemented with necessary context and analysis
-    "related_aspects": []            # The related aspects to consider together
-    "needs_competitor_info": false,    # Whether competitor information is needed
-    "needs_technical_details": false,  # Whether technical details are needed
-    "competitor_names": [],           # List of specific competitor names mentioned or implied
-    "feature_names": []              # List of specific features mentioned or implied
+    "is_competitor_related": true/false,  # Whether the question involves competitors
+    "competitor_focus": "",               # The main competitive aspect being discussed (e.g., "performance comparison", "migration", "feature comparison")
+    "competitor_names": [],               # List of specific competitors mentioned or implied
+    "comparison_aspects": [],             # List of aspects being compared (e.g., "performance", "cost")
+    "needs_technical_details": false      # Whether technical comparison is needed
 }
 
 When analyzing:
-1. For competitor_names: Include only when the question explicitly mentions or implies comparison with specific competitors
-2. For feature_names: Include specific features that are directly relevant to the question
-3. Set needs_competitor_info to true if the question involves competitive analysis or comparison
-4. Set needs_technical_details to true if detailed feature explanation or technical comparison is needed
+1. For competitor_names: Include only explicitly mentioned or clearly implied competitors
+2. For comparison_aspects: List specific aspects that are being compared
+3. Set needs_technical_details to true if detailed technical comparison is required
 
 Question: {{question}}
 """

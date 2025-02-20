@@ -31,7 +31,7 @@ from app.rag.chat.stream_protocol import (
 from app.rag.retrievers.knowledge_graph.schema import KnowledgeGraphRetrievalResult
 from app.rag.types import ChatEventType, MessageRole, ChatMessageSate
 from app.rag.utils import parse_goal_response_format
-from app.repositories import chat_repo
+from app.repositories import chat_repo, knowledge_base_repo
 from app.site_settings import SiteSetting
 from app.utils.jinja2 import get_prompt_by_jinja2_template
 from app.utils.tracing import LangfuseContextManager
@@ -198,27 +198,14 @@ class ChatFlow:
         ctx = langfuse_instrumentor_context.get().copy()
         db_user_message, db_assistant_message = yield from self._chat_start()
         langfuse_instrumentor_context.get().update(ctx)
+        
 
-        # Analyze the user question to determine if it is related to sales.
-        analysis_result = yield from self._analyze_question_and_enhance(
-            user_question=self.user_question,
-            annotation_silent=True
-        )
-
-        self.user_question = analysis_result.enhanced_question or self.user_question
-
-        # If competitor info is needed, add competitor knowledge base
-        if analysis_result.needs_competitor_info:
-            yield ChatEvent(
-                event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
-                payload=ChatStreamMessagePayload(
-                    state=ChatMessageSate.KG_RETRIEVAL,
-                    display="Retrieving Competitor Information",
-                ),
-            )
-            
-            # TODO: Move competitor knowledge base id to config
-            self.retrieve_flow.knowledge_bases.extend([240001])
+        # TODO: Move competitor knowledge base id to config
+        logger.info(f"Adding competitor knowledge base to retrieve flow")
+        self.backup_knowledge_bases = self.retrieve_flow.knowledge_bases.copy()
+        self.competitor_knowledge_base_id = 240001
+        self.competitor_knowledge_base = knowledge_base_repo.must_get(self.db_session, self.competitor_knowledge_base_id, False)
+        self.retrieve_flow.knowledge_bases.append(self.competitor_knowledge_base)
                 
         # 1. Retrieve Knowledge graph related to the user question.
         (
@@ -249,7 +236,18 @@ class ChatFlow:
                     knowledge_graph=knowledge_graph,
                 )
                 return None, []
+            
+        # 4. Analyze the user question to determine if it is competitor related.
+        analysis_result = yield from self._analyze_competitor_related(
+            user_question=self.user_question,
+            chat_history=self.chat_history,
+            knowledge_graph_context=knowledge_graph_context,
+        )
 
+        if not analysis_result.needs_competitor_info:
+            logger.info(f"Restore the original knowledge base since the question is not competitor related")
+            self.retrieve_flow.knowledge_bases = self.backup_knowledge_bases
+             
         # 4. Use refined question to search for relevant chunks.
         relevant_chunks = yield from self._search_relevance_chunks(
             user_question=refined_question
@@ -812,44 +810,72 @@ class ChatFlow:
         return goal, response_format
 
 
-    def _analyze_question_and_enhance(self,
+    def _analyze_competitor_related(self,
         user_question: str,
+        chat_history: Optional[List[ChatMessage]] = list,
+        knowledge_graph_context: str = "",
         annotation_silent: bool = False,
     ) -> Generator[ChatEvent, None, QuestionAnalysisResult]:
-        """Analyze the question type and enhance it"""
+        """Analyze if the question is competitor related"""
         with self._trace_manager.span(
-            name="analyze_question_and_enhance",
-            input={"user_question": user_question},
+            name="_analyze_competitor_related",
+            input={
+                "user_question": user_question,
+                "chat_history": chat_history,
+                "knowledge_graph_context": knowledge_graph_context,
+            },
         ) as span:
             
             if not annotation_silent:
                 yield ChatEvent(
                     event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
                     payload=ChatStreamMessagePayload(
-                        state=ChatMessageSate.KG_RETRIEVAL,
-                        display="Analyzing Question and Enhancing",
+                        state=ChatMessageSate.ANALYZE_COMPETITOR_RELATED,
+                        display="Analyzing If Question is Competitor Related",
                     ),
                 )
 
             # Analyze the question
             analysis_result = self._fast_llm.predict(
                 get_prompt_by_jinja2_template(
-                    self.engine_config.llm.analyze_question_and_enhance_prompt,
+                    self.engine_config.llm.analyze_competitor_related_prompt,
                     question=user_question,
+                    chat_history=chat_history,
+                    current_date=datetime.now().strftime("%Y-%m-%d"),
                 )
             )
                        
             try:
-                result = QuestionAnalysisResult.model_validate_json(analysis_result)
-                logger.info(f"Question analysis result: {result}")
+                logger.info(f"Question analysis result: {analysis_result}")
+                json_str = self._extract_json_from_markdown(analysis_result)
+                result = QuestionAnalysisResult.model_validate_json(json_str)
             except Exception as e:
                 logger.error(f"Failed to parse question analysis result: {e}")
                 # Return default result
                 result = QuestionAnalysisResult(
-                    is_sales_related=False,
-                    enhanced_question=user_question,
-                    related_aspects=[]
+                    is_competitor_related=False,
+                    competitor_focus="",
+                    competitor_names=[],
+                    comparison_aspects=[],
+                    needs_technical_details=False,
                 )
-
+                
             span.end(output=result.model_dump())
             return result
+        
+    def _extract_json_from_markdown(self, text: str) -> str:
+        """Extract JSON content from markdown code blocks or plain text"""
+        import re
+        
+        # Try to extract JSON from markdown code block
+        code_block_pattern = r"```(?:json)?\n([\s\S]*?)\n```"
+        if match := re.search(code_block_pattern, text):
+            return match.group(1).strip()
+            
+        # If no code block found, try to find JSON-like content
+        json_pattern = r"\{[\s\S]*\}"
+        if match := re.search(json_pattern, text):
+            return match.group(0).strip()
+            
+        # If no JSON-like content found, return the original text
+        return text.strip()
