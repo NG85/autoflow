@@ -34,10 +34,6 @@ async def register_user(
         return user
     except UserAlreadyExists:
         logger.info(f"User with email {user.email} already exists, skipping registration")
-        raise HTTPException(
-            status_code=HTTPStatus.BAD_REQUEST,
-            detail="User with this email already exists"
-        )
     except Exception as e:
         logger.error(f"Failed to register user: {e}")
         raise HTTPException(
