@@ -17,13 +17,13 @@ router = APIRouter()
 def me(user: CurrentUserDep):
     return user
 
-@router.post("/users/register", response_model=UserRead)
+@router.post("/users/register", response_model=None)
 async def register_user(
     user: UserCreate,
     session: AsyncSessionDep
 ):
     try:
-        user = await create_user(
+        await create_user(
             session,
             email=user.email,
             password=user.password or secrets.token_urlsafe(16),
@@ -31,9 +31,10 @@ async def register_user(
             is_verified=True,
             is_superuser=False,
         )
-        return user
+        return {"status": "success", "message": "User registered successfully"}
     except UserAlreadyExists:
         logger.info(f"User with email {user.email} already exists, skipping registration")
+        return {"status": "success", "message": "User already exists, skipping registration"}
     except Exception as e:
         logger.error(f"Failed to register user: {e}")
         raise HTTPException(
