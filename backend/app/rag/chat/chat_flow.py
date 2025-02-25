@@ -200,12 +200,12 @@ class ChatFlow:
         langfuse_instrumentor_context.get().update(ctx)
         
 
-        # TODO: Move competitor knowledge base id to config
-        logger.info(f"Adding competitor knowledge base to retrieve flow")
-        self.backup_knowledge_bases = self.retrieve_flow.knowledge_bases.copy()
-        self.competitor_knowledge_base_id = 240001
-        self.competitor_knowledge_base = knowledge_base_repo.must_get(self.db_session, self.competitor_knowledge_base_id, False)
-        self.retrieve_flow.knowledge_bases.append(self.competitor_knowledge_base)
+        # # TODO: Move competitor knowledge base id to config
+        # logger.info(f"Adding competitor knowledge base to retrieve flow")
+        # self.backup_knowledge_bases = self.retrieve_flow.knowledge_bases.copy()
+        # self.competitor_knowledge_base_id = 240001
+        # self.competitor_knowledge_base = knowledge_base_repo.must_get(self.db_session, self.competitor_knowledge_base_id, False)
+        # self.retrieve_flow.knowledge_bases.append(self.competitor_knowledge_base)
                 
         # 1. Retrieve Knowledge graph related to the user question.
         (
@@ -237,16 +237,16 @@ class ChatFlow:
                 )
                 return None, []
             
-        # 4. Analyze the user question to determine if it is competitor related.
-        analysis_result = yield from self._analyze_competitor_related(
-            user_question=self.user_question,
-            chat_history=self.chat_history,
-            knowledge_graph_context=knowledge_graph_context,
-        )
+        # # 4. Analyze the user question to determine if it is competitor related.
+        # analysis_result = yield from self._analyze_competitor_related(
+        #     user_question=self.user_question,
+        #     chat_history=self.chat_history,
+        #     knowledge_graph_context=knowledge_graph_context,
+        # )
 
-        if not analysis_result.is_competitor_related:
-            logger.info(f"Restore the original knowledge base since the question is not competitor related")
-            self.retrieve_flow.knowledge_bases = self.backup_knowledge_bases
+        # if not analysis_result.is_competitor_related:
+        #     logger.info(f"Restore the original knowledge base since the question is not competitor related")
+        #     self.retrieve_flow.knowledge_bases = self.backup_knowledge_bases
              
         # 4. Use refined question to search for relevant chunks.
         relevant_chunks = yield from self._search_relevance_chunks(
