@@ -1064,7 +1064,7 @@ class ChatFlow:
         content = prompt_mapping.get(identity_type, default_prompt.IDENTITY_FULL_PROMPT)
         
         # 2. For simple types, use the template content directly
-        if identity_type in ["identity_brief", "capabilities", "knowledge_base"]:
+        if identity_type in ["identity_brief", "capabilities", "knowledge_base", "greeting"]:
             return content
         
         # 3. For complex types, use LLM to generate a more natural response
@@ -1080,11 +1080,20 @@ Please respond with a natural, conversational tone using this information:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ]
-            ).content
+            )
             
-            return response
+            if hasattr(response, 'content'):
+                return response.content
+            elif isinstance(response, dict) and 'content' in response:
+                return response['content']
+            elif isinstance(response, str):
+                return response
+            else:
+                # Fallback to the template content if we can't extract the response
+                logger.warning(f"Unexpected response format from LLM: {type(response)}")
+                return content
+            
         except Exception as e:
             logger.error(f"Error generating identity response with LLM: {e}")
             # Return the template content when an error occurs
             return content
-    
