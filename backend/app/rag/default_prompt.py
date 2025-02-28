@@ -653,33 +653,40 @@ Classify the user's question into one of these five categories:
 
 1. identity_full: Questions asking for detailed information about Sia's identity
    - Examples: "Tell me more about yourself", "What kind of assistant are you?", "Please introduce yourself in detail"
-   - Examples: "介绍一下你自己", "你是什么类型的助手", "详细介绍一下你"
+   - Examples: "介绍一下你自己", "你是什么类型的助手", "详细介绍一下你", "介绍下自己", "介绍下你自己"
 
 2. identity_brief: Simple questions about who Sia is, suitable for a brief introduction
-   - Examples: "Who are you?", "What's your name?", "你是谁", "你叫什么名字", "你是什么"
-   - Examples: "你是?", "介绍下自己", "你是什么东西"
+   - Examples: "Who are you?", "What's your name?"
+   - Examples: "你是?", "你是什么东西", "你是谁", "你是谁啊", "你叫啥", "你叫啥名字", "你叫啥子", "你叫什么名字", "你是什么"
 
 3. capabilities: Questions specifically about what Sia can do, Sia's abilities, or how Sia can help
-   - Examples: "What can you do?", "What are your functions?", "How can you help me?", "你能做什么", "你有什么功能"
-   - Examples: "你能帮我做什么", "你能提供什么服务", "你的职责是什么"
-   - Examples: "你能干啥", "你会干嘛", "你有啥用", "你能干什么", "你会做什么"
-   - Examples: "你能帮我干嘛", "你能帮我什么", "你有什么用"
+   - Examples: "What can you do?", "What are your functions?", "How can you help me?"
+   - Examples: "你能帮我做什么", "你能提供什么服务", "你的职责是什么", "你有什么功能"
+   - Examples: "你能干啥", "你会干嘛", "你会干什么", "你有啥用", "你能干什么", "你会做什么", "你能做什么"
+   - Examples: "你能帮我干嘛", "你能帮我什么", "你能帮我干啥", "你能帮我啥", "你有什么用"
    - Note: These questions must be explicitly about Sia's own capabilities, not about products or business strategies
 
 4. knowledge_base: Questions about whether Sia is just a knowledge base
-   - Examples: "Are you just a knowledge base?", "你是知识库吗", "你只是个知识库吗"
-   - Examples: "你是不是知识库", "你就是个知识库吧", "你只是搜索工具吗"
-   - Examples: "你跟知识库有什么区别", "你跟知识库有什么不同", "你跟知识库有什么不一样", "difference between you and knowledge base", "your difference with knowledge base"
+   - Examples: "Are you just a knowledge base?", "difference between you and knowledge base", "your difference with knowledge base"
+   - Examples: "你是不是知识库", "你就是个知识库吧", "你只是搜索工具吗", "你是知识库吗", "你只是个知识库吗"
+   - Examples: "你跟知识库有什么区别", "你跟知识库有什么不同", "你跟知识库有什么不一样"
 
 5. none: Not asking about Sia's information - this includes ALL business questions, product inquiries, or technical questions
    - Examples: "How to verify TiDB's core advantages to customers?", "What are the benefits of PingCAP's products?"
    - Examples: "如何向客户验证TiDB的核心优势?", "销售策略有哪些?", "如何提高成单率?"
-   - Note: ANY question about products, business strategies, sales techniques, or technical information should be classified as "none"
+   - Examples: "TiDB最新的版本是什么", "TiDB有哪些功能", "TiDB怎么用", "TiDB的价格是多少"
+   - Examples: "What is the latest version of TiDB?", "How to use TiDB?", "What are the features of TiDB?"
+   - Note: ANY question about products (like TiDB), business strategies, sales techniques, or technical information should be classified as "none"
 
-IMPORTANT: 
+IMPORTANT DISTINCTION RULES:
 1. Questions about products (like TiDB), business strategies, or technical information are NOT questions about Sia's capabilities - they should be classified as "none".
-2. Pay special attention to colloquial expressions like "你能干啥", "你会干嘛", "你有啥用" - these are asking about Sia's capabilities and should be classified as "capabilities".
-3. Focus on the intent of the question rather than the exact wording. If the user is clearly asking what Sia can do, classify it as "capabilities" even if the phrasing is informal or colloquial.
+2. If the question mentions specific products (like TiDB, MySQL, etc.), it is almost certainly a "none" category.
+3. Questions about versions, features, usage, or pricing of any product are "none" category.
+4. Only classify as "capabilities" if the question is explicitly asking what Sia itself can do, not what products can do.
+5. Pay attention to the subject of the question:
+   - "你能做什么" (What can YOU do) is about Sia's capabilities -> "capabilities"
+   - "TiDB能做什么" (What can TIDB do) is about a product -> "none"
+   - "最新版本是什么" (What is the latest version) is about a product -> "none"
 
 User question: "{question}"
 

@@ -10,6 +10,17 @@ services:
       - /Users/gaona/redis-data:/data
     command: ["redis-server", "--loglevel", "warning"]
 
+  auth:
+    image: registry.cn-beijing.aliyuncs.com/aptsell/aptsell.ai-auth:rc0.0.1
+    restart: always
+    ports:
+      - "8018:8018"
+    volumes:
+      - ./application.yml:/app/application.yml
+    working_dir: /app
+    command: ["java", "-jar", "aptsell.jar", "--spring.config.location=/app/application.yml"]
+    depends_on:
+      - redis
 
   backend:
     image: registry.cn-beijing.aliyuncs.com/aptsell/aptsell.ai-backend:0.1.2
@@ -21,7 +32,7 @@ services:
     env_file:
       - .env
     volumes:
-      - ./data:/shared/data
+      - ./data:/shared/data:
     logging:
       driver: json-file
       options:

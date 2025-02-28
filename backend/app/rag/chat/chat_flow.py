@@ -967,10 +967,15 @@ class ChatFlow:
         exact_matches = {
             "你是谁": "identity_brief",
             "你叫什么": "identity_brief",
+            "你叫啥": "identity_brief",
             "你叫什么名字": "identity_brief",
             "who are you": "identity_brief",
             "what is your name": "identity_brief",
+            
             "介绍一下你自己": "identity_full",
+            "请介绍一下你自己": "identity_full",
+            "tell me about yourself": "identity_full",
+            
             "你能做什么": "capabilities",
             "你的能力": "capabilities",
             "what can you do": "capabilities",
@@ -981,8 +986,21 @@ class ChatFlow:
             "你能干什么": "capabilities",
             "你会做什么": "capabilities",
             "你能帮我干嘛": "capabilities",
-            "你是知识库": "knowledge_base",
-            "你是个人知识库": "knowledge_base",
+            "你能为我干啥": "capabilities",
+            "你能为我做什么": "capabilities",
+            "你对我有什么用": "capabilities",
+            "你怎么帮我": "capabilities",
+            "你能帮到我什么": "capabilities",
+            "你有什么用": "capabilities",
+            "你能提供什么服务": "capabilities",
+            "你的职责是什么": "capabilities",
+            
+            "你是知识库吗": "knowledge_base",
+            "你是个人知识库吗": "knowledge_base",
+            "你是知识库吗": "knowledge_base",
+            "你是个人知识库吗": "knowledge_base",
+            "你只是知识库吗": "knowledge_base",
+            "你是搜索工具吗": "knowledge_base",
             "你跟知识库有什么区别": "knowledge_base",
             "你跟知识库有什么不同": "knowledge_base",
             "你跟知识库有什么不一样": "knowledge_base",
@@ -990,17 +1008,9 @@ class ChatFlow:
             "your difference with knowledge base": "knowledge_base",
         }
         
-        # Convert user question to lowercase and remove leading/trailing spaces
         user_question_lower = user_question.lower().strip()
-        
-        # Check for fuzzy matches
-        for phrase, result in exact_matches.items():
-            # If the user question fully contains the keyword
-            if phrase in user_question_lower:
-                return result
-            # Or the similarity between the user question and the keyword is greater than the threshold (e.g. 80% same)
-            elif len(phrase) > 3 and (phrase in user_question_lower or user_question_lower in phrase):
-                return result
+        if user_question_lower in exact_matches:
+            return exact_matches[user_question_lower]     
         
         # 2. Use LLM for more precise semantic judgment
         try:
@@ -1012,7 +1022,7 @@ class ChatFlow:
             result = self._fast_llm.predict(prompt=detection_prompt).strip().lower()
             
             # Record the LLM's judgment result
-            logger.debug(f"LLM identity detection for '{user_question}': {result}")
+            logger.info(f"LLM identity detection for '{user_question}': {result}")
             
             if result in ["identity_full", "identity_brief", "capabilities", "knowledge_base"]:
                 return result
