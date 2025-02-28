@@ -1006,12 +1006,31 @@ class ChatFlow:
             "你跟知识库有什么不一样": "knowledge_base",
             "difference between you and knowledge base": "knowledge_base",
             "your difference with knowledge base": "knowledge_base",
+            
+            "你好": "greeting",
+            "hello": "greeting",
+            "hi": "greeting",
+            "hey": "greeting",
+            "嗨": "greeting",
+            "哈喽": "greeting",
+            "早上好": "greeting",
+            "下午好": "greeting",
+            "晚上好": "greeting",
+            "good morning": "greeting",
+            "good afternoon": "greeting",
+            "good evening": "greeting",
         }
         
         user_question_lower = user_question.lower().strip()
         if user_question_lower in exact_matches:
-            return exact_matches[user_question_lower]     
-        
+            return exact_matches[user_question_lower]    
+             
+        # Then check if any key is contained within the user question
+        for key, identity_type in exact_matches.items():
+            if key in user_question_lower:
+                logger.info(f"Detected identity question '{key}' in '{user_question_lower}'")
+                return identity_type
+            
         # 2. Use LLM for more precise semantic judgment
         try:
             detection_prompt = get_prompt_by_jinja2_template(
@@ -1039,6 +1058,7 @@ class ChatFlow:
             "identity_brief": default_prompt.IDENTITY_BRIEF_PROMPT,
             "capabilities": default_prompt.CAPABILITIES_PROMPT,
             "knowledge_base": default_prompt.KNOWLEDGE_BASE_PROMPT,
+            "greeting": default_prompt.IDENTITY_BRIEF_PROMPT,
         }
         
         content = prompt_mapping.get(identity_type, default_prompt.IDENTITY_FULL_PROMPT)

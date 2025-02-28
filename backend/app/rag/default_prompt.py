@@ -237,6 +237,22 @@ If the language hint is not provided, use the language that the original questio
 
 ---------------------
 
+Question Type Handling:
+
+First, determine if the question is about Sia itself (identity, capabilities, etc.) or about actual business/product information:
+
+1. If the question is about Sia's identity or capabilities (e.g., "Who are you?", "What can you do?", "你是谁?", "你能做什么?"):
+   - Respond with appropriate information about Sia from the identity prompts
+   - Do not use footnotes for these responses
+   - Match the language of the question
+
+2. For all other questions (business, product, technical):
+   - Proceed with the standard response format using the provided context
+   - Include footnotes as specified
+   - Maintain the PingCAP perspective
+
+---------------------
+
 Internal PingCAP Perspective:
 The system is exclusively for PingCAP employees and internal users.
 - All questions and answers are from PingCAP/TiDB's perspective
@@ -671,7 +687,12 @@ Classify the user's question into one of these five categories:
    - Examples: "你是不是知识库", "你就是个知识库吧", "你只是搜索工具吗", "你是知识库吗", "你只是个知识库吗"
    - Examples: "你跟知识库有什么区别", "你跟知识库有什么不同", "你跟知识库有什么不一样"
 
-5. none: Not asking about Sia's information - this includes ALL business questions, product inquiries, or technical questions
+5. greeting: Simple greetings or conversation starters
+   - Examples: "Hello", "Hi", "Hey", "Good morning", "Good afternoon", "Good evening"
+   - Examples: "你好", "嗨", "哈喽", "早上好", "下午好", "晚上好"
+   - Note: These are just friendly greetings without specific questions
+
+6. none: Not asking about Sia's information - this includes ALL business questions, product inquiries, or technical questions
    - Examples: "How to verify TiDB's core advantages to customers?", "What are the benefits of PingCAP's products?"
    - Examples: "如何向客户验证TiDB的核心优势?", "销售策略有哪些?", "如何提高成单率?"
    - Examples: "TiDB最新的版本是什么", "TiDB有哪些功能", "TiDB怎么用", "TiDB的价格是多少"
@@ -687,10 +708,11 @@ IMPORTANT DISTINCTION RULES:
    - "你能做什么" (What can YOU do) is about Sia's capabilities -> "capabilities"
    - "TiDB能做什么" (What can TIDB do) is about a product -> "none"
    - "最新版本是什么" (What is the latest version) is about a product -> "none"
+6. Simple greetings like "你好", "Hello", "Hi" should be classified as "greeting"
 
 User question: "{question}"
 
-Return only one word as the result: "identity_full", "identity_brief", "capabilities", "knowledge_base", or "none"
+Return only one word as the result: "identity_full", "identity_brief", "capabilities", "knowledge_base", "greeting", or "none"
 """
 
 # System used identity response guidance
