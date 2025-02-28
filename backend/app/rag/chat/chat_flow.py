@@ -35,6 +35,7 @@ from app.repositories import chat_repo, knowledge_base_repo
 from app.site_settings import SiteSetting
 from app.utils.jinja2 import get_prompt_by_jinja2_template
 from app.utils.tracing import LangfuseContextManager
+from app.rag import default_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -198,8 +199,32 @@ class ChatFlow:
         ctx = langfuse_instrumentor_context.get().copy()
         db_user_message, db_assistant_message = yield from self._chat_start()
         langfuse_instrumentor_context.get().update(ctx)
+        # Add initialization status display
+        yield ChatEvent(
+            event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
+            payload=ChatStreamMessagePayload(
+                state=ChatMessageSate.INITIALIZATION,
+                display="Initializing Chat Session and Starting Thinking",
+            ),
+        )
         
-
+        # 0. Identity question detection and processing
+        identity_type = self._detect_identity_question(self.user_question)
+        if identity_type:
+            logger.info(f"Detected identity question of type: {identity_type}")
+            identity_response = self._handle_identity_question(identity_type)
+            
+            with self._trace_manager.span(name="identity_response") as span:
+                span.end(output={"identity_type": identity_type, "response_length": len(identity_response)})
+                        
+            yield from self._chat_finish(
+                db_assistant_message=db_assistant_message,
+                db_user_message=db_user_message,
+                response_text=identity_response,
+            )
+            
+            return identity_response, []
+                
         # # TODO: Move competitor knowledge base id to config
         # logger.info(f"Adding competitor knowledge base to retrieve flow")
         # self.backup_knowledge_bases = self.retrieve_flow.knowledge_bases.copy()
@@ -331,9 +356,43 @@ class ChatFlow:
                         ),
                     )
 
-            knowledge_graph, knowledge_graph_context = (
-                self.retrieve_flow.search_knowledge_graph(user_question)
-            )
+            kg_search_gen = self.retrieve_flow.search_knowledge_graph(user_question)
+            knowledge_graph = KnowledgeGraphRetrievalResult()
+            knowledge_graph_context = ""
+            
+            try:
+                while True:
+                    try:
+                        stage, message = next(kg_search_gen)
+                        if not annotation_silent:
+                            display_message = message
+                            yield ChatEvent(
+                                event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
+                                payload=ChatStreamMessagePayload(
+                                    state=stage,
+                                    display=display_message,
+                                ),
+                            )
+                    except StopIteration as e:
+                        if hasattr(e, 'value'):
+                            if isinstance(e.value, KnowledgeGraphRetrievalResult):
+                                knowledge_graph = e.value
+                                knowledge_graph_context = self.retrieve_flow._get_knowledge_graph_context(knowledge_graph)
+                            elif isinstance(e.value, tuple) and len(e.value) == 2:
+                                knowledge_graph, knowledge_graph_context = e.value
+                        break
+            except Exception as e:
+                logger.error(f"Error during knowledge graph search: {e}")
+                if not annotation_silent:
+                    yield ChatEvent(
+                        event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
+                        payload=ChatStreamMessagePayload(
+                            state=stage,
+                            display=f"Error during knowledge graph search: {str(e)}",
+                        ),
+                    )
+                knowledge_graph = KnowledgeGraphRetrievalResult()
+                knowledge_graph_context = ""
 
             span.end(
                 output={
@@ -611,7 +670,8 @@ class ChatFlow:
             db_assistant_message.id,
         )
 
-        db_assistant_message.sources = [s.model_dump() for s in source_documents]
+        if not source_documents:
+            db_assistant_message.sources = [s.model_dump() for s in source_documents]
         db_assistant_message.graph_data = knowledge_graph.to_stored_graph_dict()
         db_assistant_message.content = response_text
         db_assistant_message.post_verification_result_url = post_verification_result_url
@@ -639,6 +699,22 @@ class ChatFlow:
     def _external_chat(self) -> Generator[ChatEvent | str, None, None]:
         db_user_message, db_assistant_message = yield from self._chat_start()
 
+        identity_type = self._detect_identity_question(self.user_question)
+        if identity_type:
+            logger.info(f"Detected identity question of type: {identity_type}")
+            identity_response = self._handle_identity_question(identity_type)
+            
+            with self._trace_manager.span(name="identity_response") as span:
+                span.end(output={"identity_type": identity_type, "response_length": len(identity_response)})
+                        
+            yield from self._chat_finish(
+                db_assistant_message=db_assistant_message,
+                db_user_message=db_user_message,
+                response_text=identity_response,
+            )
+            
+            return
+        
         goal, response_format = self.user_question, {}
         try:
             # 1. Generate the goal with the user question, knowledge graph and chat history.
@@ -879,3 +955,106 @@ class ChatFlow:
             
         # If no JSON-like content found, return the original text
         return text.strip()
+    
+    def _detect_identity_question(self, user_question: str) -> str:
+        """
+        Use LLM to detect if the question is about the assistant's identity and capabilities, and return the specific type if so
+        
+        Returns:
+            str: "identity_full", "identity_brief", "capabilities", "knowledge_base" or None
+        """
+        # 1. Quick keyword check - if the question matches exactly, return the result immediately
+        exact_matches = {
+            "你是谁": "identity_brief",
+            "你叫什么": "identity_brief",
+            "你叫什么名字": "identity_brief",
+            "who are you": "identity_brief",
+            "what is your name": "identity_brief",
+            "介绍一下你自己": "identity_full",
+            "你能做什么": "capabilities",
+            "你的能力": "capabilities",
+            "what can you do": "capabilities",
+            "你能帮我做什么": "capabilities",
+            "你能干啥": "capabilities",
+            "你会干嘛": "capabilities", 
+            "你有啥用": "capabilities",
+            "你能干什么": "capabilities",
+            "你会做什么": "capabilities",
+            "你能帮我干嘛": "capabilities",
+            "你是知识库": "knowledge_base",
+            "你是个人知识库": "knowledge_base",
+            "你跟知识库有什么区别": "knowledge_base",
+            "你跟知识库有什么不同": "knowledge_base",
+            "你跟知识库有什么不一样": "knowledge_base",
+            "difference between you and knowledge base": "knowledge_base",
+            "your difference with knowledge base": "knowledge_base",
+        }
+        
+        # Convert user question to lowercase and remove leading/trailing spaces
+        user_question_lower = user_question.lower().strip()
+        
+        # Check for fuzzy matches
+        for phrase, result in exact_matches.items():
+            # If the user question fully contains the keyword
+            if phrase in user_question_lower:
+                return result
+            # Or the similarity between the user question and the keyword is greater than the threshold (e.g. 80% same)
+            elif len(phrase) > 3 and (phrase in user_question_lower or user_question_lower in phrase):
+                return result
+        
+        # 2. Use LLM for more precise semantic judgment
+        try:
+            detection_prompt = get_prompt_by_jinja2_template(
+                default_prompt.IDENTITY_DETECTION_PROMPT,
+                question=user_question
+            )
+            
+            result = self._fast_llm.predict(prompt=detection_prompt).strip().lower()
+            
+            # Record the LLM's judgment result
+            logger.debug(f"LLM identity detection for '{user_question}': {result}")
+            
+            if result in ["identity_full", "identity_brief", "capabilities", "knowledge_base"]:
+                return result
+            return None
+        except Exception as e:
+            logger.error(f"Error in LLM identity detection: {e}")
+            return None
+
+    def _handle_identity_question(self, identity_type: str) -> str:
+        """ Generate response based on the identity question type"""
+        # 1. Get the corresponding prompt template
+        prompt_mapping = {
+            "identity_full": default_prompt.IDENTITY_FULL_PROMPT,
+            "identity_brief": default_prompt.IDENTITY_BRIEF_PROMPT,
+            "capabilities": default_prompt.CAPABILITIES_PROMPT,
+            "knowledge_base": default_prompt.KNOWLEDGE_BASE_PROMPT,
+        }
+        
+        content = prompt_mapping.get(identity_type, default_prompt.IDENTITY_FULL_PROMPT)
+        
+        # 2. For simple types, use the template content directly
+        if identity_type in ["identity_brief", "capabilities", "knowledge_base"]:
+            return content
+        
+        # 3. For complex types, use LLM to generate a more natural response
+        try:
+            system_prompt = default_prompt.IDENTITY_SYSTEM_PROMPT
+            user_prompt = f"""As Sia, the AI sales assistant, a user asked about your identity. 
+Please respond with a natural, conversational tone using this information:
+
+    {content}"""
+            
+            response = self._llm.chat(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ]
+            ).content
+            
+            return response
+        except Exception as e:
+            logger.error(f"Error generating identity response with LLM: {e}")
+            # Return the template content when an error occurs
+            return content
+    

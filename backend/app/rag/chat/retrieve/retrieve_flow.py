@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import Generator, List, Optional, Tuple
 
 from llama_index.core.instrumentation import get_dispatcher
 from llama_index.core.llms import LLM
@@ -23,6 +23,7 @@ from app.rag.retrievers.knowledge_graph.schema import (
 )
 from app.rag.retrievers.chunk.fusion_retriever import ChunkFusionRetriever
 from app.repositories import document_repo
+from app.rag.types import ChatMessageSate
 
 dispatcher = get_dispatcher(__name__)
 logger = logging.getLogger(__name__)
@@ -80,7 +81,7 @@ class RetrieveFlow:
 
     def search_knowledge_graph(
         self, user_question: str
-    ) -> Tuple[KnowledgeGraphRetrievalResult, str]:
+    ) -> Generator[Tuple[ChatMessageSate, str], None, Tuple[KnowledgeGraphRetrievalResult, str]]:
         kg_config = self.engine_config.knowledge_graph
         knowledge_graph = KnowledgeGraphRetrievalResult()
         knowledge_graph_context = ""
@@ -95,8 +96,32 @@ class RetrieveFlow:
                     kg_config.model_dump(exclude={"enabled", "using_intent_search"})
                 ),
             )
-            knowledge_graph = kg_retriever.retrieve_knowledge_graph(user_question)
-            knowledge_graph_context = self._get_knowledge_graph_context(knowledge_graph)
+            try:
+                kg_gen = kg_retriever.retrieve_knowledge_graph(user_question)
+                
+                try:
+                    while True:
+                        try:
+                            stage, message = next(kg_gen)
+                            yield (stage, message)
+                        except StopIteration as e:
+                            if hasattr(e, 'value'):
+                                knowledge_graph = e.value
+                            break
+                except Exception as e:
+                    logger.error(f"Knowledge graph retrieval process error: {e}")
+                    yield (ChatMessageSate.KG_RETRIEVAL, f"Knowledge graph retrieval failed: {str(e)}")
+                    knowledge_graph = KnowledgeGraphRetrievalResult()
+                
+                # Convert the knowledge graph to context text
+                knowledge_graph_context = self._get_knowledge_graph_context(knowledge_graph)
+                yield (ChatMessageSate.KG_RETRIEVAL, "Organizing and Processing Knowledge Graph Information")
+
+            except Exception as e:
+                logger.error(f"Error in knowledge graph search: {e}")
+                yield (ChatMessageSate.KG_RETRIEVAL, f"Error during knowledge graph search: {str(e)}")
+        else:
+            yield (ChatMessageSate.KG_RETRIEVAL, "Knowledge graph search is disabled, skip it")
         return knowledge_graph, knowledge_graph_context
 
     def _get_knowledge_graph_context(
