@@ -964,73 +964,7 @@ class ChatFlow:
         Returns:
             str: "identity_full", "identity_brief", "capabilities", "knowledge_base" or None
         """
-        # 1. Quick keyword check - if the question matches exactly, return the result immediately
-        exact_matches = {
-            "你是谁": "identity_brief",
-            "你叫什么": "identity_brief",
-            "你叫啥": "identity_brief",
-            "你叫什么名字": "identity_brief",
-            "who are you": "identity_brief",
-            "what is your name": "identity_brief",
-            
-            "介绍一下你自己": "identity_full",
-            "请介绍一下你自己": "identity_full",
-            "tell me about yourself": "identity_full",
-            
-            "你能做什么": "capabilities",
-            "你的能力": "capabilities",
-            "what can you do": "capabilities",
-            "你能帮我做什么": "capabilities",
-            "你能干啥": "capabilities",
-            "你会干嘛": "capabilities", 
-            "你有啥用": "capabilities",
-            "你能干什么": "capabilities",
-            "你会做什么": "capabilities",
-            "你能帮我干嘛": "capabilities",
-            "你能为我干啥": "capabilities",
-            "你能为我做什么": "capabilities",
-            "你对我有什么用": "capabilities",
-            "你怎么帮我": "capabilities",
-            "你能帮到我什么": "capabilities",
-            "你有什么用": "capabilities",
-            "你能提供什么服务": "capabilities",
-            "你的职责是什么": "capabilities",
-            
-            "你是知识库吗": "knowledge_base",
-            "你是个人知识库吗": "knowledge_base",
-            "你是知识库吗": "knowledge_base",
-            "你是个人知识库吗": "knowledge_base",
-            "你只是知识库吗": "knowledge_base",
-            "你是搜索工具吗": "knowledge_base",
-            "你跟知识库有什么区别": "knowledge_base",
-            "你跟知识库有什么不同": "knowledge_base",
-            "你跟知识库有什么不一样": "knowledge_base",
-            "difference between you and knowledge base": "knowledge_base",
-            "your difference with knowledge base": "knowledge_base",
-            
-            "你好": "greeting",
-            "hello": "greeting",
-            "hi": "greeting",
-            "hey": "greeting",
-            "嗨": "greeting",
-            "哈喽": "greeting",
-            "早上好": "greeting",
-            "下午好": "greeting",
-            "晚上好": "greeting",
-            "good morning": "greeting",
-            "good afternoon": "greeting",
-            "good evening": "greeting",
-        }
-        
-        user_question_lower = user_question.lower().strip()
-        if user_question_lower in exact_matches:
-            return exact_matches[user_question_lower]    
-             
-        # Then check if any key is contained within the user question
-        for key, identity_type in exact_matches.items():
-            if key in user_question_lower:
-                logger.info(f"Detected identity question '{key}' in '{user_question_lower}'")
-                return identity_type
+        # TODO: QA vector retrieval
             
         # 2. Use LLM for more precise semantic judgment
         try:
