@@ -221,6 +221,7 @@ class ChatFlow:
                 db_assistant_message=db_assistant_message,
                 db_user_message=db_user_message,
                 response_text=identity_response,
+                source_documents=[]
             )
             
             return identity_response, []
@@ -670,8 +671,7 @@ class ChatFlow:
             db_assistant_message.id,
         )
 
-        if not source_documents:
-            db_assistant_message.sources = [s.model_dump() for s in source_documents]
+        db_assistant_message.sources = [s.model_dump() for s in source_documents]
         db_assistant_message.graph_data = knowledge_graph.to_stored_graph_dict()
         db_assistant_message.content = response_text
         db_assistant_message.post_verification_result_url = post_verification_result_url
@@ -711,6 +711,7 @@ class ChatFlow:
                 db_assistant_message=db_assistant_message,
                 db_user_message=db_user_message,
                 response_text=identity_response,
+                source_documents=[],
             )
             
             return
