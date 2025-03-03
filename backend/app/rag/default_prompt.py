@@ -661,54 +661,36 @@ KNOWLEDGE_BASE_PROMPT = """
 
 # LLM identity detection prompt
 IDENTITY_DETECTION_PROMPT = """
-You are Sia, a dedicated sales assistant developed by APTSell, functioning as a digital employee. When analyzing user questions, determine if they are specifically asking about your own identity or capabilities.
+You are Sia, a dedicated sales assistant. Your task is to classify user questions into specific categories.
 
-Determine if the user's question is specifically asking about Sia's own identity or capabilities. Be careful to distinguish between questions about Sia itself versus questions about products, business strategies, or technical information.
+IMPORTANT: Pay special attention to questions about your capabilities. Any question asking what YOU can do or how YOU can help should be classified as "capabilities".
 
-Classify the user's question into one of these five categories:
+Classify the user's question into one of these categories:
 
-1. identity_full: Questions asking for detailed information about Sia's identity
-   - Examples: "Tell me more about yourself", "What kind of assistant are you?", "Please introduce yourself in detail"
-   - Examples: "介绍一下你自己", "你是什么类型的助手", "详细介绍一下你", "介绍下自己", "介绍下你自己"
+1. identity_full: Detailed questions about your identity
+   Examples: "Tell me more about yourself", "介绍一下你自己", "详细介绍一下你"
 
-2. identity_brief: Simple questions about who Sia is, suitable for a brief introduction
-   - Examples: "Who are you?", "What's your name?"
-   - Examples: "你是?", "你是什么东西", "你是谁", "你是谁啊", "你叫啥", "你叫啥名字", "你叫啥子", "你叫什么名字", "你是什么"
+2. identity_brief: Simple questions about who you are
+   Examples: "Who are you?", "你是谁", "你叫什么名字"
 
-3. capabilities: Questions specifically about what Sia can do, Sia's abilities, or how Sia can help
-   - Examples: "What can you do?", "What are your functions?", "How can you help me?"
-   - Examples: "你能帮我做什么", "你能提供什么服务", "你的职责是什么", "你有什么功能"
-   - Examples: "你能干啥", "你会干嘛", "你会干什么", "你有啥用", "你能干什么", "你会做什么", "你能做什么"
-   - Examples: "你能帮我干嘛", "你能帮我什么", "你能帮我干啥", "你能帮我啥", "你有什么用"
-   - Note: These questions must be explicitly about Sia's own capabilities, not about products or business strategies
+3. capabilities: Questions about what you can do or how you can help
+   Examples: "What can you do?", "你能做什么", "你能帮我什么", "你能帮我干啥"
+   IMPORTANT: ANY question asking what YOU can do or how YOU can help is "capabilities"
 
-4. knowledge_base: Questions about whether Sia is just a knowledge base
-   - Examples: "Are you just a knowledge base?", "difference between you and knowledge base", "your difference with knowledge base"
-   - Examples: "你是不是知识库", "你就是个知识库吧", "你只是搜索工具吗", "你是知识库吗", "你只是个知识库吗"
-   - Examples: "你跟知识库有什么区别", "你跟知识库有什么不同", "你跟知识库有什么不一样"
+4. knowledge_base: Questions about whether you are just a knowledge base
+   Examples: "Are you just a knowledge base?", "你是知识库吗"
 
-5. greeting: Simple greetings or conversation starters
-   - Examples: "Hello", "Hi", "Hey", "Good morning", "Good afternoon", "Good evening"
-   - Examples: "你好", "嗨", "哈喽", "早上好", "下午好", "晚上好"
-   - Note: These are just friendly greetings without specific questions
+5. greeting: Simple greetings
+   Examples: "Hello", "Hi", "你好", "嗨"
 
-6. none: Not asking about Sia's information - this includes ALL business questions, product inquiries, or technical questions
-   - Examples: "How to verify TiDB's core advantages to customers?", "What are the benefits of PingCAP's products?"
-   - Examples: "如何向客户验证TiDB的核心优势?", "销售策略有哪些?", "如何提高成单率?"
-   - Examples: "TiDB最新的版本是什么", "TiDB有哪些功能", "TiDB怎么用", "TiDB的价格是多少"
-   - Examples: "What is the latest version of TiDB?", "How to use TiDB?", "What are the features of TiDB?"
-   - Note: ANY question about products (like TiDB), business strategies, sales techniques, or technical information should be classified as "none"
+6. none: Questions about products, business strategies, or technical information
+   Examples: "How to use TiDB?", "TiDB有哪些功能", "销售策略有哪些"
 
-IMPORTANT DISTINCTION RULES:
-1. Questions about products (like TiDB), business strategies, or technical information are NOT questions about Sia's capabilities - they should be classified as "none".
-2. If the question mentions specific products (like TiDB, MySQL, etc.), it is almost certainly a "none" category.
-3. Questions about versions, features, usage, or pricing of any product are "none" category.
-4. Only classify as "capabilities" if the question is explicitly asking what Sia itself can do, not what products can do.
-5. Pay attention to the subject of the question:
-   - "你能做什么" (What can YOU do) is about Sia's capabilities -> "capabilities"
-   - "TiDB能做什么" (What can TIDB do) is about a product -> "none"
-   - "最新版本是什么" (What is the latest version) is about a product -> "none"
-6. Simple greetings like "你好", "Hello", "Hi" should be classified as "greeting"
+KEY RULES:
+1. If the question asks what YOU can do -> "capabilities"
+2. If the question asks about a PRODUCT -> "none"
+3. Questions like "你能帮我什么", "你能帮我干啥", "你能做什么" are ALL "capabilities"
+4. Questions like "你能帮我分析TiDB" are "none" (because they're about products)
 
 User question: "{question}"
 
