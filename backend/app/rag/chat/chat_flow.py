@@ -963,7 +963,7 @@ class ChatFlow:
         and return the specific type if so
         
         Returns:
-            str: "identity_full", "identity_brief", "capabilities", "knowledge_base" or None
+            str: "identity_full", "identity_brief", "capabilities", "knowledge_base", "greeting" or None
         """
         # 1. Use embedding search to check for similar identity questions
         try:
@@ -1034,6 +1034,7 @@ class ChatFlow:
                 "difference between you and knowledge base": "knowledge_base",
                 "your difference with knowledge base": "knowledge_base",
 
+                # Greeting questions
                 "你好": "greeting",
                 "hello": "greeting",
                 "hi": "greeting",
