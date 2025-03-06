@@ -959,13 +959,132 @@ class ChatFlow:
     
     def _detect_identity_question(self, user_question: str) -> str:
         """
-        Use LLM to detect if the question is about the assistant's identity and capabilities, and return the specific type if so
+        Use embedding search to detect if the question is about the assistant's identity and capabilities, 
+        and return the specific type if so
         
         Returns:
             str: "identity_full", "identity_brief", "capabilities", "knowledge_base" or None
         """
-        # TODO: QA vector retrieval
+        # 1. Use embedding search to check for similar identity questions
+        try:
+            # Get embedding model directly from the session
+            from app.rag.embeddings.resolver import get_default_embed_model
+            embed_model = get_default_embed_model(self.db_session)
             
+            if not embed_model:
+                # If no embedding model is available, fall back to LLM detection
+                logger.warning("No embedding model available for identity detection, falling back to LLM")
+                raise ValueError("No embedding model available")
+            
+            # Get embedding for user question
+            user_question_embedding = embed_model.get_query_embedding(user_question)
+            
+            # Predefined identity questions with their categories
+            identity_questions = {
+                # Full identity questions
+                "Tell me more about yourself": "identity_full",
+                "介绍一下你自己": "identity_full",
+                "详细介绍一下你": "identity_full",
+                "你是什么": "identity_full",
+                "请介绍一下你自己": "identity_full",
+                "tell me about yourself": "identity_full",
+                
+                # Brief identity questions
+                "Who are you?": "identity_brief",
+                "你是谁": "identity_brief",
+                "你叫什么名字": "identity_brief",
+                "你叫什么": "identity_brief",
+                "你叫啥": "identity_brief",
+                "what is your name": "identity_brief",
+                
+                # Capability questions
+                "What can you do?": "capabilities",
+                "你能做什么": "capabilities",
+                "你能帮我什么": "capabilities",
+                "你能帮我干啥": "capabilities",
+                "你有什么功能": "capabilities",
+                "你的能力": "capabilities",
+                "what can you do": "capabilities",
+                "你能帮我做什么": "capabilities",
+                "你能干啥": "capabilities",
+                "你会干嘛": "capabilities", 
+                "你有啥用": "capabilities",
+                "你能干什么": "capabilities",
+                "你会做什么": "capabilities",
+                "你能帮我干嘛": "capabilities",
+                "你能为我干啥": "capabilities",
+                "你能为我做什么": "capabilities",
+                "你对我有什么用": "capabilities",
+                "你怎么帮我": "capabilities",
+                "你能帮到我什么": "capabilities",
+                "你有什么用": "capabilities",
+                "你能提供什么服务": "capabilities",
+                "你的职责是什么": "capabilities",
+                    
+                # Knowledge base questions
+                "Are you just a knowledge base?": "knowledge_base",
+                "你只是一个知识库吗": "knowledge_base",
+                "你是个人知识库吗": "knowledge_base",
+                "你是知识库吗": "knowledge_base",
+                "你只是知识库吗": "knowledge_base",
+                "你是搜索工具吗": "knowledge_base",
+                "你跟知识库有什么区别": "knowledge_base",
+                "你跟知识库有什么不同": "knowledge_base",
+                "你跟知识库有什么不一样": "knowledge_base",
+                "difference between you and knowledge base": "knowledge_base",
+                "your difference with knowledge base": "knowledge_base",
+
+                "你好": "greeting",
+                "hello": "greeting",
+                "hi": "greeting",
+                "hey": "greeting",
+                "嗨": "greeting",
+                "哈喽": "greeting",
+                "早上好": "greeting",
+                "下午好": "greeting",
+                "晚上好": "greeting",
+                "good morning": "greeting",
+                "good afternoon": "greeting",
+                "good evening": "greeting",
+            }
+            
+
+            # Calculate embeddings for predefined questions (only once)
+            if not hasattr(self, '_identity_question_embeddings'):
+                self._identity_question_embeddings = {}
+                for question, category in identity_questions.items():
+                    self._identity_question_embeddings[question] = {
+                        'embedding': embed_model.get_query_embedding(question),
+                        'category': category
+                    }
+            
+            # Find the closest match using cosine similarity
+            import numpy as np
+            best_similarity = -1
+            best_category = None
+            
+            for question, data in self._identity_question_embeddings.items():
+                # Calculate cosine similarity (1 - cosine_distance)
+                similarity = 1 - (1 - np.dot(user_question_embedding, data['embedding']) / 
+                                 (np.linalg.norm(user_question_embedding) * np.linalg.norm(data['embedding'])))
+                
+                if similarity > best_similarity:
+                    best_similarity = similarity
+                    best_category = data['category']
+            
+            logger.info(f"Best category: {best_category}, similarity: {best_similarity:.4f}")
+            
+            # Use a threshold to determine if it's a match
+            similarity_threshold = 0.85  # Adjust based on testing
+            if best_similarity >= similarity_threshold:
+                logger.info(f"Embedding identity detection for '{user_question}': {best_category} (similarity: {best_similarity:.4f})")
+                return best_category
+            
+            # If no strong match found, proceed to LLM detection
+            logger.info(f"No strong embedding match found for '{user_question}' (best: {best_category}, similarity: {best_similarity:.4f})")
+        except Exception as e:
+            logger.error(f"Error in embedding identity detection: {e}")
+        
         # 2. Use LLM for more precise semantic judgment
         try:
             detection_prompt = get_prompt_by_jinja2_template(
