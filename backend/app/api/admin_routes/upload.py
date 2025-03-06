@@ -61,7 +61,7 @@ def upload_files(
     
     # Create DocumentMetadata object
     document_metadata = DocumentMetadata(
-        category=metadata_dict.pop("category", DocumentCategory.PLAYBOOK),
+        category=metadata_dict.pop("category", DocumentCategory.GENERAL),
         **metadata_dict
     )
     

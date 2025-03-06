@@ -19,13 +19,13 @@ logger = logging.getLogger(__name__)
 
 
 class ExtractGraphTriplet(dspy.Signature):
-    """Carefully analyze the provided text from database documentation and community blogs to thoroughly identify all entities related to database technologies, including both general concepts and specific details.
+    """Carefully analyze the provided text from FinClip documentation and technical resources to thoroughly identify all entities related to mini-program container technology, including both general concepts and specific details.
 
     Follow these Step-by-Step Analysis:
 
     1. Extract Meaningful Entities:
-      - Identify all significant nouns, proper nouns, and technical terminologies that represent database-related concepts, objects, components, features, issues, key steps, execute order, user case, locations, versions, or any substantial entities.
-      - Ensure that you capture entities across different levels of detail, from high-level overviews to specific technical specifications, to create a comprehensive representation of the subject matter.
+      - Identify all significant nouns, proper nouns, and technical terminologies that represent mini-program related concepts, components, features, APIs, implementation steps, use cases, platforms, versions, or any substantial entities.
+      - Ensure that you capture entities across different levels of detail, from high-level overviews to specific technical specifications, to create a comprehensive representation of FinClip's mini-program container technology.
       - Choose names for entities that are specific enough to indicate their meaning without additional context, avoiding overly generic terms.
       - Consolidate similar entities to avoid redundancy, ensuring each represents a distinct concept at appropriate granularity levels.
 
@@ -43,9 +43,11 @@ class ExtractGraphTriplet(dspy.Signature):
          This means identifying which entity is the source, which is the target, and what the nature of their relationship is (e.g., $source_entity depends on $target_entity for $relationship).
 
     Some key points to consider:
+      - Focus on FinClip-specific terminology, including container technology, mini-program lifecycle, cross-platform capabilities, API interfaces, and integration methods.
+      - Pay special attention to technical implementation details, deployment processes, and compatibility considerations.
       - Please endeavor to extract all meaningful entities and relationships from the text, avoid subsequent additional gleanings.
 
-    Objective: Produce a detailed and comprehensive knowledge graph that captures the full spectrum of entities mentioned in the text, along with their interrelations, reflecting both broad concepts and intricate details specific to the database domain.
+    Objective: Produce a detailed and comprehensive knowledge graph that captures the full spectrum of entities mentioned in the text, along with their interrelations, reflecting both broad concepts and intricate details specific to FinClip's mini-program container technology.
 
     Please only response in JSON format.
     """
@@ -64,6 +66,8 @@ class ExtractCovariate(dspy.Signature):
     Ensure all extracted covariates is clearly connected to the correct entity for accuracy and comprehensive understanding.
     Ensure that all extracted covariates are factual and verifiable within the text itself, without relying on external knowledge or assumptions.
     Collectively, the covariates should provide a thorough and precise summary of the entity's characteristics as described in the source material.
+    
+    For FinClip-specific entities, pay special attention to technical specifications, implementation requirements, compatibility information, and usage scenarios related to mini-program container technology.
 
     Please only response in JSON format.
     """
