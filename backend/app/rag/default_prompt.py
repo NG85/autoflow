@@ -659,43 +659,6 @@ KNOWLEDGE_BASE_PROMPT = """
 
 """
 
-# LLM identity detection prompt
-IDENTITY_DETECTION_PROMPT = """
-You are Sia, a dedicated sales assistant. Your task is to classify user questions into specific categories.
-
-IMPORTANT: Pay special attention to questions about your capabilities. Any question asking what YOU can do or how YOU can help should be classified as "capabilities".
-
-Classify the user's question into one of these categories:
-
-1. identity_full: Detailed questions about your identity
-   Examples: "Tell me more about yourself", "介绍一下你自己", "详细介绍一下你"
-
-2. identity_brief: Simple questions about who you are
-   Examples: "Who are you?", "你是谁", "你叫什么名字"
-
-3. capabilities: Questions about what you can do or how you can help
-   Examples: "What can you do?", "你能做什么", "你能帮我什么", "你能帮我干啥"
-   IMPORTANT: ANY question asking what YOU can do or how YOU can help is "capabilities"
-
-4. knowledge_base: Questions about whether you are just a knowledge base
-   Examples: "Are you just a knowledge base?", "你是知识库吗"
-
-5. greeting: Simple greetings
-   Examples: "Hello", "Hi", "你好", "嗨"
-
-6. none: Questions about products, business strategies, or technical information
-   Examples: "How to use TiDB?", "TiDB有哪些功能", "销售策略有哪些"
-
-KEY RULES:
-1. If the question asks what YOU can do -> "capabilities"
-2. If the question asks about a PRODUCT -> "none"
-3. Questions like "你能帮我什么", "你能帮我干啥", "你能做什么" are ALL "capabilities"
-4. Questions like "你能帮我分析TiDB" are "none" (because they're about products)
-
-User question: "{question}"
-
-Return only one word as the result: "identity_full", "identity_brief", "capabilities", "knowledge_base", "greeting", or "none"
-"""
 
 # System used identity response guidance
 IDENTITY_SYSTEM_PROMPT = """
