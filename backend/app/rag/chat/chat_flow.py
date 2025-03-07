@@ -1086,24 +1086,9 @@ class ChatFlow:
         except Exception as e:
             logger.error(f"Error in embedding identity detection: {e}")
         
-        # 2. Use LLM for more precise semantic judgment
-        try:
-            detection_prompt = get_prompt_by_jinja2_template(
-                default_prompt.IDENTITY_DETECTION_PROMPT,
-                question=user_question
-            )
-            
-            result = self._fast_llm.predict(prompt=detection_prompt).strip().lower()
-            
-            # Record the LLM's judgment result
-            logger.info(f"LLM identity detection for '{user_question}': {result}")
-            
-            if result in ["identity_full", "identity_brief", "capabilities", "knowledge_base"]:
-                return result
-            return None
-        except Exception as e:
-            logger.error(f"Error in LLM identity detection: {e}")
-            return None
+        # 2. Return None if no match is found, indicating the question is not about the assistant's identity
+        return None
+
 
     def _handle_identity_question(self, identity_type: str) -> str:
         """ Generate response based on the identity question type"""
