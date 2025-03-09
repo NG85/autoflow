@@ -115,13 +115,13 @@ class RetrieveFlow:
                 
                 # Convert the knowledge graph to context text
                 knowledge_graph_context = self._get_knowledge_graph_context(knowledge_graph)
-                yield (ChatMessageSate.KG_RETRIEVAL, "Organizing and Processing Knowledge Graph Information")
+                yield (ChatMessageSate.KG_RETRIEVAL, "Organizing and processing knowledge graph information")
 
             except Exception as e:
                 logger.error(f"Error in knowledge graph search: {e}")
                 yield (ChatMessageSate.KG_RETRIEVAL, f"Error during knowledge graph search: {str(e)}")
         else:
-            yield (ChatMessageSate.KG_RETRIEVAL, "Knowledge graph search is disabled, skip it")
+                yield (ChatMessageSate.KG_RETRIEVAL, "Knowledge graph search is disabled, skip it")
         return knowledge_graph, knowledge_graph_context
 
     def _get_knowledge_graph_context(

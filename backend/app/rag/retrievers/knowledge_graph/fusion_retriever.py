@@ -144,13 +144,13 @@ class KnowledgeGraphFusionRetriever(MultiKBFusionRetriever, KnowledgeGraphRetrie
                                     results = e.value
                                 break
                             except Exception as e:
-                                yield (ChatMessageSate.KG_RETRIEVAL, f"Error during Async Query Execution: {str(e)}")
+                                yield (ChatMessageSate.KG_RETRIEVAL, f"Error during async query execution: {str(e)}")
                                 results = {}
                     except Exception as e:
-                        yield (ChatMessageSate.KG_RETRIEVAL, f"Error setting up Async Queries: {str(e)}")
+                        yield (ChatMessageSate.KG_RETRIEVAL, f"Error setting up async queries: {str(e)}")
                         results = {}
                 except Exception as e:
-                    yield (ChatMessageSate.KG_RETRIEVAL, f"Error setting up Async Queries: {str(e)}")
+                    yield (ChatMessageSate.KG_RETRIEVAL, f"Error setting up async queries: {str(e)}")
                     results = {}
             else:
                 try:
@@ -165,21 +165,21 @@ class KnowledgeGraphFusionRetriever(MultiKBFusionRetriever, KnowledgeGraphRetrie
                                     results = e.value
                                 break
                     except Exception as e:
-                        yield (ChatMessageSate.KG_RETRIEVAL, f"Error during Sync Query Execution: {str(e)}")
+                        yield (ChatMessageSate.KG_RETRIEVAL, f"Error during sync query execution: {str(e)}")
                         results = {}
                 except Exception as e:
-                    yield (ChatMessageSate.KG_RETRIEVAL, f"Error setting up Sync Queries: {str(e)}")
+                    yield (ChatMessageSate.KG_RETRIEVAL, f"Error setting up sync queries: {str(e)}")
                     results = {}
                     
         if not results:
-            yield (ChatMessageSate.KG_RETRIEVAL, "No Results Retrieved from Knowledge Sources")
+            yield (ChatMessageSate.KG_RETRIEVAL, "No results retrieved from knowledge sources")
             return []
         try:
             fused_results = self._fusion(query_bundle.query_str, results)
-            yield (ChatMessageSate.KG_QUERY_EXECUTION, f"Result Fusion Completed and Found {len(fused_results)} Related Nodes")
+            yield (ChatMessageSate.KG_QUERY_EXECUTION, f"Result fusion completed and found {len(fused_results)} related nodes")
             return fused_results
         except Exception as e:
-            yield (ChatMessageSate.KG_QUERY_EXECUTION, f"Error during Result Fusion: {str(e)}")
+            yield (ChatMessageSate.KG_QUERY_EXECUTION, f"Error during result fusion: {str(e)}")
             return []
 
 
@@ -200,9 +200,9 @@ class KnowledgeGraphFusionRetriever(MultiKBFusionRetriever, KnowledgeGraphRetrie
             total_sections += len(sections)
 
         if total_sections == 0:
-            yield (ChatMessageSate.KG_RETRIEVAL, "No Suitable Knowledge Sources Found")
+            yield (ChatMessageSate.KG_RETRIEVAL, "No suitable knowledge sources found")
             return {}
-        yield (ChatMessageSate.KG_RETRIEVAL, "Preparing to Execute Knowledge Graph Retrieval")
+        yield (ChatMessageSate.KG_RETRIEVAL, "Preparing to execute knowledge graph retrieval")
       
         for query in queries:
             sections = sections_by_query[query.query_str]
@@ -210,7 +210,7 @@ class KnowledgeGraphFusionRetriever(MultiKBFusionRetriever, KnowledgeGraphRetrie
                 tasks.append(retriever.aretrieve(query.query_str))
                 task_queries.append((query.query_str, i))
 
-        yield (ChatMessageSate.KG_QUERY_EXECUTION, f"Executing {len(tasks)} Knowledge Graph Retrievals in Parallel")
+        yield (ChatMessageSate.KG_QUERY_EXECUTION, f"Executing {len(tasks)} knowledge graph retrievals in parallel")
         task_results = run_async_tasks(tasks)
         results = {}
         total_nodes = 0
@@ -218,14 +218,14 @@ class KnowledgeGraphFusionRetriever(MultiKBFusionRetriever, KnowledgeGraphRetrie
             results[query_tuple] = query_result
             total_nodes += len(query_result)
             
-        yield (ChatMessageSate.KG_QUERY_EXECUTION, f"Retrieval Completed and Found {total_nodes} Related Nodes")
+        yield (ChatMessageSate.KG_QUERY_EXECUTION, f"Retrieval completed and found {total_nodes} related nodes")
 
         return results
 
     def _run_sync_queries(
         self, queries: List[QueryBundle]
     ) -> Generator[Tuple[ChatMessageSate, str], None, Dict[Tuple[str, int], List[NodeWithScore]]]:
-        yield (ChatMessageSate.KG_RETRIEVAL, "Start Selecting The Appropriate Knowledge Base")
+        yield (ChatMessageSate.KG_RETRIEVAL, "Start selecting the appropriate knowledge base")
         sections_by_query = {}
         total_sections = 0
         results = {}
@@ -235,9 +235,9 @@ class KnowledgeGraphFusionRetriever(MultiKBFusionRetriever, KnowledgeGraphRetrie
             total_sections += len(sections)
 
         if total_sections == 0:
-            yield (ChatMessageSate.KG_RETRIEVAL, "No Suitable Knowledge Sources Found")
+            yield (ChatMessageSate.KG_RETRIEVAL, "No suitable knowledge sources found")
             return {}
-        yield (ChatMessageSate.KG_RETRIEVAL, "Preparing to Execute Knowledge Graph Retrieval")
+        yield (ChatMessageSate.KG_RETRIEVAL, "Preparing to execute knowledge graph retrieval")
 
         results = {}
         completed = 0
@@ -251,10 +251,10 @@ class KnowledgeGraphFusionRetriever(MultiKBFusionRetriever, KnowledgeGraphRetrie
                 
                 completed += 1
                 progress = int(completed / total_sections * 100)
-                yield (ChatMessageSate.KG_QUERY_EXECUTION, f"Searching Progress: {progress}%")
+                yield (ChatMessageSate.KG_QUERY_EXECUTION, f"Searching progress: {progress}%")
 
         total_nodes = sum(len(nodes) for nodes in results.values())
-        yield (ChatMessageSate.KG_QUERY_EXECUTION, f"Retrieval Completed and Found {total_nodes} Related Nodes")
+        yield (ChatMessageSate.KG_QUERY_EXECUTION, f"Retrieval completed and found {total_nodes} related nodes")
         
         return results
             

@@ -204,13 +204,27 @@ class ChatFlow:
             event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
             payload=ChatStreamMessagePayload(
                 state=ChatMessageSate.INITIALIZATION,
-                display="Initializing Chat Session and Starting Thinking",
+                display="Initializing chat session and starting thinking",
             ),
         )
         
+        yield ChatEvent(
+            event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
+            payload=ChatStreamMessagePayload(
+                state=ChatMessageSate.IDENTITY_DETECTION,
+                display="Identifying the question's type and routing to the corresponding flow",
+            ),
+        )
         # 0. Identity question detection and processing
         identity_type = self._detect_identity_question(self.user_question)
         if identity_type:
+            yield ChatEvent(
+                event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
+                payload=ChatStreamMessagePayload(
+                    state=ChatMessageSate.IDENTITY_DETECTION,
+                    display=f"Routing to the {identity_type} flow",
+                ),
+            )
             logger.info(f"Detected identity question of type: {identity_type}")
             identity_response = self._handle_identity_question(identity_type)
             
@@ -345,7 +359,7 @@ class ChatFlow:
                         event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
                         payload=ChatStreamMessagePayload(
                             state=ChatMessageSate.KG_RETRIEVAL,
-                            display="Identifying The Question's Intents and Perform Knowledge Graph Search",
+                            display="Identifying the question's intents and performing knowledge graph search",
                         ),
                     )
                 else:
@@ -353,7 +367,7 @@ class ChatFlow:
                         event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
                         payload=ChatStreamMessagePayload(
                             state=ChatMessageSate.KG_RETRIEVAL,
-                            display="Searching the Knowledge Graph for Relevant Context",
+                            display="Searching the knowledge graph for relevant context",
                         ),
                     )
 
@@ -425,7 +439,7 @@ class ChatFlow:
                     event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
                     payload=ChatStreamMessagePayload(
                         state=ChatMessageSate.REFINE_QUESTION,
-                        display="Query Rewriting for Enhanced Information Retrieval",
+                        display="Query rewriting for enhanced information retrieval",
                     ),
                 )
 
@@ -518,7 +532,7 @@ class ChatFlow:
                 event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
                 payload=ChatStreamMessagePayload(
                     state=ChatMessageSate.SEARCH_RELATED_DOCUMENTS,
-                    display="Retrieving the Most Relevant Documents",
+                    display="Retrieving the most relevant documents",
                 ),
             )
 
@@ -573,7 +587,7 @@ class ChatFlow:
                 event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
                 payload=ChatStreamMessagePayload(
                     state=ChatMessageSate.GENERATE_ANSWER,
-                    display="Generating a Precise Answer with AI",
+                    display="Thinking and generating a precise answer with AI",
                 ),
             )
             response_text = ""
