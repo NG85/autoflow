@@ -91,7 +91,14 @@ class Settings(BaseSettings):
     # TODO: move below config to `option` table, it should be configurable by staff in console
     TIDB_AI_CHAT_ENDPOINT: str = "https://af.aptsell.ai/api/v1/chats"
     TIDB_AI_API_KEY: SecretStr | None = None
-
+ 
+    # TOS STS
+    TOS_API_KEY: str = ""
+    TOS_API_SECRET: str = ""
+    TOS_API_HOST: str = "open.volcengineapi.com"
+    TOS_API_ENDPOINT: str = f"https://{TOS_API_HOST}"
+    TOS_API_REGION: str = "cn-beijing"
+        
     COMPLIED_INTENT_ANALYSIS_PROGRAM_PATH: str | None = None
     COMPLIED_PREREQUISITE_ANALYSIS_PROGRAM_PATH: str | None = None
 

@@ -72,7 +72,7 @@ Given the conversation between the user and ASSISTANT, along with the follow-up 
 
 Instructions:
 1. Assess Information Sufficiency:
-   - Evaluate if the user’s question provides enough detail to generate a precise answer based on the prerequisite questions, relevant knowledge, and conversation history.
+   - Evaluate if the user's question provides enough detail to generate a precise answer based on the prerequisite questions, relevant knowledge, and conversation history.
    - If the user's question is too vague or lacks key information, identify what additional information would be necessary for clarity.
 
 2. Generate a Clarifying Question:
@@ -322,7 +322,7 @@ The chat message content is:
 
 ---------------------
 Task:
-Based on the provided chat message, generate 2–3 follow-up questions that are relevant to the content. Each question should explore the topic in greater detail, seek clarification, or introduce new angles for discussion.
+Based on the provided chat message, generate 2-3 follow-up questions that are relevant to the content. Each question should explore the topic in greater detail, seek clarification, or introduce new angles for discussion.
 
 Instructions:
 1. Build upon the key information, themes, or insights within the provided chat message.
@@ -333,7 +333,7 @@ Instructions:
 6. Each question should end with a question mark.
 7. Each question should be in a new line, DO NOT add any indexes or blank lines, just output the questions.
 
-Now, generate 2–3 follow-up questions below:
+Now, generate 2-3 follow-up questions below:
 """
 
 DEFAULT_GENERATE_GOAL_PROMPT = """\
