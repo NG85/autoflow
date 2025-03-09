@@ -1,10 +1,11 @@
+from http import HTTPStatus
 import json
 import logging
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from app.api.deps import SessionDep, CurrentSuperuserDep
+from app.api.deps import CurrentUserDep
 from app.utils import tos
 from app.core.config import settings
 
@@ -18,7 +19,9 @@ class STSCredentialResponse(BaseModel):
     session_token: str
     
 @router.get("/tos/sts", response_model=STSCredentialResponse)
-def get_tos_sts():
+def get_tos_sts(user: CurrentUserDep, access_key: str):
+    if access_key != settings.TOS_API_KEY:
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="This access key is not authorized to get STS token")
     try:
         text = tos.get_sts_token(
             host=settings.TOS_API_HOST,
