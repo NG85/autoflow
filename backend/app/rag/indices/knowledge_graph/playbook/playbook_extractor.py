@@ -12,27 +12,27 @@ from app.models.enums import GraphType
 logger = logging.getLogger(__name__)
 
 class ExtractPlaybookTriplet(dspy.Signature):
-    """Carefully analyze the provided text to identify sales related entities and their relationships.
+    """Carefully analyze the provided text to identify FinClip sales related entities and their relationships.
     
     Follow these Step-by-Step Analysis:
 
     1. Extract Key Entities:
       First, identify significant entities from the text:
-        * Personas (who): Organizations or departments that are potential customers
+        * Personas (who): Organizations or departments that are potential customers for FinClip
           Examples:
-          - "Enterprise IT Department in Healthcare"
-          - "Bank's Security Operations Team"
-          - "Manufacturing Company's R&D Division"
-          - "Marketing Manager in Financial Services"
-        * Pain Points (what): Business challenges, problems, needs
-        * Features (how): Solutions, capabilities, functionalities
+          - "Financial Institution's Mobile Banking Team"
+          - "Retail Company's Digital Experience Department"
+          - "Insurance Company's App Development Team"
+          - "E-commerce Platform's Technical Director"
+        * Pain Points (what): Business challenges, problems, needs related to mobile applications
+        * Features (how): FinClip solutions, capabilities, functionalities
 
       Important Classification Rules:
-        - Technical terms (e.g., "TiDB", "TiKV") should never be classified as personas
-        - Terms containing "system", "service", "tool", "platform" should be classified as features
-        - Terms containing "Department", "Team", "Manager", "Director" should be classified as personas
+        - Technical terms (e.g., "FinClip", "Mini-program container") should never be classified as personas
+        - Terms containing "system", "service", "tool", "platform", "container", "SDK", "API" should be classified as features
+        - Terms containing "Department", "Team", "Manager", "Director", "Developer" should be classified as personas
         - Generic terms without clear classification should be excluded
-            
+           
     2. Establish Relationships:
       Valid Relationship Patterns:
         1. Persona experiences Pain Point
@@ -41,17 +41,17 @@ class ExtractPlaybookTriplet(dspy.Signature):
       Required Elements for Each Relationship Type:
       A. "Persona experiences Pain Point":
         Must include these core elements in description:
-        - Problem identification
+        - Problem identification in mobile app development or deployment
         - Impact on business operations (with metrics if possible)
         - Frequency or pattern of occurrence
-        Example: "Enterprise IT Directors face system integration challenges weekly, resulting in 20% productivity loss."
+        Example: "E-commerce App Development Teams face content update challenges weekly, resulting in 30% delay in feature releases and market opportunities."
       
       B. "Pain Point is addressed by Feature":
         Must include these core elements in description:
-        - Solution mechanism
+        - Solution mechanism using FinClip technology
         - Effectiveness (with metrics if possible)
         - Time to value
-        Example: "The integration challenges are resolved through automated integration, reducing integration time by 90% with immediate productivity gains after 2-day setup."
+        Example: "The content update challenges are resolved through FinClip's dynamic mini-program deployment, reducing update time by 95% with immediate content delivery without app store approval process."
 
       Critical Rules for Relationships:
         - Must follow exact sequence: Persona -> Pain Point -> Feature
@@ -122,7 +122,7 @@ class ExtractPlaybookCovariate(dspy.Signature):
     2. Pain Point entities:
         {
             "topic": "pain_point",  # Must be first field and keep unchanged from input
-            "scenario": "specific context",  # Required
+            "scenario": "specific mobile app development or deployment context",  # Required
             "impact": "quantifiable business impact",  # Required
             "severity": "Critical|High|Medium|Low"  # Optional
         }
@@ -132,8 +132,9 @@ class ExtractPlaybookCovariate(dspy.Signature):
             "topic": "feature",  # Must be first field and keep unchanged from input
             "benefits": ["specific business benefit 1", "benefit 2"],  # Required, must be array
             "technical_details": {  # Optional
-                "key1": "value1",
-                "key2": "value2"
+                "platform_compatibility": "iOS|Android|both",  # FinClip specific
+                "integration_complexity": "simple|moderate|complex",  # FinClip specific
+                "update_mechanism": "specific update process"  # FinClip specific
             }
         }
 
@@ -150,6 +151,7 @@ class ExtractPlaybookCovariate(dspy.Signature):
        - Use consistent terminology across all metadata
        - Make values quantifiable where possible
        - Avoid generic or vague descriptions
+       - For FinClip-specific fields, ensure values accurately reflect mini-program container technology characteristics
     
     3. Format Rules:
        - String values must be properly formatted and meaningful
