@@ -98,7 +98,9 @@ class Settings(BaseSettings):
     TOS_API_HOST: str = "open.volcengineapi.com"
     TOS_API_ENDPOINT: str = f"https://{TOS_API_HOST}"
     TOS_API_REGION: str = "cn-beijing"
-        
+    TOS_API_BUCKET: str = "aptsell-dev"
+    TOS_API_PATH_PREFIX: str = "data/customer-uploads/"
+    
     COMPLIED_INTENT_ANALYSIS_PROGRAM_PATH: str | None = None
     COMPLIED_PREREQUISITE_ANALYSIS_PROGRAM_PATH: str | None = None
 

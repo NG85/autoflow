@@ -17,6 +17,10 @@ class STSCredentialResponse(BaseModel):
     access_key_id: str
     secret_access_key: str
     session_token: str
+    endpoint: str
+    region: str
+    bucket: str
+    path_prefix: str
     
 @router.get("/tos/sts", response_model=STSCredentialResponse)
 def get_tos_sts(user: CurrentUserDep, access_key: str):
@@ -36,7 +40,11 @@ def get_tos_sts(user: CurrentUserDep, access_key: str):
         return STSCredentialResponse(
             access_key_id=credentials["AccessKeyId"],
             secret_access_key=credentials["SecretAccessKey"],
-            session_token=credentials["SessionToken"]
+            session_token=credentials["SessionToken"],
+            endpoint=settings.TOS_API_ENDPOINT,
+            region=settings.TOS_API_REGION,
+            bucket=settings.TOS_API_BUCKET,
+            path_prefix=settings.TOS_API_PATH_PREFIX
         )
     except Exception as e:
         logger.error(f"Failed to get TOS STS: {e}")
