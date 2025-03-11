@@ -107,10 +107,11 @@ class ChatFlow:
             #         user_id=self.user.id if self.user else None,
             #         browser_id=self.browser_id,
             #         origin=origin,
-            #         visibility=ChatVisibility.PUBLIC
-            #         if not self.user
-            #         else ChatVisibility.PRIVATE,
-            #     ),
+            #         visibility=(
+            #             ChatVisibility.PUBLIC
+            #             if not self.user
+            #             else ChatVisibility.PRIVATE,
+            #         ),
             # )
             # chat_id = self.db_chat_obj.id
             # # slack/discord may create a new chat with history messages
@@ -181,9 +182,9 @@ class ChatFlow:
         try:
             with self._trace_manager.observe(
                 trace_name="ChatFlow",
-                user_id=self.user.email
-                if self.user
-                else f"anonymous-{self.browser_id}",
+                user_id=(
+                    self.user.email if self.user else f"anonymous-{self.browser_id}"
+                ),
                 metadata={
                     "is_external_engine": self.engine_config.is_external_engine,
                     "chat_engine_config": self.engine_config.screenshot(),
@@ -346,7 +347,7 @@ class ChatFlow:
         db_user_message = DBChatMessage(
             role=MessageRole.USER.value,
             trace_url=self._trace_manager.trace_url,
-            content=self.user_question,
+            content=self.user_question.strip(),
         )
         
         db_assistant_message = DBChatMessage(
@@ -668,11 +669,13 @@ class ChatFlow:
                         "external_request_id": external_request_id,
                         "qa_content": qa_content,
                     },
-                    headers={
-                        "Authorization": f"Bearer {post_verification_token}",
-                    }
-                    if post_verification_token
-                    else {},
+                    headers=(
+                        {
+                            "Authorization": f"Bearer {post_verification_token}",
+                        }
+                        if post_verification_token
+                        else {}
+                    ),
                     timeout=10,
                 )
                 resp.raise_for_status()
@@ -761,48 +764,65 @@ class ChatFlow:
             
             return
         
-        goal, response_format = self.user_question, {}
-        try:
-            # 1. Generate the goal with the user question, knowledge graph and chat history.
-            goal, response_format = yield from self._generate_goal()
-
-            # 2. Check if the goal provided enough context information or need to clarify.
-            if self.engine_config.clarify_question:
-                need_clarify, need_clarify_response = yield from self._clarify_question(
-                    user_question=goal, chat_history=self.chat_history
-                )
-                if need_clarify:
-                    yield from self._chat_finish(
-                        db_assistant_message=db_assistant_message,
-                        db_user_message=db_user_message,
-                        response_text=need_clarify_response,
-                        annotation_silent=True,
-                    )
-                    return
-        except Exception as e:
-            goal = self.user_question
-            logger.warning(
-                f"Failed to generate refined goal, fallback to use user question as goal directly: {e}",
-                exc_info=True,
-                extra={},
-            )
-
         cache_messages = None
-        if settings.ENABLE_QUESTION_CACHE:
+        goal, response_format = self.user_question, {}
+        if settings.ENABLE_QUESTION_CACHE and len(self.chat_history) == 0:
             try:
-                logger.info(
-                    f"start to find_recent_assistant_messages_by_goal with goal: {goal}, response_format: {response_format}"
+                logger.info(f"start to find_best_answer_for_question with question: {self.user_question}")
+                cache_messages = chat_repo.find_best_answer_for_question(
+                    self.db_session, self.user_question
                 )
-                cache_messages = chat_repo.find_recent_assistant_messages_by_goal(
-                    self.db_session,
-                    {"goal": goal, "Lang": response_format.get("Lang", "English")},
-                    90,
-                )
-                logger.info(
-                    f"find_recent_assistant_messages_by_goal result {len(cache_messages)} for goal {goal}"
-                )
+                if cache_messages and len(cache_messages) > 0:
+                    logger.info(f"find_best_answer_for_question result {len(cache_messages)} for question {self.user_question}")
             except Exception as e:
-                logger.error(f"Failed to find recent assistant messages by goal: {e}")
+                logger.error(f"Failed to find best answer for question {self.user_question}: {e}")
+
+        if not cache_messages or len(cache_messages) == 0:
+            try:
+                # 1. Generate the goal with the user question, knowledge graph and chat history.
+                goal, response_format = yield from self._generate_goal()
+
+                # 2. Check if the goal provided enough context information or need to clarify.
+                if self.engine_config.clarify_question:
+                    need_clarify, need_clarify_response = (
+                        yield from self._clarify_question(
+                            user_question=goal, chat_history=self.chat_history
+                        )
+                    )
+                    if need_clarify:
+                        yield from self._chat_finish(
+                            db_assistant_message=db_assistant_message,
+                            db_user_message=db_user_message,
+                            response_text=need_clarify_response,
+                            annotation_silent=True,
+                        )
+                        return
+            except Exception as e:
+                goal = self.user_question
+                logger.warning(
+                    f"Failed to generate refined goal, fallback to use user question as goal directly: {e}",
+                    exc_info=True,
+                    extra={},
+                )
+
+            cache_messages = None
+            if settings.ENABLE_QUESTION_CACHE:
+                try:
+                    logger.info(
+                        f"start to find_recent_assistant_messages_by_goal with goal: {goal}, response_format: {response_format}"
+                    )
+                    cache_messages = chat_repo.find_recent_assistant_messages_by_goal(
+                        self.db_session,
+                        {"goal": goal, "Lang": response_format.get("Lang", "English")},
+                        90,
+                    )
+                    logger.info(
+                        f"find_recent_assistant_messages_by_goal result {len(cache_messages)} for goal {goal}"
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"Failed to find recent assistant messages by goal: {e}"
+                    )
 
         stream_chat_api_url = (
             self.engine_config.external_engine_config.stream_chat_api_url
