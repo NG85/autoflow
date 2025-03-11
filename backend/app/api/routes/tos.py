@@ -164,11 +164,10 @@ def list_tos_uploads(
         
         results = session.exec(query).all()
         
-        return Page(
+        return Page.create(
             items=results,
             total=total,
-            page=params.page,
-            size=params.size
+            params=params,
         )
         
     except Exception as e:
