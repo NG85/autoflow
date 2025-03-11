@@ -142,22 +142,34 @@ def list_tos_uploads(
         query = select(Upload).where(
             and_(
                 Upload.user_id == user.id,
-                Upload.meta.contains({"source": "customer"})  # Base filter for TOS uploads
+                Upload.meta["source"].as_string().startswith("customer")
             )
         )
-        
+                
         # Add category filter if provided
         if category:
             specific_source = f"customer-{category}"
-            query = query.where(Upload.meta.contains({"source": specific_source}))
+            query = query.where(Upload.meta["source"].as_string() == specific_source)
         
         # Order by creation date, newest first
         query = query.order_by(Upload.created_at.desc())
         
-        # Execute paginated query
-        result = paginate(session, query, params)
+        # Use offset and limit to implement database-level pagination, not loading all results
+        total_count = session.exec(select(Upload.id).where(query.whereclause)).all()
+        total = len(total_count)
         
-        return result
+        offset = (params.page - 1) * params.size
+        limit = params.size        
+        query = query.offset(offset).limit(limit)
+        
+        results = session.exec(query).all()
+        
+        return Page(
+            items=results,
+            total=total,
+            page=params.page,
+            size=params.size
+        )
         
     except Exception as e:
         logger.error(f"Failed to list uploads: {e}")
