@@ -19,12 +19,12 @@ logger = logging.getLogger(__name__)
 
 
 class ExtractGraphTriplet(dspy.Signature):
-    """Carefully analyze the provided text from database documentation and community blogs to thoroughly identify all entities related to database technologies, including both general concepts and specific details.
+    """Carefully analyze the provided text from ZDNS documentation to thoroughly identify all entities related to domain name systems and ZDNS products, including both general concepts and specific details.
 
     Follow these Step-by-Step Analysis:
 
     1. Extract Meaningful Entities:
-      - Identify all significant nouns, proper nouns, and technical terminologies that represent database-related concepts, objects, components, features, issues, key steps, execute order, user case, locations, versions, or any substantial entities.
+      - Identify all significant nouns, proper nouns, and technical terminologies that represent domain name systems, network security, DNS resolution, ZDNS products, components, features, issues, key steps, execute order, user cases, versions, or any substantial entities.
       - Ensure that you capture entities across different levels of detail, from high-level overviews to specific technical specifications, to create a comprehensive representation of the subject matter.
       - Choose names for entities that are specific enough to indicate their meaning without additional context, avoiding overly generic terms.
       - Consolidate similar entities to avoid redundancy, ensuring each represents a distinct concept at appropriate granularity levels.
@@ -45,7 +45,7 @@ class ExtractGraphTriplet(dspy.Signature):
     Some key points to consider:
       - Please endeavor to extract all meaningful entities and relationships from the text, avoid subsequent additional gleanings.
 
-    Objective: Produce a detailed and comprehensive knowledge graph that captures the full spectrum of entities mentioned in the text, along with their interrelations, reflecting both broad concepts and intricate details specific to the database domain.
+    Objective: Produce a detailed and comprehensive knowledge graph that captures the full spectrum of entities mentioned in the text, along with their interrelations, reflecting both broad concepts and intricate details specific to the domain name system and ZDNS products domain.
 
     Please only response in JSON format.
     """
@@ -64,6 +64,8 @@ class ExtractCovariate(dspy.Signature):
     Ensure all extracted covariates is clearly connected to the correct entity for accuracy and comprehensive understanding.
     Ensure that all extracted covariates are factual and verifiable within the text itself, without relying on external knowledge or assumptions.
     Collectively, the covariates should provide a thorough and precise summary of the entity's characteristics as described in the source material.
+
+    Pay special attention to ZDNS products, services, technical features, application scenarios, and solutions, as well as professional terminology and concepts related to domain name systems.
 
     Please only response in JSON format.
     """

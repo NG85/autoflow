@@ -12,7 +12,7 @@ from app.models.enums import GraphType
 logger = logging.getLogger(__name__)
 
 class ExtractPlaybookTriplet(dspy.Signature):
-    """Carefully analyze the provided text to identify sales related entities and their relationships.
+    """Carefully analyze the provided text to identify sales related entities and their relationships for ZDNS products and services.
     
     Follow these Step-by-Step Analysis:
 
@@ -20,15 +20,15 @@ class ExtractPlaybookTriplet(dspy.Signature):
       First, identify significant entities from the text:
         * Personas (who): Organizations or departments that are potential customers
           Examples:
-          - "Enterprise IT Department in Healthcare"
-          - "Bank's Security Operations Team"
-          - "Manufacturing Company's R&D Division"
-          - "Marketing Manager in Financial Services"
+          - "Government Network Administration Department"
+          - "ISP's DNS Operations Team"
+          - "Enterprise IT Security Division"
+          - "Telecommunications Provider's Infrastructure Team"
         * Pain Points (what): Business challenges, problems, needs
         * Features (how): Solutions, capabilities, functionalities
 
       Important Classification Rules:
-        - Technical terms (e.g., "TiDB", "TiKV") should never be classified as personas
+        - Technical terms (e.g., "DNS", "Domain Name System", "DNSSEC") should never be classified as personas
         - Terms containing "system", "service", "tool", "platform" should be classified as features
         - Terms containing "Department", "Team", "Manager", "Director" should be classified as personas
         - Generic terms without clear classification should be excluded
@@ -44,14 +44,14 @@ class ExtractPlaybookTriplet(dspy.Signature):
         - Problem identification
         - Impact on business operations (with metrics if possible)
         - Frequency or pattern of occurrence
-        Example: "Enterprise IT Directors face system integration challenges weekly, resulting in 20% productivity loss."
+        Example: "Government Network Administrators face DNS security vulnerabilities monthly, resulting in 30% increased risk of data breaches."
       
       B. "Pain Point is addressed by Feature":
         Must include these core elements in description:
         - Solution mechanism
         - Effectiveness (with metrics if possible)
         - Time to value
-        Example: "The integration challenges are resolved through automated integration, reducing integration time by 90% with immediate productivity gains after 2-day setup."
+        Example: "The DNS security vulnerabilities are mitigated through ZDNS Security Shield, reducing attack surface by 85% within one week of deployment."
 
       Critical Rules for Relationships:
         - Must follow exact sequence: Persona -> Pain Point -> Feature
@@ -104,7 +104,7 @@ class ExtractPlaybookTriplet(dspy.Signature):
     knowledge: KnowledgeGraph = dspy.OutputField(desc="Graph representation of the sales knowledge extracted from the text.")
 
 class ExtractPlaybookCovariate(dspy.Signature):
-    """Please carefully review the provided text and entities list. Extract detailed metadata for each entity based on its type.
+    """Please carefully review the provided text and entities list. Extract detailed metadata for each entity based on its type, focusing on ZDNS products and domain name system contexts.
     
     Required metadata structure by entity type:
 
@@ -150,6 +150,7 @@ class ExtractPlaybookCovariate(dspy.Signature):
        - Use consistent terminology across all metadata
        - Make values quantifiable where possible
        - Avoid generic or vague descriptions
+       - Ensure all metadata is relevant to domain name systems and ZDNS products
     
     3. Format Rules:
        - String values must be properly formatted and meaningful
