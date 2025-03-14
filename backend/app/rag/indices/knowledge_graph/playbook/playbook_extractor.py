@@ -8,6 +8,10 @@ from llama_index.core.schema import BaseNode
 from app.rag.indices.knowledge_graph.extractor import SimpleGraphExtractor, get_relation_metadata_from_node
 from app.rag.indices.knowledge_graph.schema import EntityCovariateInput, EntityCovariateOutput, KnowledgeGraph
 from app.models.enums import GraphType
+from backend.app.rag.indices.knowledge_graph.extract_template import (
+    PLAYBOOK_EXTRACTION_TEMPLATE,
+    PLAYBOOK_COVARIATE_TEMPLATE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -171,10 +175,14 @@ class PlaybookExtractor(SimpleGraphExtractor):
     """Extractor for sales playbook knowledge graph, using customized prompts for playbook entities and relationships"""
     def __init__(self, dspy_lm: dspy.LM, complied_extract_program_path: Optional[str] = None):
       super().__init__(dspy_lm, complied_extract_program_path, GraphType.playbook)
-      # Replace the default extractor with Playbook specific extractor
-      self.extract_prog.prog_graph = TypedPredictor(ExtractPlaybookTriplet)
-      self.extract_prog.prog_covariates = TypedPredictor(ExtractPlaybookCovariate)
       
+      # Create playbook extraction with proper template assignment
+      with dspy.settings.context(instructions=PLAYBOOK_EXTRACTION_TEMPLATE):
+          self.extract_prog.prog_graph = TypedPredictor(ExtractPlaybookTriplet)
+
+      with dspy.settings.context(instructions=PLAYBOOK_COVARIATE_TEMPLATE):
+          self.extract_prog.prog_covariates = TypedPredictor(ExtractPlaybookCovariate)
+
           
     def _get_competitor_info(self, node: BaseNode) -> Optional[dict]:
         """Extract competitor information from document metadata"""
