@@ -14,6 +14,10 @@ from app.rag.indices.knowledge_graph.schema import (
     EntityCovariateOutput,
 )
 from app.models.enums import GraphType
+from backend.app.rag.indices.knowledge_graph.extract_template import (
+    EXTRACTION_TEMPLATE,
+    COVARIATE_TEMPLATE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -98,8 +102,12 @@ class Extractor(dspy.Module):
     def __init__(self, dspy_lm: dspy.LM):
         super().__init__()
         self.dspy_lm = dspy_lm
-        self.prog_graph = TypedPredictor(ExtractGraphTriplet)
-        self.prog_covariates = TypedPredictor(ExtractCovariate)
+        with dspy.settings.context(instructions=EXTRACTION_TEMPLATE):
+            self.prog_graph = TypedPredictor(ExtractGraphTriplet)
+
+        with dspy.settings.context(instructions=COVARIATE_TEMPLATE):
+            self.prog_covariates = TypedPredictor(ExtractCovariate)
+    
 
     def get_llm_output_config(self):
         if "openai" in self.dspy_lm.provider.lower():
