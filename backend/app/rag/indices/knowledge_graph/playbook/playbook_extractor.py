@@ -8,7 +8,7 @@ from llama_index.core.schema import BaseNode
 from app.rag.indices.knowledge_graph.extractor import SimpleGraphExtractor, get_relation_metadata_from_node
 from app.rag.indices.knowledge_graph.schema import EntityCovariateInput, EntityCovariateOutput, KnowledgeGraph
 from app.models.enums import GraphType
-from backend.app.rag.indices.knowledge_graph.extract_template import (
+from app.rag.indices.knowledge_graph.extract_template import (
     PLAYBOOK_EXTRACTION_TEMPLATE,
     PLAYBOOK_COVARIATE_TEMPLATE,
 )
