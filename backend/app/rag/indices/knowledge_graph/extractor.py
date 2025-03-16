@@ -14,7 +14,7 @@ from app.rag.indices.knowledge_graph.schema import (
     EntityCovariateOutput,
 )
 from app.models.enums import GraphType
-from backend.app.rag.indices.knowledge_graph.extract_template import (
+from app.rag.indices.knowledge_graph.extract_template import (
     EXTRACTION_TEMPLATE,
     COVARIATE_TEMPLATE,
 )
