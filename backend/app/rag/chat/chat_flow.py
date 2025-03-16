@@ -1090,7 +1090,7 @@ class ChatFlow:
             logger.info(f"Best category: {best_category}, similarity: {best_similarity:.4f}")
             
             # Use a threshold to determine if it's a match
-            similarity_threshold = 0.85  # Adjust based on testing
+            similarity_threshold = 0.87  # Adjust based on testing
             if best_similarity >= similarity_threshold:
                 logger.info(f"Embedding identity detection for '{user_question}': {best_category} (similarity: {best_similarity:.4f})")
                 return best_category
