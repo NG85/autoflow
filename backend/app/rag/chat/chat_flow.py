@@ -67,7 +67,7 @@ class ChatFlow:
         self.user = user
         self.browser_id = browser_id
         self.engine_name = engine_name
-
+        self.origin = origin
         # Load chat engine and chat session.
         self.user_question, self.chat_history = parse_chat_messages(chat_messages)
         if chat_id:
@@ -98,36 +98,36 @@ class ChatFlow:
         else:
             self.engine_config = ChatEngineConfig.load_from_db(db_session, engine_name)
             self.db_chat_engine = self.engine_config.get_db_chat_engine()
-            self.db_chat_obj = chat_repo.create(
-                self.db_session,
-                DBChat(
-                    title=self.user_question[:100],
-                    engine_id=self.db_chat_engine.id,
-                    engine_options=self.engine_config.screenshot(),
-                    user_id=self.user.id if self.user else None,
-                    browser_id=self.browser_id,
-                    origin=origin,
-                    visibility=ChatVisibility.PUBLIC
-                    if not self.user
-                    else ChatVisibility.PRIVATE,
-                ),
-            )
-            chat_id = self.db_chat_obj.id
-            # slack/discord may create a new chat with history messages
-            now = datetime.now(UTC)
-            for i, m in enumerate(self.chat_history):
-                chat_repo.create_message(
-                    session=self.db_session,
-                    chat=self.db_chat_obj,
-                    chat_message=DBChatMessage(
-                        role=m.role,
-                        content=m.content,
-                        ordinal=i + 1,
-                        created_at=now,
-                        updated_at=now,
-                        finished_at=now,
-                    ),
-                )
+            # self.db_chat_obj = chat_repo.create(
+            #     self.db_session,
+            #     DBChat(
+            #         title=self.user_question[:100],
+            #         engine_id=self.db_chat_engine.id,
+            #         engine_options=self.engine_config.screenshot(),
+            #         user_id=self.user.id if self.user else None,
+            #         browser_id=self.browser_id,
+            #         origin=origin,
+            #         visibility=ChatVisibility.PUBLIC
+            #         if not self.user
+            #         else ChatVisibility.PRIVATE,
+            #     ),
+            # )
+            # chat_id = self.db_chat_obj.id
+            # # slack/discord may create a new chat with history messages
+            # now = datetime.now(UTC)
+            # for i, m in enumerate(self.chat_history):
+            #     chat_repo.create_message(
+            #         session=self.db_session,
+            #         chat=self.db_chat_obj,
+            #         chat_message=DBChatMessage(
+            #             role=m.role,
+            #             content=m.content,
+            #             ordinal=i + 1,
+            #             created_at=now,
+            #             updated_at=now,
+            #             finished_at=now,
+            #         ),
+            #     )
 
         # Init Langfuse for tracing.
         enable_langfuse = (
@@ -140,25 +140,42 @@ class ChatFlow:
             enabled=enable_langfuse,
         )
         self._trace_manager = LangfuseContextManager(instrumentor)
+        
+        # Lazy initialization.
+        self._llm_initialized = False
+        self._kb_initialized = False
+        self._retrieve_flow_initialized = False
 
-        # Init LLM.
-        self._llm = self.engine_config.get_llama_llm(self.db_session)
-        self._fast_llm = self.engine_config.get_fast_llama_llm(self.db_session)
-        self._fast_dspy_lm = self.engine_config.get_fast_dspy_lm(self.db_session)
+    # Init LLM.
+    def _ensure_llm_initialized(self):
+        if not self._llm_initialized:
+            self._llm = self.engine_config.get_llama_llm(self.db_session)
+            self._fast_llm = self.engine_config.get_fast_llama_llm(self.db_session)
+            self._fast_dspy_lm = self.engine_config.get_fast_dspy_lm(self.db_session)
+            self._llm_initialized = True
 
-        # Load knowledge bases.
-        self.knowledge_bases = self.engine_config.get_knowledge_bases(self.db_session)
-        self.knowledge_base_ids = [kb.id for kb in self.knowledge_bases]
+    # Load knowledge bases.
+    def _ensure_kb_initialized(self):
+        if not self._kb_initialized:
+            self.knowledge_bases = self.engine_config.get_knowledge_bases(self.db_session)
+            self.knowledge_base_ids = [kb.id for kb in self.knowledge_bases]
+            self._kb_initialized = True
+            
+    # Init retrieve flow.
+    def _ensure_retrieve_flow_initialized(self):
+        if not self._retrieve_flow_initialized:
+            self._ensure_llm_initialized()
+            self._ensure_kb_initialized()
+            self.retrieve_flow = RetrieveFlow(
+                db_session=self.db_session,
+                engine_name=self.engine_name,
+                engine_config=self.engine_config,
+                llm=self._llm,
+                fast_llm=self._fast_llm,
+                knowledge_bases=self.knowledge_bases,
+            )
+            self._retrieve_flow_initialized = True
 
-        # Init retrieve flow.
-        self.retrieve_flow = RetrieveFlow(
-            db_session=self.db_session,
-            engine_name=self.engine_name,
-            engine_config=self.engine_config,
-            llm=self._llm,
-            fast_llm=self._fast_llm,
-            knowledge_bases=self.knowledge_bases,
-        )
 
     def chat(self) -> Generator[ChatEvent | str, None, None]:
         try:
@@ -196,17 +213,17 @@ class ChatFlow:
     def _builtin_chat(
         self,
     ) -> Generator[ChatEvent | str, None, Tuple[Optional[str], List[Any]]]:
-        ctx = langfuse_instrumentor_context.get().copy()
         db_user_message, db_assistant_message = yield from self._chat_start()
-        langfuse_instrumentor_context.get().update(ctx)
         # Add initialization status display
         yield ChatEvent(
             event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
             payload=ChatStreamMessagePayload(
                 state=ChatMessageSate.INITIALIZATION,
-                display="Initializing chat session and starting thinking",
+                display="Initializing chat session and starting flow",
             ),
         )
+        ctx = langfuse_instrumentor_context.get().copy()
+        langfuse_instrumentor_context.get().update(ctx)
         
         yield ChatEvent(
             event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
@@ -313,33 +330,46 @@ class ChatFlow:
     def _chat_start(
         self,
     ) -> Generator[ChatEvent, None, Tuple[DBChatMessage, DBChatMessage]]:
-        db_user_message = chat_repo.create_message(
-            session=self.db_session,
-            chat=self.db_chat_obj,
-            chat_message=DBChatMessage(
-                role=MessageRole.USER.value,
-                trace_url=self._trace_manager.trace_url,
-                content=self.user_question,
-            ),
+        
+        chat_obj = DBChat(
+            title=self.user_question[:100],
+            engine_id=self.db_chat_engine.id,
+            engine_options=self.engine_config.screenshot(),
+            user_id=self.user.id if self.user else None,
+            browser_id=self.browser_id,
+            origin=self.origin,
+            visibility=ChatVisibility.PUBLIC
+            if not self.user
+            else ChatVisibility.PRIVATE,
         )
-        db_assistant_message = chat_repo.create_message(
-            session=self.db_session,
-            chat=self.db_chat_obj,
-            chat_message=DBChatMessage(
-                role=MessageRole.ASSISTANT.value,
-                trace_url=self._trace_manager.trace_url,
-                content="",
-            ),
+        
+        db_user_message = DBChatMessage(
+            role=MessageRole.USER.value,
+            trace_url=self._trace_manager.trace_url,
+            content=self.user_question,
         )
+        
+        db_assistant_message = DBChatMessage(
+            role=MessageRole.ASSISTANT.value,
+            trace_url=self._trace_manager.trace_url,
+            content="",
+        )
+        
+        self.db_chat_obj, messages = chat_repo.create_chat_with_messages(
+            self.db_session,
+            chat_obj,
+            [db_user_message, db_assistant_message]
+        )
+        
         yield ChatEvent(
             event_type=ChatEventType.DATA_PART,
             payload=ChatStreamDataPayload(
                 chat=self.db_chat_obj,
-                user_message=db_user_message,
-                assistant_message=db_assistant_message,
+                user_message=messages[0],
+                assistant_message=messages[1],
             ),
         )
-        return db_user_message, db_assistant_message
+        return messages[0], messages[1]
 
     def _search_knowledge_graph(
         self,
@@ -371,6 +401,7 @@ class ChatFlow:
                         ),
                     )
 
+            self._ensure_retrieve_flow_initialized()
             kg_search_gen = self.retrieve_flow.search_knowledge_graph(user_question)
             knowledge_graph = KnowledgeGraphRetrievalResult()
             knowledge_graph_context = ""
@@ -712,7 +743,7 @@ class ChatFlow:
     #  share some common methods through ChatMixin or BaseChatFlow.
     def _external_chat(self) -> Generator[ChatEvent | str, None, None]:
         db_user_message, db_assistant_message = yield from self._chat_start()
-
+        self._ensure_retrieve_flow_initialized()
         identity_type = self._detect_identity_question(self.user_question)
         if identity_type:
             logger.info(f"Detected identity question of type: {identity_type}")

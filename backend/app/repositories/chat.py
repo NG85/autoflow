@@ -1,6 +1,6 @@
 import enum
 from uuid import UUID
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime, UTC, date, timedelta
 from collections import defaultdict
 
@@ -150,6 +150,34 @@ class ChatRepo(BaseRepo):
         session.refresh(chat_message)
         return chat_message
 
+    def create_chat_with_messages(
+        self,
+        session: Session,
+        chat: Chat,
+        messages: List[ChatMessage]
+    ) -> Tuple[Chat, List[ChatMessage]]:
+        """Create chat and messages in a single transaction"""
+        with session.begin():
+            # Add chat record
+            session.add(chat)
+            session.flush()  # Generate ID but don't commit
+            
+            # Set message chat_id and add messages
+            for message in messages:
+                message.chat_id = chat.id
+                message.created_at = message.updated_at = datetime.now(UTC)
+            
+            session.add_all(messages)
+            # The transaction will be committed automatically when it ends
+        
+        # Refresh objects to get all database generated values
+        session.refresh(chat)
+        for message in messages:
+            session.refresh(message)
+        
+        return chat, messages
+
+        
     def find_recent_assistant_messages_by_goal(
         self, session: Session, metadata: Dict[str, Any], days: int = 15
     ) -> List[ChatMessage]:
