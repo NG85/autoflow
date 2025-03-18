@@ -114,18 +114,18 @@ Please only response in JSON format:
 {
    "entities": [
       {
-            "name": "entity name (specific and meaningful)",
-            "description": "detailed description in complete sentences",
-            "metadata": {
-               "topic": "persona|pain_point|feature"
-            }
+         "name": "entity name (specific and meaningful)",
+         "description": "detailed description in complete sentences",
+         "metadata": {
+            "topic": "persona|pain_point|feature"
+         }
       }
    ],
    "relationships": [
       {
-            "source_entity": "source entity name",
-            "target_entity": "target entity name",
-            "relationship_desc": "comprehensive description including all required elements"
+         "source_entity": "source entity name",
+         "target_entity": "target entity name",
+         "relationship_desc": "comprehensive description including all required elements"
       }
    ]
 }
