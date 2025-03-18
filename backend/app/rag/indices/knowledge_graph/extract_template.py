@@ -1,10 +1,10 @@
 EXTRACTION_TEMPLATE = """
-Carefully analyze the provided text from database documentation and community blogs to thoroughly identify all entities related to database technologies, including both general concepts and specific details.
+Carefully analyze the provided text from Fadada company documentation and industry blogs to thoroughly identify all entities related to electronic signatures, contract management, and legal services, including both general concepts and specific details.
 
 Follow these Step-by-Step Analysis:
 
 1. Extract Meaningful Entities:
-- Identify all significant nouns, proper nouns, and technical terminologies that represent database-related concepts, objects, components, features, issues, key steps, execute order, user case, locations, versions, or any substantial entities.
+- Identify all significant nouns, proper nouns, and technical terminologies that represent concepts related to electronic signatures, digital contracts, legal compliance, identity verification, or any substantial entities including components, features, issues, key steps, execution order, use cases, applicable scenarios, regulatory versions.
 - Ensure that you capture entities across different levels of detail, from high-level overviews to specific technical specifications, to create a comprehensive representation of the subject matter.
 - Choose names for entities that are specific enough to indicate their meaning without additional context, avoiding overly generic terms.
 - Consolidate similar entities to avoid redundancy, ensuring each represents a distinct concept at appropriate granularity levels.
@@ -25,7 +25,7 @@ Follow these Step-by-Step Analysis:
 Some key points to consider:
 - Please endeavor to extract all meaningful entities and relationships from the text, avoid subsequent additional gleanings.
 
-Objective: Produce a detailed and comprehensive knowledge graph that captures the full spectrum of entities mentioned in the text, along with their interrelations, reflecting both broad concepts and intricate details specific to the database domain.
+Objective: Produce a detailed and comprehensive knowledge graph that captures the full spectrum of entities mentioned in the text, along with their interrelations, reflecting both broad concepts and intricate details specific to the electronic signature, digital contract, and legal services domain.
 
 Please only response in JSON format.
 """
@@ -43,7 +43,7 @@ Please only response in JSON format.
 
 
 PLAYBOOK_EXTRACTION_TEMPLATE = """
-Carefully analyze the provided text to identify sales related entities and their relationships.
+Carefully analyze the provided text to identify sales related entities and their relationships for Fadada's electronic signature and digital contract services.
    
 Follow these Step-by-Step Analysis:
 
@@ -51,15 +51,15 @@ Follow these Step-by-Step Analysis:
 First, identify significant entities from the text:
    * Personas (who): Organizations or departments that are potential customers
       Examples:
-      - "Enterprise IT Department in Healthcare"
-      - "Bank's Security Operations Team"
-      - "Manufacturing Company's R&D Division"
-      - "Marketing Manager in Financial Services"
+      - "Corporate Legal Department"
+      - "Bank Compliance Team"
+      - "Manufacturing HR Department"
+      - "Financial Services Business Manager"
    * Pain Points (what): Business challenges, problems, needs
-   * Features (how): Solutions, capabilities, functionalities
+   * Features (how): Fadada solutions, capabilities, functionalities
 
 Important Classification Rules:
-   - Technical terms (e.g., "TiDB", "TiKV") should never be classified as personas
+   - Technical terms (e.g., "E-signature", "Cloud Signing") should never be classified as personas
    - Terms containing "system", "service", "tool", "platform" should be classified as features
    - Terms containing "Department", "Team", "Manager", "Director" should be classified as personas
    - Generic terms without clear classification should be excluded
@@ -75,14 +75,14 @@ A. "Persona experiences Pain Point":
    - Problem identification
    - Impact on business operations (with metrics if possible)
    - Frequency or pattern of occurrence
-   Example: "Enterprise IT Directors face system integration challenges weekly, resulting in 20% productivity loss."
+   Example: "Corporate Legal Directors face contract approval inefficiencies weekly, resulting in 20% business process delays."
 
 B. "Pain Point is addressed by Feature":
    Must include these core elements in description:
    - Solution mechanism
    - Effectiveness (with metrics if possible)
    - Time to value
-   Example: "The integration challenges are resolved through automated integration, reducing integration time by 90% with immediate productivity gains after 2-day setup."
+   Example: "The contract approval inefficiencies are resolved through electronic signature automated workflows, reducing approval time by 90% with immediate productivity gains after 2-day setup."
 
 Critical Rules for Relationships:
    - Must follow exact sequence: Persona -> Pain Point -> Feature

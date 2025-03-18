@@ -16,91 +16,91 @@ from app.rag.indices.knowledge_graph.extract_template import (
 logger = logging.getLogger(__name__)
 
 class ExtractPlaybookTriplet(dspy.Signature):
-    """Carefully analyze the provided text to identify sales related entities and their relationships.
+    """Carefully analyze the provided text to identify sales related entities and their relationships for Fadada's electronic signature and digital contract services.
     
     Follow these Step-by-Step Analysis:
 
     1. Extract Key Entities:
-      First, identify significant entities from the text:
-        * Personas (who): Organizations or departments that are potential customers
-          Examples:
-          - "Enterprise IT Department in Healthcare"
-          - "Bank's Security Operations Team"
-          - "Manufacturing Company's R&D Division"
-          - "Marketing Manager in Financial Services"
-        * Pain Points (what): Business challenges, problems, needs
-        * Features (how): Solutions, capabilities, functionalities
+    First, identify significant entities from the text:
+    * Personas (who): Organizations or departments that are potential customers
+        Examples:
+        - "Corporate Legal Department"
+        - "Bank Compliance Team"
+        - "Manufacturing HR Department"
+        - "Financial Services Business Manager"
+    * Pain Points (what): Business challenges, problems, needs
+    * Features (how): Fadada solutions, capabilities, functionalities
 
-      Important Classification Rules:
-        - Technical terms (e.g., "TiDB", "TiKV") should never be classified as personas
-        - Terms containing "system", "service", "tool", "platform" should be classified as features
-        - Terms containing "Department", "Team", "Manager", "Director" should be classified as personas
-        - Generic terms without clear classification should be excluded
-            
+    Important Classification Rules:
+    - Technical terms (e.g., "E-signature", "Cloud Signing") should never be classified as personas
+    - Terms containing "system", "service", "tool", "platform" should be classified as features
+    - Terms containing "Department", "Team", "Manager", "Director" should be classified as personas
+    - Generic terms without clear classification should be excluded
+        
     2. Establish Relationships:
-      Valid Relationship Patterns:
-        1. Persona experiences Pain Point
-        2. Pain Point is addressed by Feature
-      
-      Required Elements for Each Relationship Type:
-      A. "Persona experiences Pain Point":
-        Must include these core elements in description:
-        - Problem identification
-        - Impact on business operations (with metrics if possible)
-        - Frequency or pattern of occurrence
-        Example: "Enterprise IT Directors face system integration challenges weekly, resulting in 20% productivity loss."
-      
-      B. "Pain Point is addressed by Feature":
-        Must include these core elements in description:
-        - Solution mechanism
-        - Effectiveness (with metrics if possible)
-        - Time to value
-        Example: "The integration challenges are resolved through automated integration, reducing integration time by 90% with immediate productivity gains after 2-day setup."
+    Valid Relationship Patterns:
+    1. Persona experiences Pain Point
+    2. Pain Point is addressed by Feature
 
-      Critical Rules for Relationships:
-        - Must follow exact sequence: Persona -> Pain Point -> Feature
-        - Each relationship must be part of a complete chain
-        - No direct Persona-to-Feature relationships
-        - No reverse relationships
-        - No relationships between same entity types
-        - Both source and target entities must exist and be valid
-        - Must use exact entity names in relationships
-          
+    Required Elements for Each Relationship Type:
+    A. "Persona experiences Pain Point":
+    Must include these core elements in description:
+    - Problem identification
+    - Impact on business operations (with metrics if possible)
+    - Frequency or pattern of occurrence
+    Example: "Corporate Legal Directors face contract approval inefficiencies weekly, resulting in 20% business process delays."
+
+    B. "Pain Point is addressed by Feature":
+    Must include these core elements in description:
+    - Solution mechanism
+    - Effectiveness (with metrics if possible)
+    - Time to value
+    Example: "The contract approval inefficiencies are resolved through electronic signature automated workflows, reducing approval time by 90% with immediate productivity gains after 2-day setup."
+
+    Critical Rules for Relationships:
+    - Must follow exact sequence: Persona -> Pain Point -> Feature
+    - Each relationship must be part of a complete chain
+    - No direct Persona-to-Feature relationships
+    - No reverse relationships
+    - No relationships between same entity types
+    - Both source and target entities must exist and be valid
+    - Must use exact entity names in relationships
+        
     3. Quality Guidelines:
-      Basic Entity Information:
-        - Each entity MUST have:
-          * name: Clear, specific identifier
-          * description: Detailed description in complete sentences
-          * metadata.topic: Must be exactly one of: "persona", "pain_point", or "feature"
-       
-      Relationship Rules:
-        - Follow strict sequence: Persona -> Pain Point -> Feature
-        - Each relationship must form part of a complete chain
-        - Never create direct Persona-to-Feature relationships
-        - Never create reverse relationships
-        - Never skip steps in the sequence
-        - Both source and target entities must be valid
-        - Relationship descriptions must be specific and verifiable
-        - Must use exact entity names in relationships
+    Basic Entity Information:
+    - Each entity MUST have:
+        * name: Clear, specific identifier
+        * description: Detailed description in complete sentences
+        * metadata.topic: Must be exactly one of: "persona", "pain_point", or "feature"
+    
+    Relationship Rules:
+    - Follow strict sequence: Persona -> Pain Point -> Feature
+    - Each relationship must form part of a complete chain
+    - Never create direct Persona-to-Feature relationships
+    - Never create reverse relationships
+    - Never skip steps in the sequence
+    - Both source and target entities must be valid
+    - Relationship descriptions must be specific and verifiable
+    - Must use exact entity names in relationships
 
     Please only response in JSON format:
     {
-        "entities": [
-            {
+    "entities": [
+        {
                 "name": "entity name (specific and meaningful)",
                 "description": "detailed description in complete sentences",
                 "metadata": {
-                    "topic": "persona|pain_point|feature"
+                "topic": "persona|pain_point|feature"
                 }
-            }
-        ],
-        "relationships": [
-            {
+        }
+    ],
+    "relationships": [
+        {
                 "source_entity": "source entity name",
                 "target_entity": "target entity name",
                 "relationship_desc": "comprehensive description including all required elements"
-            }
-        ]
+        }
+    ]
     }
     """
 
