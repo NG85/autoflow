@@ -23,13 +23,13 @@ logger = logging.getLogger(__name__)
 
 
 class ExtractGraphTriplet(dspy.Signature):
-    """Carefully analyze the provided text from database documentation and community blogs to thoroughly identify all entities related to database technologies, including both general concepts and specific details.
+    """Carefully analyze the provided text from labor law documentation, legal regulations, and case studies to thoroughly identify all entities related to labor law, including both general concepts and specific details.
 
     Follow these Step-by-Step Analysis:
 
     1. Extract Meaningful Entities:
-      - Identify all significant nouns, proper nouns, and technical terminologies that represent database-related concepts, objects, components, features, issues, key steps, execute order, user case, locations, versions, or any substantial entities.
-      - Ensure that you capture entities across different levels of detail, from high-level overviews to specific technical specifications, to create a comprehensive representation of the subject matter.
+      - Identify all significant nouns, proper nouns, and legal terminologies that represent labor law-related concepts, regulations, statutes, legal procedures, case precedents, legal subjects (employers, employees), rights, obligations, dispute types, remedies, or any substantial entities.
+      - Ensure that you capture entities across different levels of detail, from high-level legal principles to specific provisions and clauses, to create a comprehensive representation of the subject matter.
       - Choose names for entities that are specific enough to indicate their meaning without additional context, avoiding overly generic terms.
       - Consolidate similar entities to avoid redundancy, ensuring each represents a distinct concept at appropriate granularity levels.
 
@@ -42,14 +42,15 @@ class ExtractGraphTriplet(dspy.Signature):
 
     3. Establish Relationships:
       - Carefully examine the text to identify all relationships between clearly-related entities, ensuring each relationship is correctly captured with accurate details about the interactions.
-      - Analyze the context and interactions between the identified entities to determine how they are interconnected, focusing on actions, associations, dependencies, or similarities.
-      - Clearly define the relationships, ensuring accurate directionality that reflects the logical or functional dependencies among entities. \
-         This means identifying which entity is the source, which is the target, and what the nature of their relationship is (e.g., $source_entity depends on $target_entity for $relationship).
+      - Analyze the context and interactions between the identified entities to determine how they are interconnected, focusing on legal hierarchies, statutory references, rights and duties, procedural sequences, and causative relationships.
+      - Clearly define the relationships, ensuring accurate directionality that reflects the logical or legal dependencies among entities. \
+         This means identifying which entity is the source, which is the target, and what the nature of their relationship is (e.g., $employer_obligation applies to $employee_category under $legal_provision).
 
     Some key points to consider:
       - Please endeavor to extract all meaningful entities and relationships from the text, avoid subsequent additional gleanings.
+      - Pay special attention to legal citation patterns, statutory references, time limitations, procedural requirements, and conditions that modify rights or obligations.
 
-    Objective: Produce a detailed and comprehensive knowledge graph that captures the full spectrum of entities mentioned in the text, along with their interrelations, reflecting both broad concepts and intricate details specific to the database domain.
+    Objective: Produce a detailed and comprehensive knowledge graph that captures the full spectrum of entities mentioned in the text, along with their interrelations, reflecting both broad concepts and intricate details specific to the labor law domain.
 
     Please only response in JSON format.
     """
@@ -63,9 +64,20 @@ class ExtractGraphTriplet(dspy.Signature):
 
 
 class ExtractCovariate(dspy.Signature):
-    """Please carefully review the provided text and entities list which are already identified in the text. Focusing on identifying detailed covariates associated with each entities provided.
+    """Please carefully review the provided text from labor law documentation and the entities list which are already identified in the text. Focus on identifying detailed covariates associated with each entity provided.
+    
+    For labor law entities, important covariates may include:
+    - Legal references (article numbers, clause identifiers, statute names)
+    - Temporal information (effective dates, deadlines, limitation periods)
+    - Jurisdictional scope (national, provincial, industry-specific)
+    - Legal requirements (documentation, procedures, notice periods)
+    - Exceptions and special conditions
+    - Penalties and remedies
+    - Burden of proof considerations
+    - Relevant case precedents mentioned
+    
     Extract and link the covariates (which is a comprehensive json TREE, the first field is always: "topic") to their respective entities.
-    Ensure all extracted covariates is clearly connected to the correct entity for accuracy and comprehensive understanding.
+    Ensure all extracted covariates are clearly connected to the correct entity for accuracy and comprehensive understanding.
     Ensure that all extracted covariates are factual and verifiable within the text itself, without relying on external knowledge or assumptions.
     Collectively, the covariates should provide a thorough and precise summary of the entity's characteristics as described in the source material.
 
