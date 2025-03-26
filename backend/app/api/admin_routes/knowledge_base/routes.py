@@ -41,6 +41,7 @@ from app.tasks import (
     build_vector_index_for_entity,
     build_vector_index_for_relationship,
     build_playbook_kg_index_for_chunk,
+    build_crm_graph_index_for_document,
 )
 from app.tasks.knowledge_base import (
     import_documents_for_knowledge_base,
@@ -258,6 +259,7 @@ def retry_failed_tasks(
         document_ids = []
         chunk_ids = []
         playbook_chunk_ids = []
+        crm_document_ids = []
         
         if GraphType.general in graph_types:
             # Retry failed vector index tasks.
@@ -281,11 +283,19 @@ def retry_failed_tasks(
                 build_playbook_kg_index_for_chunk.delay(kb_id, chunk_id)
             logger.info(f"Triggered {len(playbook_chunk_ids)} chunks to rebuild playbook knowledge graph index.")
 
+        if GraphType.crm in graph_types:
+            # Retry failed crm kg index tasks
+            crm_document_ids = knowledge_base_repo.set_failed_crm_documents_chunks_status_to_pending(session, kb)
+            for document_id in crm_document_ids:
+                build_crm_graph_index_for_document.delay(kb_id, document_id)
+            logger.info(f"Triggered {len(crm_document_ids)} crm documents to rebuild crm knowledge graph index.")
+
         return {
-            "detail": f"Triggered reindex {len(document_ids)} documents, {len(chunk_ids)} chunks and {len(playbook_chunk_ids)} playbook chunks of knowledge base #{kb_id}.",
+            "detail": f"Triggered reindex {len(document_ids)} documents, {len(chunk_ids)} chunks, {len(playbook_chunk_ids)} playbook chunks and {len(crm_document_ids)} crm documents of knowledge base #{kb_id}.",
             "reindex_document_ids": document_ids,
             "reindex_chunk_ids": chunk_ids,
             "reindex_playbook_chunk_ids": playbook_chunk_ids,
+            "reindex_crm_document_ids": crm_document_ids,
         }
     except HTTPException:
         raise
@@ -318,6 +328,29 @@ def build_playbook_failed_chunks_graph_index(
         logger.exception(e)
         raise InternalServerError()
 
+@router.post("/admin/knowledge_bases/{kb_id}/build-crm-graph-index")
+def build_crm_failed_documents_graph_index(
+    session: SessionDep,
+    user: CurrentSuperuserDep,
+    kb_id: int,
+) -> dict:
+    try:
+        kb = knowledge_base_repo.must_get(session, kb_id)
+        document_ids = knowledge_base_repo.prepare_documents_to_build_crm_index(session, kb)
+
+        for document_id in document_ids:
+            build_crm_graph_index_for_document.delay(kb_id, document_id)
+        logger.info(f"Triggered {len(document_ids)} crm documents to build crm knowledge graph index.")
+        return {
+            "detail": f"Triggered index {len(document_ids)} crm documents of crm knowledge base #{kb_id}.",
+            "index_crm_document_ids": document_ids,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(e)
+        raise InternalServerError()
+    
 
 @router.post("/admin/knowledge_bases/{kb_id}/build-entity-vectors")
 def build_entity_vectors(

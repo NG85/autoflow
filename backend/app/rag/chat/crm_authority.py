@@ -1,0 +1,204 @@
+import logging
+from uuid import UUID
+import requests
+from typing import Any, Dict, List, Optional, Set
+from pydantic import BaseModel
+from app.core.config import settings
+from app.rag.types import CrmDataType
+
+logger = logging.getLogger(__name__)
+
+    
+class CRMAuthorityItem(BaseModel):
+    """CRM authority item"""
+    dataId: str
+    type: str
+    userId: str
+  
+class CRMAuthorityResponse(BaseModel):
+    """CRM authority API response"""
+    code: int
+    message: str
+    result: List[CRMAuthorityItem]
+      
+class CRMAuthority(BaseModel):
+    """CRM authority data structure"""
+    authorized_items: Dict[str, Set[str]] = {}  # data type -> data ID set
+    
+    def is_authorized(self, data_type: str, data_id: str) -> bool:
+        """
+        Check if the specified type of data ID has access permission
+        
+        Args:
+            data_type: data type, e.g. 'crm_account', 'crm_opportunity'
+            data_id: data ID
+            
+        Returns:
+            Whether there is access permission
+        """
+        if data_type == CrmDataType.CRM:
+            return data_id in self.authorized_items[CrmDataType.OPPORTUNITY] \
+                or data_id in self.authorized_items[CrmDataType.ACCOUNT]
+        
+        if data_type not in self.authorized_items:
+            return False
+        return data_id in self.authorized_items[data_type]
+    
+    def is_authorized_opportunity(self, opportunity_id: str) -> bool:
+        """Check if the opportunity ID has access permission"""
+        return self.is_authorized(CrmDataType.OPPORTUNITY, opportunity_id)
+        
+    def is_authorized_account(self, account_id: str) -> bool:
+        """Check if the customer ID has access permission"""
+        return self.is_authorized(CrmDataType.ACCOUNT, account_id)
+        
+    def is_empty(self) -> bool:
+        """Check if there is any authorized data"""
+        return len(self.authorized_items) == 0 or all(len(ids) == 0 for ids in self.authorized_items.values())
+
+
+def get_user_crm_authority(user_id: Optional[UUID]) -> CRMAuthority:
+    """Get the CRM data access permission of the user"""
+    if not user_id:
+        logger.info("Anonymous user has no CRM data access")
+        return CRMAuthority()
+    
+    authority = CRMAuthority()
+            
+    # Get API URL from configuration
+    auth_api_url = settings.CRM_AUTHORITY_API_URL
+    if not auth_api_url:
+        logger.error("CRM_AUTHORITY_API_URL is not configured")
+        return authority
+    
+    try:
+        # Build request body
+        payload = {
+            "dataId": "",
+            "type": "",
+            "userId": str(user_id)
+        }
+        
+        # Send POST request
+        response = requests.post(auth_api_url, json=payload, timeout=5)
+        
+        # Check HTTP response status
+        if response.status_code != 200:
+            logger.error(f"CRM authority API HTTP error: {response.status_code}")
+            return authority
+            
+        # Parse response JSON
+        try:
+            data = response.json()
+        except ValueError:
+            logger.error("CRM authority API returned invalid JSON")
+            return authority
+            
+        # Verify response format
+        if not isinstance(data, dict) or "code" not in data or "result" not in data:
+            logger.error(f"CRM authority API returned unexpected format: {data}")
+            return authority
+            
+        # Check response status code
+        if data["code"] != 0:
+            logger.error(f"CRM authority API error: {data.get('message', 'Unknown error')}")
+            return authority
+            
+        # Process authority data
+        result = data.get("result", [])
+        if not isinstance(result, list):
+            logger.error(f"CRM authority API returned invalid result format: {result}")
+            return authority
+            
+        for item in result:
+            if not isinstance(item, dict) or "dataId" not in item or "type" not in item:
+                continue
+                
+            data_type = item["type"]
+            data_id = item["dataId"]
+            
+            if not data_type or not data_id:
+                continue
+                
+            # Map the API returned type to the CrmDataType enum
+            try:
+                crm_type = CrmDataType(data_type)
+                if crm_type not in authority.authorized_items:
+                    authority.authorized_items[crm_type] = set()
+                authority.authorized_items[crm_type].add(data_id)
+            except ValueError:
+                logger.warning(f"Unknown CRM data type from API: {data_type}")
+        
+        # Record authority statistics
+        stats = {data_type: len(ids) for data_type, ids in authority.authorized_items.items()}
+        logger.info(f"User {user_id} CRM authority fetched: {stats}")
+        
+        return authority
+        
+    except Exception as e:
+        logger.error(f"Failed to get CRM authority for user {user_id}: {e}", exc_info=True)
+        # Return empty authority when error, ensuring security
+        return authority
+
+def identify_crm_entity_type(entity) -> tuple[Optional[str], Optional[str]]:
+    """
+    Identify the CRM type and ID of the entity, only process the entity with the CRM category mark
+    
+    Args:
+        entity: Knowledge graph entity
+        
+    Returns:
+        Tuple (entity type, entity ID) if not a CRM entity or cannot be identified, return (None, None)
+    """
+    # Get metadata
+    meta = getattr(entity, "meta", {}) or {}
+    
+    # First check if there is a category field and it is a CRM type
+    category = meta.get("category")
+    crm_type = get_crm_type(category)
+    
+    # If not a CRM type, return None
+    if not crm_type:
+        return None, None
+    
+    # Get ID fields based on CRM type
+    id_fields_map = {
+        CrmDataType.CRM: ["unique_id", "account_id", "opportunity_id", "contact_id"],
+        CrmDataType.ACCOUNT: ["account_id", "unique_id"],
+        CrmDataType.OPPORTUNITY: ["opportunity_id", "unique_id"],
+        CrmDataType.CONTACT: ["contact_id", "unique_id"],
+        # TODO: Add more other CRM types
+        # CrmDataType.ORDER: ["order_id", "unique_id"],
+        # CrmDataType.CONTRACT: ["contract_id", "unique_id"],
+        # CrmDataType.PAYMENTPLAN: ["payment_plan_id", "unique_id"]
+    }
+    
+    # Find ID
+    if crm_type in id_fields_map:
+        for id_field in id_fields_map[crm_type]:
+            if id_field in meta and meta[id_field]:
+                return crm_type, meta[id_field]
+    
+    # No valid ID found
+    return crm_type, None
+
+def is_crm_category(category: Any) -> bool:
+    """Check if the given category is a valid CRM type"""
+    if not category:
+        return False
+        
+    try:
+        # Check if it is one of the enum values
+        return any(category == data_type.value for data_type in CrmDataType)
+    except (ValueError, TypeError):
+        return False
+
+def get_crm_type(category: Any) -> Optional[CrmDataType]:
+    """Get the CRM type enum corresponding to the category"""
+    if not is_crm_category(category):
+        return None
+        
+    try:
+        return CrmDataType(category)
+    except (ValueError, TypeError):
+        return None

@@ -30,6 +30,8 @@ from app.types import MimeTypes
 from app.utils.dspy import get_dspy_lm_by_llama_llm
 from app.models.enums import GraphType
 from app.rag.indices.knowledge_graph.graph_store.helpers import get_entity_description_embedding, get_entity_metadata_embedding, get_relationship_description_embedding
+from app.rag.node_parser.single_node import SingleNodeParser
+from app.models.document import DocumentCategory
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +85,11 @@ class IndexService:
         self, db_document: Type[Document]
     ) -> List[TransformComponent]:
         transformations = []
+
+        # 如果文档是CRM商机文档，则不进行切分
+        if db_document.meta.get("category") == DocumentCategory.CRM:
+            logger.info(f"Using SingleNodeParser for CRM document #{db_document.id}")
+            return [SingleNodeParser()]
 
         chunking_config_dict = self._knowledge_base.chunking_config
         mode = (

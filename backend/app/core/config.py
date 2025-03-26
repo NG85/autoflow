@@ -101,6 +101,11 @@ class Settings(BaseSettings):
     TOS_BUCKET: str = "aptsell-dev"
     TOS_PATH_PREFIX: str = "data/customer-uploads/"
     
+    # CRM authority API
+    CRM_AUTHORITY_API_URL: str = "http://auth:8018/crm/authority/user"
+    
+    EMBEDDING_THRESHOLD: float = 0.875
+    
     COMPLIED_INTENT_ANALYSIS_PROGRAM_PATH: str | None = None
     COMPLIED_PREREQUISITE_ANALYSIS_PROGRAM_PATH: str | None = None
 

@@ -7,7 +7,7 @@ from .base import BaseDataSource
 from .file import FileDataSource
 from .web_sitemap import WebSitemapDataSource
 from .web_single_page import WebSinglePageDataSource
-
+from .crm import CRMDataSource
 
 def get_data_source_loader(
     session: Session,
@@ -26,6 +26,8 @@ def get_data_source_loader(
             data_source_cls = WebSitemapDataSource
         case DataSourceType.WEB_SINGLE_PAGE:
             data_source_cls = WebSinglePageDataSource
+        case DataSourceType.CRM:
+            data_source_cls = CRMDataSource
         case _:
             raise ValueError("Data source type not supported")
 

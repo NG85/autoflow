@@ -36,6 +36,7 @@ from app.site_settings import SiteSetting
 from app.utils.jinja2 import get_prompt_by_jinja2_template
 from app.utils.tracing import LangfuseContextManager
 from app.rag import default_prompt
+from app.rag.chat.crm_authority import CRMAuthority, get_user_crm_authority
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,7 @@ class ChatFlow:
         self.origin = origin
         # Load chat engine and chat session.
         self.user_question, self.chat_history = parse_chat_messages(chat_messages)
+        
         if chat_id:
             # FIXME:
             #   only chat owner or superuser can access the chat,
@@ -264,14 +266,36 @@ class ChatFlow:
         # self.competitor_knowledge_base_id = 240001
         # self.competitor_knowledge_base = knowledge_base_repo.must_get(self.db_session, self.competitor_knowledge_base_id, False)
         # self.retrieve_flow.knowledge_bases.append(self.competitor_knowledge_base)
-                
-        # 1. Retrieve Knowledge graph related to the user question.
+        
+        # 1. Identity verification and permission check step
+        yield ChatEvent(
+            event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
+            payload=ChatStreamMessagePayload(
+                state=ChatMessageSate.AUTHORIZATION,
+                display="Verifying data access permissions",
+            ),
+        )
+        # Initialize CRM authority control
+        self.crm_authority = get_user_crm_authority(
+            user_id=self.user.id if self.user else None
+        )
+        logger.info(f"CRM authority initialized for user {self.user.id if self.user else 'anonymous'}")
+    
+        if self.user and not self.crm_authority.is_empty():
+            # Record user permission statistics information
+            auth_stats = {k: len(v) for k, v in self.crm_authority.authorized_items.items()}
+            logger.info(f"User {self.user.id} has CRM access: {auth_stats}")
+            
+        # 2. Retrieve Knowledge graph related to the user question.
         (
             knowledge_graph,
             knowledge_graph_context,
-        ) = yield from self._search_knowledge_graph(user_question=self.user_question)
+        ) = yield from self._search_knowledge_graph(
+            user_question=self.user_question,
+            crm_authority=self.crm_authority,
+        )
 
-        # 2. Refine the user question using knowledge graph and chat history.
+        # 3. Refine the user question using knowledge graph and chat history.
         refined_question = yield from self._refine_user_question(
             user_question=self.user_question,
             chat_history=self.chat_history,
@@ -279,7 +303,7 @@ class ChatFlow:
             refined_question_prompt=self.engine_config.llm.condense_question_prompt,
         )
 
-        # 3. Check if the question provided enough context information or need to clarify.
+        # 4. Check if the question provided enough context information or need to clarify.
         if self.engine_config.clarify_question:
             need_clarify, need_clarify_response = yield from self._clarify_question(
                 user_question=refined_question,
@@ -306,12 +330,13 @@ class ChatFlow:
         #     logger.info(f"Restore the original knowledge base since the question is not competitor related")
         #     self.retrieve_flow.knowledge_bases = self.backup_knowledge_bases
              
-        # 4. Use refined question to search for relevant chunks.
+        # 5. Use refined question to search for relevant chunks.
         relevant_chunks = yield from self._search_relevance_chunks(
-            user_question=refined_question
+            user_question=refined_question,
+            crm_authority=self.crm_authority
         )
 
-        # 5. Generate a response using the refined question and related chunks
+        # 6. Generate a response using the refined question and related chunks
         response_text, source_documents = yield from self._generate_answer(
             user_question=refined_question,
             knowledge_graph_context=knowledge_graph_context,
@@ -375,6 +400,7 @@ class ChatFlow:
     def _search_knowledge_graph(
         self,
         user_question: str,
+        crm_authority: Optional[CRMAuthority] = None,
         annotation_silent: bool = False,
     ) -> Generator[ChatEvent, None, Tuple[KnowledgeGraphRetrievalResult, str]]:
         kg_config = self.engine_config.knowledge_graph
@@ -402,8 +428,12 @@ class ChatFlow:
                         ),
                     )
 
+
             self._ensure_retrieve_flow_initialized()
-            kg_search_gen = self.retrieve_flow.search_knowledge_graph(user_question)
+            kg_search_gen = self.retrieve_flow.search_knowledge_graph(
+                user_question,
+                crm_authority=crm_authority
+            )
             knowledge_graph = KnowledgeGraphRetrievalResult()
             knowledge_graph_context = ""
             
@@ -555,7 +585,7 @@ class ChatFlow:
             return need_clarify, need_clarify_response
 
     def _search_relevance_chunks(
-        self, user_question: str
+        self, user_question: str, crm_authority: Optional[CRMAuthority] = None
     ) -> Generator[ChatEvent, None, List[NodeWithScore]]:
         with self._trace_manager.span(
             name="search_relevance_chunks", input=user_question
@@ -568,8 +598,11 @@ class ChatFlow:
                 ),
             )
 
-            relevance_chunks = self.retrieve_flow.search_relevant_chunks(user_question)
-
+            relevance_chunks = self.retrieve_flow.search_relevant_chunks(
+                user_question,
+                crm_authority=crm_authority
+            )
+            
             span.end(
                 output={
                     "relevance_chunks": relevance_chunks,
@@ -1141,7 +1174,7 @@ class ChatFlow:
             logger.info(f"Best category: {best_category}, similarity: {best_similarity:.4f}")
             
             # Use a threshold to determine if it's a match
-            similarity_threshold = 0.87  # Adjust based on testing
+            similarity_threshold = settings.EMBEDDING_THRESHOLD  # Adjust based on testing
             if best_similarity >= similarity_threshold:
                 logger.info(f"Embedding identity detection for '{user_question}': {best_category} (similarity: {best_similarity:.4f})")
                 return best_category

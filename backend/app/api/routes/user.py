@@ -23,7 +23,7 @@ async def register_user(
     session: AsyncSessionDep
 ):
     try:
-        await create_user(
+        user = await create_user(
             session,
             email=user.email,
             password=user.password or secrets.token_urlsafe(16),
@@ -31,10 +31,10 @@ async def register_user(
             is_verified=True,
             is_superuser=False,
         )
-        return {"status": "success", "message": "User registered successfully"}
+        return {"status": "success", "message": "User registered successfully", "user_id": user.id}
     except UserAlreadyExists:
         logger.info(f"User with email {user.email} already exists, skipping registration")
-        return {"status": "success", "message": "User already exists, skipping registration"}
+        return {"status": "success", "message": "User already exists, skipping registration", "user_id": ''}
     except Exception as e:
         logger.error(f"Failed to register user: {e}")
         raise HTTPException(

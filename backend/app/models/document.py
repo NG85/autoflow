@@ -35,6 +35,7 @@ class ContentFormat(str, enum.Enum):
 class DocumentCategory(str, enum.Enum):
     GENERAL = "general"
     PLAYBOOK = "playbook"
+    CRM = "crm"
 
 
 class DocumentMetadata(BaseModel):
