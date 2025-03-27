@@ -23,12 +23,12 @@ logger = logging.getLogger(__name__)
 
 
 class ExtractGraphTriplet(dspy.Signature):
-    """Carefully analyze the provided text from database documentation and community blogs to thoroughly identify all entities related to database technologies, including both general concepts and specific details.
+    """Carefully analyze the provided text from Qingflow documentation and community blogs to thoroughly identify all entities related to no-code platform technologies, including both general concepts and specific details.
 
     Follow these Step-by-Step Analysis:
 
     1. Extract Meaningful Entities:
-      - Identify all significant nouns, proper nouns, and technical terminologies that represent database-related concepts, objects, components, features, issues, key steps, execute order, user case, locations, versions, or any substantial entities.
+      - Identify all significant nouns, proper nouns, and technical terminologies that represent no-code platform concepts, components, functional modules, form elements, workflow steps, execution order, user scenarios, interface elements, versions, or any substantial entities.
       - Ensure that you capture entities across different levels of detail, from high-level overviews to specific technical specifications, to create a comprehensive representation of the subject matter.
       - Choose names for entities that are specific enough to indicate their meaning without additional context, avoiding overly generic terms.
       - Consolidate similar entities to avoid redundancy, ensuring each represents a distinct concept at appropriate granularity levels.
@@ -49,9 +49,9 @@ class ExtractGraphTriplet(dspy.Signature):
     Some key points to consider:
       - Please endeavor to extract all meaningful entities and relationships from the text, avoid subsequent additional gleanings.
 
-    Objective: Produce a detailed and comprehensive knowledge graph that captures the full spectrum of entities mentioned in the text, along with their interrelations, reflecting both broad concepts and intricate details specific to the database domain.
+    Objective: Produce a detailed and comprehensive knowledge graph that captures the full spectrum of entities mentioned in the text, along with their interrelations, reflecting both broad concepts and intricate details specific to the no-code platform domain.
 
-    Please only response in JSON format.
+    Please only respond in JSON format.
     """
 
     text = dspy.InputField(
@@ -63,13 +63,21 @@ class ExtractGraphTriplet(dspy.Signature):
 
 
 class ExtractCovariate(dspy.Signature):
-    """Please carefully review the provided text and entities list which are already identified in the text. Focusing on identifying detailed covariates associated with each entities provided.
-    Extract and link the covariates (which is a comprehensive json TREE, the first field is always: "topic") to their respective entities.
-    Ensure all extracted covariates is clearly connected to the correct entity for accuracy and comprehensive understanding.
+    """Please carefully review the provided text and entities list which are already identified in the text. Focus on identifying detailed covariates associated with each entity provided within the Qingflow no-code platform context.
+    
+    For each no-code platform entity, extract and link comprehensive covariates to build a detailed JSON TREE (the first field is always: "topic"). Consider relevant attributes such as:
+    - Functionality and purpose within the no-code ecosystem
+    - Configuration options and customization capabilities
+    - Relationships with other platform components
+    - User interaction patterns and interface characteristics
+    - Technical limitations or requirements
+    - Implementation examples or use cases mentioned
+    
+    Ensure all extracted covariates are clearly connected to the correct entity for accuracy and comprehensive understanding.
     Ensure that all extracted covariates are factual and verifiable within the text itself, without relying on external knowledge or assumptions.
-    Collectively, the covariates should provide a thorough and precise summary of the entity's characteristics as described in the source material.
+    Collectively, the covariates should provide a thorough and precise summary of the entity's characteristics as described in the source material, focusing on aspects relevant to no-code platform development.
 
-    Please only response in JSON format.
+    Please only respond in JSON format.
     """
 
     text = dspy.InputField(

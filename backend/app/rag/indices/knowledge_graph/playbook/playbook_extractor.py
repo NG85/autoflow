@@ -16,24 +16,34 @@ from app.rag.indices.knowledge_graph.extract_template import (
 logger = logging.getLogger(__name__)
 
 class ExtractPlaybookTriplet(dspy.Signature):
-    """Carefully analyze the provided text to identify sales related entities and their relationships.
+    """Carefully analyze the provided text to identify sales related entities and their relationships for Qingflow's no-code platform.
     
     Follow these Step-by-Step Analysis:
 
     1. Extract Key Entities:
       First, identify significant entities from the text:
-        * Personas (who): Organizations or departments that are potential customers
+        * Personas (who): Organizations or departments that are potential customers of Qingflow
           Examples:
-          - "Enterprise IT Department in Healthcare"
-          - "Bank's Security Operations Team"
-          - "Manufacturing Company's R&D Division"
-          - "Marketing Manager in Financial Services"
-        * Pain Points (what): Business challenges, problems, needs
-        * Features (how): Solutions, capabilities, functionalities
+          - "Business Analysts in Financial Services" 
+          - "HR Department in Healthcare"
+          - "Operations Team in Manufacturing"
+          - "IT Department with Limited Development Resources"
+        * Pain Points (what): Business challenges, problems, needs that can be solved with no-code platforms
+          Examples:
+          - "Time-consuming Manual Workflow Approvals"
+          - "Siloed Data Systems Across Departments"
+          - "Slow Custom Application Development"
+          - "Difficulty in Process Standardization"
+        * Features (how): Qingflow platform capabilities and functionalities
+          Examples:
+          - "Visual Form Builder"
+          - "Drag-and-Drop Workflow Designer"
+          - "No-Code Database Integration"
+          - "Automated Approval Process"
 
       Important Classification Rules:
-        - Technical terms (e.g., "TiDB", "TiKV") should never be classified as personas
-        - Terms containing "system", "service", "tool", "platform" should be classified as features
+        - Technical terms (e.g., "API", "Database") should never be classified as personas
+        - Terms containing "builder", "designer", "module", "component" should be classified as features
         - Terms containing "Department", "Team", "Manager", "Director" should be classified as personas
         - Generic terms without clear classification should be excluded
             
@@ -48,14 +58,14 @@ class ExtractPlaybookTriplet(dspy.Signature):
         - Problem identification
         - Impact on business operations (with metrics if possible)
         - Frequency or pattern of occurrence
-        Example: "Enterprise IT Directors face system integration challenges weekly, resulting in 20% productivity loss."
+        Example: "HR Departments face time-consuming approval processes daily, resulting in 70% of staff time spent on administrative tasks rather than strategic initiatives."
       
       B. "Pain Point is addressed by Feature":
         Must include these core elements in description:
         - Solution mechanism
         - Effectiveness (with metrics if possible)
         - Time to value
-        Example: "The integration challenges are resolved through automated integration, reducing integration time by 90% with immediate productivity gains after 2-day setup."
+        Example: "The approval process bottlenecks are eliminated through Automated Approval Workflows, reducing process time by 85% and allowing implementation within 2 days without IT support."
 
       Critical Rules for Relationships:
         - Must follow exact sequence: Persona -> Pain Point -> Feature
@@ -154,6 +164,7 @@ class ExtractPlaybookCovariate(dspy.Signature):
        - Use consistent terminology across all metadata
        - Make values quantifiable where possible
        - Avoid generic or vague descriptions
+       - For no-code platform context, focus on business impact and ease of implementation
     
     3. Format Rules:
        - String values must be properly formatted and meaningful

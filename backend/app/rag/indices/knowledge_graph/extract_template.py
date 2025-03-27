@@ -1,10 +1,10 @@
 EXTRACTION_TEMPLATE = """
-Carefully analyze the provided text from database documentation and community blogs to thoroughly identify all entities related to database technologies, including both general concepts and specific details.
+Carefully analyze the provided text from Qingflow documentation and community blogs to thoroughly identify all entities related to no-code platform technologies, including both general concepts and specific details.
 
 Follow these Step-by-Step Analysis:
 
 1. Extract Meaningful Entities:
-- Identify all significant nouns, proper nouns, and technical terminologies that represent database-related concepts, objects, components, features, issues, key steps, execute order, user case, locations, versions, or any substantial entities.
+- Identify all significant nouns, proper nouns, and technical terminologies that represent no-code platform concepts, components, functional modules, form elements, workflow steps, execution order, user scenarios, interface elements, versions, or any substantial entities.
 - Ensure that you capture entities across different levels of detail, from high-level overviews to specific technical specifications, to create a comprehensive representation of the subject matter.
 - Choose names for entities that are specific enough to indicate their meaning without additional context, avoiding overly generic terms.
 - Consolidate similar entities to avoid redundancy, ensuring each represents a distinct concept at appropriate granularity levels.
@@ -25,42 +25,60 @@ Follow these Step-by-Step Analysis:
 Some key points to consider:
 - Please endeavor to extract all meaningful entities and relationships from the text, avoid subsequent additional gleanings.
 
-Objective: Produce a detailed and comprehensive knowledge graph that captures the full spectrum of entities mentioned in the text, along with their interrelations, reflecting both broad concepts and intricate details specific to the database domain.
+Objective: Produce a detailed and comprehensive knowledge graph that captures the full spectrum of entities mentioned in the text, along with their interrelations, reflecting both broad concepts and intricate details specific to the no-code platform domain.
 
-Please only response in JSON format.
+Please only respond in JSON format.
 """
    
 
 COVARIATE_TEMPLATE = """
-Please carefully review the provided text and entities list which are already identified in the text. Focusing on identifying detailed covariates associated with each entities provided.
-Extract and link the covariates (which is a comprehensive json TREE, the first field is always: "topic") to their respective entities.
-Ensure all extracted covariates is clearly connected to the correct entity for accuracy and comprehensive understanding.
-Ensure that all extracted covariates are factual and verifiable within the text itself, without relying on external knowledge or assumptions.
-Collectively, the covariates should provide a thorough and precise summary of the entity's characteristics as described in the source material.
+Please carefully review the provided text and entities list which are already identified in the text. Focus on identifying detailed covariates associated with each entity provided within the Qingflow no-code platform context.
+    
+For each no-code platform entity, extract and link comprehensive covariates to build a detailed JSON TREE (the first field is always: "topic"). Consider relevant attributes such as:
+- Functionality and purpose within the no-code ecosystem
+- Configuration options and customization capabilities
+- Relationships with other platform components
+- User interaction patterns and interface characteristics
+- Technical limitations or requirements
+- Implementation examples or use cases mentioned
 
-Please only response in JSON format.
+Ensure all extracted covariates are clearly connected to the correct entity for accuracy and comprehensive understanding.
+Ensure that all extracted covariates are factual and verifiable within the text itself, without relying on external knowledge or assumptions.
+Collectively, the covariates should provide a thorough and precise summary of the entity's characteristics as described in the source material, focusing on aspects relevant to no-code platform development.
+
+Please only respond in JSON format.
 """
 
 
 PLAYBOOK_EXTRACTION_TEMPLATE = """
-Carefully analyze the provided text to identify sales related entities and their relationships.
-   
+Carefully analyze the provided text to identify sales related entities and their relationships for Qingflow's no-code platform.
+
 Follow these Step-by-Step Analysis:
 
 1. Extract Key Entities:
 First, identify significant entities from the text:
-   * Personas (who): Organizations or departments that are potential customers
+   * Personas (who): Organizations or departments that are potential customers of Qingflow
       Examples:
-      - "Enterprise IT Department in Healthcare"
-      - "Bank's Security Operations Team"
-      - "Manufacturing Company's R&D Division"
-      - "Marketing Manager in Financial Services"
-   * Pain Points (what): Business challenges, problems, needs
-   * Features (how): Solutions, capabilities, functionalities
+      - "Business Analysts in Financial Services" 
+      - "HR Department in Healthcare"
+      - "Operations Team in Manufacturing"
+      - "IT Department with Limited Development Resources"
+   * Pain Points (what): Business challenges, problems, needs that can be solved with no-code platforms
+      Examples:
+      - "Time-consuming Manual Workflow Approvals"
+      - "Siloed Data Systems Across Departments"
+      - "Slow Custom Application Development"
+      - "Difficulty in Process Standardization"
+   * Features (how): Qingflow platform capabilities and functionalities
+      Examples:
+      - "Visual Form Builder"
+      - "Drag-and-Drop Workflow Designer"
+      - "No-Code Database Integration"
+      - "Automated Approval Process"
 
 Important Classification Rules:
-   - Technical terms (e.g., "TiDB", "TiKV") should never be classified as personas
-   - Terms containing "system", "service", "tool", "platform" should be classified as features
+   - Technical terms (e.g., "API", "Database") should never be classified as personas
+   - Terms containing "builder", "designer", "module", "component" should be classified as features
    - Terms containing "Department", "Team", "Manager", "Director" should be classified as personas
    - Generic terms without clear classification should be excluded
       
@@ -75,14 +93,14 @@ A. "Persona experiences Pain Point":
    - Problem identification
    - Impact on business operations (with metrics if possible)
    - Frequency or pattern of occurrence
-   Example: "Enterprise IT Directors face system integration challenges weekly, resulting in 20% productivity loss."
+   Example: "HR Departments face time-consuming approval processes daily, resulting in 70% of staff time spent on administrative tasks rather than strategic initiatives."
 
 B. "Pain Point is addressed by Feature":
    Must include these core elements in description:
    - Solution mechanism
    - Effectiveness (with metrics if possible)
    - Time to value
-   Example: "The integration challenges are resolved through automated integration, reducing integration time by 90% with immediate productivity gains after 2-day setup."
+   Example: "The approval process bottlenecks are eliminated through Automated Approval Workflows, reducing process time by 85% and allowing implementation within 2 days without IT support."
 
 Critical Rules for Relationships:
    - Must follow exact sequence: Persona -> Pain Point -> Feature
@@ -134,7 +152,7 @@ Please only response in JSON format:
 
 PLAYBOOK_COVARIATE_TEMPLATE = """
 Please carefully review the provided text and entities list. Extract detailed metadata for each entity based on its type.
-
+    
 Required metadata structure by entity type:
 
 1. Persona entities:
@@ -179,6 +197,7 @@ Requirements:
    - Use consistent terminology across all metadata
    - Make values quantifiable where possible
    - Avoid generic or vague descriptions
+   - For no-code platform context, focus on business impact and ease of implementation
 
 3. Format Rules:
    - String values must be properly formatted and meaningful
