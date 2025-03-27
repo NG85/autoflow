@@ -16,25 +16,35 @@ from app.rag.indices.knowledge_graph.extract_template import (
 logger = logging.getLogger(__name__)
 
 class ExtractPlaybookTriplet(dspy.Signature):
-    """Carefully analyze the provided text to identify sales related entities and their relationships.
+    """Carefully analyze the provided text to identify sales related entities and their relationships for Zai Lab's pharmaceutical products.
     
     Follow these Step-by-Step Analysis:
 
     1. Extract Key Entities:
       First, identify significant entities from the text:
-        * Personas (who): Organizations or departments that are potential customers
+        * Personas (who): Organizations or healthcare professionals that are potential customers/partners
           Examples:
-          - "Enterprise IT Department in Healthcare"
-          - "Bank's Security Operations Team"
-          - "Manufacturing Company's R&D Division"
-          - "Marketing Manager in Financial Services"
-        * Pain Points (what): Business challenges, problems, needs
-        * Features (how): Solutions, capabilities, functionalities
+          - "Oncologists in Tertiary Hospitals"
+          - "Immunology Department in Research Institutions"
+          - "Hospital Pharmacy Directors"
+          - "Regulatory Affairs Specialists"
+        * Pain Points (what): Treatment challenges, unmet medical needs, healthcare delivery problems
+          Examples:
+          - "Limited Treatment Options for Advanced NSCLC"
+          - "High Toxicity of Current Therapies"
+          - "Drug Resistance in Cancer Patients"
+          - "Prolonged Regulatory Approval Process"
+        * Features (how): Zai Lab's pharmaceutical solutions, technologies, and capabilities
+          Examples:
+          - "Targeted Therapy with Reduced Side Effects"
+          - "Companion Diagnostic Technology"
+          - "Accelerated Clinical Development Platform"
+          - "Novel Mechanism of Action in Immunotherapy"
 
       Important Classification Rules:
-        - Technical terms (e.g., "TiDB", "TiKV") should never be classified as personas
-        - Terms containing "system", "service", "tool", "platform" should be classified as features
-        - Terms containing "Department", "Team", "Manager", "Director" should be classified as personas
+        - Technical terms (e.g., "protein", "biomarker") should never be classified as personas
+        - Terms containing "therapy", "treatment", "platform", "technology" should be classified as features
+        - Terms containing "Specialist", "Physician", "Director", "Department" should be classified as personas
         - Generic terms without clear classification should be excluded
             
     2. Establish Relationships:
@@ -46,16 +56,16 @@ class ExtractPlaybookTriplet(dspy.Signature):
       A. "Persona experiences Pain Point":
         Must include these core elements in description:
         - Problem identification
-        - Impact on business operations (with metrics if possible)
+        - Impact on patient outcomes or healthcare delivery (with metrics if possible)
         - Frequency or pattern of occurrence
-        Example: "Enterprise IT Directors face system integration challenges weekly, resulting in 20% productivity loss."
+        Example: "Oncologists in Specialized Cancer Centers face treatment resistance in 40% of patients with advanced solid tumors, leading to disease progression within 6-12 months of initial response."
       
       B. "Pain Point is addressed by Feature":
         Must include these core elements in description:
         - Solution mechanism
-        - Effectiveness (with metrics if possible)
-        - Time to value
-        Example: "The integration challenges are resolved through automated integration, reducing integration time by 90% with immediate productivity gains after 2-day setup."
+        - Effectiveness (with clinical data if possible)
+        - Time to clinical benefit
+        Example: "The treatment resistance challenge is addressed through Dual-Targeting Immunotherapy, showing 65% reduction in resistance development in phase II clinical trials with benefits observed within 8 weeks of treatment initiation."
 
       Critical Rules for Relationships:
         - Must follow exact sequence: Persona -> Pain Point -> Feature
@@ -108,33 +118,33 @@ class ExtractPlaybookTriplet(dspy.Signature):
     knowledge: KnowledgeGraph = dspy.OutputField(desc="Graph representation of the sales knowledge extracted from the text.")
 
 class ExtractPlaybookCovariate(dspy.Signature):
-    """Please carefully review the provided text and entities list. Extract detailed metadata for each entity based on its type.
+    """Please carefully review the provided text and entities list. Extract detailed metadata for each entity based on its type within the pharmaceutical and healthcare context.
     
     Required metadata structure by entity type:
 
     1. Persona entities:
         {
             "topic": "persona",  # Must be first field and keep unchanged from input
-            "industry": "specific industry name",  # Required
-            "persona_type": "organization or department type",  # Required
+            "industry": "specific healthcare sector",  # Required (e.g., "oncology", "immunology", "hospital administration")
+            "persona_type": "healthcare professional or institution type",  # Required
             "role": {  # Optional object
-                "title": "specific job title",  # Required if role is present
-                "level": "c_level|middle_management|operational_staff"  # Required if role is present
+                "title": "specific medical or administrative title",  # Required if role is present
+                "level": "c_level|specialist|researcher|general_practitioner"  # Required if role is present
             }
         }
 
     2. Pain Point entities:
         {
             "topic": "pain_point",  # Must be first field and keep unchanged from input
-            "scenario": "specific context",  # Required
-            "impact": "quantifiable business impact",  # Required
+            "scenario": "specific clinical or healthcare context",  # Required
+            "impact": "quantifiable patient outcome or healthcare delivery impact",  # Required
             "severity": "Critical|High|Medium|Low"  # Optional
         }
         
     3. Feature entities:
         {
             "topic": "feature",  # Must be first field and keep unchanged from input
-            "benefits": ["specific business benefit 1", "benefit 2"],  # Required, must be array
+            "benefits": ["specific clinical benefit 1", "benefit 2"],  # Required, must be array
             "technical_details": {  # Optional
                 "key1": "value1",
                 "key2": "value2"
@@ -152,8 +162,9 @@ class ExtractPlaybookCovariate(dspy.Signature):
     2. Data Quality:
        - All values must be specific and verifiable in the source text
        - Use consistent terminology across all metadata
-       - Make values quantifiable where possible
+       - Make values quantifiable where possible (e.g., efficacy rates, survival improvements)
        - Avoid generic or vague descriptions
+       - For pharmaceutical context, focus on clinical outcomes, patient benefits, and therapeutic advantages
     
     3. Format Rules:
        - String values must be properly formatted and meaningful
