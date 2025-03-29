@@ -86,7 +86,7 @@ class IndexService:
     ) -> List[TransformComponent]:
         transformations = []
 
-        # 如果文档是CRM商机文档，则不进行切分
+        # 如果文档来源于CRM数据，则不进行切分
         if db_document.meta.get("category") == DocumentCategory.CRM:
             logger.info(f"Using SingleNodeParser for CRM document #{db_document.id}")
             return [SingleNodeParser()]

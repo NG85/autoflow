@@ -24,11 +24,12 @@ def get_column_comments_and_names(model_class) -> tuple:
 # 客户信息处理函数
 def format_account_info(account) -> List[str]:
     """动态处理客户信息，仅使用模型中定义的字段"""
-    content = []
-    content.append("\n## 客户信息")
-    
     if not account:
-        return content
+        return []
+    
+    content = []
+    account_name = getattr(account, "customer_name", None) or "未命名客户"
+    content.append(f"# 客户：{account_name}")
         
     # 获取客户模型的列注释和字段名
     column_comments, valid_columns = get_column_comments_and_names(type(account))
@@ -38,15 +39,13 @@ def format_account_info(account) -> List[str]:
     date_fields = {"last_follow_up", "last_deal_time", "allocation_time", "creation_time", 
                   "last_modification_time", "earliest_deal_date", "latest_deal_date", 
                   "person_in_charge_change_time"}
-    status_fields = {"allocation_status", "deal_status", "life_status", "lock_status", 
-                    "account_status"}
+    status_fields = {"allocation_status", "deal_status", "life_status", "lock_status", "account_status"}
     
     # 需要排除的字段
-    exclude_fields = {"id", "unique_id"}
+    exclude_fields = {"id", "unique_id", "customer_name"}
     
     # 优先显示的核心字段
-    priority_fields = {"customer_name", "customer_level", "industry", 
-                      "customer_source", "business_type", "customer_attribute"}
+    priority_fields = {"customer_level", "industry", "customer_source", "business_type", "customer_attribute"}
     
     # 先处理优先字段
     for field_name in priority_fields:
@@ -74,7 +73,7 @@ def format_account_info(account) -> List[str]:
         contact_info.append(f"**{display_name}**: {value}")
     
     if contact_info:
-        content.append("\n### 联系方式")
+        content.append("\n## 联系方式")
         content.extend(contact_info)
     
     # 处理日期字段
@@ -96,7 +95,7 @@ def format_account_info(account) -> List[str]:
         date_info.append(f"**{display_name}**: {formatted_date}")
     
     if date_info:
-        content.append("\n### 时间信息")
+        content.append("\n## 时间信息")
         content.extend(date_info)
     
     # 处理状态字段
@@ -113,13 +112,13 @@ def format_account_info(account) -> List[str]:
         status_info.append(f"**{display_name}**: {value}")
     
     if status_info:
-        content.append("\n### 状态信息")
+        content.append("\n## 状态信息")
         content.extend(status_info)
     
     # 处理备注信息
     if "remarks" in valid_columns and account.remarks:
         remarks_label = column_comments.get("remarks", "备注")
-        content.append(f"\n### {remarks_label}")
+        content.append(f"\n## {remarks_label}")
         content.append(account.remarks)
     
     # 处理其他未分类字段
@@ -143,166 +142,477 @@ def format_account_info(account) -> List[str]:
     
     return content
 
-def format_contacts_info(contacts: List[Any]) -> List[str]:
+def format_contact_info(contact) -> List[str]:
     """动态处理联系人信息，仅使用模型中定义的字段"""
-    if not contacts:
+    if not contact:
+        return []
+    
+    content = []
+    contact_name = getattr(contact, 'name', 'None') or '未知联系人'
+    content.append(f"# 联系人：{contact_name}")
+        
+    # 获取联系人模型的列注释和字段名
+    column_comments, valid_columns = get_column_comments_and_names(type(contact))
+    
+    # 分组字段
+    identity_fields = {"position", "position1", "department", "department1", "key_decision_maker", 
+                        "influence_level", "relationship_strength", "direct_superior", "direct_superior_id"}
+    contact_method_fields = {"mobile1", "mobile2", "mobile3", "mobile4", "mobile5", 
+                            "phone1", "phone2", "phone3", "phone4", "phone5", 
+                            "email", "wechat", "address"}
+    date_fields = {"birthday", "created_date", "last_modified_date"}
+    special_fields = {"remarks", "gender"}
+    
+    # 需要排除的字段
+    exclude_fields = {"id", "name", "customer_id", "unique_id", "direct_superior_id"}
+    
+    # 处理身份信息
+    # 优先使用position/department，如果为空则使用position1/department1
+    if "position" in valid_columns and getattr(contact, "position"):
+        position_label = column_comments.get("position", "职务")
+        content.append(f"**{position_label}**: {getattr(contact, 'position')}")
+    elif "position1" in valid_columns and getattr(contact, "position1"):
+        position_label = column_comments.get("position1", "职务1")
+        content.append(f"**{position_label}**: {getattr(contact, 'position1')}")
+        
+    if "department" in valid_columns and getattr(contact, "department"):
+        dept_label = column_comments.get("department", "部门")
+        content.append(f"**{dept_label}**: {getattr(contact, 'department')}")
+    elif "department1" in valid_columns and getattr(contact, "department1"):
+        dept_label = column_comments.get("department1", "部门1")
+        content.append(f"**{dept_label}**: {getattr(contact, 'department1')}")
+    
+    # 处理关键决策者
+    if "key_decision_maker" in valid_columns and getattr(contact, "key_decision_maker"):
+        kdm_value = getattr(contact, "key_decision_maker")
+        kdm_label = column_comments.get("key_decision_maker", "关键决策人")
+        kdm_formatted = '是' if str(kdm_value).lower() in ('是', 'yes', 'true', '1') else '否'
+        content.append(f"**{kdm_label}**: {kdm_formatted}")
+        
+    # 处理影响力和关系强度
+    if "influence_level" in valid_columns and getattr(contact, "influence_level"):
+        inf_label = column_comments.get("influence_level", "影响力层级")
+        content.append(f"**{inf_label}**: {getattr(contact, 'influence_level')}")
+        
+    if "relationship_strength" in valid_columns and getattr(contact, "relationship_strength"):
+        rel_label = column_comments.get("relationship_strength", "联系人与我方关系强度")
+        content.append(f"**{rel_label}**: {getattr(contact, 'relationship_strength')}")
+            
+    # 处理直属上级信息
+    if "direct_superior" in valid_columns and getattr(contact, "direct_superior"):
+        superior_label = column_comments.get("direct_superior", "直属上级")
+        content.append(f"**{superior_label}**: {getattr(contact, 'direct_superior')}")
+        
+    if "direct_superior_id" in valid_columns and getattr(contact, "direct_superior_id"):
+        superior_id_label = column_comments.get("direct_superior_id", "直属上级ID")
+        content.append(f"**{superior_id_label}**: {getattr(contact, 'direct_superior_id')}")
+    
+    
+    # 处理联系方式
+    contact_methods = []
+    for i in range(1, 6):
+        mobile_attr = f'mobile{i}'
+        if mobile_attr in valid_columns and getattr(contact, mobile_attr):
+            mobile_label = column_comments.get(mobile_attr, f'手机{i}')
+            contact_methods.append(f"{mobile_label}: {getattr(contact, mobile_attr)}")
+        
+        phone_attr = f'phone{i}'
+        if phone_attr in valid_columns and getattr(contact, phone_attr):
+            phone_label = column_comments.get(phone_attr, f'电话{i}')
+            contact_methods.append(f"{phone_label}: {getattr(contact, phone_attr)}")
+    
+    if "email" in valid_columns and getattr(contact, "email"):
+        email_label = column_comments.get("email", "邮件")
+        contact_methods.append(f"{email_label}: {contact.email}")
+    
+    if "wechat" in valid_columns and getattr(contact, "wechat"):
+        wechat_label = column_comments.get("wechat", "微信")
+        contact_methods.append(f"{wechat_label}: {contact.wechat}")
+        
+    if "address" in valid_columns and getattr(contact, "address"):
+        address_label = column_comments.get("address", "联系地址")
+        contact_methods.append(f"{address_label}: {contact.address}")
+    
+    if contact_methods:
+        content.append(f"**联系方式**:")
+        for method in contact_methods:
+            content.append(f"- {method}")
+            
+    # 处理性别
+    if "gender" in valid_columns and getattr(contact, "gender"):
+        gender_label = column_comments.get("gender", "性别")
+        content.append(f"**{gender_label}**: {getattr(contact, 'gender')}")
+        
+    # 处理日期字段
+    for field_name in date_fields:
+        if field_name not in valid_columns:
+            continue
+            
+        value = getattr(contact, field_name)
+        if value is None:
+            continue
+            
+        # 格式化日期
+        formatted_date = value
+        if isinstance(value, (datetime, date)):
+            formatted_date = value.strftime("%Y-%m-%d")
+            
+        display_name = column_comments.get(field_name, field_name.replace('_', ' ').title())
+        content.append(f"**{display_name}**: {formatted_date}")
+        
+    # 处理备注
+    if "remarks" in valid_columns and getattr(contact, "remarks"):
+        remarks_label = column_comments.get("remarks", "备注")
+        content.append(f"**{remarks_label}**: {getattr(contact, 'remarks')}")
+        
+    # 处理其他字段
+    all_special_fields = identity_fields.union(contact_method_fields).union(date_fields).union(special_fields).union(exclude_fields)
+    
+    # 找出重要字段先显示
+    important_fields = {"tidb_knowledge", "attitude", "status", "score", "mva", 
+                        "contributor", "committer", "reviewer"}
+    
+    for field_name in important_fields:
+        if field_name not in valid_columns or field_name in all_special_fields:
+            continue
+            
+        value = getattr(contact, field_name)
+        if value is None:
+            continue
+            
+        display_name = column_comments.get(field_name, field_name.replace('_', ' ').title())
+        content.append(f"**{display_name}**: {value}")
+        
+    # 添加已处理的重要字段到特殊字段集合
+    all_special_fields = all_special_fields.union(important_fields)
+    
+    # 处理其余所有字段
+    for field_name in valid_columns:
+        # 跳过已处理的字段
+        if field_name in all_special_fields:
+            continue
+            
+        value = getattr(contact, field_name)
+        if value is None:
+            continue
+            
+        display_name = column_comments.get(field_name, field_name.replace('_', ' ').title())
+        content.append(f"**{display_name}**: {value}")
+    
+    return content
+
+def format_opportunity_info(opportunity) -> List[str]:
+    """动态处理商机信息，仅使用模型中定义的字段"""
+    if not opportunity:
         return []
         
     content = []
-    content.append(f"\n## 联系人信息")
+    opp_name = getattr(opportunity, "opportunity_name", None) or "未命名商机"
+    content.append(f"# 商机：{opp_name}")
     
-    for contact in contacts:
-        # 获取联系人模型的列注释和字段名
-        column_comments, valid_columns = get_column_comments_and_names(type(contact))
+    # 获取商机模型的列注释和字段名
+    column_comments, valid_columns = get_column_comments_and_names(type(opportunity))
+    
+    field_groups = {
+        "basic": {
+            "title": "",  # 基本信息不需要标题
+            "fields": ["customer_name", "owner", "opportunity_stage", 
+                      "stage_status", "expected_closing_date", "expected_closing_quarter", 
+                      "expected_closing_month", "forecast_amount", "business_type", 
+                      "opportunity_type", "opportunity_number", "sales_process", 
+                      "opportunity_source", "lifecycle_status"]
+        },
+        "parent": {
+            "title": "",  # 父商机信息与基本信息合并展示
+            "fields": ["parent_opportunity", "parent_opportunity_id"]
+        },
+        "financial": {
+            "title": "## 财务信息",
+            "fields": ["estimated_tcv", "estimated_acv", "opportunity_order_amount"]
+        },
+        "amount_detail": {
+            "title": "### 金额明细",
+            "fields": ["license_amount", "ma_amount", "service_days_amount", "product_subscription_amount"]
+        },
+        "acv_detail": {
+            "title": "### ACV明细",
+            "fields": ["license_acv", "ma_acv", "service_acv", "subscription_acv"]
+        },
+        "forecast": {
+            "title": "### 当财年收入预测",
+            "fields": ["current_year_revenue_forecast", "current_year_license_forecast", 
+                       "current_year_ma_forecast", "current_year_service_forecast", 
+                       "current_year_subscription_forecast"]
+        },
+        "service": {
+            "title": "## 服务信息",
+            "fields": ["expected_service_start_date", "expected_service_end_date", 
+                       "expected_service_duration_months", "service_days_type", 
+                       "expected_launch_date"]
+        },
+        "technical": {
+            "title": "## 技术信息",
+            "fields": ["primary_database", "primary_database_percentage", "data_volume", 
+                       "data_volume_tb_gb", "current_database_resource", "current_database_pain_points"]
+        },
+        "solution": {
+            "title": "## 解决方案信息", 
+            "fields": ["estimated_total_project_nodes", "has_isv_joint_solution"]
+        },
+        "solution1": {
+            "title": "### 解决方案1",
+            "fields": ["solution_1_name", "solution_1_number", "solution_1_certified_partner", 
+                       "estimated_solution_1_nodes", "estimated_solution_1_percentage"]
+        },
+        "solution2": {
+            "title": "### 解决方案2",
+            "fields": ["solution_2_name", "solution_2_number", "solution_2_certified_partner", 
+                       "estimated_solution_2_nodes", "estimated_solution_2_percentage"]
+        },
+        "mutual_solution": {
+            "title": "### 互认证解决方案",
+            "fields": ["mutual_certified_solution_partner", "mutual_certified_solution_percentage"]
+        },
+        "competitor": {
+            "title": "## 竞争情况",
+            "fields": ["competitor_name", "competitor_info", "competitor_advantages"]
+        },
+        "risk": {
+            "title": "## 风险与状态评估",
+            "fields": ["customer_journey_percentage", "timing_risk", "operational_risk_assessment", 
+                       "is_key_deal", "is_slip_deal", "forecast_type", "lock_status"]
+        },
+        "partner": {
+            "title": "## 合作伙伴信息",
+            "fields": ["partner", "distributor", "alternative_distributor", "cloud_vendor", 
+                       "partner_cooperation_mode", "general_agent", "application_developer"]
+        },
+        "channel": {
+            "title": "## 渠道报备信息",
+            "fields": ["is_channel_filing_opportunity", "partner_opportunity_filing_id", 
+                       "filing_partner_name", "partner_filing_opportunity_owner", "is_double_credit"]
+        },
+        "process": {
+            "title": "## 项目流程信息",
+            "fields": ["bidding_method", "signing_type", "contract_signing_status", "quotation_status", 
+                       "order_status", "project_approval", "has_poc", "has_bid", "bid_result", "loss_reason"]
+        },
+        "system": {
+            "title": "## 系统信息",
+            "fields": ["creator", "create_time", "last_modifier", "last_modified_time", "last_followup_time"]
+        }
+    }
         
-        # 添加联系人名称作为标题
-        contact_name = getattr(contact, 'name', '未知联系人') if 'name' in valid_columns else '未知联系人'
-        content.append(f"\n### {contact_name}")
-        
-        # 分组字段
-        identity_fields = {"position", "position1", "department", "department1", "key_decision_maker", 
-                          "influence_level", "relationship_strength", "direct_superior", "direct_superior_id"}
-        contact_method_fields = {"mobile1", "mobile2", "mobile3", "mobile4", "mobile5", 
-                                "phone1", "phone2", "phone3", "phone4", "phone5", 
-                                "email", "wechat", "address"}
-        date_fields = {"birthday", "created_date", "last_modified_date"}
-        special_fields = {"remarks", "gender"}
-        
-        # 需要排除的字段
-        exclude_fields = {"id", "name", "customer_id", "customer_name", "unique_id"}
-        
-        # 处理身份信息
-        # 优先使用position/department，如果为空则使用position1/department1
-        if "position" in valid_columns and getattr(contact, "position"):
-            position_label = column_comments.get("position", "职务")
-            content.append(f"**{position_label}**: {getattr(contact, 'position')}")
-        elif "position1" in valid_columns and getattr(contact, "position1"):
-            position_label = column_comments.get("position1", "职务1")
-            content.append(f"**{position_label}**: {getattr(contact, 'position1')}")
+    # 详细信息字段（长文本）单独处理
+    detail_fields = {
+        "sales_log_details": "销售日志详情",
+        "call_high_notes": "Call High情况",
+        "customer_budget_status": "客户预算情况",
+        "todo_and_followup": "TODO与跟进事项",
+        "timeline_project_progress": "倒排时间表项目进展",
+        "countdown_next_plan": "下一步计划(Countdown)",
+        "countdown_bottleneck": "问题卡点(Countdown)",
+        "remarks": "备注"
+    }
+
+    # 需要排除的字段
+    exclude_fields = {"id", "unique_id", "opportunity_name", "customer_id", "parent_opportunity_id"}
+     
+    # 需要特殊处理的布尔字段 - 显示为"是/否"
+    boolean_fields = {
+        "is_key_deal", "is_slip_deal", "is_channel_filing_opportunity", 
+        "has_isv_joint_solution", "has_poc", "has_bid", "is_double_credit"
+    }
+    
+    # 需要特殊处理的百分比字段 - 自动添加%符号
+    percentage_fields = {
+        "primary_database_percentage", "customer_journey_percentage",
+        "estimated_solution_1_percentage", "estimated_solution_2_percentage",
+        "mutual_certified_solution_percentage"
+    }
+    
+    # 需要特殊处理的金额字段 - 格式化显示
+    currency_fields = {
+        "forecast_amount", "estimated_tcv", "estimated_acv", "opportunity_order_amount",
+        "license_amount", "ma_amount", "service_days_amount", "product_subscription_amount",
+        "license_acv", "ma_acv", "service_acv", "subscription_acv",
+        "current_year_revenue_forecast", "current_year_license_forecast", 
+        "current_year_ma_forecast", "current_year_service_forecast", 
+        "current_year_subscription_forecast"
+    }
+  
+    # 辅助函数：处理字段值的格式化
+    def format_field_value(field_name, value):
+        # 处理布尔值
+        if field_name in boolean_fields:
+            if str(value).lower() in ('true', '1', 'yes', '是', 't', 'y'):
+                return "是"
+            elif str(value).lower() in ('false', '0', 'no', '否', 'f', 'n'):
+                return "否"
+            return value
             
-        if "department" in valid_columns and getattr(contact, "department"):
-            dept_label = column_comments.get("department", "部门")
-            content.append(f"**{dept_label}**: {getattr(contact, 'department')}")
-        elif "department1" in valid_columns and getattr(contact, "department1"):
-            dept_label = column_comments.get("department1", "部门1")
-            content.append(f"**{dept_label}**: {getattr(contact, 'department1')}")
-        
-        # 处理关键决策者
-        if "key_decision_maker" in valid_columns and getattr(contact, "key_decision_maker"):
-            kdm_value = getattr(contact, "key_decision_maker")
-            kdm_label = column_comments.get("key_decision_maker", "关键决策人")
-            kdm_formatted = '是' if str(kdm_value).lower() in ('是', 'yes', 'true', '1') else '否'
-            content.append(f"**{kdm_label}**: {kdm_formatted}")
+        # 处理日期时间
+        if isinstance(value, datetime):
+            return value.strftime("%Y-%m-%d %H:%M")
+        elif isinstance(value, date):
+            return value.strftime("%Y-%m-%d")
             
-        # 处理影响力和关系强度
-        if "influence_level" in valid_columns and getattr(contact, "influence_level"):
-            inf_label = column_comments.get("influence_level", "影响力层级")
-            content.append(f"**{inf_label}**: {getattr(contact, 'influence_level')}")
+        # 处理百分比
+        if field_name in percentage_fields and value is not None:
+            # 如果值已经包含%，则不添加
+            if str(value).endswith('%'):
+                return value
+            return f"{value}%"
             
-        if "relationship_strength" in valid_columns and getattr(contact, "relationship_strength"):
-            rel_label = column_comments.get("relationship_strength", "联系人与我方关系强度")
-            content.append(f"**{rel_label}**: {getattr(contact, 'relationship_strength')}")
-             
-        # 处理直属上级信息
-        if "direct_superior" in valid_columns and getattr(contact, "direct_superior"):
-            superior_label = column_comments.get("direct_superior", "直属上级")
-            content.append(f"**{superior_label}**: {getattr(contact, 'direct_superior')}")
-            
-        if "direct_superior_id" in valid_columns and getattr(contact, "direct_superior_id"):
-            superior_id_label = column_comments.get("direct_superior_id", "直属上级ID")
-            content.append(f"**{superior_id_label}**: {getattr(contact, 'direct_superior_id')}")
-      
-      
-        # 处理联系方式
-        contact_methods = []
-        for i in range(1, 6):
-            mobile_attr = f'mobile{i}'
-            if mobile_attr in valid_columns and getattr(contact, mobile_attr):
-                mobile_label = column_comments.get(mobile_attr, f'手机{i}')
-                contact_methods.append(f"{mobile_label}: {getattr(contact, mobile_attr)}")
-            
-            phone_attr = f'phone{i}'
-            if phone_attr in valid_columns and getattr(contact, phone_attr):
-                phone_label = column_comments.get(phone_attr, f'电话{i}')
-                contact_methods.append(f"{phone_label}: {getattr(contact, phone_attr)}")
-        
-        if "email" in valid_columns and getattr(contact, "email"):
-            email_label = column_comments.get("email", "邮件")
-            contact_methods.append(f"{email_label}: {contact.email}")
-        
-        if "wechat" in valid_columns and getattr(contact, "wechat"):
-            wechat_label = column_comments.get("wechat", "微信")
-            contact_methods.append(f"{wechat_label}: {contact.wechat}")
-            
-        if "address" in valid_columns and getattr(contact, "address"):
-            address_label = column_comments.get("address", "联系地址")
-            contact_methods.append(f"{address_label}: {contact.address}")
-        
-        if contact_methods:
-            content.append(f"**联系方式**:")
-            for method in contact_methods:
-                content.append(f"- {method}")
+        # 处理货币金额
+        if field_name in currency_fields and value is not None:
+            try:
+                # 尝试将值转换为数字并格式化
+                num_value = float(value)
+                # 如果是整数，不显示小数位
+                if num_value.is_integer():
+                    return f"{int(num_value):,}"
+                # 否则保留两位小数
+                return f"{num_value:,.2f}"
+            except (ValueError, TypeError):
+                pass
                 
-        # 处理性别
-        if "gender" in valid_columns and getattr(contact, "gender"):
-            gender_label = column_comments.get("gender", "性别")
-            content.append(f"**{gender_label}**: {getattr(contact, 'gender')}")
+        # 默认返回原值
+        return value
+    
+    # 辅助函数：处理一组字段
+    def process_field_group(group_info, condition_field=None):
+        # 检查条件字段
+        if condition_field and (condition_field not in valid_columns or 
+                               not getattr(opportunity, condition_field, None)):
+            return []
             
-        # 处理日期字段
-        for field_name in date_fields:
-            if field_name not in valid_columns:
+        group_content = []
+        has_fields = False
+        
+        for field_name in group_info["fields"]:
+            if field_name not in valid_columns or field_name in exclude_fields:
                 continue
                 
-            value = getattr(contact, field_name)
+            value = getattr(opportunity, field_name, None)
             if value is None:
                 continue
                 
-            # 格式化日期
-            formatted_date = value
-            if isinstance(value, (datetime, date)):
-                formatted_date = value.strftime("%Y-%m-%d")
+            if not has_fields and group_info["title"]:
+                group_content.append(group_info["title"])
+                has_fields = True
                 
             display_name = column_comments.get(field_name, field_name.replace('_', ' ').title())
-            content.append(f"**{display_name}**: {formatted_date}")
+            formatted_value = format_field_value(field_name, value)
+            group_content.append(f"**{display_name}**: {formatted_value}")
             
-        # 处理备注
-        if "remarks" in valid_columns and getattr(contact, "remarks"):
-            remarks_label = column_comments.get("remarks", "备注")
-            content.append(f"**{remarks_label}**: {getattr(contact, 'remarks')}")
+        return group_content
+       
+    # 处理基本信息
+    content.extend(process_field_group(field_groups["basic"]))
+    
+    # 处理父商机信息
+    content.extend(process_field_group(field_groups["parent"]))
+    
+    # 处理财务信息
+    financial_content = []
+    financial_content.extend(process_field_group(field_groups["financial"]))
+    
+    # 只有当至少有一个金额明细字段有值时才显示金额明细
+    if any(getattr(opportunity, field, None) for field in field_groups["amount_detail"]["fields"] 
+          if field in valid_columns):
+        financial_content.extend(process_field_group(field_groups["amount_detail"]))
+        
+    # 只有当至少有一个ACV明细字段有值时才显示ACV明细
+    if any(getattr(opportunity, field, None) for field in field_groups["acv_detail"]["fields"] 
+          if field in valid_columns):
+        financial_content.extend(process_field_group(field_groups["acv_detail"]))
+        
+    # 只有当至少有一个收入预测字段有值时才显示收入预测
+    if any(getattr(opportunity, field, None) for field in field_groups["forecast"]["fields"] 
+          if field in valid_columns):
+        financial_content.extend(process_field_group(field_groups["forecast"]))
+        
+    # 只有当财务信息组有内容时，才将财务信息添加到主内容中
+    if len(financial_content) > 0:
+        content.extend(financial_content)
+    
+    # 处理服务信息
+    service_fields = field_groups["service"]["fields"]
+    if any(getattr(opportunity, field, None) for field in service_fields if field in valid_columns):
+        content.extend(process_field_group(field_groups["service"]))
+    
+    # 处理技术信息
+    tech_fields = field_groups["technical"]["fields"]
+    if any(getattr(opportunity, field, None) for field in tech_fields if field in valid_columns):
+        content.extend(process_field_group(field_groups["technical"]))
+    
+    # 处理解决方案信息
+    solution_content = []
+    # 检查是否有任何解决方案相关字段
+    all_solution_fields = (field_groups["solution"]["fields"] + 
+                         field_groups["solution1"]["fields"] + 
+                         field_groups["solution2"]["fields"] + 
+                         field_groups["mutual_solution"]["fields"])
+                         
+    if any(getattr(opportunity, field, None) for field in all_solution_fields if field in valid_columns):
+        solution_content.extend(process_field_group(field_groups["solution"]))
+        
+        # 处理解决方案1
+        if "solution_1_name" in valid_columns and getattr(opportunity, "solution_1_name", None):
+            solution_content.extend(process_field_group(field_groups["solution1"]))
             
-        # 处理其他字段
-        all_special_fields = identity_fields.union(contact_method_fields).union(date_fields).union(special_fields).union(exclude_fields)
-        
-        # 找出重要字段先显示
-        important_fields = {"tidb_knowledge", "attitude", "status", "score", "mva", 
-                           "contributor", "committer", "reviewer"}
-        
-        for field_name in important_fields:
-            if field_name not in valid_columns or field_name in all_special_fields:
-                continue
-                
-            value = getattr(contact, field_name)
-            if value is None:
-                continue
-                
-            display_name = column_comments.get(field_name, field_name.replace('_', ' ').title())
-            content.append(f"**{display_name}**: {value}")
+        # 处理解决方案2
+        if "solution_2_name" in valid_columns and getattr(opportunity, "solution_2_name", None):
+            solution_content.extend(process_field_group(field_groups["solution2"]))
             
-        # 添加已处理的重要字段到特殊字段集合
-        all_special_fields = all_special_fields.union(important_fields)
+        # 处理互认证解决方案
+        if "mutual_certified_solution_partner" in valid_columns and getattr(opportunity, "mutual_certified_solution_partner", None):
+            solution_content.extend(process_field_group(field_groups["mutual_solution"]))
+    
+    # 只有当解决方案信息有内容时，才将其添加到主内容中
+    if len(solution_content) > 0:
+        content.extend(solution_content)
+    
+    # 处理竞争情况
+    competitor_fields = field_groups["competitor"]["fields"]
+    if any(getattr(opportunity, field, None) for field in competitor_fields if field in valid_columns):
+        content.extend(process_field_group(field_groups["competitor"]))
+    
+    # 处理风险评估
+    risk_fields = field_groups["risk"]["fields"]
+    if any(getattr(opportunity, field, None) for field in risk_fields if field in valid_columns):
+        content.extend(process_field_group(field_groups["risk"]))
+    
+    # 处理合作伙伴信息
+    partner_fields = field_groups["partner"]["fields"]
+    if any(getattr(opportunity, field, None) for field in partner_fields if field in valid_columns):
+        content.extend(process_field_group(field_groups["partner"]))
+    
+    # 处理渠道报备信息 - 只有当is_channel_filing_opportunity为"是"时才显示
+    if "is_channel_filing_opportunity" in valid_columns and getattr(opportunity, "is_channel_filing_opportunity", None) == '是':
+        content.extend(process_field_group(field_groups["channel"], "is_channel_filing_opportunity"))
+    
+    # 处理项目流程信息
+    process_fields = field_groups["process"]["fields"]
+    if any(getattr(opportunity, field, None) for field in process_fields if field in valid_columns):
+        content.extend(process_field_group(field_groups["process"]))
+    
+    # 处理详细信息字段（长文本）
+    for field_name, display_title in detail_fields.items():
+        if field_name not in valid_columns:
+            continue
+            
+        value = getattr(opportunity, field_name, None)
+        if value is None or value == "":
+            continue
         
-        # 处理其余所有字段
-        for field_name in valid_columns:
-            # 跳过已处理的字段
-            if field_name in all_special_fields:
-                continue
-                
-            value = getattr(contact, field_name)
-            if value is None:
-                continue
-                
-            display_name = column_comments.get(field_name, field_name.replace('_', ' ').title())
-            content.append(f"**{display_name}**: {value}")
+        title = column_comments.get(field_name, display_title)
+        content.append(f"\n## {title}")
+        content.append(value)
+    
+    # 处理系统信息
+    content.extend(process_field_group(field_groups["system"]))
     
     return content
 

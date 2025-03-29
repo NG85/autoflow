@@ -512,6 +512,7 @@ class ChatFlow:
                     chat_history=chat_history,
                     question=user_question,
                     current_date=datetime.now().strftime("%Y-%m-%d"),
+                    has_filtered_data=self.retrieve_flow.filtered_objects_count > 0,
                 ),
             )
 
@@ -626,6 +627,7 @@ class ChatFlow:
                 current_date=datetime.now().strftime("%Y-%m-%d"),
                 graph_knowledges=knowledge_graph_context,
                 original_question=self.user_question,
+                has_filtered_data=self.retrieve_flow.filtered_objects_count > 0,
             )
             response_synthesizer = get_response_synthesizer(
                 llm=self._llm, text_qa_template=text_qa_template, streaming=True

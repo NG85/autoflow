@@ -23,12 +23,10 @@ from app.rag.retrievers.knowledge_graph.schema import (
 )
 from app.rag.retrievers.chunk.fusion_retriever import ChunkFusionRetriever
 from app.repositories import document_repo
-from app.rag.types import ChatMessageSate, CrmDataType
+from app.rag.types import ChatMessageSate
 from app.rag.chat.crm_authority import (
     CRMAuthority,
-    get_crm_type,
-    identify_crm_entity_type,
-    is_crm_category,
+    identify_crm_data_type,
 )
 
 dispatcher = get_dispatcher(__name__)
@@ -69,6 +67,7 @@ class RetrieveFlow:
             knowledge_bases or self.engine_config.get_knowledge_bases(self.db_session)
         )
         self.knowledge_base_ids = [kb.id for kb in self.knowledge_bases]
+        self.filtered_objects_count = 0
 
     def retrieve(self, user_question: str) -> List[NodeWithScore]:
         if self.engine_config.refine_question_with_kg:
@@ -127,12 +126,13 @@ class RetrieveFlow:
                         for entity in knowledge_graph.entities:
                             logger.debug(f"Retrieved entity before filtering: {entity}")
                             meta = getattr(entity, "meta", {}) or {}
-                            category = meta.get("category", "unknown")
+                            category = meta.get("crm_data_type", "unknown")
                             category_counts[category] = category_counts.get(category, 0) + 1
                         logger.debug(f"Entity categories before filtering: {category_counts}")
                     
-                    knowledge_graph = self.filter_knowledge_graph_by_authority(knowledge_graph, crm_authority)
-                
+                    knowledge_graph, filtered_count = self.filter_knowledge_graph_by_authority(knowledge_graph, crm_authority)
+                    logger.info(f"Filtered {filtered_count} unauthorized objects from knowledge graph")
+                    self.filtered_objects_count += filtered_count
                 # Convert the knowledge graph to context text
                 knowledge_graph_context = self._get_knowledge_graph_context(knowledge_graph)
                 yield (ChatMessageSate.KG_RETRIEVAL, "Organizing and processing knowledge graph information")
@@ -187,7 +187,8 @@ class RetrieveFlow:
 
         # Filter the nodes according to the CRM authority
         if crm_authority and not crm_authority.is_empty():
-            nodes = self.filter_chunks_by_authority(nodes, crm_authority)
+            nodes, filtered_count = self.filter_chunks_by_authority(nodes, crm_authority)
+            self.filtered_objects_count += filtered_count
         
         return nodes
                 
@@ -216,10 +217,11 @@ class RetrieveFlow:
         self,
         knowledge_graph: KnowledgeGraphRetrievalResult,
         crm_authority: CRMAuthority
-    ) -> KnowledgeGraphRetrievalResult:
+    ) -> Tuple[KnowledgeGraphRetrievalResult, int]:
         """Filter the knowledge graph results according to the CRM authority"""
+        count = 0
         if not crm_authority or crm_authority.is_empty():
-            return knowledge_graph
+            return knowledge_graph, count
             
         filtered_entities = []
         filtered_relationships = []
@@ -227,14 +229,12 @@ class RetrieveFlow:
         # Filter entities
         for entity in knowledge_graph.entities:
             is_authorized = True
-              
-            # Identify the CRM entity type and ID (only return the information of CRM type entities)
-            entity_type, entity_id = identify_crm_entity_type(entity)
-
             # Only process CRM related entities
+            entity_type, entity_id = identify_crm_data_type(entity)
             if entity_type and entity_id:
                 if not crm_authority.is_authorized(entity_type, entity_id):
                     is_authorized = False
+                    count += 1
                     logger.debug(f"Filtering out unauthorized {entity_type.value} entity: {entity_id}")
                
             # Retain non-CRM entities or entities with permission
@@ -244,39 +244,13 @@ class RetrieveFlow:
         # Filter relationships
         for rel in knowledge_graph.relationships:
             is_authorized = True
-            meta = getattr(rel, "meta", {}) or {}
-            
-            # Only check the relationships of CRM type
-            category = meta.get("category")
-            
             # Only check the CRM type relationships
-            if is_crm_category(category):
-                doc_id = meta.get("document_id")
-                if doc_id:
-                    # Get the document metadata to check the permission
-                    document = document_repo.get(self.db_session, doc_id)
-                    if document and document.meta:
-                        doc_meta = document.meta
-                        
-                        # Check the opportunity ID permission
-                        opportunity_id = doc_meta.get("unique_id") or doc_meta.get("opportunity_id")
-                        if opportunity_id and not crm_authority.is_authorized(CrmDataType.OPPORTUNITY, opportunity_id):
-                            is_authorized = False
-                        
-                        # Check the account ID permission
-                        if "account" in doc_meta and isinstance(doc_meta["account"], dict):
-                            account_id = doc_meta["account"].get("account_id") or doc_meta["account"].get("unique_id")
-                            if account_id and not crm_authority.is_authorized(CrmDataType.ACCOUNT, account_id):
-                                is_authorized = False
-                
-                # Check if the relationship metadata directly contains CRM ID
-                opportunity_id = meta.get("opportunity_id")
-                if opportunity_id and not crm_authority.is_authorized(CrmDataType.OPPORTUNITY, opportunity_id):
+            relationship_type, relationship_id = identify_crm_data_type(rel)
+            if relationship_type and relationship_id:
+                if not crm_authority.is_authorized(relationship_type, relationship_id):
                     is_authorized = False
-                    
-                account_id = meta.get("account_id")
-                if account_id and not crm_authority.is_authorized(CrmDataType.ACCOUNT, account_id):
-                    is_authorized = False
+                    count += 1
+                    logger.debug(f"Filtering out unauthorized {relationship_type.value} relationship: {relationship_id}")
             
             # Retain non-CRM relationships or relationships with permission
             if is_authorized:
@@ -290,87 +264,37 @@ class RetrieveFlow:
         logger.info(f"Applied CRM authority filter on knowledge graph: {len(filtered_entities)}/{len(knowledge_graph.entities)} entities, "
                     f"{len(filtered_relationships)}/{len(knowledge_graph.relationships)} relationships kept")
         
-        return result
+        return result, count
     
     
     def filter_chunks_by_authority(
         self,
         nodes: List[NodeWithScore],
         crm_authority: CRMAuthority
-    ) -> List[NodeWithScore]:
+    ) -> Tuple[List[NodeWithScore], int]:
         """Filter the document chunks results according to the CRM authority"""
         if not crm_authority or crm_authority.is_empty():
-            return nodes
+            return nodes, 0
             
         filtered_nodes = []
-        
+        count = 0
         for node in nodes:
             is_authorized = True
-        
             logger.debug(f"Filtering chunks by CRM authority: {crm_authority}, node: {node}")
             # Check the node metadata
             if hasattr(node, "metadata") and node.metadata:
                 logger.debug(f"Node metadata before filtering: {node.metadata}")
-                meta = node.metadata
-                
-                # Only process the documents with the CRM category mark
-                node_category = meta.get("category")
-                crm_type = get_crm_type(node_category)
-                
-                # Check the permission of the CRM type
-                if crm_type:
-                    id_field_map = {
-                        CrmDataType.CRM: ["unique_id", "opportunity_id", "account_id"],
-                        CrmDataType.OPPORTUNITY: ["opportunity_id", "unique_id"],
-                        CrmDataType.ACCOUNT: ["account_id"],
-                        CrmDataType.CONTACT: ["contact_id"],
-                        # TODO: Add more other CRM types
-                        # CrmDataType.ORDER: ["order_id"],
-                        # CrmDataType.CONTRACT: ["contract_id"],
-                        # CrmDataType.PAYMENTPLAN: ["payment_plan_id"]
-                    }
-                    
-                    # Check the ID field of the corresponding type
-                    if crm_type in id_field_map:
-                        # user has access if ANY ID is authorized
+                # Only process the documents with the CRM type mark
+                chunk_entity_type, chunk_entity_id = identify_crm_data_type(node, "metadata")
+                if chunk_entity_type and chunk_entity_id:
+                    if not crm_authority.is_authorized(chunk_entity_type, chunk_entity_id):
                         is_authorized = False
-                        for id_field in id_field_map[crm_type]:
-                            if id_field in meta and meta[id_field]:
-                                if crm_authority.is_authorized(crm_type, meta[id_field]):
-                                    is_authorized = True 
-                                    logger.debug(f"Authorized chunk with {crm_type.value} ID: {meta[id_field]}")
-                                    break
-                    
-                # Check the document metadata if it is still authorized
-                if is_authorized and "document_id" in meta:
-                    doc_id = meta["document_id"]
-                    document = document_repo.get(self.db_session, doc_id)
-                    
-                    if document and document.meta:
-                        doc_meta = document.meta
-                        
-                        # Check if the document belongs to the CRM category
-                        doc_category = doc_meta.get("category")
-                        if is_crm_category(doc_category):
-                            # First check account permission - if user has account permission,
-                            # they automatically have access to all opportunities under it
-                            account_permission = False
-                            if "account" in doc_meta and isinstance(doc_meta["account"], dict):
-                                account_id = doc_meta["account"].get("account_id") or doc_meta["account"].get("unique_id")
-                                if account_id and crm_authority.is_authorized(CrmDataType.ACCOUNT, account_id):
-                                    account_permission = True
-                                    logger.debug(f"Authorized chunk due to account permission: {account_id}")
-                            
-                            # If no account permission, check opportunity permission
-                            if not account_permission:
-                                opportunity_id = doc_meta.get("unique_id") or doc_meta.get("opportunity_id")
-                                if opportunity_id and not crm_authority.is_authorized(CrmDataType.OPPORTUNITY, opportunity_id):
-                                    is_authorized = False
-                                    logger.debug(f"Filtering out chunk from unauthorized document with opportunity ID: {opportunity_id}")
- 
-            # Retain non-CRM document chunks or document chunks with permission
+                        count += 1
+                        logger.debug(f"Filtering out unauthorized {chunk_entity_type.value} entity: {chunk_entity_id}")
+  
+            # Retain the node with permission
             if is_authorized:
                 filtered_nodes.append(node)
         
         logger.info(f"Applied CRM authority filter on document chunks: {len(filtered_nodes)}/{len(nodes)} chunks kept")
-        return filtered_nodes
+        return filtered_nodes, count

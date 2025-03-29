@@ -71,7 +71,6 @@ class ChatMessageSate(int, enum.Enum):
     
     
 class CrmDataType(str, enum.Enum):
-    CRM = "crm"
     ACCOUNT = "crm_account"
     OPPORTUNITY = "crm_opportunity"
     CONTACT = "crm_contact"

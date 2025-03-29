@@ -36,10 +36,6 @@ class CRMAuthority(BaseModel):
         Returns:
             Whether there is access permission
         """
-        if data_type == CrmDataType.CRM:
-            return data_id in self.authorized_items[CrmDataType.OPPORTUNITY] \
-                or data_id in self.authorized_items[CrmDataType.ACCOUNT]
-        
         if data_type not in self.authorized_items:
             return False
         return data_id in self.authorized_items[data_type]
@@ -51,6 +47,10 @@ class CRMAuthority(BaseModel):
     def is_authorized_account(self, account_id: str) -> bool:
         """Check if the customer ID has access permission"""
         return self.is_authorized(CrmDataType.ACCOUNT, account_id)
+    
+    def is_authorized_contact(self, contact_id: str) -> bool:
+        """Check if the contact ID has access permission"""
+        return self.is_authorized(CrmDataType.CONTACT, contact_id)
         
     def is_empty(self) -> bool:
         """Check if there is any authorized data"""
@@ -140,22 +140,22 @@ def get_user_crm_authority(user_id: Optional[UUID]) -> CRMAuthority:
         # Return empty authority when error, ensuring security
         return authority
 
-def identify_crm_entity_type(entity) -> tuple[Optional[str], Optional[str]]:
+def identify_crm_data_type(data_object, meta_or_metadata: str = "meta") -> tuple[Optional[str], Optional[str]]:
     """
-    Identify the CRM type and ID of the entity, only process the entity with the CRM category mark
+    Identify the CRM type and ID of the entity/relationship, only process the entity/relationship with the CRM type mark
     
     Args:
-        entity: Knowledge graph entity
+        data_object: Knowledge graph entity/relationship
         
     Returns:
         Tuple (entity type, entity ID) if not a CRM entity or cannot be identified, return (None, None)
     """
     # Get metadata
-    meta = getattr(entity, "meta", {}) or {}
+    meta = getattr(data_object, meta_or_metadata, {}) or {}
     
-    # First check if there is a category field and it is a CRM type
-    category = meta.get("category")
-    crm_type = get_crm_type(category)
+    # First check if there is a crm_data_type field and it is a CRM type
+    data_type = meta.get("crm_data_type")
+    crm_type = get_crm_type(data_type)
     
     # If not a CRM type, return None
     if not crm_type:
@@ -163,8 +163,7 @@ def identify_crm_entity_type(entity) -> tuple[Optional[str], Optional[str]]:
     
     # Get ID fields based on CRM type
     id_fields_map = {
-        CrmDataType.CRM: ["unique_id", "account_id", "opportunity_id", "contact_id"],
-        CrmDataType.ACCOUNT: ["account_id", "unique_id"],
+        CrmDataType.ACCOUNT: ["account_id", "customer_id", "unique_id"],
         CrmDataType.OPPORTUNITY: ["opportunity_id", "unique_id"],
         CrmDataType.CONTACT: ["contact_id", "unique_id"],
         # TODO: Add more other CRM types
@@ -182,23 +181,23 @@ def identify_crm_entity_type(entity) -> tuple[Optional[str], Optional[str]]:
     # No valid ID found
     return crm_type, None
 
-def is_crm_category(category: Any) -> bool:
-    """Check if the given category is a valid CRM type"""
-    if not category:
+def is_crm_data_type(crm_data_type: Any) -> bool:
+    """Check if the given crm_data_type is a valid CRM type"""
+    if not crm_data_type:
         return False
         
     try:
         # Check if it is one of the enum values
-        return any(category == data_type.value for data_type in CrmDataType)
+        return any(crm_data_type == data_type.value for data_type in CrmDataType)
     except (ValueError, TypeError):
         return False
 
-def get_crm_type(category: Any) -> Optional[CrmDataType]:
-    """Get the CRM type enum corresponding to the category"""
-    if not is_crm_category(category):
+def get_crm_type(crm_data_type: Any) -> Optional[CrmDataType]:
+    """Get the CRM type enum corresponding to the crm_data_type"""
+    if not is_crm_data_type(crm_data_type):
         return None
         
     try:
-        return CrmDataType(category)
+        return CrmDataType(crm_data_type)
     except (ValueError, TypeError):
         return None

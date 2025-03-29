@@ -16,6 +16,7 @@ from app.repositories.chunk import ChunkRepo
 from app.models.document import DocumentCategory
 from app.rag.knowledge_base.index_store import get_kb_tidb_graph_store
 from app.models.enums import GraphType
+from app.rag.types import CrmDataType
 
 logger = get_task_logger(__name__)
     
@@ -72,76 +73,122 @@ def build_crm_graph_index_for_document(
         session.commit()
                
     try:
-        opportunity_id = meta.get("unique_id")
-        if not opportunity_id:
-            logger.warning("Missing unique_id as opportunity_id in metadata, skipping graph construction")
+        # 获取CRM数据类型，确定是哪种实体类型的文档
+        crm_data_type = meta.get("crm_data_type")
+        if not crm_data_type:
+            logger.warning("Missing crm_data_type in metadata, unable to determine entity type")
             return
-               
+            
+        logger.info(f"Building graph for CRM entity type: {crm_data_type}")
+
         # 初始化CRM数据结构
-        opportunity_data = {"opportunity_id": opportunity_id}
-        account_data = None
-        contacts_data = []
+        primary_data = {}
+        secondary_data = {}
         
-        for key, value in meta.items():
-            # Filter out the contacts list, this will be handled separately
-            if key != "contacts" and value is not None:
-                opportunity_data[key] = value
-        
-        # 处理客户数据
-        account_data = meta.get("account")
-        if not account_data:
-            logger.warning("No account data found in metadata, relationships cannot be created")
-            return
-        
-        account_id = account_data.get("account_id")
-        if not account_id:
-            logger.warning("No account_id found in metadata, relationships cannot be created")
-            return
-            
-        # 处理联系人数据
-        contacts_list = meta.get("contacts", [])
-        if contacts_list and isinstance(contacts_list, list):
-            # 处理联系人列表
-            for contact in contacts_list:
-                if not isinstance(contact, dict):
-                    continue
-                    
-                # 确保联系人数据包含 account_id 以建立关系
-                if "account_id" not in contact and account_id:
-                    contact["account_id"] = account_id
-                    
-                # 确保联系人数据有ID
-                if "contact_id" not in contact:
-                    continue
-                    
-                contacts_data.append(contact)
-        # 处理单个联系人情况
-        elif meta.get("contact_id"):
-            contact_data = {"contact_id": meta.get("contact_id")}
-            # 提取所有contact_前缀字段
-            for key, value in meta.items():
-                if key.startswith("contact_") and key != "contact_id" and value is not None:
-                    contact_data[key] = value
-                    
-            # 确保联系人与客户关联
-            if "account_id" not in contact_data and account_id:
-                contact_data["account_id"] = account_id
+        opportunity_data = {}
+        account_data = {}
+        contact_data = {}
+         
+        # 根据不同的实体类型处理
+        if crm_data_type == CrmDataType.OPPORTUNITY:
+            # 获取商机ID
+            opportunity_id = meta.get("unique_id")
+            if not opportunity_id:
+                logger.warning("Missing unique_id as opportunity_id in metadata, skipping graph construction")
+                return
                 
-            contacts_data.append(contact_data)
+            # 构建商机数据
+            opportunity_data = {"opportunity_id": opportunity_id}
+            for key, value in meta.items():
+                if key not in ["crm_data_type"] and value is not None:
+                    opportunity_data[key] = value
             
-        # 数据验证
-        if not opportunity_data:
-            logger.warning("No valid opportunity data found, skipping graph construction")
-            return
+            # 如果商机有客户关联信息，创建一个简单的Account数据（从商机信息中提取）
+            if opportunity_data.get("customer_name"):
+               secondary_data = {
+                   "account_id": opportunity_data.get("customer_id"),
+                   "account_name": opportunity_data.get("customer_name"),
+                   "document_id": document_id,
+                   "chunk_id": chunk_id,
+                }
+                
+            primary_data = opportunity_data
+            logger.info(f"Creating graph for opportunity {opportunity_id} with account {opportunity_data.get('customer_name')}")
+           
+        elif crm_data_type == CrmDataType.ACCOUNT:
+            # 获取客户ID
+            account_id = meta.get("unique_id")
+            if not account_id:
+                logger.warning("Missing unique_id as account_id in metadata, skipping graph construction")
+                return
+                
+            # 构建客户数据
+            account_data = {"account_id": account_id}
+            for key, value in meta.items():
+                if key not in ["crm_data_type"] and value is not None:
+                    account_data[key] = value
             
-        logger.info(f"Creating graph for opportunity {opportunity_id} with {len(contacts_data)} contacts")
-                   
+            # 构建一个简单的Account数据（从客户信息中提取）
+            secondary_data = {
+                "account_id": account_id,
+                "account_name": account_data.get("customer_name") or account_data.get("account_name"),
+                "document_id": document_id,
+                "chunk_id": chunk_id,
+            }
+            
+            primary_data = account_data
+            logger.info(f"Creating graph for account {account_id}")
+
+        elif crm_data_type == CrmDataType.CONTACT:
+            # 获取联系人ID
+            contact_id = meta.get("unique_id")
+            if not contact_id:
+                logger.warning("Missing unique_id as contact_id in metadata, skipping graph construction")
+                return
+                
+            # 构建联系人数据
+            contact_data = {"contact_id": contact_id}
+            for key, value in meta.items():
+                if key not in ["crm_data_type"] and value is not None:
+                    contact_data[key] = value
+            
+            customer_id = contact_data.get("customer_id") or contact_data.get("account_id")
+            customer_name = contact_data.get("customer_name")
+
+            # 如果没有客户ID但有客户名称，使用客户名称作为ID
+            if not customer_id and customer_name:
+                customer_id = customer_name
+                contact_data["customer_id"] = customer_id
+
+            # 如果联系人有客户信息，创建一个简单的Account数据（从联系人信息中提取）
+            if customer_name:
+                secondary_data = {
+                    "account_id": customer_id or customer_name,
+                    "account_name": customer_name,
+                    "document_id": document_id,
+                    "chunk_id": chunk_id,
+                }
+            
+            primary_data = contact_data            
+            logger.info(f"Creating graph for contact {contact_id} with customer {customer_name}")
+            
+        else:
+            logger.warning(f"Unknown crm_data_type: {crm_data_type}, skipping graph construction")
+            return          
+   
+        # 数据验证 - 确保存在有效的实体数据
+        if not primary_data:
+            logger.warning("No valid CRM entity data found, skipping graph construction")
+            return             
         # 2. 创建实体、关系
         builder = CRMKnowledgeGraphBuilder()
+        
+        logger.debug(f"primary_data: {primary_data}")
+        logger.debug(f"secondary_data: {secondary_data}")
         entities_data, relationships_data = builder.build_graph_from_document_data(
-            opportunity_data=opportunity_data,
-            account_data=account_data,
-            contacts_data=contacts_data,
+            crm_data_type=crm_data_type,
+            primary_data=primary_data,
+            secondary_data=secondary_data,
             document_id=document_id,
             chunk_id=chunk_id,
             meta=meta
@@ -149,11 +196,15 @@ def build_crm_graph_index_for_document(
                   
         # 3. 创建 DataFrame
         entities_df = pd.DataFrame(entities_data)
-        relationships_df = pd.DataFrame(relationships_data)
+        if entities_df.empty:
+            logger.warning(f"No entity data generated for CRM document #{document_id}, skipping graph construction")
+            return
         
+        relationships_df = pd.DataFrame(relationships_data)
+        logger.debug(f"entities_df: {entities_df}")
+        logger.debug(f"relationships_df: {relationships_df}")
         # 4. 保存实体和关系
-        if not entities_df.empty and not relationships_df.empty:
-            graph_store.save(chunk.id, entities_df, relationships_df)
+        graph_store.save(chunk.id, entities_df, relationships_df)
                         
         with Session(engine) as session:
             chunk.crm_index_status = CrmKgIndexStatus.COMPLETED

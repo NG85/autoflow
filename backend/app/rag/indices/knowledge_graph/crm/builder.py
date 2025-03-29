@@ -14,214 +14,240 @@ class CRMKnowledgeGraphBuilder:
            
     def create_account_entity(self, account_data: Dict) -> AccountEntity:
         """Create account entity."""
-        account_name = account_data.get("account_name")
-        industry = account_data.get("industry", "")
-        customer_level = account_data.get("customer_level", "")
+        account_name = account_data.get("account_name") or account_data.get("customer_name")
         return AccountEntity(
             id=None,
             name=account_name,
-            description=f"{account_name}是我们在{industry}行业中的{customer_level}客户",
+            description=f"客户{account_name}",
+            metadata=account_data
+        )
+        
+    def create_account_detail_entity(self, account_data: Dict) -> AccountEntity:
+        """Create account detail entity."""
+        account_name = account_data.get("account_name") or account_data.get("customer_name")
+        return AccountEntity(
+            id=None,
+            name=account_name,
+            description=f"关于客户{account_name}的明细数据，包括客户行业、负责人、合作状态等",
             metadata=account_data
         )
         
     def create_contact_entity(self, contact_data: Dict) -> ContactEntity:
         """Create contact entity."""
-        contact_name = contact_data.get("contact_name")
-        position = contact_data.get("position", "未知")
-        department = contact_data.get("department", "未知")
+        contact_name = contact_data.get("contact_name") or contact_data.get("name")
         return ContactEntity(
             id=None,
             name=contact_name,
-            description=f"联系人{contact_name}的岗位是{position}，所在部门{department}",
+            description=f"联系人{contact_name}",
+            metadata=contact_data
+        )
+        
+    def create_contact_detail_entity(self, contact_data: Dict) -> ContactEntity:
+        """Create contact detail entity."""
+        contact_name = contact_data.get("contact_name") or contact_data.get("name")
+        return ContactEntity(
+            id=None,
+            name=contact_name,
+            description=f"关于联系人{contact_name}的明细数据，包括联系方式、所属部门、职位等",
             metadata=contact_data
         )
            
     def create_opportunity_entity(self, opportunity_data: Dict) -> OpportunityEntity:
         """Create opportunity entity."""
         opportunity_name = opportunity_data.get("opportunity_name")
-        opportunity_stage = opportunity_data.get("opportunity_stage", "未知")
-        owner = opportunity_data.get("owner", "未知")
         return OpportunityEntity(
             id=None,
             name=opportunity_name,
-            description=f"{opportunity_name}的商机阶段是{opportunity_stage}，负责人是{owner}",
+            description=f"商机{opportunity_name}",
             metadata=opportunity_data
         )
- 
+    
+    def create_opportunity_detail_entity(self, opportunity_data: Dict) -> OpportunityEntity:
+        """Create opportunity detail entity."""
+        opportunity_name = opportunity_data.get("opportunity_name")
+        return OpportunityEntity(
+            id=None,
+            name=opportunity_name,
+            description=f"关于商机{opportunity_name}的明细数据，包括商机类型、商机阶段、服务类型、商机金额等",
+            metadata=opportunity_data
+        )
+    
     def build_graph_from_document_data(
         self,
-        opportunity_data: Dict[str, Any] = None,
-        account_data: Dict[str, Any] = None, 
-        contacts_data: List[Dict[str, Any]] = None,
+        crm_data_type: CrmDataType,
+        primary_data: Dict[str, Any],
+        secondary_data: Dict[str, Any] = None,
         document_id: str = None,
         chunk_id: str = None,
         meta: Dict[str, Any] = None
     ) -> tuple[List[Dict], List[Dict]]:
-        """
-        Build CRM knowledge graph from document data
-        
-        Args:
-            opportunity_data: Opportunity data
-            account_data: Account data
-            contacts_data: List of contact data
-            document_id: Document ID
-            chunk_id: Document chunk ID
-            meta: Metadata
-            
-        Returns:
-            (entities_data, relationships_data): Entity and Relationship data
-        """
+        """Build CRM knowledge graph from document data"""
+        # 初始化实体和关系列表
         entities_data = []
         relationships_data = []
         
-        if not meta:
-            meta = {}
-        
-        # 添加商机实体
-        if opportunity_data:
-            opportunity_entity = self.create_opportunity_entity(opportunity_data)
-            entities_data.append({
-                "name": opportunity_entity.name,
-                "description": opportunity_entity.description,
-                "meta": opportunity_entity.metadata,
-                "graph_type": GraphType.crm
-            })
-            
-        # 添加客户实体
-        if account_data:
-            account_entity = self.create_account_entity(account_data)
-            entities_data.append({
-                "name": account_entity.name,
-                "description": account_entity.description,
-                "meta": account_entity.metadata,
-                "graph_type": GraphType.crm
-            })
-            
-        # 处理联系人数据
-        if contacts_data:
-            # 创建联系人ID到联系人数据的映射
-            contact_id_to_data = {}
-            for contact in contacts_data:
-                if "contact_id" in contact and contact["contact_id"]:
-                    contact_id_to_data[contact["contact_id"]] = contact
-            
-            # 已处理的联系人ID集合，避免重复处理
-            processed_contact_ids = set()
-            # 存储联系人ID到实体的映射
-            contact_entities_map = {}
-            
-            # 递归处理联系人及其上级链
-            def process_contact_and_superiors(contact_id):
-                # 如果已经处理过这个联系人，则直接返回
-                if contact_id in processed_contact_ids:
-                    return contact_entities_map.get(contact_id)
-                
-                # 如果没有这个联系人的数据，则返回None
-                if contact_id not in contact_id_to_data:
-                    return None
-                
-                # 标记为已处理
-                processed_contact_ids.add(contact_id)
-                
-                contact_data = contact_id_to_data[contact_id]
-                
-                # 先处理上级（如果有）
-                superior_entity = None
-                if "direct_superior_id" in contact_data and contact_data["direct_superior_id"]:
-                    superior_id = contact_data["direct_superior_id"]
-                    # 递归处理上级
-                    superior_entity = process_contact_and_superiors(superior_id)
-                
-                # 创建当前联系人实体
-                contact_entity = self.create_contact_entity(contact_data)
-                if contact_entity:
-                    entities_data.append({
-                        "name": contact_entity.name,
-                        "description": contact_entity.description,
-                        "meta": contact_entity.metadata,
-                        "graph_type": GraphType.crm
-                    })
-                    
-                    # 存储联系人实体映射
-                    contact_entities_map[contact_id] = contact_entity
-                    
-                    # 如果有上级，建立关系
-                    if superior_entity:
-                        relationships_data.append({
-                            "source_entity": contact_entity,
-                            "target_entity": superior_entity,
-                            "source_entity_description": contact_entity,
-                            "target_entity_description": superior_entity,
-                            "relationship_desc": f"联系人{contact_entity}的直属上级是{superior_entity}",
-                            "meta": {
-                                **meta,
-                                "document_id": document_id,
-                                "chunk_id": chunk_id,
-                                "relation_type": "reports_to", 
-                                "category": CrmDataType.CONTACT,
-                                "source_type": CrmDataType.CONTACT,
-                                "target_type": CrmDataType.CONTACT
-                            },
-                            "graph_type": GraphType.crm
-                        })
-                
-                return contact_entity
-            
-            # 处理所有联系人
-            for contact in contacts_data:
-                if "contact_id" in contact and contact["contact_id"]:
-                    process_contact_and_superiors(contact["contact_id"])
-        
-        # 添加客户与商机的关系
-        if account_data and opportunity_data:
-            opportunity_entity = opportunity_data.get("opportunity_name", f"商机 {opportunity_data.get('opportunity_id')}")
-            account_entity = account_data.get("account_name", f"客户 {account_data.get('account_id')}")
-            
+        if crm_data_type == CrmDataType.ACCOUNT:
+            # 创建客户实体、客户详情实体
+            account_entity = self.create_account_entity(secondary_data)
+            account_detail_entity = self.create_account_detail_entity(primary_data)
+            entities_data.extend([
+                {
+                    "name": account_entity.name,
+                    "description": account_entity.description,
+                    "meta": account_entity.metadata,
+                    "graph_type": GraphType.crm
+                },
+                {
+                    "name": account_detail_entity.name,
+                    "description": account_detail_entity.description,
+                    "meta": account_detail_entity.metadata,
+                    "graph_type": GraphType.crm
+                }
+            ])
+            # 创建客户关系
             relationships_data.append({
-                "source_entity": account_entity,
-                "target_entity": opportunity_entity,
-                "source_entity_description": account_entity,
-                "target_entity_description": opportunity_entity,
-                "relationship_desc": f"客户{account_entity}的商机包括{opportunity_entity}",
+                "source_entity": account_entity.name,
+                "target_entity": account_detail_entity.name,
+                "source_entity_description": account_entity.description,
+                "target_entity_description": account_detail_entity.description,
+                "relationship_desc": f"客户{account_entity.name}包含更多详细信息",
                 "meta": {
                     **meta,
                     "document_id": document_id,
                     "chunk_id": chunk_id,
-                    "relation_type": "has_opportunity",
-                    "category": CrmDataType.OPPORTUNITY,
+                    "relation_type": "HAS_DETAIL",
+                    "crm_data_type": crm_data_type,
                     "source_type": CrmDataType.ACCOUNT,
-                    "target_type": CrmDataType.OPPORTUNITY,
-                    "opportunity_id": opportunity_data.get("opportunity_id", ""),
-                    "account_id": account_data.get("account_id", "")
-                },
-                "graph_type": GraphType.crm
+                    "target_type": CrmDataType.ACCOUNT,
+                    "unique_id": account_entity.metadata.get("unique_id") or account_entity.metadata.get("account_id")
+                }
             })
-        
-        # 添加客户与联系人的关系
-        if account_data and contacts_data:
-            account_entity = account_data.get("account_name", f"客户 {account_data.get('account_id')}")
-            
-            for contact in contacts_data:
-                contact_entity = contact.get("contact_name", f"联系人 {contact.get('contact_id')}")
-                
-                relationships_data.append({
-                    "source_entity": account_entity,
-                    "target_entity": contact_entity,
-                    "source_entity_description": account_entity,
-                    "target_entity_description": contact_entity,
-                    "relationship_desc": f"客户{account_entity}的联系人之一是{contact_entity}",
+        elif crm_data_type == CrmDataType.CONTACT:
+            # 创建联系人实体、联系人详情实体
+            contact_entity = self.create_contact_entity(primary_data)
+            contact_detail_entity = self.create_contact_detail_entity(primary_data)
+            entities_data.extend([
+                {
+                    "name": contact_entity.name,
+                    "description": contact_entity.description,
+                    "meta": contact_entity.metadata,
+                    "graph_type": GraphType.crm
+                },
+                {
+                    "name": contact_detail_entity.name,
+                    "description": contact_detail_entity.description,
+                    "meta": contact_detail_entity.metadata,
+                    "graph_type": GraphType.crm
+                }
+            ])
+            # 创建联系人关系
+            relationships_data.append({
+                "source_entity": contact_entity.name,
+                "target_entity": contact_detail_entity.name,
+                "source_entity_description": contact_entity.description,
+                "target_entity_description": contact_detail_entity.description,
+                "relationship_desc": f"联系人{contact_entity.name}包含更多详细信息",
                     "meta": {
                         **meta,
                         "document_id": document_id,
                         "chunk_id": chunk_id,
-                        "relation_type": "has_contact",
-                        "category": CrmDataType.ACCOUNT,
-                        "source_type": CrmDataType.ACCOUNT,
+                        "relation_type": "HAS_DETAIL",
+                        "crm_data_type": crm_data_type,
+                        "source_type": CrmDataType.CONTACT,
                         "target_type": CrmDataType.CONTACT,
-                        "contact_id": contact.get("contact_id", ""),
-                        "account_id": account_data.get("account_id", "")
-                    },
+                        "unique_id": contact_entity.metadata.get("unique_id") or contact_entity.metadata.get("contact_id")
+                }
+            })
+            # 如果客户实体存在，创建客户实体、联系人-客户关系
+            if secondary_data:
+                account_entity = self.create_account_entity(secondary_data) 
+                entities_data.append({
+                    "name": account_entity.name,
+                    "description": account_entity.description,
+                    "meta": account_entity.metadata,
                     "graph_type": GraphType.crm
                 })
+                relationships_data.append({
+                    "source_entity": contact_entity.name,
+                    "target_entity": account_entity.name,
+                    "source_entity_description": contact_entity.description,
+                    "target_entity_description": account_entity.description,
+                    "relationship_desc": f"联系人{contact_entity.name}属于客户{account_entity.name}",
+                    "meta": {
+                        **meta,
+                        "document_id": document_id,
+                        "chunk_id": chunk_id,
+                        "relation_type": "BELONGS_TO",
+                        "crm_data_type": crm_data_type,
+                        "source_type": CrmDataType.CONTACT,
+                        "target_type": CrmDataType.ACCOUNT,
+                        "unique_id": contact_entity.metadata.get("unique_id") or contact_entity.metadata.get("contact_id")
+                    }
+                })
                 
+        elif crm_data_type == CrmDataType.OPPORTUNITY:
+            # 创建商机实体、商机详情实体
+            opportunity_entity = self.create_opportunity_entity(primary_data)
+            opportunity_detail_entity = self.create_opportunity_detail_entity(primary_data)
+            entities_data.extend([
+                {
+                    "name": opportunity_entity.name,
+                    "description": opportunity_entity.description,
+                    "meta": opportunity_entity.metadata,
+                    "graph_type": GraphType.crm
+                },
+                {
+                    "name": opportunity_detail_entity.name,
+                    "description": opportunity_detail_entity.description,
+                    "meta": opportunity_detail_entity.metadata,
+                    "graph_type": GraphType.crm
+                }
+            ])
+                
+            relationships_data.append({
+                    "source_entity": opportunity_entity.name,
+                    "target_entity": opportunity_detail_entity.name,
+                    "source_entity_description": opportunity_entity.description,
+                    "target_entity_description": opportunity_detail_entity.description,
+                    "relationship_desc": f"商机{opportunity_entity.name}包含更多详细信息",
+                    "meta": {
+                        **meta,
+                        "document_id": document_id,
+                        "chunk_id": chunk_id,
+                        "relation_type": "HAS_DETAIL",
+                        "crm_data_type": crm_data_type,
+                        "source_type": CrmDataType.OPPORTUNITY,
+                        "target_type": CrmDataType.OPPORTUNITY,
+                        "unique_id": opportunity_entity.metadata.get("unique_id") or opportunity_entity.metadata.get("opportunity_id")
+                    }
+                }
+            )
+            
+            # 如果客户实体存在，创建客户实体、商机-客户关系
+            if secondary_data:
+                account_entity = self.create_account_entity(secondary_data)
+                entities_data.append({
+                    "name": account_entity.name,
+                    "description": account_entity.description,
+                    "meta": account_entity.metadata,
+                    "graph_type": GraphType.crm
+                })
+                relationships_data.append({
+                    "source_entity": opportunity_entity.name,
+                    "target_entity": account_entity.name,
+                    "source_entity_description": opportunity_entity.description,
+                    "target_entity_description": account_entity.description,
+                    "relationship_desc": f"商机{opportunity_entity.name}属于客户{account_entity.name}",
+                    "meta": {
+                        **meta,
+                        "document_id": document_id,
+                        "chunk_id": chunk_id,
+                        "relation_type": "BELONGS_TO",
+                        "crm_data_type": crm_data_type,
+                        "source_type": CrmDataType.OPPORTUNITY,
+                        "target_type": CrmDataType.ACCOUNT,
+                        "unique_id": opportunity_entity.metadata.get("unique_id") or opportunity_entity.metadata.get("opportunity_id")
+                    }
+                })
+        
         return entities_data, relationships_data

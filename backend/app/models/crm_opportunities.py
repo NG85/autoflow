@@ -203,11 +203,3 @@ class CRMOpportunity(SQLModel, table=True):
             "viewonly": True
         }
     )
-    
-    updates: List["CRMOpportunityUpdate"] = Relationship(
-        sa_relationship_kwargs={
-            "primaryjoin": "and_(CRMOpportunityUpdate.opportunity_id==cast(CRMOpportunity.unique_id, String))",
-            "foreign_keys": "[CRMOpportunityUpdate.opportunity_id]",
-            "viewonly": True
-        }
-    )

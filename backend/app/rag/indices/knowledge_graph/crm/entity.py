@@ -6,23 +6,23 @@ from app.rag.chat.crm_authority import CrmDataType
 class CRMEntityBase(Entity):
     """Base class for CRM entities"""
     
-    CATEGORY: ClassVar = None  # Will be overridden by subclasses
+    CRM_DATA_TYPE: ClassVar = None  # Will be overridden by subclasses
     
     @model_validator(mode='after')
     def ensure_category(self):
-        if isinstance(self.metadata, dict) and self.CATEGORY:
+        if isinstance(self.metadata, dict) and self.CRM_DATA_TYPE:
             self.metadata = dict(self.metadata)
-            self.metadata["category"] = self.CATEGORY
+            self.metadata["crm_data_type"] = self.CRM_DATA_TYPE
         return self
 
 class AccountEntity(CRMEntityBase):
     """Entity representing a CRM account"""
-    CATEGORY = CrmDataType.ACCOUNT
+    CRM_DATA_TYPE = CrmDataType.ACCOUNT
     
 class ContactEntity(CRMEntityBase):
     """Entity representing a CRM contact"""
-    CATEGORY = CrmDataType.CONTACT
+    CRM_DATA_TYPE = CrmDataType.CONTACT
 
 class OpportunityEntity(CRMEntityBase):
     """Entity representing a CRM opportunity"""
-    CATEGORY = CrmDataType.OPPORTUNITY
+    CRM_DATA_TYPE = CrmDataType.OPPORTUNITY
