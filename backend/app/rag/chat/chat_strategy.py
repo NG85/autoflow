@@ -1,29 +1,19 @@
-from abc import ABC, abstractmethod
-from enum import Enum
-from typing import Generator
+from typing import Any, Generator
+from app.rag.chat.stream_protocol import ChatEvent
 
-from app.rag.chat.chat_flow import ChatFlow
+class BaseChatStrategy:
+    def __init__(self, chat_flow: Any):
+        self.chat_flow = chat_flow
 
-
-class ChatFlowType(str, Enum):
-    DEFAULT = "default"
-    CLIENT_VISIT_GUIDE = "client_visit_guide"
-
-class ChatFlowStrategy(ABC):
-    @abstractmethod
-    def execute(self) -> Generator:
+    def execute(self) -> Generator[ChatEvent, None, None]:
+        raise NotImplementedError
+    
+class DefaultChatStrategy(BaseChatStrategy):
+    def execute(self) -> Generator[ChatEvent, None, None]:
+        # Implement default chat strategy
         pass
 
-class DefaultFlowStrategy(ChatFlowStrategy):
-    def __init__(self, chat_flow: ChatFlow):
-        self.chat_flow = chat_flow
-        
-    def execute(self):
-        yield from self.chat_flow._default_chat_flow()
-
-class ClientVisitGuideStrategy(ChatFlowStrategy):
-    def __init__(self, chat_flow: ChatFlow):
-        self.chat_flow = chat_flow
-        
-    def execute(self):
-        yield from self.chat_flow._client_visit_guide_flow()
+class ClientVisitGuideStrategy(BaseChatStrategy):
+    def execute(self) -> Generator[ChatEvent, None, None]:
+        # Implement client visit guide strategy
+        pass

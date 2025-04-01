@@ -78,3 +78,8 @@ class CrmDataType(str, enum.Enum):
     # ORDER = "crm_order"
     # CONTRACT = "crm_contract"
     # PAYMENTPLAN = "crm_payment_plan"
+
+
+class ChatFlowType(str, enum.Enum):
+    DEFAULT = "default"
+    CLIENT_VISIT_GUIDE = "client_visit_guide"

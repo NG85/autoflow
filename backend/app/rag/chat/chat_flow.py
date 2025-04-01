@@ -37,11 +37,8 @@ from app.utils.jinja2 import get_prompt_by_jinja2_template
 from app.utils.tracing import LangfuseContextManager
 from app.rag import default_prompt
 from app.rag.chat.crm_authority import CRMAuthority, get_user_crm_authority
-from app.rag.chat.chat_strategy import(
-    ChatFlowType,
-    ClientVisitGuideStrategy,
-    DefaultFlowStrategy
-)
+from app.rag.types import ChatFlowType
+from app.rag.chat.chat_strategy import BaseChatStrategy, ClientVisitGuideStrategy, DefaultChatStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +65,8 @@ class ChatFlow:
         engine_name: str = "default",
         chat_id: Optional[UUID] = None,
         chat_flow_type: ChatFlowType = ChatFlowType.DEFAULT,
-        cvg_report: Optional[str] = None,
+        cvg_report: Optional[List[str]] = None,
+        save_only: bool = False,
     ) -> None:
         self.chat_id = chat_id
         self.db_session = db_session
@@ -78,6 +76,7 @@ class ChatFlow:
         self.origin = origin
         self.chat_flow_type = chat_flow_type
         self.cvg_report = cvg_report
+        self.save_only = save_only
         # Load chat engine and chat session.
         self.user_question, self.chat_history = parse_chat_messages(chat_messages)
         
@@ -188,19 +187,36 @@ class ChatFlow:
             )
             self._retrieve_flow_initialized = True
         
-    def _select_strategy(self):
-        if self.chat_flow_type == ChatFlowType.CLIENT_VISIT_GUIDE:
-            return ClientVisitGuideStrategy(self)
-        return DefaultFlowStrategy(self)
+    def _select_strategy(self) -> BaseChatStrategy:
+        strategy_map = {
+            ChatFlowType.DEFAULT: DefaultChatStrategy,
+            ChatFlowType.CLIENT_VISIT_GUIDE: ClientVisitGuideStrategy,
+        }
+        strategy_class = strategy_map.get(self.chat_flow_type, DefaultChatStrategy)
+        return strategy_class(self)
+    
     
     def chat(self): 
         try:
-            # 1. 如果有cvg_report，先保存报告并进入普通对话
-            if self.cvg_report:
-                self._save_cvg_report_as_assistant_message()
+            # 1. Save cvg report as chat messages
+            if self.chat_flow_type == ChatFlowType.CLIENT_VISIT_GUIDE and self.cvg_report:
+                self._save_cvg_messages()
+                # If save_only is True, return immediately
+                if self.save_only:
+                    yield ChatEvent(
+                        event_type=ChatEventType.DATA_PART,
+                        payload=ChatStreamDataPayload(
+                            chat=self.db_chat_obj,
+                            user_message=self.db_user_message,
+                            assistant_message=self.db_assistant_message,
+                        ),
+                    )
+                    return
+                # Otherwise, continue the normal chat flow
                 return self._default_chat_flow()
 
-            # 2. 根据chat_flow_type选择策略
+
+            # 2. Select the strategy based on chat_flow_type
             strategy = self._select_strategy()
             return strategy.execute()
         except Exception as e:
@@ -1269,33 +1285,38 @@ Please respond with a natural, conversational tone using this information:
             return content
         
 
-    def _save_cvg_report_as_assistant_message(self):
-        """Save cvg report as assistant message"""                    
-        db_user_message = DBChatMessage(
-            chat_id=self.db_chat_obj.id,
-            role=MessageRole.USER,
-            content="获取客户拜访报告",
-            user_id=self.user.id if self.user else None,
-            meta={
-                "type": "cvg_report",
-                "timestamp": datetime.now(UTC).isoformat()
-            }
-        )
-        db_assistant_message = DBChatMessage(
-            chat_id=self.db_chat_obj.id,
-            role=MessageRole.ASSISTANT,
-            content=json.dumps({"cvg_report": self.cvg_report}),
-            user_id=self.user.id if self.user else None,
-            meta={
-                "type": "cvg_report",
-                "timestamp": datetime.now(UTC).isoformat()
-            }
-        )
-        self.db_chat_obj, messages = chat_repo.create_chat_with_messages(
-            self.db_session,
-            self.db_chat_obj,
-            [db_user_message, db_assistant_message]
-        )
+    def _save_cvg_messages(self):
+        """Save user command and cvg report as chat messages"""                    
+        try:
+            db_user_message = DBChatMessage(
+                chat_id=self.db_chat_obj.id,
+                role=MessageRole.USER,
+                content=self.cvg_report[0],
+                user_id=self.user.id if self.user else None,
+                meta={
+                    "type": "user_command_for_cvg",
+                    "timestamp": datetime.now(UTC).isoformat()
+                }
+            )
+            db_assistant_message = DBChatMessage(
+                chat_id=self.db_chat_obj.id,
+                role=MessageRole.ASSISTANT,
+                content=self.cvg_report[1],
+                user_id=self.user.id if self.user else None,
+                meta={
+                    "type": "cvg_report",
+                    "timestamp": datetime.now(UTC).isoformat()
+                }
+            )
+            
+            self.db_chat_obj, [self.db_user_message, self.db_assistant_message] = chat_repo.create_chat_with_messages(
+                self.db_session,
+                self.db_chat_obj,
+                [db_user_message, db_assistant_message]
+            )
+        except Exception as e:
+            logger.error(f"Failed to save cvg messages: {e}")
+            raise
         
     
     # TECHDEBT: Refactor to independent strategy class.

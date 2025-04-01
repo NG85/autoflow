@@ -25,9 +25,8 @@ from app.rag.chat.chat_service import (
     get_chat_message_recommend_questions,
     remove_chat_message_recommend_questions,
 )
-from app.rag.types import MessageRole, ChatMessage
+from app.rag.types import ChatFlowType, MessageRole, ChatMessage
 from app.exceptions import InternalServerError
-from app.rag.chat.chat_strategy import ChatFlowType
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +39,8 @@ class ChatRequest(BaseModel):
     chat_id: Optional[UUID] = None
     stream: bool = True
     chat_flow_type: ChatFlowType = ChatFlowType.DEFAULT
-    cvg_report: Optional[str] = None
+    cvg_report: Optional[List[str]] = None
+    save_only: bool = False
     
     @field_validator("messages")
     @classmethod
@@ -60,14 +60,35 @@ class ChatRequest(BaseModel):
     
     @field_validator("cvg_report")
     @classmethod
-    def validate_cvg_report(cls, v: Optional[str], values: dict) -> Optional[str]:
+    def validate_cvg_report(cls, v: Optional[List[str]], values: dict) -> Optional[List[str]]:
         if v is not None:
+            # Ensure the correct flow type
+            if values.get("chat_flow_type") != ChatFlowType.CLIENT_VISIT_GUIDE:
+                raise ValueError("cvg_report can only be provided when chat_flow_type is CLIENT_VISIT_GUIDE")
+                
+            # Validate the array length
+            if len(v) != 2:
+                raise ValueError("cvg_report must contain exactly 2 elements")
+            
+            # Validate the array elements are not empty
+            if not v[0] or not v[1]:
+                raise ValueError("cvg_report elements cannot be empty")
+            
             # If cvg_report is provided, chat_id is required
             if not values.get("chat_id"):
                 raise ValueError("chat_id is required when cvg_report is provided")
-            # Ensure the correct flow type
+        return v
+    
+    @field_validator("save_only")
+    @classmethod
+    def validate_save_only(cls, v: bool, values: dict) -> bool:
+        if v:
+            # save_only can only be used in CLIENT_VISIT_GUIDE mode
             if values.get("chat_flow_type") != ChatFlowType.CLIENT_VISIT_GUIDE:
-                raise ValueError("chat_flow_type must be CLIENT_VISIT_GUIDE when cvg_report is provided")
+                raise ValueError("save_only can only be True when chat_flow_type is CLIENT_VISIT_GUIDE")
+            # save_only mode requires chat_id
+            if not values.get("chat_id"):
+                raise ValueError("chat_id is required when save_only is True")
         return v
 
 @router.post("/chats")
@@ -91,6 +112,7 @@ def chats(
             engine_name=chat_request.chat_engine,
             chat_flow_type=chat_request.chat_flow_type,
             cvg_report=chat_request.cvg_report,
+            save_only=chat_request.save_only,
         )
 
         if chat_request.stream:
