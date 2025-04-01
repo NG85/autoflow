@@ -105,7 +105,7 @@ class Settings(BaseSettings):
     CRM_AUTHORITY_API_URL: str = "http://auth:8018/crm/authority/user"
     
     # Client Visit Guide Generation API
-    ALDEBARAN_CVGG_URL: str = "http://aldebaran:8010/api/v1/previsit/create_v3"
+    ALDEBARAN_CVGG_URL: str = "http://aldebaran:8001/api/v1/previsit/create_v3"
     ALDEBARAN_TENANT_ID: str = "PINGCAP"
     
     EMBEDDING_THRESHOLD: float = 0.875
