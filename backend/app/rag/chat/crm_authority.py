@@ -80,7 +80,7 @@ def get_user_crm_authority(user_id: Optional[UUID]) -> CRMAuthority:
         }
         
         # Send POST request
-        response = requests.post(auth_api_url, json=payload, timeout=5)
+        response = requests.post(auth_api_url, json=payload, timeout=300)
         
         # Check HTTP response status
         if response.status_code != 200:

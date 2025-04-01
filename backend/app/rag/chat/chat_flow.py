@@ -37,6 +37,11 @@ from app.utils.jinja2 import get_prompt_by_jinja2_template
 from app.utils.tracing import LangfuseContextManager
 from app.rag import default_prompt
 from app.rag.chat.crm_authority import CRMAuthority, get_user_crm_authority
+from app.rag.chat.chat_strategy import(
+    ChatFlowType,
+    ClientVisitGuideStrategy,
+    DefaultFlowStrategy
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +67,8 @@ class ChatFlow:
         chat_messages: List[ChatMessage],
         engine_name: str = "default",
         chat_id: Optional[UUID] = None,
+        chat_flow_type: ChatFlowType = ChatFlowType.DEFAULT,
+        cvg_report: Optional[str] = None,
     ) -> None:
         self.chat_id = chat_id
         self.db_session = db_session
@@ -69,6 +76,8 @@ class ChatFlow:
         self.browser_id = browser_id
         self.engine_name = engine_name
         self.origin = origin
+        self.chat_flow_type = chat_flow_type
+        self.cvg_report = cvg_report
         # Load chat engine and chat session.
         self.user_question, self.chat_history = parse_chat_messages(chat_messages)
         
@@ -178,9 +187,30 @@ class ChatFlow:
                 knowledge_bases=self.knowledge_bases,
             )
             self._retrieve_flow_initialized = True
+        
+    def _select_strategy(self):
+        if self.chat_flow_type == ChatFlowType.CLIENT_VISIT_GUIDE:
+            return ClientVisitGuideStrategy(self)
+        return DefaultFlowStrategy(self)
+    
+    def chat(self): 
+        try:
+            # 1. 如果有cvg_report，先保存报告并进入普通对话
+            if self.cvg_report:
+                self._save_cvg_report_as_assistant_message()
+                return self._default_chat_flow()
 
-
-    def chat(self) -> Generator[ChatEvent | str, None, None]:
+            # 2. 根据chat_flow_type选择策略
+            strategy = self._select_strategy()
+            return strategy.execute()
+        except Exception as e:
+            logger.exception(e)
+            yield ChatEvent(
+                event_type=ChatEventType.ERROR_PART,
+                payload="Encountered an error while processing the chat. Please try again later.",
+            )
+    
+    def _default_chat_flow(self) -> Generator[ChatEvent | str, None, None]:
         try:
             with self._trace_manager.observe(
                 trace_name="ChatFlow",
@@ -1237,3 +1267,125 @@ Please respond with a natural, conversational tone using this information:
             logger.error(f"Error generating identity response with LLM: {e}")
             # Return the template content when an error occurs
             return content
+        
+
+    def _save_cvg_report_as_assistant_message(self):
+        """Save cvg report as assistant message"""                    
+        db_user_message = DBChatMessage(
+            chat_id=self.db_chat_obj.id,
+            role=MessageRole.USER,
+            content="获取客户拜访报告",
+            user_id=self.user.id if self.user else None,
+            meta={
+                "type": "cvg_report",
+                "timestamp": datetime.now(UTC).isoformat()
+            }
+        )
+        db_assistant_message = DBChatMessage(
+            chat_id=self.db_chat_obj.id,
+            role=MessageRole.ASSISTANT,
+            content=json.dumps({"cvg_report": self.cvg_report}),
+            user_id=self.user.id if self.user else None,
+            meta={
+                "type": "cvg_report",
+                "timestamp": datetime.now(UTC).isoformat()
+            }
+        )
+        self.db_chat_obj, messages = chat_repo.create_chat_with_messages(
+            self.db_session,
+            self.db_chat_obj,
+            [db_user_message, db_assistant_message]
+        )
+        
+    
+    # TECHDEBT: Refactor to independent strategy class.
+    def _client_visit_guide_flow(self) -> Generator[ChatEvent | str, None, None]:
+        """Client Visit Guide Flow"""
+        try:
+            # Generate client visit guide
+            with self._trace_manager.observe(
+                trace_name="CVGFlow",
+                user_id=(
+                    self.user.email if self.user else f"anonymous-{self.browser_id}"
+                ),
+                metadata={
+                    "tenant_id": settings.ALDEBARAN_TENANT_ID,
+                },
+                tags=[f"chat_engine:{self.engine_name}"],
+                release=settings.ENVIRONMENT,
+            ) as trace:
+                trace.update(
+                    input={
+                        "user_question": self.user_question,
+                        "chat_history": self.chat_history,
+                    }
+                )
+                # Invoke external document generation service
+                aldebaran_cvgg_url = settings.ALDEBARAN_CVGG_URL
+                if not aldebaran_cvgg_url:
+                    logger.error("ALDEBARAN_CVGG_URL is not configured")
+                    
+                execution_id, report_id = yield from self._generate_visit_guide(aldebaran_cvgg_url)
+                trace.update(output={
+                    "execution_id": execution_id,
+                    "report_id": report_id,
+                })
+        except Exception as e:
+            logger.error(f"Client visit guide error: {str(e)}")
+            yield ChatEvent(
+                event_type=ChatEventType.ERROR_PART,
+                payload="Failed to generate client visit guide",
+            )
+    
+    def _generate_visit_guide(self, aldebaran_cvgg_url: str) -> Generator[ChatEvent | str, None, Tuple[str, str]]:
+        """Generate client visit guide document"""
+        db_user_message, db_assistant_message = yield from self._chat_start()
+        # Add initialization status display
+        yield ChatEvent(
+            event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
+            payload=ChatStreamMessagePayload(
+                state=ChatMessageSate.INITIALIZATION,
+                display="Initializing chat session and starting generation flow",
+            ),
+        )
+        ctx = langfuse_instrumentor_context.get().copy()
+        langfuse_instrumentor_context.get().update(ctx)
+    
+        # Build request body
+        payload = {
+            "content": self.user_question,
+            "tenant_id": settings.ALDEBARAN_TENANT_ID,
+        }
+        
+        # Send POST request
+        response = requests.post(aldebaran_cvgg_url, json=payload, timeout=300)
+        response.raise_for_status()
+        
+        # Parse JSON response
+        result = response.json()
+        if result.get("status") != "success":
+            raise ValueError(f"Failed to create job for client visit guide: {result.get('message')}")
+            
+        execution_id = result["data"]["execution_id"]
+        report_id = result["data"]["report_id"]
+                    
+        yield ChatEvent(
+            event_type=ChatEventType.DATA_PART,
+            payload=ChatStreamDataPayload(
+                chat=self.db_chat_obj,
+                user_message=self.user_question,
+                assistant_message=f"Start generating client visit guide, execution_id: {execution_id}",
+            ),
+        )
+        
+        with self._trace_manager.span(name="client_visit_guide_generation") as span:
+            span.end(output={"execution_id": execution_id, "report_id": report_id})
+                    
+        yield from self._chat_finish(
+            db_assistant_message=db_assistant_message,
+            db_user_message=db_user_message,
+            response_text=json.dumps({"execution_id": execution_id, "report_id": report_id}),
+            source_documents=[]
+        )
+        
+        return execution_id, report_id

@@ -27,6 +27,7 @@ from app.rag.chat.chat_service import (
 )
 from app.rag.types import MessageRole, ChatMessage
 from app.exceptions import InternalServerError
+from app.rag.chat.chat_strategy import ChatFlowType
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,9 @@ class ChatRequest(BaseModel):
     chat_engine: str = "default"
     chat_id: Optional[UUID] = None
     stream: bool = True
-
+    chat_flow_type: ChatFlowType = ChatFlowType.DEFAULT
+    cvg_report: Optional[str] = None
+    
     @field_validator("messages")
     @classmethod
     def check_messages(cls, messages: List[ChatMessage]) -> List[ChatMessage]:
@@ -54,7 +57,18 @@ class ChatRequest(BaseModel):
         if messages[-1].role != MessageRole.USER:
             raise ValueError("last message must be from user")
         return messages
-
+    
+    @field_validator("cvg_report")
+    @classmethod
+    def validate_cvg_report(cls, v: Optional[str], values: dict) -> Optional[str]:
+        if v is not None:
+            # If cvg_report is provided, chat_id is required
+            if not values.get("chat_id"):
+                raise ValueError("chat_id is required when cvg_report is provided")
+            # Ensure the correct flow type
+            if values.get("chat_flow_type") != ChatFlowType.CLIENT_VISIT_GUIDE:
+                raise ValueError("chat_flow_type must be CLIENT_VISIT_GUIDE when cvg_report is provided")
+        return v
 
 @router.post("/chats")
 def chats(
@@ -75,6 +89,8 @@ def chats(
             chat_id=chat_request.chat_id,
             chat_messages=chat_request.messages,
             engine_name=chat_request.chat_engine,
+            chat_flow_type=chat_request.chat_flow_type,
+            cvg_report=chat_request.cvg_report,
         )
 
         if chat_request.stream:
