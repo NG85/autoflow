@@ -24,36 +24,99 @@ logger = logging.getLogger(__name__)
 
 class ExtractGraphTriplet(dspy.Signature):
     """Carefully analyze the provided text from insurance documentation and related materials to thoroughly identify all entities related to insurance business, including both general concepts and specific details.
-
-    Follow these Step-by-Step Analysis:
-
-    1. Extract Meaningful Entities:
-      - Identify all significant nouns, proper nouns, and technical terminologies that represent insurance-related concepts, objects, components, or substantial entities.
-      - Ensure that you capture entities across different levels of detail, from high-level concepts to specific technical specifications.
-      - Choose names for entities that are specific enough to indicate their meaning without additional context, avoiding overly generic terms.
-      - Consolidate similar entities to avoid redundancy, ensuring each represents a distinct concept at appropriate granularity levels.
-
-    2. Extract Metadata to claim the entities:
-      - Carefully review the provided text, focusing on identifying detailed covariates associated with each entity.
-      - Extract and link the covariates (which is a comprehensive json TREE, the first field is always: "topic") to their respective entities.
-      - Pay special attention to insurance-specific attributes such as coverage details, policy terms, and risk factors.
-      - Ensure all extracted covariates are factual and verifiable within the text itself, without relying on external knowledge or assumptions.
-      - Collectively, the covariates should provide a thorough and precise summary of the entity's characteristics as described in the source material.
-
-    3. Establish Relationships:
-      - Carefully examine the text to identify all relationships between insurance-related entities, ensuring each relationship is correctly captured with accurate details about the interactions.
-      - Analyze the context and interactions between the identified entities to determine how they are interconnected.
-      - Clearly define the relationships, ensuring accurate directionality that reflects the logical or functional dependencies among entities. \
-         This means identifying which entity is the source, which is the target, and what the nature of their relationship is (e.g., $source_entity provides coverage for $target_entity).
-
-    Key points to consider:
-      - Focus on insurance-specific relationships and dependencies
-      - Ensure regulatory and compliance aspects are captured
-      - Consider temporal and conditional relationships in policy terms
-
-    Objective: Produce a detailed and comprehensive knowledge graph that captures the full spectrum of insurance-related entities mentioned in the text, along with their interrelations.
-
-    Please only response in JSON format.
+    
+    # 核心提取原则
+    1. 保险要素优先：
+       - 识别保险五要素：投保人、被保险人、保险标的、保险责任、保险期间
+       - 发现三金关系：保费、保额、现金价值
+       - 捕捉两期：犹豫期、等待期
+    
+    2. 灵活文档处理：
+       a. 对已知文档类型应用预设规则（见下文）
+       b. 对未知类型执行：
+          - 识别文档功能属性（产品设计/销售支持/合规管理）
+          - 提取功能相关实体（如营销材料提取卖点话术与条款对应关系）
+          - 建立跨文档知识关联
+    
+    # 保险文档智能分类矩阵
+    | 文档特征                | 处理策略                          | 示例实体                     |
+    |-------------------------|-----------------------------------|-----------------------------|
+    | 含产品代码+条款版本      | 按产品手册处理                    | 产品代码、条款条目           |
+    | 出现费率表+年龄梯度      | 按精算资料处理                    | 基准费率、核保系数           |
+    | 包含医院列表+等级        | 按医疗服务网络处理                | 医疗机构编码、服务范围       |
+    | 涉及话术+案例           | 按销售支持材料处理                | 异议处理模板、客户案例       |
+    | 含监管文号+合规要求      | 按合规文件处理                    | 监管文件编号、生效日期       |
+    
+    # 通用保险关系模板
+    1. 产品结构关系：
+       - (主险)-[组合]->(附加险)
+       - (产品)-[版本迭代]->(历史版本)
+    
+    2. 精算关系：
+       - (年龄区间)-[对应]->(费率系数)
+       - (职业类别)-[影响]->(风险评级)
+    
+    3. 服务关系：
+       - (理赔类型)-[需要]->(材料清单)
+       - (增值服务)-[覆盖]->(医疗机构)
+    
+    4. 监管关系：
+       - (产品备案)-[依据]->(监管文件)
+       - (条款描述)-[受限]->(合规要求)
+    
+    # 弹性处理机制
+    1. 新实体发现：
+       - 若遇未识别实体类型，根据上下文推断分类
+         - 示例：在再保合约中识别"分保比例"为【再保险参数】
+    
+    2. 跨文档推理：
+       - 通过产品代码关联分散在不同文档中的信息
+         - 示例：投保单中的HL-XGXS-2023-V2自动关联产品手册
+    
+    3. 模糊匹配：
+       - 对非标表述智能归一化
+         - 将"3甲医院"→"三级甲等医院"
+         - "保监[2023]8号"→"银保监金规[2023]8号文"
+    
+    # 质量保障措施
+    1. 数据校验：
+       - 产品代码校验：校验版本号连续性（V2必须在V1之后）
+       - 时间逻辑校验：生效日期早于失效日期
+       - 地域代码校验：符合GB/T 2260标准
+    
+    2. 冲突解决：
+       - 同一实体多来源时，按文档优先级处理：
+         条款文件 > 费率表 > 产品手册 > 培训材料
+    
+    3. 溯源机制：
+       - 记录实体来源文档的元信息：
+         - 文件名、页码、更新时间
+    
+    # 典型复杂案例处理
+    案例：某互联网保险平台的FAQ文档
+    原文：
+    "Q：安康医疗2024版（HL-AK2024）的智能核保是否支持甲状腺结节？
+    A：根据2024年核保手册，TI-RADS 3类以下且直径＜1cm可承保"
+    
+    提取结果：
+    Entities:
+      - 产品: HL-AK2024
+      - 疾病: 甲状腺结节
+      - 核保标准: TI-RADS 3类/直径<1cm
+    Relationships:
+      - (HL-AK2024)-[支持核保]->(甲状腺结节)
+      - (甲状腺结节)-[需满足]->(TI-RADS 3类/直径<1cm)
+    Metadata:
+      - HL-AK2024:
+          核保类型: "智能核保"
+          依据文件: "2024核保手册"
+    
+    # 输出规范
+    - 一定要返回json格式
+    - 严格遵循保险行业数据标准
+    - 未知实体类型用【通用保险概念】标签
+    - 保持原始文档上下文关联性
+    
     """
 
     text = dspy.InputField(
@@ -66,22 +129,77 @@ class ExtractGraphTriplet(dspy.Signature):
 
 class ExtractCovariate(dspy.Signature):
     """Please carefully review the provided text and insurance-related entities list which are already identified in the text. Focusing on identifying detailed covariates associated with each insurance entity provided.
+    
+    # 核心结构要求
+    1. 每个实体的首个字段必须为topic，取值如下：
+       - 保险产品
+       - 保险条款
+       - 费率规则
+       - 医疗机构
+       - 监管文件
+       - 通用概念（默认）
 
-    Extract and link the covariates (which is a comprehensive json TREE, the first field is always: "topic") to their respective entities.
-    
-    When extracting covariates, pay special attention to:
-    - Policy terms and conditions
-    - Coverage details and limitations
-    - Risk factors and assessment criteria
-    - Regulatory requirements and compliance factors
-    
-    Ensure all extracted covariates:
-    - Are clearly connected to the correct entity for accuracy and comprehensive understanding
-    - Are factual and verifiable within the text itself, without relying on external knowledge or assumptions
-    - Include both qualitative descriptions and quantitative values where present
-    
-    Collectively, the covariates should provide a thorough and precise summary of the entity's characteristics as described in the source material.
+    2. 层级结构：
+       {
+         "entity_name": {
+           "topic": "保险产品",  // 必须首位
+           "insurance_attributes": {  // 保险专用字段集
+             "product_code": "HL-XGXS-2023-V2",
+             "clause_version": "CI-2024-008",
+             "effective_date": "2024-03-01"
+           },
+           "system_metadata": {  // 系统管理字段
+             "confidence": 0.97,
+             "source_doc": "2024产品手册.pdf"
+           }
+         }
+       }
 
+    # 保险专用字段规则
+    1. 产品类实体（topic=保险产品）：
+       - 必填字段：product_code, clause_version
+       - 选填字段：sales_region, premium_table
+
+    2. 条款类实体（topic=保险条款）：
+       - 必填字段：clause_number, related_product
+       - 示例："clause_number": "第5.2条"
+
+    3. 医疗机构（topic=医疗机构）：
+       - 必填字段：hospital_code, grade
+       - 编码标准：卫健委22位编码
+
+    # 示例
+    输入文本：
+    "欣享一生（HL-XGXS-2023-V2）2023年3月1日生效，匹配2024版费率表"
+    
+    提取结果：
+    {
+      "HL-XGXS-2023-V2": {
+        "topic": "保险产品",
+        "insurance_attributes": {
+          "product_code": "HL-XGXS-2023-V2",
+          "effective_date": "2023-03-01",
+          "rate_table_version": "2024"
+        },
+        "system_metadata": {
+          "confidence": 0.96,
+          "source_context": "产品手册第5页"
+        }
+      }
+    }
+
+    # 校验规则
+    1. 产品代码校验：
+       - 符合[类型代码]-[产品缩写]-[年份]-V[版本]格式
+       - 示例：HL-XGXS-2023-V2
+
+    2. 日期格式：
+       - 严格遵循YYYY-MM-DD
+       - 时间相关字段后缀需带_unit，如"waiting_period_unit": "天"
+
+    3. 版本追溯：
+       - 使用@符号表示关联，如"rate_table_version": "2024@HL-XGXS-2023-V2"
+       
     Please only response in JSON format.
     """
 
