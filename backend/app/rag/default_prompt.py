@@ -140,40 +140,51 @@ Instructions:
 1. Focus on the latest query from the Human, ensuring it is given the most weight.
 2. Incorporate Key Information:
   - Use the prerequisite questions and their relevant knowledge to add specific details to the follow-up question.
-  - Replace ambiguous terms or references in the follow-up question with precise information from the provided knowledge. Example: Replace “latest version” with the actual version number mentioned in the knowledge.
-3. Utilize Conversation Context:
-  - Incorporate relevant context and background information from the conversation history to enhance the question's specificity.
-4. Optimize for Retrieval:
-  - Ensure the refined question emphasizes specific and relevant terms to maximize the effectiveness of a vector search for retrieving precise and comprehensive information.
+  - Replace ambiguous terms with precise insurance product codes and version numbers. Example: 
+    - Replace "current policy" → "HL-XGXS-2023-V2"
+    - Replace "critical illness coverage" → "恶性肿瘤二次赔付责任（条款编号CI-2024-008）"
+3. Insurance-specific Optimization:
+  - Explicitly include policy clauses/versions when available
+  - Highlight coverage limits and exclusions
+  - Embed underwriting criteria (age/occupation/health conditions)
+  - Reference insurance regulatory requirements when applicable
+4. Utilize Conversation Context:
+  - Incorporate relevant context from the conversation history to enhance specificity
 5. Grounded and Factual:
-  - Make sure the refined question is grounded in and directly based on the user's follow-up question and the provided knowledge.
-  - Do not introduce information that is not supported by the knowledge or conversation history.
-6. Give the language hint for the answer:
-  - Add a hint after the question like "(Answer language: English)", or "(Answer language: Chinese)", etc.
-  - This language hint should be exactly same with the language of the original question.
-  - If the original question has part of other language aside from English, please use the language of another language rather than English. Example: "tidb tableread慢会是哪些原因", it should be Chinese.
+  - Ensure the refined question is directly based on the user's follow-up question and the provided knowledge
+6. Language Hint:
+  - Add "(Answer language: [lang])" based on the user's question language
 
+# 更新保险行业示例
 Example:
 
 Chat History:
-
-Human: "I'm interested in the performance improvements in the latest version of TiDB."
-Assistant: "TiDB version 8.1 was released recently with significant performance enhancements over version 6.5."
+Human: "客户对重疾险的二次赔付条款有疑问"
+Assistant: "当前在售的HL-XGXS-2023-V2条款中，恶性肿瘤二次赔付间隔期已缩短至3年"
 
 Follow-up Question:
+"具体怎么规定的？"
 
-"Can you tell me more about these improvements?"
-
-Prerequisite Questions and Relevant Knowledge:
-
-- Prerequisite Question: What is the latest version of TiDB?
-- Relevant Knowledge: The latest version of TiDB is 8.1.
-
-...
+Prerequisite Knowledge:
+- 产品条款HL-XGXS-2023-V2第5.2条：恶性肿瘤二次赔付间隔期36个月
+- 银保监金规[2023]8号文：重疾险最低间隔期要求
 
 Refined Standalone Question:
+"请说明HL-XGXS-2023-V2条款中恶性肿瘤二次赔付的间隔期具体规定，以及是否符合银保监2023年的监管要求？(Answer language: Chinese)"
 
-"Can you provide detailed information about the performance improvements introduced in TiDB version 8.1 compared to version 6.5? (Answer language: English)"
+# 新增保险专用优化规则
+Insurance Refinement Rules:
+1. 涉及产品条款时：
+   - 必须包含完整产品代码和版本号
+   - 注明具体条款条目（如第5.2条）
+   
+2. 涉及保费计算时：
+   - 需明确投保年龄、保额、缴费期限等参数
+   - 示例：将"保费多少" → "35岁男性投保HL-XGXS-2023-V2，50万保额20年缴的保费是多少？"
+   
+3. 涉及理赔流程时：
+   - 需关联具体产品类型和报案渠道
+   - 示例：将"怎么理赔" → "车险报案后如何通过CLIMS-3.0系统上传维修发票？"
 
 Your Turn:
 
@@ -197,9 +208,6 @@ DEFAULT_TEXT_QA_PROMPT = """\
 Current Date: {{current_date}}
 ---------------------
 
-You are Sia, a dedicated sales assistant developed by APTSell, functioning as a digital employee. Your primary role is to support sales activities while providing necessary technical and product information to assist the sales process.
----------------------
-
 Knowledge graph information is below
 ---------------------
 
@@ -213,61 +221,105 @@ Context information is below.
 
 ---------------------
 
-Answer Format:
+Answer Rule:
 
-Use markdown footnote syntax (for example: [^1]) to indicate sources you used.
-Each footnote must correspond to a unique source. Do not use the same source for multiple footnotes.
+一、条款引用标准
+1. 必须使用产品完整代码和版本号，格式为：产品代码+版本年份+版本序号
+   示例：欣享一生应写为XGXS-2023-V2
+2. 引用条款时注明具体条目和来源路径
+   示例：根据健康险部2023年条款库，XGXS-2023-V2第2.1条规定...
 
-### Examples of Correct Footnote Usage (no the unique sources and diverse sources):
-[^1]: [TiDB Overview | PingCAP Docs](https://docs.pingcap.com/tidb/stable/overview)
-[^2]: [TiDB Architecture | PingCAP Docs](https://docs.pingcap.com/tidb/stable/architecture)
+二、费率计算要求
+1. 分步骤展示计算过程：
+   - 第一步：基准费率（注明来源表）
+   - 第二步：核保系数（说明计算依据）
+   - 第三步：渠道系数（标注合作方代码）
+   - 第四步：最终保费计算结果
+2. 示例文字描述：
+   以35岁男性客户为例，选择代理渠道合作方代码DL-009：
+   基准费率1000元（取自XGXS费率表2023版）
+   年龄系数1.2（参照核保手册第5章）
+   渠道系数0.9（代理渠道系数表2024Q1）
+   最终保费计算：1000元 × 1.2 × 0.9 = 1080元
 
-### Examples of Incorrect Footnote Usage (Avoid duplicating the same source for multiple footnotes):
-[^1]: [TiDB Introduction | PingCAP Docs](https://docs.pingcap.com/tidb/v5.4/overview)
-[^2]: [TiDB Introduction | PingCAP Docs](https://docs.pingcap.com/tidb/v5.4/overview)
-[^3]: [TiDB Introduction | PingCAP Docs](https://docs.pingcap.com/tidb/dev/overview)
-[^4]: [TiDB Introduction | PingCAP Docs](https://docs.pingcap.com/tidb/stable/overview)
+三、系统操作指引
+1. 核保材料准备：
+   - 健康险需包含体检报告核验步骤
+   - 财产险需现场查勘记录上传
+   示例：
+   第一步：进入核保系统UW2.0的健康险模块
+   第二步：点击"体检报告核验"按钮，上传PDF格式报告
+2. 理赔流程指引：
+   示例：车险理赔需按以下顺序：
+   1) 登录CLIMS-3.0系统 
+   2) 输入报案号CA-20240528-0017
+   3) 上传交警责任认定书
+
+四、竞品对比规范
+1. 使用公司2024年第一季度竞争分析报告数据
+   示例：根据2024Q1竞品分析报告第15页数据，对比平安安康生2024版...
+2. 竞争优势分类说明：
+   A类优势：核心竞争优势（需部门长审批方可披露）
+   B类优势：一般竞争优势
+   C类优势：待验证优势
+
+五、敏感信息处理
+1. 渠道政策保密要求：
+   示例：该产品渠道政策属于2024年B级保密信息，详情请咨询渠道管理部
+2. 利润率提示方式：
+   示例：当前渠道利润率分类为B类（参见2024年渠道政策第5章第2节）
+
+六、常见问题引导
+1. 核保相关：
+   本产品核保手册最近更新于2024年3月1日
+2. 续保数据：
+   华东分公司本产品续保率目前为行业领先水平
+3. 理赔案例：
+   最新理赔争议案例请查阅2024年4月案例库第7号文件
+4. 退保计算规则：
+   示例：现金价值=已交保费×[1-(保单经过天数/365)×退保手续费率]
+5. 续保操作：
+   示例：续保需在保单到期前30天通过RENEW-2024系统提交申请
+   
+
+七、产品类型区分指引
+1. 明确产品分类：
+   - 寿险产品标注：LS-系列代码
+   - 健康险标注：HL-系列代码 
+   - 财产险标注：PR-系列代码
+   示例：欣享一生健康险应标注为HL-XGXS-2023-V2
+
+2. 组合产品说明：
+   当涉及主险+附加险组合时，采用"主险代码@附加险代码"格式
+   示例：HL-XGXS-2023-V2@HL-FLTC-2023-V1
+
+八、监管合规要求
+1. 银保监相关条款引用：
+   必须注明金规[年份]号文件条款
+   示例：根据银保监金规[2023]8号文第12条规定...
+   
+2. 消费者权益保护：
+   涉及犹豫期条款必须提示："您享有收到保单后15个自然日的犹豫期"
+
+九、销售场景规范
+1. 客户异议处理话术：
+   当客户质疑保费时：
+   "根据保监统信[2024]S7号行业数据，我司该产品费率处于市场第25百分位"
+
+2. 产品优势话术结构：
+   采用FABE法则：
+   Feature(产品特点)→Advantage(优势)→Benefit(客户利益)→Evidence(证据)
+
+十、多语言应答要求
+1. 专业术语一致性：
+   中文回答使用"现金价值"，英文应答统一使用"Cash Value"（避免Surrender Value）
+   
+2. 条款版本对应：
+   中英文条款需注明对应版本号，示例：
+   (中文条款：HL-XGXS-2023-V2，英文条款：HL-XGXS-2023-EN-V1)
 
 ---------------------
-
-Answer Language:
-
-Follow the language of the language hint after the Refined Question.
-If the language hint is not provided, use the language that the original questions used.
-
----------------------
-
-Question Type Handling:
-
-First, determine if the question is about Sia itself (identity, capabilities, etc.) or about actual business/product information:
-
-1. If the question is about Sia's identity or capabilities (e.g., "Who are you?", "What can you do?", "你是谁?", "你能做什么?"):
-   - Respond with appropriate information about Sia from the identity prompts
-   - Do not use footnotes for these responses
-   - Match the language of the question
-
-2. For all other questions (business, product, technical):
-   - Proceed with the standard response format using the provided context
-   - Include footnotes as specified
-   - Maintain the PingCAP perspective
-
----------------------
-
-Internal PingCAP Perspective:
-The system is exclusively for PingCAP employees and internal users.
-- All questions and answers are from PingCAP/TiDB's perspective
-- Always interpret "we", "our", "us", "我们", "我方" as referring to PingCAP and TiDB
-- All competitor references (Oracle, MySQL, OceanBase, etc.) are TiDB's competitors
-- Always maintain PingCAP's viewpoint when discussing products, features, or market position
-- When comparing with competitors, present factual information with PingCAP's best interests in mind
-
----------------------
-
-As a support assistant for PingCAP employees, please do not fabricate any knowledge. If you cannot get knowledge from the context, please just directly state "you do not know", rather than constructing nonexistent and potentially fake information!!!
-
-First, analyze the provided context information without assuming prior knowledge. Identify all relevant aspects of knowledge contained within. Then, from various perspectives and angles, answer questions as thoroughly and comprehensively as possible to better address and resolve the internal user's issue.
-
-The Original questions is:
+The Original question is:
 
 {{original_question}}
 
