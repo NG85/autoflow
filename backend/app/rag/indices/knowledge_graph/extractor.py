@@ -23,36 +23,81 @@ logger = logging.getLogger(__name__)
 
 
 class ExtractGraphTriplet(dspy.Signature):
-    """Carefully analyze the provided text from labor law documentation, legal regulations, and case studies to thoroughly identify all entities related to labor law, including both general concepts and specific details.
+    """专门针对劳动法领域文档（法规/案例/指南）构建知识图谱的实体关系提取指令
 
-    Follow these Step-by-Step Analysis:
+    分析步骤：
 
-    1. Extract Meaningful Entities:
-      - Identify all significant nouns, proper nouns, and legal terminologies that represent labor law-related concepts, regulations, statutes, legal procedures, case precedents, legal subjects (employers, employees), rights, obligations, dispute types, remedies, or any substantial entities.
-      - Ensure that you capture entities across different levels of detail, from high-level legal principles to specific provisions and clauses, to create a comprehensive representation of the subject matter.
-      - Choose names for entities that are specific enough to indicate their meaning without additional context, avoiding overly generic terms.
-      - Consolidate similar entities to avoid redundancy, ensuring each represents a distinct concept at appropriate granularity levels.
+    1. 实体提取（劳动法专项）：
+       A. 基础法律实体：
+          - 法律条款：精确到条/款/项（如《劳动合同法》第38条第1款第2项）
+          - 法律主体：用人单位（区分注册地/经营地）、劳动者（细分类型：女职工/工伤职工等）
+          - 法律行为：解除/终止/调岗/降薪/经济补偿
+          
+       B. 案例特征实体：
+          - 案号格式：(2023)沪01民终123号
+          - 裁判要点：违法解除赔偿2N、程序瑕疵认定标准
+          - 赔偿金额：精确数字+计算方式（如2×月工资×工作年限）
+          
+       C. 风险要素实体：
+          - 时效节点：仲裁时效（1年）、工伤认定时效（30日/1年）
+          - 程序要件：民主程序（职工代表大会通过）、公示签收
+          - 证据类型：考核表（需两次）、培训记录、工资条
+          
+       D. 地域差异实体：
+          - 地方性法规：如《广东省工伤保险条例》
+          - 地区特征：社平工资（分省/市）、高温补贴标准
+          - 特殊政策：自贸区用工政策、港澳台员工特殊规定
 
-    2. Extract Metadata to claim the entities:
-      - Carefully review the provided text, focusing on identifying detailed covariates associated with each entity.
-      - Extract and link the covariates (which is a comprehensive json TREE, the first field is always: "topic") to their respective entities.
-      - Ensure all extracted covariates is clearly connected to the correct entity for accuracy and comprehensive understanding.
-      - Ensure that all extracted covariates are factual and verifiable within the text itself, without relying on external knowledge or assumptions.
-      - Collectively, the covariates should provide a thorough and precise summary of the entity's characteristics as described in the source material.
+    2. 元数据标注（劳动法特征）：
+       - 每个实体必须包含：
+         ① 法律效力级别：法律/行政法规/地方性法规/司法解释
+         ② 生效/废止时间：2024-01-01至2025-12-31
+         ③ 地域适用范围：全国/省/市（如仅适用于上海市）
+         ④ 关联条款：引用其他法律条款（如《劳动合同法》第40条引用第26条）
+         ⑤ 风险等级：高（2N赔偿）/中（程序补正）/低（协商空间）
+       - 证据类实体需标注：
+         ① 证据形式：书证/电子数据/证人证言
+         ② 举证责任：用人单位/劳动者
+         ③ 证明对象：劳动关系/工资标准/工作时间
 
-    3. Establish Relationships:
-      - Carefully examine the text to identify all relationships between clearly-related entities, ensuring each relationship is correctly captured with accurate details about the interactions.
-      - Analyze the context and interactions between the identified entities to determine how they are interconnected, focusing on legal hierarchies, statutory references, rights and duties, procedural sequences, and causative relationships.
-      - Clearly define the relationships, ensuring accurate directionality that reflects the logical or legal dependencies among entities. \
-         This means identifying which entity is the source, which is the target, and what the nature of their relationship is (e.g., $employer_obligation applies to $employee_category under $legal_provision).
+    3. 关系建立（劳动法逻辑）：
+       A. 法律引用关系：
+          - 引用依据：$法律条款 是 $案例判决 的裁判依据 → (条款)-[AS_LEGAL_BASIS]->(案例)
+          - 补充规定：$地方性法规 细化 $法律条款 → (地方法规)-[SUPPLEMENT]->(法律)
+          
+       B. 程序依赖关系：
+          - 前置条件：$民主程序 是 $规章制度 生效前提 → (民主程序)-[PRECEDURE_FOR]->(制度)
+          - 时序关系：$第一次考核 必须在 $培训 之后 → (考核)-[AFTER]->(培训)
+          
+       C. 风险关联关系：
+          - 风险成因：$未签收制度 导致 $违法解除 → (未签收)-[CAUSES]->(违法解除)
+          - 风险缓解：$工会通知 降低 $程序瑕疵风险 → (工会通知)-[MITIGATES]->(程序瑕疵)
+          
+       D. 计算逻辑关系：
+          - 计算基准：$月工资 影响 $经济补偿金 → (月工资)-[BASIS_FOR]->(补偿金)
+          - 封顶规则：$社平工资三倍 限制 $补偿金上限 → (社平工资)-[CAPS]->(补偿金)
 
-    Some key points to consider:
-      - Please endeavor to extract all meaningful entities and relationships from the text, avoid subsequent additional gleanings.
-      - Pay special attention to legal citation patterns, statutory references, time limitations, procedural requirements, and conditions that modify rights or obligations.
+    关键提取原则：
+    1. 时效性处理：
+       - 并列时效：标注最早/最晚时效（如工伤认定：单位30日/个人1年）
+       - 计算基准日：区分争议发生日/离职日/仲裁提起日
+       
+    2. 地域冲突解决：
+       - 注册地vs工作地：标注"以较高标准为准"的冲突解决规则
+       - 政策过渡期：标注新旧法规交替期的适用规则
+       
+    3. 证据链构建：
+       - 必须形成闭环：制度公示 → 考核标准 → 考核结果 → 解除依据
+       - 时间戳验证：培训记录时间应早于考核时间
+       
+    4. 赔偿计算：
+       - 区分N、N+1、2N适用场景
+       - 工作年限精确到日（满6个月按0.5年计）
 
-    Objective: Produce a detailed and comprehensive knowledge graph that captures the full spectrum of entities mentioned in the text, along with their interrelations, reflecting both broad concepts and intricate details specific to the labor law domain.
-
-    Please only response in JSON format.
+    请以JSON格式输出知识图谱，确保符合以下劳动法特征：
+    - 实体名称包含法律术语标准表述
+    - 关系方向体现法律逻辑（如用人单位→劳动者）
+    - 元数据字段完整包含法律要素
     """
 
     text = dspy.InputField(
@@ -64,35 +109,101 @@ class ExtractGraphTriplet(dspy.Signature):
 
 
 class ExtractCovariate(dspy.Signature):
-    """Please carefully review the provided text from labor law documentation and the entities list which are already identified in the text. Focus on identifying detailed covariates associated with each entity provided.
-    
-    For labor law entities, important covariates may include:
-    - Legal references (article numbers, clause identifiers, statute names)
-    - Temporal information (effective dates, deadlines, limitation periods)
-    - Jurisdictional scope (national, provincial, industry-specific)
-    - Legal requirements (documentation, procedures, notice periods)
-    - Exceptions and special conditions
-    - Penalties and remedies
-    - Burden of proof considerations
-    - Relevant case precedents mentioned
-    
-    Extract and link the covariates (which is a comprehensive json TREE, the first field is always: "topic") to their respective entities.
-    Ensure all extracted covariates are clearly connected to the correct entity for accuracy and comprehensive understanding.
-    Ensure that all extracted covariates are factual and verifiable within the text itself, without relying on external knowledge or assumptions.
-    Collectively, the covariates should provide a thorough and precise summary of the entity's characteristics as described in the source material.
+    """劳动法实体协变量专项提取指令
 
-    Please only response in JSON format.
+    协变量提取规范：
+
+    1. 法律条款类实体：
+       - 必须包含：
+         ① 法律效力级别（法律/行政法规/地方性法规）
+         ② 生效/废止时间（精确到日）
+         ③ 关联条款（引用的其他法律条款）
+         ④ 地域适用范围（全国/省/市）
+         ⑤ 风险等级（高/中/低）
+       - 示例：
+         "topic": "法律条款",
+         "法律效力": "行政法规",
+         "生效日期": "2023-05-01",
+         "关联条款": ["劳动合同法第38条"],
+         "地域适用": ["江苏省"]
+
+    2. 案例类实体：
+       - 必须包含：
+         ① 案号与法院层级（基层/中院/高院）
+         ② 裁判要点摘要（核心法律观点）
+         ③ 赔偿计算方式（N/2N/赔偿基数）
+         ④ 证据链完整性评估
+         ⑤ 程序瑕疵类型（如有）
+       - 示例：
+         "topic": "类案参考",
+         "案号": "(2023)沪01民终1234号",
+         "裁判要点": "未履行民主程序的制度不得作为解除依据",
+         "赔偿计算": "2N（月工资×工作年限×2）"
+
+    3. 风险要素类实体：
+       - 必须包含：
+         ① 风险触发条件（如超时效/程序缺失）
+         ② 法律后果（赔偿金额/恢复劳动关系）
+         ③ 风险规避措施
+         ④ 举证责任方
+         ⑤ 时效计算基准日
+       - 示例：
+         "topic": "仲裁时效",
+         "时效期限": "1年",
+         "起算日": "劳动关系终止之日",
+         "超期后果": "丧失胜诉权",
+         "中断事由": ["书面催告记录"]
+
+    4. 计算类实体：
+       - 必须包含：
+         ① 计算公式（数学表达式）
+         ② 计算参数来源（月工资标准确定方式）
+         ③ 封顶规则（如社平工资三倍）
+         ④ 年限折算规则（满6个月按0.5年）
+         ⑤ 地区差异参数
+       - 示例：
+         "topic": "经济补偿金",
+         "公式": "N×月工资",
+         "参数定义": {
+           "N": "工作年限（精确到月）",
+           "月工资": "离职前12个月平均工资"
+         },
+         "封顶规则": "不超过当地社平工资三倍"
+
+    提取要求：
+    1. 证据类实体必须形成证据链：
+       - 时间顺序：制度公示→培训记录→考核结果→解除依据
+       - 逻辑闭环：每个环节需有对应证据支撑
+       
+    2. 赔偿计算需区分场景：
+       - 正常解除（N）
+       - 违法解除（2N）
+       - 协商解除（N+1）
+       
+    3. 程序要件必须标注：
+       - 民主程序（通过比例/公示方式）
+       - 通知程序（提前30日书面）
+       - 工会程序（通知时间/反馈处理）
+
+    请确保所有协变量：
+    - 源自文本可验证内容
+    - 数值型数据附带计算方式
+    - 时间信息精确到日
+    - 法律条款完整标注条款号
+
+    输出要求：严格的JSON格式
     """
 
     text = dspy.InputField(
-        desc="a paragraph of text to extract covariates to claim the entities."
+        desc="待分析的劳动法文本内容（法规条款/案例文书/风险指南）"
     )
 
     entities: List[EntityCovariateInput] = dspy.InputField(
-        desc="List of entities identified in the text."
+        desc="已识别的劳动法实体列表，需补充协变量信息"
     )
     covariates: List[EntityCovariateOutput] = dspy.OutputField(
-        desc="Graph representation of the knowledge extracted from the text."
+        desc="结构化协变量数据，符合劳动法领域规范",
+        format="json"
     )
 
 
