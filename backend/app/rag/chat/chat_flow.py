@@ -38,7 +38,6 @@ from app.utils.tracing import LangfuseContextManager
 from app.rag import default_prompt
 from app.rag.chat.crm_authority import CRMAuthority, get_user_crm_authority
 from app.rag.types import ChatFlowType
-from app.rag.chat.chat_strategy import BaseChatStrategy, ClientVisitGuideStrategy, DefaultChatStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -186,48 +185,14 @@ class ChatFlow:
                 knowledge_bases=self.knowledge_bases,
             )
             self._retrieve_flow_initialized = True
-        
-    def _select_strategy(self) -> BaseChatStrategy:
-        strategy_map = {
-            ChatFlowType.DEFAULT: DefaultChatStrategy,
-            ChatFlowType.CLIENT_VISIT_GUIDE: ClientVisitGuideStrategy,
-        }
-        strategy_class = strategy_map.get(self.chat_flow_type, DefaultChatStrategy)
-        return strategy_class(self)
     
-    
-    def chat(self): 
+    def chat(self) -> Generator[ChatEvent | str, None, None]:
         try:
-            # 1. Save cvg report as chat messages
-            if self.chat_flow_type == ChatFlowType.CLIENT_VISIT_GUIDE and self.cvg_report:
+            # Save cvg report as chat messages
+            if self.save_only and self.cvg_report:
                 self._save_cvg_messages()
-                # If save_only is True, return immediately
-                if self.save_only:
-                    yield ChatEvent(
-                        event_type=ChatEventType.DATA_PART,
-                        payload=ChatStreamDataPayload(
-                            chat=self.db_chat_obj,
-                            user_message=self.db_user_message,
-                            assistant_message=self.db_assistant_message,
-                        ),
-                    )
-                    return
-                # Otherwise, continue the normal chat flow
-                return self._default_chat_flow()
-
-
-            # 2. Select the strategy based on chat_flow_type
-            strategy = self._select_strategy()
-            return strategy.execute()
-        except Exception as e:
-            logger.exception(e)
-            yield ChatEvent(
-                event_type=ChatEventType.ERROR_PART,
-                payload="Encountered an error while processing the chat. Please try again later.",
-            )
-    
-    def _default_chat_flow(self) -> Generator[ChatEvent | str, None, None]:
-        try:
+                return
+            
             with self._trace_manager.observe(
                 trace_name="ChatFlow",
                 user_id=(
@@ -236,6 +201,7 @@ class ChatFlow:
                 metadata={
                     "is_external_engine": self.engine_config.is_external_engine,
                     "chat_engine_config": self.engine_config.screenshot(),
+                    "chat_flow_type": self.chat_flow_type,
                 },
                 tags=[f"chat_engine:{self.engine_name}"],
                 release=settings.ENVIRONMENT,
@@ -246,12 +212,18 @@ class ChatFlow:
                         "chat_history": self.chat_history,
                     }
                 )
-
-                if self.engine_config.is_external_engine:
-                    yield from self._external_chat()
+                if self.chat_flow_type == ChatFlowType.CLIENT_VISIT_GUIDE:
+                    execution_id, report_id = yield from self._generate_client_visit_guide()
+                    trace.update(output={
+                        "execution_id": execution_id,
+                        "report_id": report_id,
+                    })
                 else:
-                    response_text, source_documents = yield from self._builtin_chat()
-                    trace.update(output=response_text)
+                    if self.engine_config.is_external_engine:
+                        yield from self._external_chat()
+                    else:
+                        response_text, source_documents = yield from self._builtin_chat()
+                        trace.update(output=response_text)
         except Exception as e:
             logger.exception(e)
             yield ChatEvent(
@@ -1320,46 +1292,8 @@ Please respond with a natural, conversational tone using this information:
         
     
     # TECHDEBT: Refactor to independent strategy class.
-    def _client_visit_guide_flow(self) -> Generator[ChatEvent | str, None, None]:
-        """Client Visit Guide Flow"""
-        try:
-            # Generate client visit guide
-            with self._trace_manager.observe(
-                trace_name="CVGFlow",
-                user_id=(
-                    self.user.email if self.user else f"anonymous-{self.browser_id}"
-                ),
-                metadata={
-                    "tenant_id": settings.ALDEBARAN_TENANT_ID,
-                },
-                tags=[f"chat_engine:{self.engine_name}"],
-                release=settings.ENVIRONMENT,
-            ) as trace:
-                trace.update(
-                    input={
-                        "user_question": self.user_question,
-                        "chat_history": self.chat_history,
-                    }
-                )
-                # Invoke external document generation service
-                aldebaran_cvgg_url = settings.ALDEBARAN_CVGG_URL
-                if not aldebaran_cvgg_url:
-                    logger.error("ALDEBARAN_CVGG_URL is not configured")
-                    
-                execution_id, report_id = yield from self._generate_visit_guide(aldebaran_cvgg_url)
-                trace.update(output={
-                    "execution_id": execution_id,
-                    "report_id": report_id,
-                })
-        except Exception as e:
-            logger.error(f"Client visit guide error: {str(e)}")
-            yield ChatEvent(
-                event_type=ChatEventType.ERROR_PART,
-                payload="Failed to generate client visit guide",
-            )
-    
-    def _generate_visit_guide(self, aldebaran_cvgg_url: str) -> Generator[ChatEvent | str, None, Tuple[str, str]]:
-        """Generate client visit guide document"""
+    def _generate_client_visit_guide(self) -> Generator[ChatEvent | str, str, str]:
+        """Invoke external service to generate client visit guide"""
         db_user_message, db_assistant_message = yield from self._chat_start()
         # Add initialization status display
         yield ChatEvent(
@@ -1372,13 +1306,13 @@ Please respond with a natural, conversational tone using this information:
         ctx = langfuse_instrumentor_context.get().copy()
         langfuse_instrumentor_context.get().update(ctx)
     
+        # Invoke external document generation service
+        aldebaran_cvgg_url = settings.ALDEBARAN_CVGG_URL
         # Build request body
         payload = {
             "content": self.user_question,
             "tenant_id": settings.ALDEBARAN_TENANT_ID,
         }
-        
-        # Send POST request
         response = requests.post(aldebaran_cvgg_url, json=payload, timeout=300)
         response.raise_for_status()
         
@@ -1408,5 +1342,5 @@ Please respond with a natural, conversational tone using this information:
             response_text=json.dumps({"execution_id": execution_id, "report_id": report_id}),
             source_documents=[]
         )
-        
+            
         return execution_id, report_id
