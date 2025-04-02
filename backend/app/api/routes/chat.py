@@ -25,8 +25,9 @@ from app.rag.chat.chat_service import (
     get_chat_message_recommend_questions,
     remove_chat_message_recommend_questions,
 )
-from app.rag.types import ChatFlowType, MessageRole, ChatMessage
+from app.rag.types import MessageRole, ChatMessage
 from app.exceptions import InternalServerError
+from app.models.chat import ChatType
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +39,8 @@ class ChatRequest(BaseModel):
     chat_engine: str = "default"
     chat_id: Optional[UUID] = None
     stream: bool = True
-    chat_flow_type: ChatFlowType = ChatFlowType.DEFAULT
-    cvg_report: Optional[List[str]] = None
+    chat_type: ChatType = ChatType.DEFAULT
+    cvg_report: Optional[List[ChatMessage]] = None
     save_only: bool = False
     
     @field_validator("messages")
@@ -62,9 +63,9 @@ class ChatRequest(BaseModel):
     @classmethod
     def validate_cvg_report(cls, v: Optional[List[str]], values: dict) -> Optional[List[str]]:
         if v is not None:
-            # Ensure the correct flow type
-            if values.get("chat_flow_type") != ChatFlowType.CLIENT_VISIT_GUIDE:
-                raise ValueError("cvg_report can only be provided when chat_flow_type is CLIENT_VISIT_GUIDE")
+            # Ensure the correct chat type
+            if values.get("chat_type") != ChatType.CLIENT_VISIT_GUIDE:
+                raise ValueError("cvg_report can only be provided when chat_type is CLIENT_VISIT_GUIDE")
                 
             # Validate the array length
             if len(v) != 2:
@@ -84,8 +85,8 @@ class ChatRequest(BaseModel):
     def validate_save_only(cls, v: bool, values: dict) -> bool:
         if v:
             # save_only can only be used in CLIENT_VISIT_GUIDE mode
-            if values.get("chat_flow_type") != ChatFlowType.CLIENT_VISIT_GUIDE:
-                raise ValueError("save_only can only be True when chat_flow_type is CLIENT_VISIT_GUIDE")
+            if values.get("chat_type") != ChatType.CLIENT_VISIT_GUIDE:
+                raise ValueError("save_only can only be True when chat_type is CLIENT_VISIT_GUIDE")
             # save_only mode requires chat_id
             if not values.get("chat_id"):
                 raise ValueError("chat_id is required when save_only is True")
@@ -110,7 +111,7 @@ def chats(
             chat_id=chat_request.chat_id,
             chat_messages=chat_request.messages,
             engine_name=chat_request.chat_engine,
-            chat_flow_type=chat_request.chat_flow_type,
+            chat_type=chat_request.chat_type,
             cvg_report=chat_request.cvg_report,
             save_only=chat_request.save_only,
         )

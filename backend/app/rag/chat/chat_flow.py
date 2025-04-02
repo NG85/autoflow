@@ -37,7 +37,7 @@ from app.utils.jinja2 import get_prompt_by_jinja2_template
 from app.utils.tracing import LangfuseContextManager
 from app.rag import default_prompt
 from app.rag.chat.crm_authority import CRMAuthority, get_user_crm_authority
-from app.rag.types import ChatFlowType
+from app.models.chat import ChatType
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ class ChatFlow:
         chat_messages: List[ChatMessage],
         engine_name: str = "default",
         chat_id: Optional[UUID] = None,
-        chat_flow_type: ChatFlowType = ChatFlowType.DEFAULT,
+        chat_type: ChatType = ChatType.DEFAULT,
         cvg_report: Optional[List[str]] = None,
         save_only: bool = False,
     ) -> None:
@@ -73,7 +73,7 @@ class ChatFlow:
         self.browser_id = browser_id
         self.engine_name = engine_name
         self.origin = origin
-        self.chat_flow_type = chat_flow_type
+        self.chat_type = chat_type
         self.cvg_report = cvg_report
         self.save_only = save_only
         # Load chat engine and chat session.
@@ -201,7 +201,7 @@ class ChatFlow:
                 metadata={
                     "is_external_engine": self.engine_config.is_external_engine,
                     "chat_engine_config": self.engine_config.screenshot(),
-                    "chat_flow_type": self.chat_flow_type,
+                    "chat_type": self.chat_type,
                 },
                 tags=[f"chat_engine:{self.engine_name}"],
                 release=settings.ENVIRONMENT,
@@ -212,12 +212,13 @@ class ChatFlow:
                         "chat_history": self.chat_history,
                     }
                 )
-                if self.chat_flow_type == ChatFlowType.CLIENT_VISIT_GUIDE:
-                    execution_id, report_id = yield from self._generate_client_visit_guide()
-                    trace.update(output={
-                        "execution_id": execution_id,
-                        "report_id": report_id,
-                    })
+                if self.chat_type == ChatType.CLIENT_VISIT_GUIDE and not self.chat_id:
+                        # This is first user command
+                        execution_id, report_id = yield from self._generate_client_visit_guide()
+                        trace.update(output={
+                            "execution_id": execution_id,
+                            "report_id": report_id,
+                        })
                 else:
                     if self.engine_config.is_external_engine:
                         yield from self._external_chat()
@@ -372,7 +373,7 @@ class ChatFlow:
         return response_text, source_documents
 
     def _chat_start(
-        self,
+        self, chat_type: ChatType = ChatType.DEFAULT
     ) -> Generator[ChatEvent, None, Tuple[DBChatMessage, DBChatMessage]]:
         
         chat_obj = DBChat(
@@ -385,6 +386,7 @@ class ChatFlow:
             visibility=ChatVisibility.PUBLIC
             if not self.user
             else ChatVisibility.PRIVATE,
+            chat_type=chat_type,
         )
         
         db_user_message = DBChatMessage(
@@ -1281,7 +1283,7 @@ Please respond with a natural, conversational tone using this information:
                 }
             )
             
-            self.db_chat_obj, [self.db_user_message, self.db_assistant_message] = chat_repo.create_chat_with_messages(
+            self.db_chat_obj, messages = chat_repo.create_chat_with_messages(
                 self.db_session,
                 self.db_chat_obj,
                 [db_user_message, db_assistant_message]
@@ -1294,7 +1296,7 @@ Please respond with a natural, conversational tone using this information:
     # TECHDEBT: Refactor to independent strategy class.
     def _generate_client_visit_guide(self) -> Generator[ChatEvent | str, str, str]:
         """Invoke external service to generate client visit guide"""
-        db_user_message, db_assistant_message = yield from self._chat_start()
+        db_user_message, db_assistant_message = yield from self._chat_start(chat_type=ChatType.CLIENT_VISIT_GUIDE)
         # Add initialization status display
         yield ChatEvent(
             event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
@@ -1323,15 +1325,6 @@ Please respond with a natural, conversational tone using this information:
             
         execution_id = result["data"]["execution_id"]
         report_id = result["data"]["report_id"]
-                    
-        yield ChatEvent(
-            event_type=ChatEventType.DATA_PART,
-            payload=ChatStreamDataPayload(
-                chat=self.db_chat_obj,
-                user_message=self.user_question,
-                assistant_message=f"Start generating client visit guide, execution_id: {execution_id}",
-            ),
-        )
         
         with self._trace_manager.span(name="client_visit_guide_generation") as span:
             span.end(output={"execution_id": execution_id, "report_id": report_id})

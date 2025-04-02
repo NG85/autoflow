@@ -15,6 +15,10 @@ from sqlmodel import (
 from .base import IntEnumType, UUIDBaseModel, UpdatableBaseModel
 
 
+class ChatType(str, enum.Enum):
+    DEFAULT = "default"
+    CLIENT_VISIT_GUIDE = "client_visit_guide"
+
 class ChatVisibility(int, enum.Enum):
     PRIVATE = 0
     PUBLIC = 1
@@ -48,6 +52,12 @@ class Chat(UUIDBaseModel, UpdatableBaseModel, table=True):
             default=ChatVisibility.PRIVATE,
         )
     )
+    chat_type: ChatType = Field(
+        sa_column=Column(
+            IntEnumType(ChatType),
+            nullable=False,
+            default=ChatType.DEFAULT,
+        ))
 
     __tablename__ = "chats"
 
@@ -65,6 +75,7 @@ class ChatFilters(BaseModel):
     chat_origin: Optional[str] = None
     # user_id: Optional[UUID] = None          # no use now
     engine_id: Optional[int] = None
+    chat_type: Optional[ChatType] = None
 
 
 class ChatOrigin(BaseModel):

@@ -48,6 +48,8 @@ class ChatRepo(BaseRepo):
         #     query = query.where(Chat.user_id == filters.user_id)
         if filters.engine_id:
             query = query.where(Chat.engine_id == filters.engine_id)
+        if filters.chat_type:
+            query = query.where(Chat.chat_type == filters.chat_type)
 
         query = query.order_by(Chat.created_at.desc())
         return paginate(session, query, params)
