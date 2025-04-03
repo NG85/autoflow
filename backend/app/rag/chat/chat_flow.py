@@ -38,6 +38,7 @@ from app.utils.tracing import LangfuseContextManager
 from app.rag import default_prompt
 from app.rag.chat.crm_authority import CRMAuthority, get_user_crm_authority
 from app.models.chat import ChatType
+from app.api.routes.models import ChatMode
 
 logger = logging.getLogger(__name__)
 
@@ -64,8 +65,7 @@ class ChatFlow:
         engine_name: str = "default",
         chat_id: Optional[UUID] = None,
         chat_type: ChatType = ChatType.DEFAULT,
-        cvg_report: Optional[List[str]] = None,
-        save_only: bool = False,
+        chat_mode: ChatMode = ChatMode.DEFAULT,
     ) -> None:
         self.chat_id = chat_id
         self.db_session = db_session
@@ -74,8 +74,8 @@ class ChatFlow:
         self.engine_name = engine_name
         self.origin = origin
         self.chat_type = chat_type
-        self.cvg_report = cvg_report
-        self.save_only = save_only
+        self.chat_messages = chat_messages
+        self.chat_mode = chat_mode
         # Load chat engine and chat session.
         self.user_question, self.chat_history = parse_chat_messages(chat_messages)
         
@@ -107,23 +107,25 @@ class ChatFlow:
         else:
             self.engine_config = ChatEngineConfig.load_from_db(db_session, engine_name)
             self.db_chat_engine = self.engine_config.get_db_chat_engine()
-            # self.db_chat_obj = chat_repo.create(
-            #     self.db_session,
-            #     DBChat(
-            #         title=self.user_question[:100],
-            #         engine_id=self.db_chat_engine.id,
-            #         engine_options=self.engine_config.screenshot(),
-            #         user_id=self.user.id if self.user else None,
-            #         browser_id=self.browser_id,
-            #         origin=origin,
-            #         visibility=(
-            #             ChatVisibility.PUBLIC
-            #             if not self.user
-            #             else ChatVisibility.PRIVATE,
-            #         ),
-            # )
-            # chat_id = self.db_chat_obj.id
-            # # slack/discord may create a new chat with history messages
+            self.db_chat_obj = chat_repo.create(
+                self.db_session,
+                DBChat(
+                    title=self.user_question[:100],
+                    engine_id=self.db_chat_engine.id,
+                    engine_options=self.engine_config.screenshot(),
+                    user_id=self.user.id if self.user else None,
+                    browser_id=self.browser_id,
+                    origin=origin,
+                    visibility=(
+                        ChatVisibility.PUBLIC
+                        if not self.user
+                        else ChatVisibility.PRIVATE
+                    ),
+                    chat_type=self.chat_type
+                )
+            )
+            chat_id = self.db_chat_obj.id
+            # slack/discord may create a new chat with history messages
             # now = datetime.now(UTC)
             # for i, m in enumerate(self.chat_history):
             #     chat_repo.create_message(
@@ -138,6 +140,12 @@ class ChatFlow:
             #             finished_at=now,
             #         ),
             #     )
+            if self.chat_history and len(self.chat_history) > 0:
+                chat_repo.create_chat_with_messages(
+                    session=self.db_session,
+                    chat=self.db_chat_obj,
+                    messages=self.chat_history,
+                )
 
         # Init Langfuse for tracing.
         enable_langfuse = (
@@ -188,9 +196,9 @@ class ChatFlow:
     
     def chat(self) -> Generator[ChatEvent | str, None, None]:
         try:
-            # Save cvg report as chat messages
-            if self.save_only and self.cvg_report:
-                self._save_cvg_messages()
+            # This is the save cvg report command
+            if self.chat_type == ChatType.CLIENT_VISIT_GUIDE and self.chat_mode == ChatMode.SAVE_CVG_REPORT:
+                yield from self._save_cvg_messages()
                 return
             
             with self._trace_manager.observe(
@@ -212,12 +220,13 @@ class ChatFlow:
                         "chat_history": self.chat_history,
                     }
                 )
-                if self.chat_type == ChatType.CLIENT_VISIT_GUIDE and not self.chat_id:
-                        # This is first user command
-                        execution_id, report_id = yield from self._generate_client_visit_guide()
+                if self.chat_type == ChatType.CLIENT_VISIT_GUIDE and self.chat_mode == ChatMode.CREATE_CVG_REPORT:
+                        # This is the create cvg report command
+                        execution_id, report_id, message = yield from self._generate_client_visit_guide()
                         trace.update(output={
                             "execution_id": execution_id,
                             "report_id": report_id,
+                            "message": message,
                         })
                 else:
                     if self.engine_config.is_external_engine:
@@ -235,6 +244,7 @@ class ChatFlow:
     def _builtin_chat(
         self,
     ) -> Generator[ChatEvent | str, None, Tuple[Optional[str], List[Any]]]:
+        ctx = langfuse_instrumentor_context.get().copy()
         db_user_message, db_assistant_message = yield from self._chat_start()
         # Add initialization status display
         yield ChatEvent(
@@ -244,7 +254,6 @@ class ChatFlow:
                 display="Initializing chat session and starting flow",
             ),
         )
-        ctx = langfuse_instrumentor_context.get().copy()
         langfuse_instrumentor_context.get().update(ctx)
         
         yield ChatEvent(
@@ -373,49 +382,35 @@ class ChatFlow:
         return response_text, source_documents
 
     def _chat_start(
-        self, chat_type: ChatType = ChatType.DEFAULT
-    ) -> Generator[ChatEvent, None, Tuple[DBChatMessage, DBChatMessage]]:
-        
-        chat_obj = DBChat(
-            title=self.user_question[:100],
-            engine_id=self.db_chat_engine.id,
-            engine_options=self.engine_config.screenshot(),
-            user_id=self.user.id if self.user else None,
-            browser_id=self.browser_id,
-            origin=self.origin,
-            visibility=ChatVisibility.PUBLIC
-            if not self.user
-            else ChatVisibility.PRIVATE,
-            chat_type=chat_type,
+            self,
+        ) -> Generator[ChatEvent, None, Tuple[DBChatMessage, DBChatMessage]]:
+        db_user_message = chat_repo.create_message(
+            session=self.db_session,
+            chat=self.db_chat_obj,
+            chat_message=DBChatMessage(
+                role=MessageRole.USER.value,
+                trace_url=self._trace_manager.trace_url,
+                content=self.user_question.strip(),
+            ),
         )
-        
-        db_user_message = DBChatMessage(
-            role=MessageRole.USER.value,
-            trace_url=self._trace_manager.trace_url,
-            content=self.user_question.strip(),
+        db_assistant_message = chat_repo.create_message(
+            session=self.db_session,
+            chat=self.db_chat_obj,
+            chat_message=DBChatMessage(
+                role=MessageRole.ASSISTANT.value,
+                trace_url=self._trace_manager.trace_url,
+                content="",
+            ),
         )
-        
-        db_assistant_message = DBChatMessage(
-            role=MessageRole.ASSISTANT.value,
-            trace_url=self._trace_manager.trace_url,
-            content="",
-        )
-        
-        self.db_chat_obj, messages = chat_repo.create_chat_with_messages(
-            self.db_session,
-            chat_obj,
-            [db_user_message, db_assistant_message]
-        )
-        
         yield ChatEvent(
             event_type=ChatEventType.DATA_PART,
             payload=ChatStreamDataPayload(
                 chat=self.db_chat_obj,
-                user_message=messages[0],
-                assistant_message=messages[1],
+                user_message=db_user_message,
+                assistant_message=db_assistant_message,
             ),
         )
-        return messages[0], messages[1]
+        return db_user_message, db_assistant_message
 
     def _search_knowledge_graph(
         self,
@@ -1259,34 +1254,37 @@ Please respond with a natural, conversational tone using this information:
             return content
         
 
-    def _save_cvg_messages(self):
+    def _save_cvg_messages(self) -> Generator[ChatEvent | str, None, None]:
         """Save user command and cvg report as chat messages"""                    
         try:
-            db_user_message = DBChatMessage(
-                chat_id=self.db_chat_obj.id,
-                role=MessageRole.USER,
-                content=self.cvg_report[0],
-                user_id=self.user.id if self.user else None,
-                meta={
-                    "type": "user_command_for_cvg",
-                    "timestamp": datetime.now(UTC).isoformat()
-                }
-            )
-            db_assistant_message = DBChatMessage(
-                chat_id=self.db_chat_obj.id,
-                role=MessageRole.ASSISTANT,
-                content=self.cvg_report[1],
-                user_id=self.user.id if self.user else None,
-                meta={
-                    "type": "cvg_report",
-                    "timestamp": datetime.now(UTC).isoformat()
-                }
-            )
+            db_messages = []
+            now = datetime.now(UTC)
+            for message in self.chat_messages:
+                db_message = DBChatMessage(
+                    chat_id=self.db_chat_obj.id,
+                    role=message.role,
+                    content=message.content,
+                    user_id=self.user.id if self.user else None,
+                    meta=message.additional_kwargs if message.additional_kwargs else {},
+                    created_at=now,
+                    updated_at=now,
+                    finished_at=now
+                )
+                db_messages.append(db_message)
             
             self.db_chat_obj, messages = chat_repo.create_chat_with_messages(
                 self.db_session,
                 self.db_chat_obj,
-                [db_user_message, db_assistant_message]
+                db_messages
+            )
+            
+            yield ChatEvent(
+                event_type=ChatEventType.DATA_PART,
+                payload=ChatStreamDataPayload(
+                    chat=self.db_chat_obj,
+                    user_message=db_messages[-2],
+                    assistant_message=db_messages[-1],
+                ),
             )
         except Exception as e:
             logger.error(f"Failed to save cvg messages: {e}")
@@ -1296,7 +1294,7 @@ Please respond with a natural, conversational tone using this information:
     # TECHDEBT: Refactor to independent strategy class.
     def _generate_client_visit_guide(self) -> Generator[ChatEvent | str, str, str]:
         """Invoke external service to generate client visit guide"""
-        db_user_message, db_assistant_message = yield from self._chat_start(chat_type=ChatType.CLIENT_VISIT_GUIDE)
+        db_user_message, db_assistant_message = yield from self._chat_start()
         # Add initialization status display
         yield ChatEvent(
             event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
@@ -1316,24 +1314,42 @@ Please respond with a natural, conversational tone using this information:
             "tenant_id": settings.ALDEBARAN_TENANT_ID,
         }
         response = requests.post(aldebaran_cvgg_url, json=payload, timeout=300)
-        response.raise_for_status()
+        execution_id = None
+        report_id = None
+        error_message = None
+        try:
+            response.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"HTTP error occurred: {e}")
+            error_message = "报告服务响应异常，请稍后再试"
         
         # Parse JSON response
         result = response.json()
         if result.get("status") != "success":
-            raise ValueError(f"Failed to create job for client visit guide: {result.get('message')}")
-            
-        execution_id = result["data"]["execution_id"]
-        report_id = result["data"]["report_id"]
+            error_message = result.get('message')
         
-        with self._trace_manager.span(name="client_visit_guide_generation") as span:
-            span.end(output={"execution_id": execution_id, "report_id": report_id})
-                    
-        yield from self._chat_finish(
-            db_assistant_message=db_assistant_message,
-            db_user_message=db_user_message,
-            response_text=json.dumps({"execution_id": execution_id, "report_id": report_id}),
-            source_documents=[]
-        )
+        if error_message:
+            with self._trace_manager.span(name="client_visit_guide_generation") as span:
+                span.end(output=error_message)
+             
+            yield from self._chat_finish(
+                db_assistant_message=db_assistant_message,
+                db_user_message=db_user_message,
+                response_text=error_message,
+                source_documents=[]
+            )
+        else:
+            execution_id = result["data"]["execution_id"]
+            report_id = result["data"]["report_id"]
             
-        return execution_id, report_id
+            with self._trace_manager.span(name="client_visit_guide_generation") as span:
+                span.end(output={"execution_id": execution_id, "report_id": report_id})
+                        
+            yield from self._chat_finish(
+                db_assistant_message=db_assistant_message,
+                db_user_message=db_user_message,
+                response_text=json.dumps({"execution_id": execution_id, "report_id": report_id}),
+                source_documents=[]
+            )
+            
+        return execution_id, report_id, error_message

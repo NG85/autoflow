@@ -98,6 +98,13 @@ class ChatRepo(BaseRepo):
             .where(ChatMessage.chat_id == chat.id)
             .order_by(ChatMessage.ordinal.desc())
         ).first()
+        
+    def get_max_message_ordinal(self, session: Session, chat_id: UUID) -> int:
+        """Get the maximum ordinal value for messages in a chat"""
+        return session.exec(
+            select(func.max(ChatMessage.ordinal))
+            .where(ChatMessage.chat_id == chat_id)
+        ).first() or 0
 
     def get_messages(
         self,
@@ -139,12 +146,8 @@ class ChatRepo(BaseRepo):
         chat_message: ChatMessage,
     ) -> ChatMessage:
         if not chat_message.ordinal:
-            last_message = self.get_last_message(session, chat)
-            if last_message:
-                ordinal = last_message.ordinal + 1
-            else:
-                ordinal = 1
-            chat_message.ordinal = ordinal
+            max_ordinal = self.get_max_message_ordinal(session, chat.id)
+            chat_message.ordinal = max_ordinal + 1
         chat_message.chat_id = chat.id
         chat_message.user_id = chat.user_id
         session.add(chat_message)
@@ -164,10 +167,13 @@ class ChatRepo(BaseRepo):
             session.add(chat)
             session.flush()  # Generate ID but don't commit
             
+            max_ordinal = self.get_max_message_ordinal(session, chat.id)
             # Set message chat_id and add messages
             for message in messages:
                 message.chat_id = chat.id
                 message.created_at = message.updated_at = datetime.now(UTC)
+                message.ordinal = max_ordinal + 1
+                max_ordinal += 1
             
             session.add_all(messages)
             # The transaction will be committed automatically when it ends
