@@ -1336,7 +1336,7 @@ Please respond with a natural, conversational tone using this information:
             result = response.json()
             data = result["data"]
             with self._trace_manager.span(name="client_visit_guide_generation") as span:
-                span.end(output={data})
+                span.end(output={json.dumps(data)})
                         
             yield from self._chat_finish(
                 db_assistant_message=db_assistant_message,
