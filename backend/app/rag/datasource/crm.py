@@ -32,7 +32,7 @@ class CRMDataSourceConfig(BaseModel):
     account_filter: Optional[str] = None
     contact_filter: Optional[str] = None
     opportunity_filter: Optional[str] = None
-    max_count: int = 10
+    max_count: Optional[int] = None
     batch_size: int = 100
 
 class CRMDataSource(BaseDataSource):
