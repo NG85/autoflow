@@ -1320,12 +1320,7 @@ Please respond with a natural, conversational tone using this information:
         except requests.exceptions.HTTPError as e:
             logger.error(f"HTTP error occurred: {e}")
             error_message = "报告服务响应异常，请稍后再试"
-        
-        # Parse JSON response
-        result = response.json()
-        if result.get("status") != "success":
-            error_message = result.get('message')
-        
+                
         if error_message:
             with self._trace_manager.span(name="client_visit_guide_generation") as span:
                 span.end(output=error_message)
@@ -1337,6 +1332,8 @@ Please respond with a natural, conversational tone using this information:
                 source_documents=[]
             )
         else:
+            # Parse JSON response
+            result = response.json()
             data = result["data"]
             with self._trace_manager.span(name="client_visit_guide_generation") as span:
                 span.end(output={data})
