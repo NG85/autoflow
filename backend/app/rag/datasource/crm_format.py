@@ -37,9 +37,8 @@ def format_account_info(account) -> List[str]:
     # 特殊处理的字段组（根据实际需要调整分组显示）
     contact_fields = {"phone", "website", "email"}
     date_fields = {"last_follow_up", "last_deal_time", "allocation_time", "creation_time", 
-                  "last_modification_time", "earliest_deal_date", "latest_deal_date", 
-                  "person_in_charge_change_time"}
-    status_fields = {"allocation_status", "deal_status", "life_status", "lock_status", "account_status"}
+                  "last_modification_time", "earliest_deal_date", "latest_deal_date"}
+    status_fields = {"allocation_status", "deal_status", "life_status"}
     
     # 需要排除的字段
     exclude_fields = {"id", "unique_id", "customer_name"}
@@ -156,12 +155,10 @@ def format_contact_info(contact) -> List[str]:
     
     # 分组字段
     identity_fields = {"position", "position1", "department", "department1", "key_decision_maker", 
-                        "influence_level", "relationship_strength", "direct_superior", "direct_superior_id"}
-    contact_method_fields = {"mobile1", "mobile2", "mobile3", "mobile4", "mobile5", 
-                            "phone1", "phone2", "phone3", "phone4", "phone5", 
-                            "email", "wechat", "address"}
-    date_fields = {"birthday", "created_date", "last_modified_date"}
-    special_fields = {"remarks", "gender"}
+                        "direct_superior", "direct_superior_id"}
+    contact_method_fields = {"mobile1", "phone1", "email", "wechat", "address"}
+    date_fields = {"birthday"}
+    special_fields = {"gender"}
     
     # 需要排除的字段
     exclude_fields = {"id", "name", "customer_id", "unique_id", "direct_superior_id"}
@@ -188,15 +185,6 @@ def format_contact_info(contact) -> List[str]:
         kdm_label = column_comments.get("key_decision_maker", "关键决策人")
         kdm_formatted = '是' if str(kdm_value).lower() in ('是', 'yes', 'true', '1') else '否'
         content.append(f"**{kdm_label}**: {kdm_formatted}")
-        
-    # 处理影响力和关系强度
-    if "influence_level" in valid_columns and getattr(contact, "influence_level"):
-        inf_label = column_comments.get("influence_level", "影响力层级")
-        content.append(f"**{inf_label}**: {getattr(contact, 'influence_level')}")
-        
-    if "relationship_strength" in valid_columns and getattr(contact, "relationship_strength"):
-        rel_label = column_comments.get("relationship_strength", "联系人与我方关系强度")
-        content.append(f"**{rel_label}**: {getattr(contact, 'relationship_strength')}")
             
     # 处理直属上级信息
     if "direct_superior" in valid_columns and getattr(contact, "direct_superior"):
@@ -210,16 +198,13 @@ def format_contact_info(contact) -> List[str]:
     
     # 处理联系方式
     contact_methods = []
-    for i in range(1, 6):
-        mobile_attr = f'mobile{i}'
-        if mobile_attr in valid_columns and getattr(contact, mobile_attr):
-            mobile_label = column_comments.get(mobile_attr, f'手机{i}')
-            contact_methods.append(f"{mobile_label}: {getattr(contact, mobile_attr)}")
-        
-        phone_attr = f'phone{i}'
-        if phone_attr in valid_columns and getattr(contact, phone_attr):
-            phone_label = column_comments.get(phone_attr, f'电话{i}')
-            contact_methods.append(f"{phone_label}: {getattr(contact, phone_attr)}")
+    if 'mobile1' in valid_columns and getattr(contact, 'mobile1'):
+        mobile_label = column_comments.get('mobile1', '手机')
+        contact_methods.append(f"{mobile_label}: {contact.mobile1}")
+    
+    if 'phone1' in valid_columns and getattr(contact, 'phone1'):
+        phone_label = column_comments.get('phone1', '电话')
+        contact_methods.append(f"{phone_label}: {contact.phone1}")
     
     if "email" in valid_columns and getattr(contact, "email"):
         email_label = column_comments.get("email", "邮件")
@@ -260,17 +245,11 @@ def format_contact_info(contact) -> List[str]:
         display_name = column_comments.get(field_name, field_name.replace('_', ' ').title())
         content.append(f"**{display_name}**: {formatted_date}")
         
-    # 处理备注
-    if "remarks" in valid_columns and getattr(contact, "remarks"):
-        remarks_label = column_comments.get("remarks", "备注")
-        content.append(f"**{remarks_label}**: {getattr(contact, 'remarks')}")
-        
     # 处理其他字段
     all_special_fields = identity_fields.union(contact_method_fields).union(date_fields).union(special_fields).union(exclude_fields)
     
     # 找出重要字段先显示
-    important_fields = {"tidb_knowledge", "attitude", "status", "score", "mva", 
-                        "contributor", "committer", "reviewer"}
+    important_fields = {"attitude", "status"}
     
     for field_name in important_fields:
         if field_name not in valid_columns or field_name in all_special_fields:
@@ -316,130 +295,68 @@ def format_opportunity_info(opportunity) -> List[str]:
     field_groups = {
         "basic": {
             "title": "",  # 基本信息不需要标题
-            "fields": ["customer_name", "owner", "opportunity_stage", 
-                      "stage_status", "expected_closing_date", "expected_closing_quarter", 
-                      "expected_closing_month", "forecast_amount", "business_type", 
-                      "opportunity_type", "opportunity_number", "sales_process", 
-                      "opportunity_source", "lifecycle_status"]
-        },
-        "parent": {
-            "title": "",  # 父商机信息与基本信息合并展示
-            "fields": ["parent_opportunity", "parent_opportunity_id"]
+            "fields": ["customer_name", "customer_type", "customer_category", "owner", 
+                    "opportunity_stage", "stage_status", "expected_closing_date", 
+                    "expected_closing_quarter", "business_type", "opportunity_type", 
+                    "opportunity_source", "customer_business_scenario"]
         },
         "financial": {
             "title": "## 财务信息",
-            "fields": ["estimated_tcv", "estimated_acv", "opportunity_order_amount"]
-        },
-        "amount_detail": {
-            "title": "### 金额明细",
-            "fields": ["license_amount", "ma_amount", "service_days_amount", "product_subscription_amount"]
-        },
-        "acv_detail": {
-            "title": "### ACV明细",
-            "fields": ["license_acv", "ma_acv", "service_acv", "subscription_acv"]
+            "fields": ["estimated_tcv", "estimated_acv"]
         },
         "forecast": {
             "title": "### 当财年收入预测",
-            "fields": ["current_year_revenue_forecast", "current_year_license_forecast", 
-                       "current_year_ma_forecast", "current_year_service_forecast", 
-                       "current_year_subscription_forecast"]
-        },
-        "service": {
-            "title": "## 服务信息",
-            "fields": ["expected_service_start_date", "expected_service_end_date", 
-                       "expected_service_duration_months", "service_days_type", 
-                       "expected_launch_date"]
-        },
-        "technical": {
-            "title": "## 技术信息",
-            "fields": ["primary_database", "primary_database_percentage", "data_volume", 
-                       "data_volume_tb_gb", "current_database_resource", "current_database_pain_points"]
-        },
-        "solution": {
-            "title": "## 解决方案信息", 
-            "fields": ["estimated_total_project_nodes", "has_isv_joint_solution"]
-        },
-        "solution1": {
-            "title": "### 解决方案1",
-            "fields": ["solution_1_name", "solution_1_number", "solution_1_certified_partner", 
-                       "estimated_solution_1_nodes", "estimated_solution_1_percentage"]
-        },
-        "solution2": {
-            "title": "### 解决方案2",
-            "fields": ["solution_2_name", "solution_2_number", "solution_2_certified_partner", 
-                       "estimated_solution_2_nodes", "estimated_solution_2_percentage"]
-        },
-        "mutual_solution": {
-            "title": "### 互认证解决方案",
-            "fields": ["mutual_certified_solution_partner", "mutual_certified_solution_percentage"]
+            "fields": ["current_year_service_forecast"]
         },
         "competitor": {
             "title": "## 竞争情况",
-            "fields": ["competitor_name", "competitor_info", "competitor_advantages"]
+            "fields": ["competitor_name"]
         },
         "risk": {
             "title": "## 风险与状态评估",
-            "fields": ["customer_journey_percentage", "timing_risk", "operational_risk_assessment", 
-                       "is_key_deal", "is_slip_deal", "forecast_type", "lock_status"]
+            "fields": ["forecast_type", "renew_risk_level"]
         },
         "partner": {
             "title": "## 合作伙伴信息",
-            "fields": ["partner", "distributor", "alternative_distributor", "cloud_vendor", 
-                       "partner_cooperation_mode", "general_agent", "application_developer"]
+            "fields": ["general_agent"]
         },
         "channel": {
             "title": "## 渠道报备信息",
-            "fields": ["is_channel_filing_opportunity", "partner_opportunity_filing_id", 
-                       "filing_partner_name", "partner_filing_opportunity_owner", "is_double_credit"]
+            "fields": ["is_channel_reported_opportunity", "partner_opportunity_filing_id_unique_id", 
+                    "partner_opportunity_filing_number", "filing_opportunity_number"]
         },
         "process": {
             "title": "## 项目流程信息",
-            "fields": ["bidding_method", "signing_type", "contract_signing_status", "quotation_status", 
-                       "order_status", "project_approval", "has_poc", "has_bid", "bid_result", "loss_reason"]
+            "fields": ["signing_type", "quotation_status", "is_project_approved", 
+                    "project_date", "bidding_time", "budget_approval_status", "lost_reason"]
+        },
+        "status_tracking": {
+            "title": "## 商机状态跟踪",
+            "fields": ["weekly_update", "sl_pull_in", "quotation_order_status", 
+                    "sales_order_archive_status", "latest_followup_date_new"]
         },
         "system": {
             "title": "## 系统信息",
-            "fields": ["creator", "create_time", "last_modifier", "last_modified_time", "last_followup_time"]
+            "fields": ["create_time", "last_modifier", "last_modified_time", "last_followup_time"]
         }
     }
         
     # 详细信息字段（长文本）单独处理
     detail_fields = {
-        "sales_log_details": "销售日志详情",
         "call_high_notes": "Call High情况",
         "customer_budget_status": "客户预算情况",
         "todo_and_followup": "TODO与跟进事项",
-        "timeline_project_progress": "倒排时间表项目进展",
-        "countdown_next_plan": "下一步计划(Countdown)",
-        "countdown_bottleneck": "问题卡点(Countdown)",
-        "remarks": "备注"
+        "remarks": "备注说明"
     }
 
     # 需要排除的字段
-    exclude_fields = {"id", "unique_id", "opportunity_name", "customer_id", "parent_opportunity_id"}
+    exclude_fields = {"id", "unique_id", "opportunity_name", "customer_id"}
      
     # 需要特殊处理的布尔字段 - 显示为"是/否"
-    boolean_fields = {
-        "is_key_deal", "is_slip_deal", "is_channel_filing_opportunity", 
-        "has_isv_joint_solution", "has_poc", "has_bid", "is_double_credit"
-    }
-    
-    # 需要特殊处理的百分比字段 - 自动添加%符号
-    percentage_fields = {
-        "primary_database_percentage", "customer_journey_percentage",
-        "estimated_solution_1_percentage", "estimated_solution_2_percentage",
-        "mutual_certified_solution_percentage"
-    }
+    boolean_fields = {"is_channel_reported_opportunity", "is_project_approved"}
     
     # 需要特殊处理的金额字段 - 格式化显示
-    currency_fields = {
-        "forecast_amount", "estimated_tcv", "estimated_acv", "opportunity_order_amount",
-        "license_amount", "ma_amount", "service_days_amount", "product_subscription_amount",
-        "license_acv", "ma_acv", "service_acv", "subscription_acv",
-        "current_year_revenue_forecast", "current_year_license_forecast", 
-        "current_year_ma_forecast", "current_year_service_forecast", 
-        "current_year_subscription_forecast"
-    }
+    currency_fields = {"estimated_tcv", "estimated_acv", "current_year_service_forecast"}
   
     # 辅助函数：处理字段值的格式化
     def format_field_value(field_name, value):
@@ -456,13 +373,6 @@ def format_opportunity_info(opportunity) -> List[str]:
             return value.strftime("%Y-%m-%d %H:%M")
         elif isinstance(value, date):
             return value.strftime("%Y-%m-%d")
-            
-        # 处理百分比
-        if field_name in percentage_fields and value is not None:
-            # 如果值已经包含%，则不添加
-            if str(value).endswith('%'):
-                return value
-            return f"{value}%"
             
         # 处理货币金额
         if field_name in currency_fields and value is not None:
@@ -511,22 +421,9 @@ def format_opportunity_info(opportunity) -> List[str]:
     # 处理基本信息
     content.extend(process_field_group(field_groups["basic"]))
     
-    # 处理父商机信息
-    content.extend(process_field_group(field_groups["parent"]))
-    
     # 处理财务信息
     financial_content = []
     financial_content.extend(process_field_group(field_groups["financial"]))
-    
-    # 只有当至少有一个金额明细字段有值时才显示金额明细
-    if any(getattr(opportunity, field, None) for field in field_groups["amount_detail"]["fields"] 
-          if field in valid_columns):
-        financial_content.extend(process_field_group(field_groups["amount_detail"]))
-        
-    # 只有当至少有一个ACV明细字段有值时才显示ACV明细
-    if any(getattr(opportunity, field, None) for field in field_groups["acv_detail"]["fields"] 
-          if field in valid_columns):
-        financial_content.extend(process_field_group(field_groups["acv_detail"]))
         
     # 只有当至少有一个收入预测字段有值时才显示收入预测
     if any(getattr(opportunity, field, None) for field in field_groups["forecast"]["fields"] 
@@ -536,44 +433,7 @@ def format_opportunity_info(opportunity) -> List[str]:
     # 只有当财务信息组有内容时，才将财务信息添加到主内容中
     if len(financial_content) > 0:
         content.extend(financial_content)
-    
-    # 处理服务信息
-    service_fields = field_groups["service"]["fields"]
-    if any(getattr(opportunity, field, None) for field in service_fields if field in valid_columns):
-        content.extend(process_field_group(field_groups["service"]))
-    
-    # 处理技术信息
-    tech_fields = field_groups["technical"]["fields"]
-    if any(getattr(opportunity, field, None) for field in tech_fields if field in valid_columns):
-        content.extend(process_field_group(field_groups["technical"]))
-    
-    # 处理解决方案信息
-    solution_content = []
-    # 检查是否有任何解决方案相关字段
-    all_solution_fields = (field_groups["solution"]["fields"] + 
-                         field_groups["solution1"]["fields"] + 
-                         field_groups["solution2"]["fields"] + 
-                         field_groups["mutual_solution"]["fields"])
-                         
-    if any(getattr(opportunity, field, None) for field in all_solution_fields if field in valid_columns):
-        solution_content.extend(process_field_group(field_groups["solution"]))
         
-        # 处理解决方案1
-        if "solution_1_name" in valid_columns and getattr(opportunity, "solution_1_name", None):
-            solution_content.extend(process_field_group(field_groups["solution1"]))
-            
-        # 处理解决方案2
-        if "solution_2_name" in valid_columns and getattr(opportunity, "solution_2_name", None):
-            solution_content.extend(process_field_group(field_groups["solution2"]))
-            
-        # 处理互认证解决方案
-        if "mutual_certified_solution_partner" in valid_columns and getattr(opportunity, "mutual_certified_solution_partner", None):
-            solution_content.extend(process_field_group(field_groups["mutual_solution"]))
-    
-    # 只有当解决方案信息有内容时，才将其添加到主内容中
-    if len(solution_content) > 0:
-        content.extend(solution_content)
-    
     # 处理竞争情况
     competitor_fields = field_groups["competitor"]["fields"]
     if any(getattr(opportunity, field, None) for field in competitor_fields if field in valid_columns):
@@ -589,14 +449,19 @@ def format_opportunity_info(opportunity) -> List[str]:
     if any(getattr(opportunity, field, None) for field in partner_fields if field in valid_columns):
         content.extend(process_field_group(field_groups["partner"]))
     
-    # 处理渠道报备信息 - 只有当is_channel_filing_opportunity为"是"时才显示
-    if "is_channel_filing_opportunity" in valid_columns and getattr(opportunity, "is_channel_filing_opportunity", None) == '是':
-        content.extend(process_field_group(field_groups["channel"], "is_channel_filing_opportunity"))
-    
+    # 处理渠道报备信息 - 只有当is_channel_reported_opportunity为"是"时才显示
+    if "is_channel_reported_opportunity" in valid_columns and getattr(opportunity, "is_channel_reported_opportunity", None) in ('是', 'True', 'true', 'YES', 'yes', '1'):
+       content.extend(process_field_group(field_groups["channel"], "is_channel_reported_opportunity"))
+       
     # 处理项目流程信息
     process_fields = field_groups["process"]["fields"]
     if any(getattr(opportunity, field, None) for field in process_fields if field in valid_columns):
         content.extend(process_field_group(field_groups["process"]))
+    
+    # 处理商机状态跟踪信息
+    status_fields = field_groups["status_tracking"]["fields"]
+    if any(getattr(opportunity, field, None) for field in status_fields if field in valid_columns):
+        content.extend(process_field_group(field_groups["status_tracking"]))
     
     # 处理详细信息字段（长文本）
     for field_name, display_title in detail_fields.items():
