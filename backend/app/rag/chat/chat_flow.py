@@ -222,10 +222,9 @@ class ChatFlow:
                 )
                 if self.chat_type == ChatType.CLIENT_VISIT_GUIDE and self.chat_mode == ChatMode.CREATE_CVG_REPORT:
                         # This is the create cvg report command
-                        execution_id, report_id, message = yield from self._generate_client_visit_guide()
+                        data, message = yield from self._generate_client_visit_guide()
                         trace.update(output={
-                            "execution_id": execution_id,
-                            "report_id": report_id,
+                            "data": data,
                             "message": message,
                         })
                 else:
@@ -1292,7 +1291,7 @@ Please respond with a natural, conversational tone using this information:
         
     
     # TECHDEBT: Refactor to independent strategy class.
-    def _generate_client_visit_guide(self) -> Generator[ChatEvent | str, str, str]:
+    def _generate_client_visit_guide(self) -> Generator[ChatEvent | str, None, Tuple[Optional[dict], Optional[str]]]:
         """Invoke external service to generate client visit guide"""
         db_user_message, db_assistant_message = yield from self._chat_start()
         # Add initialization status display
@@ -1314,8 +1313,7 @@ Please respond with a natural, conversational tone using this information:
             "tenant_id": settings.ALDEBARAN_TENANT_ID,
         }
         response = requests.post(aldebaran_cvgg_url, json=payload, timeout=300)
-        execution_id = None
-        report_id = None
+        data = None
         error_message = None
         try:
             response.raise_for_status()
@@ -1339,17 +1337,15 @@ Please respond with a natural, conversational tone using this information:
                 source_documents=[]
             )
         else:
-            execution_id = result["data"]["execution_id"]
-            report_id = result["data"]["report_id"]
-            
+            data = result["data"]
             with self._trace_manager.span(name="client_visit_guide_generation") as span:
-                span.end(output={"execution_id": execution_id, "report_id": report_id})
+                span.end(output={data})
                         
             yield from self._chat_finish(
                 db_assistant_message=db_assistant_message,
                 db_user_message=db_user_message,
-                response_text=json.dumps({"execution_id": execution_id, "report_id": report_id}),
+                response_text=json.dumps(data),
                 source_documents=[]
             )
             
-        return execution_id, report_id, error_message
+        return data, error_message
