@@ -23,6 +23,21 @@ class ContactEntity(CRMEntityBase):
     """Entity representing a CRM contact"""
     CRM_DATA_TYPE = CrmDataType.CONTACT
 
+class InternalOwnerEntity(CRMEntityBase):
+    """Entity representing a CRM internal owner"""
+    CRM_DATA_TYPE = CrmDataType.INTERNAL_OWNER
 class OpportunityEntity(CRMEntityBase):
     """Entity representing a CRM opportunity"""
     CRM_DATA_TYPE = CrmDataType.OPPORTUNITY
+
+class OrderEntity(CRMEntityBase):
+    """Entity representing a CRM order"""
+    CRM_DATA_TYPE = CrmDataType.ORDER
+
+class PaymentPlanEntity(CRMEntityBase):
+    """Entity representing a CRM payment plan"""
+    CRM_DATA_TYPE = CrmDataType.PAYMENTPLAN
+    
+class OpportunityUpdatesEntity(CRMEntityBase):
+    """Entity representing a CRM opportunity updates"""
+    CRM_DATA_TYPE = CrmDataType.OPPORTUNITY_UPDATES

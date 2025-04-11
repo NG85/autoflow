@@ -4,19 +4,52 @@ import logging
 
 logger = logging.getLogger(__name__)
     
-def get_column_comments_and_names(model_class) -> tuple:
+def get_column_comments_and_names(model_class, filter_text: bool = False, filter_max_length: int = 300) -> tuple:
     """获取模型的列注释和所有列名"""
     comments_as_display_names = {}
     column_names = set()
+    excluded_fields = set()
+  
+    # 如果需要过滤长文本
+    if filter_text:
+        # 检查模型的所有字段
+        for field_name in dir(model_class):
+            field = getattr(model_class, field_name, None)
+            
+            # 跳过非字段属性和特殊属性
+            if field_name.startswith('_') or not hasattr(field, 'sa_column'):
+                continue
+            
+            sa_column = getattr(field, 'sa_column', None)
+            if sa_column is not None:
+                # 检查是否为Text类型
+                if sa_column.type.__class__.__name__ == "Text":
+                    excluded_fields.add(field_name)
+                    logger.debug(f"Excluding Text field: {field_name}")
+                    continue
+                
+                # 检查VARCHAR类型的长度限制
+                if hasattr(sa_column.type, 'length'):
+                    # 对于长度大于300的VARCHAR字段，也视为长文本字段
+                    if sa_column.type.length and sa_column.type.length > filter_max_length:
+                        excluded_fields.add(field_name)
+                        logger.debug(f"Excluding long VARCHAR field: {field_name} (length: {sa_column.type.length})")
+                        continue
  
     # 尝试使用 SQLModel 模型的 schema 属性
     if hasattr(model_class, 'schema') and model_class.schema:
         for field_name, field_info in model_class.schema()['properties'].items():
+            # 跳过已被标记为排除的字段
+            if field_name in excluded_fields:
+                continue
+            
             if 'description' in field_info:
                 comments_as_display_names[field_name] = field_info['description']
                 column_names.add(field_name)
     
     logger.info(f"Found {len(column_names)} columns with {len(comments_as_display_names)} comments for Model: {model_class.__name__}")
+    if filter_text:
+        logger.info(f"Excluded {len(excluded_fields)} long text fields")
     
     return comments_as_display_names, column_names
 
@@ -45,6 +78,9 @@ def format_account_info(account) -> List[str]:
     
     # 优先显示的核心字段
     priority_fields = {"customer_level", "industry", "customer_source", "business_type", "customer_attribute"}
+    
+    # 我方负责人信息
+    responsible_fields = {"person_in_charge", "department"}
     
     # 先处理优先字段
     for field_name in priority_fields:
@@ -123,7 +159,7 @@ def format_account_info(account) -> List[str]:
     # 处理其他未分类字段
     special_fields = contact_fields.union(date_fields).union(status_fields)
     special_fields.add("remarks")
-    special_fields = special_fields.union(priority_fields)
+    special_fields = special_fields.union(priority_fields).union(responsible_fields)
     
     for field_name in valid_columns:
         # 跳过已排除字段和特殊处理字段
@@ -139,6 +175,19 @@ def format_account_info(account) -> List[str]:
         display_name = column_comments.get(field_name, field_name.replace('_', ' ').title())
         content.append(f"**{display_name}**: {value}")
     
+    # 单独处理我方负责人信息
+    responsible_info = []
+    if "person_in_charge" in valid_columns and getattr(account, "person_in_charge"):
+        responsible_info.append(f"**姓名**: {getattr(account, 'person_in_charge')}")
+    
+    if "department" in valid_columns and getattr(account, "department"):
+        responsible_info.append(f"**主属部门**: {getattr(account, 'department')}")
+    
+    if responsible_info:
+        content.append("\n# 我方对接人信息")
+        content.extend(responsible_info)
+        content.append("**说明**：以上“对接人”为我方（公司内部）人员，非客户方。")
+
     return content
 
 def format_contact_info(contact) -> List[str]:
@@ -148,7 +197,7 @@ def format_contact_info(contact) -> List[str]:
     
     content = []
     contact_name = getattr(contact, 'name', 'None') or '未知联系人'
-    content.append(f"# 联系人：{contact_name}")
+    content.append(f"# 客户联系人：{contact_name}")
         
     # 获取联系人模型的列注释和字段名
     column_comments, valid_columns = get_column_comments_and_names(type(contact))
@@ -162,6 +211,9 @@ def format_contact_info(contact) -> List[str]:
     
     # 需要排除的字段
     exclude_fields = {"id", "name", "customer_id", "unique_id", "direct_superior_id"}
+    
+    # 我方负责人信息
+    responsible_fields = {"responsible_person", "responsible_department"}
     
     # 处理身份信息
     # 优先使用position/department，如果为空则使用position1/department1
@@ -246,7 +298,7 @@ def format_contact_info(contact) -> List[str]:
         content.append(f"**{display_name}**: {formatted_date}")
         
     # 处理其他字段
-    all_special_fields = identity_fields.union(contact_method_fields).union(date_fields).union(special_fields).union(exclude_fields)
+    all_special_fields = identity_fields.union(contact_method_fields).union(date_fields).union(special_fields).union(exclude_fields).union(responsible_fields)
     
     # 找出重要字段先显示
     important_fields = {"attitude", "status"}
@@ -278,6 +330,20 @@ def format_contact_info(contact) -> List[str]:
         display_name = column_comments.get(field_name, field_name.replace('_', ' ').title())
         content.append(f"**{display_name}**: {value}")
     
+    # 单独处理我方对接负责人信息
+    responsible_info = []
+    if "responsible_person" in valid_columns and getattr(contact, "responsible_person"):
+        responsible_info.append(f"**姓名**: {getattr(contact, 'responsible_person')}")
+    
+    if "responsible_department" in valid_columns and getattr(contact, "responsible_department"):
+        responsible_info.append(f"**主属部门**: {getattr(contact, 'responsible_department')}")
+    
+    if responsible_info:
+        content.append("---")
+        content.append("\n# 我方对接人信息")
+        content.extend(responsible_info)
+        content.append("**说明**：以上“对接人”为我方（公司内部）人员，非客户方。")
+
     return content
 
 def format_opportunity_info(opportunity) -> List[str]:
@@ -296,9 +362,9 @@ def format_opportunity_info(opportunity) -> List[str]:
         "basic": {
             "title": "",  # 基本信息不需要标题
             "fields": ["customer_name", "customer_type", "customer_category", "owner", 
-                    "opportunity_stage", "stage_status", "expected_closing_date", 
-                    "expected_closing_quarter", "business_type", "opportunity_type", 
-                    "opportunity_source", "customer_business_scenario"]
+                "opportunity_stage", "stage_status", "expected_closing_date", 
+                "expected_closing_quarter", "business_type", "opportunity_type", 
+                "opportunity_source", "customer_business_scenario"]
         },
         "financial": {
             "title": "## 财务信息",
@@ -323,17 +389,18 @@ def format_opportunity_info(opportunity) -> List[str]:
         "channel": {
             "title": "## 渠道报备信息",
             "fields": ["is_channel_reported_opportunity", "partner_opportunity_filing_id_unique_id", 
-                    "partner_opportunity_filing_number", "filing_opportunity_number"]
+                "partner_opportunity_filing_number", "filing_opportunity_number"]
         },
         "process": {
             "title": "## 项目流程信息",
             "fields": ["signing_type", "quotation_status", "is_project_approved", 
-                    "project_date", "bidding_time", "budget_approval_status", "lost_reason"]
+                "project_date", "bidding_time", "budget_approval_status", "lost_reason"]
         },
         "status_tracking": {
             "title": "## 商机状态跟踪",
-            "fields": ["weekly_update", "sl_pull_in", "quotation_order_status", 
-                    "sales_order_archive_status", "latest_followup_date_new"]
+            "fields": [# "weekly_update",
+                "sl_pull_in", "quotation_order_status", 
+                "sales_order_archive_status", "latest_followup_date_new"]
         },
         "system": {
             "title": "## 系统信息",
@@ -343,9 +410,9 @@ def format_opportunity_info(opportunity) -> List[str]:
         
     # 详细信息字段（长文本）单独处理
     detail_fields = {
-        "call_high_notes": "Call High情况",
+        # "call_high_notes": "Call High情况",
         "customer_budget_status": "客户预算情况",
-        "todo_and_followup": "TODO与跟进事项",
+        # "todo_and_followup": "TODO与跟进事项",
         "remarks": "备注说明"
     }
 
@@ -481,27 +548,25 @@ def format_opportunity_info(opportunity) -> List[str]:
     
     return content
 
-def format_opportunity_updates(updates: List[Any]) -> List[str]:
-    """动态处理商机更新记录，仅使用CRMOpportunityUpdate模型中定义的字段"""
+def format_opportunity_updates(updates, opportunity_name: str) -> List[str]:
+    """动态处理商机更新记录，仅使用CRMOpportunityUpdates模型中定义的字段"""
     if not updates:
         return []
         
     content = []
-    content.append(f"\n## 商机更新记录")
+    # 添加商机名称作为主标题
+    content.append(f"# 商机活动更新记录：{opportunity_name}")
     
-    # 按更新日期倒序排序，显示最新的更新记录在前
-    sorted_updates = sorted(updates, key=lambda x: getattr(x, 'update_date', datetime.min), reverse=True)
-    
-    for update in sorted_updates:
+    for update in updates:
         # 获取模型的列注释和字段名
         column_comments, valid_columns = get_column_comments_and_names(type(update))
         
-        # 获取更新的日期和类型，作为小节标题
-        update_date = getattr(update, 'update_date', None)
-        update_type = getattr(update, 'update_type', '更新记录')
+        # 获取记录的日期和类型，作为小节标题
+        record_date = getattr(update, 'record_date', None)
+        update_type = getattr(update, 'update_type', '未知分类')
         
-        date_str = update_date.strftime("%Y-%m-%d %H:%M") if isinstance(update_date, datetime) else "未知日期"
-        content.append(f"\n### {date_str} - {update_type}")
+        date_str = record_date.strftime("%Y-%m-%d") if isinstance(record_date, date) else "未知日期"
+        content.append(f"\n## {date_str} - {update_type}")
         
         # 处理摘要信息 - 优先显示
         if 'summary' in valid_columns and getattr(update, 'summary'):
@@ -546,10 +611,14 @@ def format_opportunity_updates(updates: List[Any]) -> List[str]:
         
         # 已处理的字段集合
         processed_fields = {
-            'id', 'opportunity_id', 'record_date', 'update_type', 'update_date', 
-            'creator', 'creator_id', 'summary', 'detailed_notes', 'next_steps',
+            # 系统字段 - 需要排除
+            'id', 'opportunity_id', 'creator_id',
+            
+            # 已处理的业务字段
+            'opportunity_name', 'update_type', 'record_date', 
+            'creator', 'summary', 'detailed_notes', 'next_steps',
             'key_stakeholders', 'customer_sentiment', 'deal_probability_change', 
-            'blockers', 'create_time', 'last_modified_time'
+            'blockers'
         }
         
         # 处理剩余字段（如果有模型更新增加了新字段）
@@ -568,5 +637,451 @@ def format_opportunity_updates(updates: List[Any]) -> List[str]:
                 
             display_name = column_comments.get(field_name, field_name.replace('_', ' ').title())
             content.append(f"**{display_name}**: {value}")
+    
+    return content
+
+def format_order_info(order) -> List[str]:
+    """动态处理订单信息，仅使用模型中定义的字段"""
+    if not order:
+        return []
+        
+    content = []
+    order_number = getattr(order, "sales_order_number", None) or getattr(order, "unique_id", None) or "未命名订单"
+    content.append(f"# 订单：{order_number}")
+    
+    # 获取订单模型的列注释和字段名
+    column_comments, valid_columns = get_column_comments_and_names(type(order))
+    
+    field_groups = {
+        "basic": {
+            "title": "",  # 基本信息不需要标题
+            "fields": ["customer_name", "project_name", "contract_name", "product_type", 
+                      "sales_order_number", "signing_date", "life_status", "owner", "owner_department"]
+        },
+        "financial": {
+            "title": "## 财务信息",
+            "fields": ["sales_order_amount", "sales_order_amount_excluding_tax", "product_subscription_amount", 
+                      "product_perpetual_license_amount", "maintenance_service_amount", "man_day_service_amount",
+                      "arr", "arr_excluding_tax", "acv", "renew_arr", "new_arr", "split_ratio"]
+        },
+        "payment": {
+            "title": "## 回款信息",
+            "fields": ["total_payment_amount", "planned_payment_amount", "pending_payment_amount", 
+                      "payment_status", "invoice_status", "invoice_completion_status", "settle_type"]
+        },
+        "service": {
+            "title": "## 服务信息",
+            "fields": ["service_start_date_subscription_maintenance", "service_end_date_subscription_maintenance", 
+                      "service_duration_months", "maintenance_ratio", "expected_renewal_time_fy"]
+        },
+        "contract": {
+            "title": "## 合同信息",
+            "fields": ["contract_type", "contracting_party", "contracting_partner", "contract_attribute", 
+                      "contract_archiving_status", "is_framework_order", "framework_agreement_id"]
+        },
+        "partner": {
+            "title": "## 合作伙伴信息",
+            "fields": ["partner_id", "is_general_agent", "first_level_distributor", "second_level_distributor", 
+                      "third_level_distributor", "reported_partner_name", "has_sub_agents",
+                      "total_margin_percentage", "commission_info"]
+        },
+        "opportunity": {
+            "title": "## 商机信息",
+            "fields": ["opportunity_name", "opportunity_number", "quote_id"]
+        },
+        "delivery": {
+            "title": "## 交付信息",
+            "fields": ["shipping_status", "shipping_address", "delivery_time", "delivery_acceptance_progress"]
+        },
+        "renewal": {
+            "title": "## 续约信息",
+            "fields": ["renewal_status", "renewal_type"]
+        },
+        "cost": {
+            "title": "## 成本信息",
+            "fields": ["outsourcing_cost", "profit_statement"]
+        },
+        "system": {
+            "title": "## 系统信息",
+            "fields": ["creation_time", "created_by", "last_modified_time", "last_modified_by", 
+                      "sales_type", "order_type", "source", "resource"]
+        }
+    }
+        
+    # 详细信息字段（长文本）单独处理
+    detail_fields = {
+        "delivery_acceptance_progress": "交付/验收进展",
+        "delivery_comment": "发货备注",
+        "remark": "备注"
+    }
+
+    # 需要排除的字段
+    exclude_fields = {"id", "unique_id", "customer_id", "opportunity_id"}
+     
+    # 需要特殊处理的布尔字段 - 显示为"是/否"
+    boolean_fields = {"is_general_agent", "is_framework_order", "has_sub_agents"}
+    
+    # 需要特殊处理的金额字段 - 格式化显示
+    currency_fields = {"sales_order_amount", "product_subscription_amount", "product_perpetual_license_amount", 
+                      "maintenance_service_amount", "man_day_service_amount", "outsourcing_cost", 
+                      "total_payment_amount", "planned_payment_amount"}
+    
+    # 需要特殊处理的JSON字段
+    json_fields = {"owner", "created_by", "last_modified_by", "owning_department", "renewal_type", 
+                  "profit_statement", "performance_accounting_sales_department"}
+  
+    # 辅助函数：处理字段值的格式化
+    def format_field_value(field_name, value):
+        # 处理布尔值
+        if field_name in boolean_fields:
+            if str(value).lower() in ('true', '1', 'yes', '是', 't', 'y'):
+                return "是"
+            elif str(value).lower() in ('false', '0', 'no', '否', 'f', 'n'):
+                return "否"
+            return value
+            
+        # 处理日期时间
+        if isinstance(value, datetime):
+            return value.strftime("%Y-%m-%d %H:%M")
+        elif isinstance(value, date):
+            return value.strftime("%Y-%m-%d")
+            
+        # 处理货币金额
+        if field_name in currency_fields and value is not None:
+            try:
+                # 尝试将值转换为数字并格式化
+                num_value = float(value)
+                # 如果是整数，不显示小数位
+                if num_value.is_integer():
+                    return f"{int(num_value):,}"
+                # 否则保留两位小数
+                return f"{num_value:,.2f}"
+            except (ValueError, TypeError):
+                pass
+                
+        # 处理JSON字段
+        if field_name in json_fields and value is not None:
+            try:
+                # 对于人员类字段，尝试获取名称
+                if field_name in ["owner", "created_by", "last_modified_by"]:
+                    if isinstance(value, dict) and "name" in value:
+                        return value["name"]
+                    elif isinstance(value, str):
+                        return value
+                # 对于部门类字段
+                elif field_name in ["owning_department", "performance_accounting_sales_department"]:
+                    if isinstance(value, dict) and "name" in value:
+                        return value["name"]
+                    elif isinstance(value, str):
+                        return value
+                # 其他JSON字段直接使用字符串表示
+                return str(value)
+            except Exception:
+                pass
+                
+        # 默认返回原值
+        return value
+    
+    # 辅助函数：处理一组字段
+    def process_field_group(group_info, condition_field=None):
+        # 检查条件字段
+        if condition_field and (condition_field not in valid_columns or 
+                               not getattr(order, condition_field, None)):
+            return []
+            
+        group_content = []
+        has_fields = False
+        
+        for field_name in group_info["fields"]:
+            if field_name not in valid_columns or field_name in exclude_fields:
+                continue
+                
+            value = getattr(order, field_name, None)
+            if value is None:
+                continue
+                
+            if not has_fields and group_info["title"]:
+                group_content.append(group_info["title"])
+                has_fields = True
+                
+            display_name = column_comments.get(field_name, field_name.replace('_', ' ').title())
+            formatted_value = format_field_value(field_name, value)
+            group_content.append(f"**{display_name}**: {formatted_value}")
+            
+        return group_content
+       
+    # 处理基本信息
+    content.extend(process_field_group(field_groups["basic"]))
+    
+    # 处理财务信息
+    financial_content = process_field_group(field_groups["financial"])
+    if financial_content:
+        content.extend(financial_content)
+    
+    # 处理回款信息
+    payment_content = process_field_group(field_groups["payment"])
+    if payment_content:
+        content.extend(payment_content)
+    
+    # 处理服务信息
+    service_content = process_field_group(field_groups["service"])
+    if service_content:
+        content.extend(service_content)
+    
+    # 处理合同信息
+    contract_content = process_field_group(field_groups["contract"])
+    if contract_content:
+        content.extend(contract_content)
+    
+    # 处理合作伙伴信息
+    partner_content = process_field_group(field_groups["partner"])
+    if partner_content:
+        content.extend(partner_content)
+    
+    # 处理商机信息
+    opportunity_content = process_field_group(field_groups["opportunity"])
+    if opportunity_content:
+        content.extend(opportunity_content)
+    
+    # 处理交付信息
+    delivery_content = process_field_group(field_groups["delivery"])
+    if delivery_content:
+        content.extend(delivery_content)
+    
+    # 处理续约信息
+    renewal_content = process_field_group(field_groups["renewal"])
+    if renewal_content:
+        content.extend(renewal_content)
+    
+    # 处理成本信息
+    cost_content = process_field_group(field_groups["cost"])
+    if cost_content:
+        content.extend(cost_content)
+    
+    # 处理详细信息字段（长文本）
+    for field_name, display_title in detail_fields.items():
+        if field_name not in valid_columns:
+            continue
+            
+        value = getattr(order, field_name, None)
+        if value is None or value == "":
+            continue
+        
+        title = column_comments.get(field_name, display_title)
+        content.append(f"\n## {title}")
+        content.append(value)
+    
+    # 处理系统信息
+    system_content = process_field_group(field_groups["system"])
+    if system_content:
+        content.extend(system_content)
+    
+    return content
+
+def format_payment_plan_info(payment_plan) -> List[str]:
+    """动态处理回款计划信息，仅使用模型中定义的字段"""
+    if not payment_plan:
+        return []
+    
+    content = []
+    payment_plan_name = getattr(payment_plan, 'name', 'None') or getattr(payment_plan, "unique_id", None) or '未知回款计划'
+    content.append(f"# 回款计划：{payment_plan_name}")
+
+    # 获取回款计划模型的列注释和字段名
+    column_comments, valid_columns = get_column_comments_and_names(type(payment_plan))
+    
+    # 定义字段组
+    field_groups = {
+        "basic": {
+            "title": "",  # 基本信息不需要标题
+            "fields": ["name", "order_id", "account_name", "plan_payment_status", 
+                      "plan_payment_method", "plan_payment_ratio", "plan_payment_time", 
+                      "latest_plan_payment_date", "target_payment_date"]
+        },
+        "amount": {
+            "title": "## 金额信息",
+            "fields": ["order_amount", "plan_payment_amount", "actual_payment_amount", 
+                      "pending_payment_amount"]
+        },
+        "contract": {
+            "title": "## 合同信息",
+            "fields": ["contract_party", "contract_entity", "contract_date"]
+        },
+        "overdue": {
+            "title": "## 逾期信息",
+            "fields": ["first_payment_overdue_days", "latest_payment_overdue_days", 
+                      "first_plan_overdue_month", "overdue_payment_reason", 
+                      "overdue_description_and_next_plan"]
+        },
+        "plan": {
+            "title": "## 计划信息",
+            "fields": ["next_plan", "next_plan_description"]
+        },
+        "fiscal": {
+            "title": "## 财务周期信息",
+            "fields": ["booking_fiscal_year", "first_plan_payment_fiscal_quarter", 
+                      "latest_plan_payment_fiscal_quarter", "actual_payment_fiscal_quarter"]
+        },
+        "status": {
+            "title": "## 状态信息",
+            "fields": ["life_status", "lock_status", "backend_process_status"]
+        },
+        "owner": {
+            "title": "## 责任方信息",
+            "fields": ["owner", "owner_department", "out_owner", "relevant_team", 
+                      "data_own_department", "approve_employee_id"]
+        },
+        "system": {
+            "title": "## 系统信息",
+            "fields": ["create_time", "created_by", "last_modified_time", "last_modified_by", 
+                      "origin_source", "out_resources", "record_type"]
+        }
+    }
+    
+    # 详细信息字段（长文本）单独处理
+    detail_fields = {
+        "remark": "备注",
+        "overdue_payment_reason": "逾期归因",
+        "next_plan_description": "下一步计划说明",
+        "lock_rule": "锁定规则"
+    }
+    
+    # 需要排除的字段
+    exclude_fields = {"id", "unique_id", "account_id", "is_deleted", "version", "data_refresh_flag", 
+                       "order_by", "extend_obj_data_id", "backend_process_status", "out_tenant_id"}
+    
+    # 需要特殊处理的金额字段 - 格式化显示
+    currency_fields = {"plan_payment_amount", "actual_payment_amount", "order_amount", "pending_payment_amount"}
+    
+    # 辅助函数：处理字段值的格式化
+    def format_field_value(field_name, value):
+        # 处理 None 值
+        if value is None:
+            return ""
+        
+        # 处理日期时间
+        if isinstance(value, datetime):
+            return value.strftime("%Y-%m-%d %H:%M")
+        elif isinstance(value, date):
+            return value.strftime("%Y-%m-%d")
+            
+        # 处理货币金额
+        if field_name in currency_fields and value is not None:
+            try:
+                # 尝试将值转换为数字并格式化
+                num_value = float(value)
+                # 如果是整数，不显示小数位
+                if num_value.is_integer():
+                    return f"{int(num_value):,}"
+                # 否则保留两位小数
+                return f"{num_value:,.2f}"
+            except (ValueError, TypeError):
+                pass
+                
+        # 默认返回原值
+        return value
+    
+    # 辅助函数：处理一组字段
+    def process_field_group(group_info):
+        group_content = []
+        has_fields = False
+        
+        for field_name in group_info["fields"]:
+            if field_name not in valid_columns or field_name in exclude_fields:
+                continue
+                
+            value = getattr(payment_plan, field_name, None)
+            if value is None:
+                continue
+                
+            if not has_fields and group_info["title"]:
+                group_content.append(group_info["title"])
+                has_fields = True
+                
+            display_name = column_comments.get(field_name, field_name.replace('_', ' ').title())
+            formatted_value = format_field_value(field_name, value)
+            group_content.append(f"**{display_name}**: {formatted_value}")
+            
+        return group_content
+    
+    # 处理基本信息
+    content.extend(process_field_group(field_groups["basic"]))
+    
+    # 处理金额信息
+    amount_content = process_field_group(field_groups["amount"])
+    if amount_content:
+        content.extend(amount_content)
+
+    # 处理合同信息
+    contract_content = process_field_group(field_groups["contract"])
+    if contract_content:
+        content.extend(contract_content)
+
+    # 处理逾期信息
+    overdue_content = process_field_group(field_groups["overdue"])
+    if overdue_content:
+        content.extend(overdue_content)
+
+    # 处理计划信息
+    plan_content = process_field_group(field_groups["plan"])
+    if plan_content:
+        content.extend(plan_content)
+
+    # 处理财务周期信息
+    fiscal_content = process_field_group(field_groups["fiscal"])
+    if fiscal_content:
+        content.extend(fiscal_content)
+
+    # 处理状态信息
+    status_content = process_field_group(field_groups["status"])
+    if status_content:
+        content.extend(status_content)
+
+    # 处理责任方信息
+    owner_content = process_field_group(field_groups["owner"])
+    if owner_content:
+        content.extend(owner_content)
+    
+    # 处理详细信息字段（长文本）
+    for field_name, display_title in detail_fields.items():
+        if field_name not in valid_columns:
+            continue
+            
+        value = getattr(payment_plan, field_name, None)
+        if value is None or value == "":
+            continue
+        
+        title = column_comments.get(field_name, display_title)
+        content.append(f"\n## {title}")
+        content.append(value)
+    
+    # 处理系统信息
+    system_content = process_field_group(field_groups["system"])
+    if system_content:
+        content.extend(system_content)
+    
+    # 处理所有其他未归类字段
+    all_processed_fields = set()
+    for group in field_groups.values():
+        all_processed_fields.update(group["fields"])
+    all_processed_fields.update(exclude_fields)
+    all_processed_fields.update(detail_fields.keys())
+    
+    other_fields = []
+    for field_name in valid_columns:
+        if field_name in all_processed_fields:
+            continue
+            
+        value = getattr(payment_plan, field_name, None)
+        if value is None:
+            continue
+            
+        display_name = column_comments.get(field_name, field_name.replace('_', ' ').title())
+        formatted_value = format_field_value(field_name, value)
+        other_fields.append(f"**{display_name}**: {formatted_value}")
+    
+    if other_fields:
+        content.append("\n## 其他信息")
+        content.extend(other_fields)
     
     return content

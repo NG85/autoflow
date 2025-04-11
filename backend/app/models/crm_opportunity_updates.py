@@ -3,7 +3,7 @@ from datetime import datetime, date
 from sqlalchemy import Index
 from sqlmodel import Field, Column, DateTime, Date, Relationship, SQLModel, Text
 
-class CRMOpportunityUpdate(SQLModel, table=True):
+class CRMOpportunityUpdates(SQLModel, table=True):
     class Config:
         orm_mode = True
         read_only = True
@@ -11,6 +11,7 @@ class CRMOpportunityUpdate(SQLModel, table=True):
     """商机更新记录表"""
     id: Optional[int] = Field(default=None, primary_key=True)
     opportunity_id: str = Field(max_length=255, description="关联的商机唯一ID")
+    opportunity_name: Optional[str] = Field(nullable=True, max_length=255, description="商机名称")
     record_date: date = Field(sa_column=Column(Date), description="记录日期（YYYY-MM-DD）")
     update_type: str = Field(max_length=50, description="更新类型（日常/周报/会议/电话/邮件）")
     update_date: datetime = Field(sa_column=Column(DateTime(timezone=True)), description="更新的具体时间戳")
@@ -36,8 +37,8 @@ class CRMOpportunityUpdate(SQLModel, table=True):
     
     opportunity: Optional["CRMOpportunity"] = Relationship(
         sa_relationship_kwargs={
-            "primaryjoin": "and_(CRMOpportunityUpdate.opportunity_id==cast(CRMOpportunity.unique_id, String))",
-            "foreign_keys": "[CRMOpportunityUpdate.opportunity_id]",
+            "primaryjoin": "and_(CRMOpportunityUpdates.opportunity_id==cast(CRMOpportunity.unique_id, String))",
+            "foreign_keys": "[CRMOpportunityUpdates.opportunity_id]",
             "viewonly": True
         }
     )
