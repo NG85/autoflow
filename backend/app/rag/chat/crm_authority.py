@@ -164,12 +164,12 @@ def identify_crm_data_type(data_object, meta_or_metadata: str = "meta") -> tuple
     # Get ID fields based on CRM type
     id_fields_map = {
         CrmDataType.ACCOUNT: ["account_id", "customer_id", "unique_id"],
-        CrmDataType.OPPORTUNITY: ["opportunity_id", "unique_id"],
         CrmDataType.CONTACT: ["contact_id", "unique_id"],
+        CrmDataType.OPPORTUNITY: ["opportunity_id", "unique_id"],
+        CrmDataType.OPPORTUNITY_UPDATES: ["opportunity_id", "updates_group_id", "unique_id"],
+        CrmDataType.ORDER: ["sales_order_number", "unique_id"],
+        CrmDataType.PAYMENTPLAN: ["name", "unique_id"]
         # TODO: Add more other CRM types
-        # CrmDataType.ORDER: ["order_id", "unique_id"],
-        # CrmDataType.CONTRACT: ["contract_id", "unique_id"],
-        # CrmDataType.PAYMENTPLAN: ["payment_plan_id", "unique_id"]
     }
     
     # Find ID
