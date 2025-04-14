@@ -1,7 +1,9 @@
+import hashlib
 import json
 import logging
 from datetime import datetime, UTC
-from typing import List, Optional, Generator, Tuple, Any
+import threading
+from typing import Dict, List, Optional, Generator, Tuple, Any
 from urllib.parse import urljoin
 from uuid import UUID
 
@@ -50,6 +52,8 @@ def parse_chat_messages(
     chat_history = chat_messages[:-1]
     return user_question, chat_history
 
+_EMBEDDING_CACHE:Dict[str, Dict[str, Any]] = {}
+_EMBEDDING_LOCK = threading.Lock()
 
 class ChatFlow:
     _trace_manager: LangfuseContextManager
@@ -1138,7 +1142,7 @@ class ChatFlow:
                 # Knowledge base questions
                 "Are you just a knowledge base?": "knowledge_base",
                 "你只是一个知识库吗": "knowledge_base",
-                "你是个人知识库吗": "knowledge_base",
+                "你是个知识库吗": "knowledge_base",
                 "你是知识库吗": "knowledge_base",
                 "你只是知识库吗": "knowledge_base",
                 "你是搜索工具吗": "knowledge_base",
@@ -1163,34 +1167,64 @@ class ChatFlow:
                 "good evening": "greeting",
             }
             
+            global _EMBEDDING_CACHE, _EMBEDDING_LOCK
+            cache_key = hashlib.md5(json.dumps(sorted(identity_questions.keys())).encode()).hexdigest()
+            
+            with _EMBEDDING_LOCK:
+                if cache_key not in _EMBEDDING_CACHE:
+                    # Calculate embeddings for predefined questions and cache them
+                    questions = list(identity_questions.keys())
+                    batch_embeddings = embed_model.get_text_embedding_batch(questions)
 
-            # Calculate embeddings for predefined questions (only once)
-            if not hasattr(self, '_identity_question_embeddings'):
-                self._identity_question_embeddings = {}
-                for question, category in identity_questions.items():
-                    self._identity_question_embeddings[question] = {
-                        'embedding': embed_model.get_query_embedding(question),
-                        'category': category
+                    embeddings = {
+                        q: {
+                            'embedding': batch_embeddings[i],
+                            'category': identity_questions[q]
+                        }
+                        for i, q in enumerate(questions)
                     }
+                    _EMBEDDING_CACHE[cache_key] = embeddings
+                    logger.info(f"Generated new embeddings cache: {cache_key}")
+            
+            self._identity_question_embeddings = _EMBEDDING_CACHE[cache_key]
             
             # Find the closest match using cosine similarity
             import numpy as np
             best_similarity = -1
             best_category = None
             
-            for question, data in self._identity_question_embeddings.items():
-                # Calculate cosine similarity (1 - cosine_distance)
-                similarity = 1 - (1 - np.dot(user_question_embedding, data['embedding']) / 
-                                 (np.linalg.norm(user_question_embedding) * np.linalg.norm(data['embedding'])))
-                
-                if similarity > best_similarity:
-                    best_similarity = similarity
-                    best_category = data['category']
+            # Pre-calculate the norm of the user question
+            user_norm = np.linalg.norm(user_question_embedding)
             
-            logger.info(f"Best category: {best_category}, similarity: {best_similarity:.4f}")
+            # for question, data in self._identity_question_embeddings.items():
+            #     # Calculate cosine similarity (1 - cosine_distance)
+            #     similarity = np.dot(user_question_embedding, data['embedding']) / (user_norm * np.linalg.norm(data['embedding']))
+                
+            #     if similarity > best_similarity:
+            #         best_similarity = similarity
+            #         best_category = data['category']
+            
+            
+            # Vectorized calculation (faster than loop)
+            if not hasattr(self, '_identity_emb_matrix'):
+                embeddings = [data['embedding'] for data in self._identity_question_embeddings.values()]
+                self._identity_emb_matrix = np.array(embeddings)
+                self._identity_categories = [data['category'] for data in self._identity_question_embeddings.values()]
+                # Pre-calculate norms and store as column vector
+                self._identity_norms = np.linalg.norm(self._identity_emb_matrix, axis=1, keepdims=True)
+
+            user_emb = np.array(user_question_embedding).reshape(1, -1)
+            dot_products = np.dot(self._identity_emb_matrix, user_emb.T)
+            similarities = dot_products / (self._identity_norms * user_norm)
+
+            # Find the maximum similarity index
+            max_index = np.argmax(similarities)
+            best_similarity = similarities[max_index][0]
+            best_category = self._identity_categories[max_index]
             
             # Use a threshold to determine if it's a match
             similarity_threshold = settings.EMBEDDING_THRESHOLD  # Adjust based on testing
+            logger.info(f"Best category: {best_category}, similarity: {best_similarity:.4f}")
             if best_similarity >= similarity_threshold:
                 logger.info(f"Embedding identity detection for '{user_question}': {best_category} (similarity: {best_similarity:.4f})")
                 return best_category
@@ -1229,6 +1263,7 @@ Please respond with a natural, conversational tone using this information:
 
     {content}"""
             
+            self._ensure_llm_initialized()
             response = self._llm.chat(
                 messages=[
                     {"role": "system", "content": system_prompt},
