@@ -78,6 +78,7 @@ class ChatFlow:
         chat_id: Optional[UUID] = None,
         chat_type: ChatType = ChatType.DEFAULT,
         chat_mode: ChatMode = ChatMode.DEFAULT,
+        incoming_cookie: Optional[str] = None,
     ) -> None:
         self.chat_id = chat_id
         self.db_session = db_session
@@ -88,6 +89,7 @@ class ChatFlow:
         self.chat_type = chat_type
         self.chat_messages = chat_messages
         self.chat_mode = chat_mode
+        self.incoming_cookie = incoming_cookie
         # Load chat engine and chat session.
         self.user_question, self.chat_history = parse_chat_messages(chat_messages)
         
@@ -1304,7 +1306,7 @@ class ChatFlow:
             "content": self.user_question,
             "tenant_id": settings.ALDEBARAN_TENANT_ID,
         }
-        response = requests.post(aldebaran_cvgg_url, json=payload, timeout=300)
+        response = requests.post(aldebaran_cvgg_url, json=payload, timeout=300, headers={"cookie": self.incoming_cookie})
         data = None
         error_message = None
         try:
