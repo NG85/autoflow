@@ -107,13 +107,15 @@ def build_crm_graph_index_for_document(
                 if key not in ["crm_data_type", "weekly_update", "todo_and_followup", "call_high_notes"] and value is not None:
                     opportunity_data[key] = value
             
-            # 如果商机有客户关联信息，创建一个简单的Account数据（从商机信息中提取）
-            if opportunity_data.get("customer_name"):
-               secondary_data = {
-                   "account_id": opportunity_data.get("customer_id"),
-                   "account_name": opportunity_data.get("customer_name"),
-                   "document_id": document_id,
-                   "chunk_id": chunk_id,
+            # 如果商机有客户/负责人关联信息，创建一个简单的Account/我方对接人数据（从商机信息中提取）
+            if opportunity_data.get("customer_name") or opportunity_data.get("owner"):
+                secondary_data = {
+                    "account_id": opportunity_data.get("customer_id"),
+                    "account_name": opportunity_data.get("customer_name"),
+                    "internal_owner": opportunity_data.get("owner"),
+                    "internal_department": opportunity_data.get("owner_main_department"),
+                    "document_id": document_id,
+                    "chunk_id": chunk_id,
                 }
                 
             primary_data = opportunity_data
@@ -185,13 +187,15 @@ def build_crm_graph_index_for_document(
                 if key not in ["crm_data_type"] and value is not None:
                     order_data[key] = value
             
-            # 如果订单有客户/商机关联信息，创建一个简单的Account/Opportunity数据（从订单信息中提取）
-            if order_data.get("customer_name"):
+            # 如果订单有客户/商机关联信息，创建一个简单的Account/Opportunity/我方对接人数据（从订单信息中提取）
+            if order_data.get("customer_name") or order_data.get("opportunity_name") or order_data.get("owner"):
                secondary_data = {
                    "account_id": order_data.get("customer_id"),
                    "account_name": order_data.get("customer_name"),
                    "opportunity_id": order_data.get("opportunity_id"),
                    "opportunity_name": order_data.get("opportunity_name"),
+                   "internal_owner": order_data.get("owner"),
+                   "internal_department": order_data.get("owner_department"),
                    "document_id": document_id,
                    "chunk_id": chunk_id,
                 }
@@ -212,11 +216,13 @@ def build_crm_graph_index_for_document(
                 if key not in ["crm_data_type"] and value is not None:
                     payment_plan_data[key] = value
             
-            # 如果回款计划有订单关联信息，创建一个简单的Order数据（从回款计划信息中提取）
-            if payment_plan_data.get("order_id"):
+            # 如果回款计划有订单/我方对接人关联信息，创建一个简单的Order/我方对接人数据（从回款计划信息中提取）
+            if payment_plan_data.get("order_id") or payment_plan_data.get("owner"):
                secondary_data = {
                    "order_id": payment_plan_data.get("order_id"),
                    "order_amount": payment_plan_data.get("order_amount"),
+                   "internal_owner": payment_plan_data.get("owner"),
+                   "internal_department": payment_plan_data.get("owner_department"),
                    "document_id": document_id,
                    "chunk_id": chunk_id,
                 }

@@ -36,6 +36,8 @@ class CRMAuthority(BaseModel):
         Returns:
             Whether there is access permission
         """
+        if data_type == CrmDataType.INTERNAL_OWNER or data_type == CrmDataType.OPPORTUNITY_UPDATES:
+            return True
         if data_type not in self.authorized_items:
             return False
         return data_id in self.authorized_items[data_type]
@@ -185,6 +187,7 @@ def identify_crm_data_type(data_object, meta_or_metadata: str = "meta") -> tuple
     id_fields_map = {
         CrmDataType.ACCOUNT: ["account_id", "customer_id", "unique_id"],
         CrmDataType.CONTACT: ["contact_id", "unique_id"],
+        CrmDataType.INTERNAL_OWNER: ["internal_owner", "unique_id"],
         CrmDataType.OPPORTUNITY: ["opportunity_id", "unique_id"],
         CrmDataType.OPPORTUNITY_UPDATES: ["opportunity_id", "updates_group_id", "unique_id"],
         CrmDataType.ORDER: ["sales_order_number", "unique_id"],

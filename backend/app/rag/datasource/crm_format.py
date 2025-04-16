@@ -400,11 +400,12 @@ def format_opportunity_info(opportunity) -> List[str]:
             "title": "## 商机状态跟踪",
             "fields": [# "weekly_update",
                 "sl_pull_in", "quotation_order_status", 
-                "sales_order_archive_status", "latest_followup_date_new"]
+                "sales_order_archive_status", #"latest_followup_date_new",
+                "last_followup_time"]
         },
         "system": {
             "title": "## 系统信息",
-            "fields": ["create_time", "last_modifier", "last_modified_time", "last_followup_time"]
+            "fields": ["create_time", "last_modifier", "last_modified_time"]
         }
     }
         
@@ -529,6 +530,7 @@ def format_opportunity_info(opportunity) -> List[str]:
     status_fields = field_groups["status_tracking"]["fields"]
     if any(getattr(opportunity, field, None) for field in status_fields if field in valid_columns):
         content.extend(process_field_group(field_groups["status_tracking"]))
+        content.append("**说明**：以上“跟进时间”为商机完成一些阶段任务，项目有跟进动作，例如阶段推进、增加关联的销售记录等的时间。")
     
     # 处理详细信息字段（长文本）
     for field_name, display_title in detail_fields.items():
@@ -545,6 +547,7 @@ def format_opportunity_info(opportunity) -> List[str]:
     
     # 处理系统信息
     content.extend(process_field_group(field_groups["system"]))
+    content.append("**说明**：以上“修改时间”为修改商机任何字段的具体数值的时间。")
     
     return content
 
