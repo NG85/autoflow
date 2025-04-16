@@ -51,6 +51,26 @@ class CRMAuthority(BaseModel):
     def is_authorized_contact(self, contact_id: str) -> bool:
         """Check if the contact ID has access permission"""
         return self.is_authorized(CrmDataType.CONTACT, contact_id)
+    
+    def is_authorized_opportunity_updates(self, opportunity_id: str) -> bool:
+        """Check if the opportunity updates ID has access permission"""
+        return self.is_authorized(CrmDataType.OPPORTUNITY_UPDATES, opportunity_id)
+    
+    def is_authorized_order(self, order_id: str) -> bool:
+        """Check if the order ID has access permission"""
+        return self.is_authorized(CrmDataType.ORDER, order_id)
+    
+    def is_authorized_payment_plan(self, payment_plan_id: str) -> bool:
+        """Check if the payment plan ID has access permission"""
+        return self.is_authorized(CrmDataType.PAYMENTPLAN, payment_plan_id)
+    
+    def is_authorized_stage(self, stage_id: str) -> bool:
+        """Check if the stage ID has access permission"""
+        return self.is_authorized(CrmDataType.STAGE, stage_id)
+    
+    def is_authorized_sales_record(self, sales_record_id: str) -> bool:
+        """Check if the sales record ID has access permission"""
+        return self.is_authorized(CrmDataType.SALES_RECORD, sales_record_id)
         
     def is_empty(self) -> bool:
         """Check if there is any authorized data"""
@@ -168,7 +188,9 @@ def identify_crm_data_type(data_object, meta_or_metadata: str = "meta") -> tuple
         CrmDataType.OPPORTUNITY: ["opportunity_id", "unique_id"],
         CrmDataType.OPPORTUNITY_UPDATES: ["opportunity_id", "updates_group_id", "unique_id"],
         CrmDataType.ORDER: ["sales_order_number", "unique_id"],
-        CrmDataType.PAYMENTPLAN: ["name", "unique_id"]
+        CrmDataType.PAYMENTPLAN: ["name", "unique_id"],
+        CrmDataType.STAGE: ["stage_id", "unique_id"],
+        CrmDataType.SALES_RECORD: ["sales_record_id", "unique_id"]
         # TODO: Add more other CRM types
     }
     
