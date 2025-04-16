@@ -210,6 +210,15 @@ class CRMOpportunity(SQLModel, table=True):
     is_channel_reported_opportunity: str = Field(max_length=255, description="是否渠道报备商机（必填）")
     is_project_approved: Optional[str] = Field(nullable=True, max_length=255, description="是否立项")
 
+    # New OPS CD and KD fields
+    ops_cd_project_retrospective_schedule: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="ops cd 项目进展倒排时间表")
+    ops_cd_critical_issues: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="ops cd 重大问题卡点")
+    ops_cd_business_progress: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="ops cd 商务进展")
+    kd_closure_milestone: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="KD-关单节点")
+    kd_decision_chain: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="KD-决策链条")
+    kd_competitor_strategy: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="KD-友商策略和动态")
+    kd_breakthrough_basis: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="KD-突破单依据")
+
     __tablename__ = "crm_opportunities"
     
     account: Optional["CRMAccount"] = Relationship(

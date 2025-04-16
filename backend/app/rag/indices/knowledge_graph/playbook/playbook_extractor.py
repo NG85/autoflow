@@ -8,10 +8,6 @@ from llama_index.core.schema import BaseNode
 from app.rag.indices.knowledge_graph.extractor import SimpleGraphExtractor, get_relation_metadata_from_node
 from app.rag.indices.knowledge_graph.schema import EntityCovariateInput, EntityCovariateOutput, KnowledgeGraph
 from app.models.enums import GraphType
-from app.rag.indices.knowledge_graph.extract_template import (
-    PLAYBOOK_EXTRACTION_TEMPLATE,
-    PLAYBOOK_COVARIATE_TEMPLATE,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -30,17 +26,21 @@ class ExtractPlaybookTriplet(dspy.Signature):
           - "Marketing Manager in Financial Services"
         * Pain Points (what): Business challenges, problems, needs
         * Features (how): Solutions, capabilities, functionalities
+        * Cases (proof): Customer success cases and implementation scenarios
 
       Important Classification Rules:
         - Technical terms (e.g., "TiDB", "TiKV") should never be classified as personas
         - Terms containing "system", "service", "tool", "platform" should be classified as features
         - Terms containing "Department", "Team", "Manager", "Director" should be classified as personas
+        - Terms containing "case", "customer success", "implementation scenario" should be classified as cases
+        - Case entities must contain measurable results and implementation details
         - Generic terms without clear classification should be excluded
             
     2. Establish Relationships:
       Valid Relationship Patterns:
         1. Persona experiences Pain Point
         2. Pain Point is addressed by Feature
+        3. Feature is demonstrated by Case
       
       Required Elements for Each Relationship Type:
       A. "Persona experiences Pain Point":
@@ -57,10 +57,20 @@ class ExtractPlaybookTriplet(dspy.Signature):
         - Time to value
         Example: "The integration challenges are resolved through automated integration, reducing integration time by 90% with immediate productivity gains after 2-day setup."
 
+      C. "Feature is demonstrated by Case":
+        Must include these core elements in description:
+        - Industry and business scenario (domain)
+        - Quantifiable implementation results (outcomes)
+        - At least 1 related feature/product (features)
+        Example: "HTAP capability is demonstrated in a financial risk control case, reducing query latency by 80% for Bank X"
+    
+
       Critical Rules for Relationships:
-        - Must follow exact sequence: Persona -> Pain Point -> Feature
+        - Must follow exact sequence: Persona -> Pain Point -> Feature -> Case
         - Each relationship must be part of a complete chain
         - No direct Persona-to-Feature relationships
+        - No direct Persona-to-Case relationships
+        - No direct Pain Point-to-Case relationships
         - No reverse relationships
         - No relationships between same entity types
         - Both source and target entities must exist and be valid
@@ -71,12 +81,14 @@ class ExtractPlaybookTriplet(dspy.Signature):
         - Each entity MUST have:
           * name: Clear, specific identifier
           * description: Detailed description in complete sentences
-          * metadata.topic: Must be exactly one of: "persona", "pain_point", or "feature"
+          * metadata.topic: Must be exactly one of: "persona", "pain_point", "feature", or "case"
        
       Relationship Rules:
-        - Follow strict sequence: Persona -> Pain Point -> Feature
+        - Follow strict sequence: Persona -> Pain Point -> Feature -> Case
         - Each relationship must form part of a complete chain
         - Never create direct Persona-to-Feature relationships
+        - Never create direct Persona-to-Case relationships
+        - Never create direct Pain Point-to-Case relationships
         - Never create reverse relationships
         - Never skip steps in the sequence
         - Both source and target entities must be valid
@@ -140,10 +152,18 @@ class ExtractPlaybookCovariate(dspy.Signature):
                 "key2": "value2"
             }
         }
+    4. Case entities:
+        {
+            "topic": "case",  # Must be first field and keep unchanged from input
+            "domain": "specific industry name",  # Required
+            "features": ["product/feature name 1", "product/feature name 2"],  # Required, array format
+            "outcomes": "quantifiable implementation results",  # Required
+            "references": "reference customer/implementation period information",  # Optional
+        }
 
     Requirements:
     1. Field Requirements:
-       - topic field must be first and keep the value from input entity unchanged
+       - Topic field must be first and keep the value from input entity unchanged
        - Each entity must have all required fields for its type
        - Optional fields should only be included if clear information is present in the text
        - The 'role' object for Personas must include both title and level if present
@@ -173,14 +193,11 @@ class ExtractPlaybookCovariate(dspy.Signature):
 class PlaybookExtractor(SimpleGraphExtractor):
     """Extractor for sales playbook knowledge graph, using customized prompts for playbook entities and relationships"""
     def __init__(self, dspy_lm: dspy.LM, complied_extract_program_path: Optional[str] = None):
-      super().__init__(dspy_lm, complied_extract_program_path, GraphType.playbook)
+        super().__init__(dspy_lm, complied_extract_program_path, GraphType.playbook)
       
-      # Create playbook extraction with proper template assignment
-      with dspy.settings.context(instructions=PLAYBOOK_EXTRACTION_TEMPLATE):
-          self.extract_prog.prog_graph = TypedPredictor(ExtractPlaybookTriplet)
-
-      with dspy.settings.context(instructions=PLAYBOOK_COVARIATE_TEMPLATE):
-          self.extract_prog.prog_covariates = TypedPredictor(ExtractPlaybookCovariate)
+        # Create playbook extraction with proper template assignment
+        self.extract_prog.prog_graph = TypedPredictor(ExtractPlaybookTriplet)
+        self.extract_prog.prog_covariates = TypedPredictor(ExtractPlaybookCovariate)
 
           
     def _get_competitor_info(self, node: BaseNode) -> Optional[dict]:

@@ -55,6 +55,14 @@ def parse_chat_messages(
 _EMBEDDING_CACHE:Dict[str, Dict[str, Any]] = {}
 _EMBEDDING_LOCK = threading.Lock()
 
+PROMPT_TYPE_MAPPING = {
+    "identity_full": default_prompt.IDENTITY_FULL_PROMPT,
+    "identity_brief": default_prompt.IDENTITY_BRIEF_PROMPT,
+    "capabilities": default_prompt.CAPABILITIES_PROMPT,
+    "knowledge_base": default_prompt.KNOWLEDGE_BASE_PROMPT,
+    "greeting": default_prompt.IDENTITY_BRIEF_PROMPT,
+}
+
 class ChatFlow:
     _trace_manager: LangfuseContextManager
 
@@ -70,6 +78,7 @@ class ChatFlow:
         chat_id: Optional[UUID] = None,
         chat_type: ChatType = ChatType.DEFAULT,
         chat_mode: ChatMode = ChatMode.DEFAULT,
+        incoming_cookie: Optional[str] = None,
     ) -> None:
         self.chat_id = chat_id
         self.db_session = db_session
@@ -80,6 +89,7 @@ class ChatFlow:
         self.chat_type = chat_type
         self.chat_messages = chat_messages
         self.chat_mode = chat_mode
+        self.incoming_cookie = incoming_cookie
         # Load chat engine and chat session.
         self.user_question, self.chat_history = parse_chat_messages(chat_messages)
         
@@ -277,7 +287,7 @@ class ChatFlow:
                 ),
             )
             logger.info(f"Detected identity question of type: {identity_type}")
-            identity_response = self._handle_identity_question(identity_type)
+            identity_response = PROMPT_TYPE_MAPPING.get(identity_type)
             
             with self._trace_manager.span(name="identity_response") as span:
                 span.end(output={"identity_type": identity_type, "response_length": len(identity_response)})
@@ -803,7 +813,7 @@ class ChatFlow:
         identity_type = self._detect_identity_question(self.user_question)
         if identity_type:
             logger.info(f"Detected identity question of type: {identity_type}")
-            identity_response = self._handle_identity_question(identity_type)
+            identity_response = PROMPT_TYPE_MAPPING.get(identity_type)
             
             with self._trace_manager.span(name="identity_response") as span:
                 span.end(output={"identity_type": identity_type, "response_length": len(identity_response)})
@@ -1237,57 +1247,6 @@ class ChatFlow:
         # 2. Return None if no match is found, indicating the question is not about the assistant's identity
         return None
 
-
-    def _handle_identity_question(self, identity_type: str) -> str:
-        """ Generate response based on the identity question type"""
-        # 1. Get the corresponding prompt template
-        prompt_mapping = {
-            "identity_full": default_prompt.IDENTITY_FULL_PROMPT,
-            "identity_brief": default_prompt.IDENTITY_BRIEF_PROMPT,
-            "capabilities": default_prompt.CAPABILITIES_PROMPT,
-            "knowledge_base": default_prompt.KNOWLEDGE_BASE_PROMPT,
-            "greeting": default_prompt.IDENTITY_BRIEF_PROMPT,
-        }
-        
-        content = prompt_mapping.get(identity_type, default_prompt.IDENTITY_FULL_PROMPT)
-        
-        # 2. For simple types, use the template content directly
-        if identity_type in ["identity_brief", "capabilities", "knowledge_base", "greeting"]:
-            return content
-        
-        # 3. For complex types, use LLM to generate a more natural response
-        try:
-            system_prompt = default_prompt.IDENTITY_SYSTEM_PROMPT
-            user_prompt = f"""As Sia, the AI sales assistant, a user asked about your identity. 
-Please respond with a natural, conversational tone using this information:
-
-    {content}"""
-            
-            self._ensure_llm_initialized()
-            response = self._llm.chat(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ]
-            )
-            
-            if hasattr(response, 'content'):
-                return response.content
-            elif isinstance(response, dict) and 'content' in response:
-                return response['content']
-            elif isinstance(response, str):
-                return response
-            else:
-                # Fallback to the template content if we can't extract the response
-                logger.warning(f"Unexpected response format from LLM: {type(response)}")
-                return content
-            
-        except Exception as e:
-            logger.error(f"Error generating identity response with LLM: {e}")
-            # Return the template content when an error occurs
-            return content
-        
-
     def _save_cvg_messages(self) -> Generator[ChatEvent | str, None, None]:
         """Save user command and cvg report as chat messages"""                    
         try:
@@ -1347,7 +1306,7 @@ Please respond with a natural, conversational tone using this information:
             "content": self.user_question,
             "tenant_id": settings.ALDEBARAN_TENANT_ID,
         }
-        response = requests.post(aldebaran_cvgg_url, json=payload, timeout=300)
+        response = requests.post(aldebaran_cvgg_url, json=payload, timeout=300, headers={"cookie": self.incoming_cookie})
         data = None
         error_message = None
         try:

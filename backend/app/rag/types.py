@@ -78,4 +78,6 @@ class CrmDataType(str, enum.Enum):
     OPPORTUNITY_UPDATES = "crm_opportunity_updates"
     ORDER = "crm_order"
     PAYMENTPLAN = "crm_payment_plan"
+    STAGE = "crm_stage"
+    SALES_RECORD = "crm_sales_record"
     # TODO: Add more other CRM types

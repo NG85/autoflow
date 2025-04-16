@@ -89,6 +89,10 @@ def chats(
     browser_id = request.state.browser_id
 
     try:
+        incoming_cookie = request.headers.get("cookie")
+        if incoming_cookie:
+            logger.debug(f"Incoming cookie: {incoming_cookie}")
+
         chat_flow = ChatFlow(
             db_session=session,
             user=user,
@@ -99,6 +103,7 @@ def chats(
             engine_name=chat_request.chat_engine,
             chat_type=chat_request.chat_type,
             chat_mode=chat_request.chat_mode,
+            incoming_cookie=incoming_cookie,
         )
 
         if chat_request.stream:
