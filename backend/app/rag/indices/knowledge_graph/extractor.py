@@ -2,8 +2,9 @@ import logging
 from copy import deepcopy
 import pandas as pd
 import dspy
-from dspy.functional import TypedPredictor
 from typing import Mapping, Optional, List
+
+from dspy import Predict
 from llama_index.core.schema import BaseNode
 
 from app.rag.indices.knowledge_graph.schema import (
@@ -178,12 +179,12 @@ class SimpleGraphExtractor:
         pred = self.extract_prog(text=text)
         logger.info(f"pred output: {pred}")
         metadata = get_relation_metadata_from_node(node)
-        
+
         # Ensure all entities have proper metadata dictionary structure
         for entity in pred.knowledge.entities:
             if entity.metadata is None or not isinstance(entity.metadata, dict):
                 entity.metadata = {"topic": "Unknown", "status": "auto-generated"}
-        
+
         return self._to_df(
             pred.knowledge.entities, pred.knowledge.relationships, metadata
         )
