@@ -13,11 +13,12 @@ class CRMOpportunityUpdates(SQLModel, table=True):
     opportunity_id: str = Field(max_length=255, description="关联的商机唯一ID")
     opportunity_name: Optional[str] = Field(nullable=True, max_length=255, description="商机名称")
     record_date: date = Field(sa_column=Column(Date), description="记录日期（YYYY-MM-DD）")
-    update_type: str = Field(max_length=50, description="更新类型（日常/周报/会议/电话/邮件）")
-    update_date: datetime = Field(sa_column=Column(DateTime(timezone=True)), description="更新的具体时间戳")
-    creator: str = Field(max_length=255, description="创建人")
-    creator_id: str = Field(max_length=255, description="创建人唯一性ID")
-    summary: str = Field(max_length=500, description="更新摘要")
+    update_type: Optional[str] = Field(nullable=True, max_length=50, description="更新类型（日常/周报/会议/电话/邮件）")
+    data_source: Optional[str] = Field(nullable=True, max_length=255, description="数据来源")
+    update_date: Optional[datetime] = Field(sa_column=Column(DateTime, default=None, nullable=True), description="更新的具体时间戳")
+    creator: Optional[str] = Field(nullable=True, max_length=255, description="创建人")
+    creator_id: Optional[str] = Field(nullable=True, max_length=255, description="创建人唯一性ID")
+    summary: Optional[str] = Field(nullable=True, max_length=500, description="更新摘要")
     detailed_notes: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="详细描述和进展")
     next_steps: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="下一步行动计划")
     key_stakeholders: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="相关关键干系人")
@@ -25,11 +26,11 @@ class CRMOpportunityUpdates(SQLModel, table=True):
     deal_probability_change: Optional[str] = Field(nullable=True, max_length=50, description="成单概率变化（上升/下降/不变）")
     blockers: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="当前障碍或挑战")
     create_time: datetime = Field(
-        sa_column=Column(DateTime(timezone=True), server_default="CURRENT_TIMESTAMP"),
+        sa_column=Column(DateTime, server_default="CURRENT_TIMESTAMP"),
         description="创建时间"
     )
     last_modified_time: datetime = Field(
-        sa_column=Column(DateTime(timezone=True), server_default="CURRENT_TIMESTAMP", onupdate="CURRENT_TIMESTAMP"),
+        sa_column=Column(DateTime, server_default="CURRENT_TIMESTAMP", onupdate="CURRENT_TIMESTAMP"),
         description="最后修改时间"
     )
 
