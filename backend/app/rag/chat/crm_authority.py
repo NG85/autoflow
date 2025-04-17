@@ -97,6 +97,7 @@ def get_user_crm_authority(user_id: Optional[UUID]) -> CRMAuthority:
         # Build request body
         payload = {
             "dataId": "",
+            "highSeasAccounts": True,
             "type": "",
             "userId": str(user_id)
         }
@@ -127,12 +128,18 @@ def get_user_crm_authority(user_id: Optional[UUID]) -> CRMAuthority:
             return authority
             
         # Process authority data
-        result = data.get("result", [])
-        if not isinstance(result, list):
+        result = data.get("result", {})
+        if not isinstance(result, dict):
             logger.error(f"CRM authority API returned invalid result format: {result}")
             return authority
-            
-        for item in result:
+               
+        # Handle authList
+        auth_list = result.get("authList", [])
+        if not isinstance(auth_list, list):
+            logger.error(f"CRM authority API returned invalid authList format: {auth_list}")
+            return authority
+                 
+        for item in auth_list:
             if not isinstance(item, dict) or "dataId" not in item or "type" not in item:
                 continue
                 
@@ -150,7 +157,14 @@ def get_user_crm_authority(user_id: Optional[UUID]) -> CRMAuthority:
                 authority.authorized_items[crm_type].add(data_id)
             except ValueError:
                 logger.warning(f"Unknown CRM data type from API: {data_type}")
-        
+          
+        # Handle highSeasAccounts
+        high_seas_accounts = result.get("highSeasAccounts", [])
+        if isinstance(high_seas_accounts, list):
+            if CrmDataType.ACCOUNT not in authority.authorized_items:
+                authority.authorized_items[CrmDataType.ACCOUNT] = set()
+            authority.authorized_items[CrmDataType.ACCOUNT].update(high_seas_accounts)
+             
         # Record authority statistics
         stats = {data_type: len(ids) for data_type, ids in authority.authorized_items.items()}
         logger.info(f"User {user_id} CRM authority fetched: {stats}")
