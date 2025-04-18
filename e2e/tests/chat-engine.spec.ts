@@ -22,7 +22,7 @@ test.describe('Chat Engine', () => {
         await page.getByRole('tab', { name: 'Retrieval' }).click();
 
         // Select default knowledge base
-        await selectOption(page, 'Linked Knowledge Bases', /My Knowledge Base/, true);
+        await selectOption(page, 'Knowledge Bases', /My Knowledge Base/, true);
       });
 
       const chatEngineId = await test.step('Create', async () => {
@@ -44,8 +44,10 @@ test.describe('Chat Engine', () => {
             }],
           },
           knowledge_graph: {
-            enabled: false,
-          }
+            enabled: true,
+          },
+          hide_sources: false,
+          clarify_question: false,
         });
         expect(chatEngine.llm_id).toBeNull();
         expect(chatEngine.fast_llm_id).toBeNull();
@@ -78,22 +80,20 @@ test.describe('Chat Engine', () => {
 
         // Goto retrieval tab
         await page.getByRole('tab', { name: 'Retrieval' }).click();
+        await selectOption(page, 'Knowledge Bases', /My Knowledge Base/, true);
+        await checkCheckbox(page, 'Hide Sources');
 
-        // Select default knowledge base
-        await selectOption(page, 'Linked Knowledge Bases', /My Knowledge Base/, true);
-
-        // Select Reranker
+        // Semantic Search Subsection
         await selectOption(page, 'Reranker', /My Reranker/);
 
-        // KG Properties
+        // Knowledge Graph Subsection
         await page.getByRole('spinbutton', { name: 'Depth' }).fill('1'); // Do not use 2 for default value is 2
-        await checkCheckbox(page, 'Include Meta');
-        await checkCheckbox(page, 'Using intent search');
+        await checkCheckbox(page, 'Include Metadata');
+        await checkCheckbox(page, 'Using Intent Search');
 
-        // Goto features tab
-        await page.getByRole('tab', { name: 'Features' }).click();
+        // Goto Generation tab
+        await page.getByRole('tab', { name: 'Generation' }).click();
 
-        await checkCheckbox(page, 'Hide Reference Sources');
         await turnSwitch(page, 'Clarify Question');
       });
 
@@ -116,7 +116,7 @@ test.describe('Chat Engine', () => {
             }],
           },
           knowledge_graph: {
-            enabled: false,
+            enabled: true,
             depth: 1,
             include_meta: true,
             using_intent_search: true,
@@ -151,7 +151,7 @@ test.describe('Chat Engine', () => {
           await page.getByRole('tab', { name: 'Retrieval' }).click();
 
           // Select default knowledge base
-          await selectOption(page, 'Linked Knowledge Bases', /My Knowledge Base/, true);
+          await selectOption(page, 'Knowledge Bases', /My Knowledge Base/, true);
         });
 
         const chatEngineId = await test.step('Create', async () => {
