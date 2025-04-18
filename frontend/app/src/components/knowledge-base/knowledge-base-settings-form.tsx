@@ -26,7 +26,7 @@ export function KnowledgeBaseSettingsForm ({ knowledgeBase }: { knowledgeBase: K
       readonly={false}
       loading={transitioning}
       onUpdate={async (data, path) => {
-        if (['name', 'description'].includes(path[0] as never)) {
+        if (['name', 'description', 'chunking_config'].includes(path[0] as never)) {
           const partial = shallowPick(data, path as never);
           await updateKnowledgeBase(knowledgeBase.id, partial);
           startTransition(() => {
