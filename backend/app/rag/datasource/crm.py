@@ -501,8 +501,11 @@ class CRMDataSource(BaseDataSource):
         
         if entity:
             # Define the key fields to retain
-            key_fields = {"unique_id", "account_id", "account_name", "customer_id", "customer_name",  
-                          "opportunity_id", "opportunity_name", "sales_order_number", "order_id", "name"}
+            key_fields = {"unique_id", "account_id", "account_name", "customer_id", "customer_name", "customer_level", "industry",
+                          "opportunity_id", "opportunity_name", "forecast_type", "opportunity_stage", "stage_status", "expected_closing_date",
+                          "sales_order_number", "order_id", "name", "plan_payment_status",
+                          "person_in_charge", "department", "owner", "owner_department", "owner_main_department",
+                          "responsible_person", "responsible_department"}
             
             for field_name in key_fields:
                 if hasattr(entity, field_name):
@@ -510,6 +513,6 @@ class CRMDataSource(BaseDataSource):
                     if value is None:
                         continue
                     
-                    metadata[field_name] = str(value) if value else ""
+                    metadata[field_name] = value if isinstance(value, str) else str(value) if value else ""
         
         return metadata
