@@ -199,9 +199,8 @@ def build_crm_graph_index_for_document(
             # 如果订单有客户/商机/负责人信息，创建一个简单的Account/Opportunity/InternalOwner数据（从订单信息中提取）
             customer_name = order_data.get("customer_name")
             opportunity_name = order_data.get("opportunity_name")
-            owner_str = order_data.get("owner")
-            if customer_name or opportunity_name or owner_str:                
-                owner = _parse_owner(owner_str=owner_str)                        
+            owner = order_data.get("owner")# owner字段已经是json类型
+            if customer_name or opportunity_name or owner:
                 secondary_data = {
                     "account_id": order_data.get("customer_id"),
                     "account_name": customer_name,
@@ -231,9 +230,8 @@ def build_crm_graph_index_for_document(
             
             # 如果回款计划有订单/负责人信息，创建一个简单的Order/InternalOwner数据（从回款计划信息中提取）
             order_id = payment_plan_data.get("order_id")
-            owner_str = payment_plan_data.get("owner")
-            if order_id or owner_str:
-                owner = _parse_owner(owner_str=owner_str)
+            owner = payment_plan_data.get("owner")# owner字段已经是json类型
+            if order_id or owner:
                 secondary_data = {
                     "order_id": order_id,
                     "order_amount": payment_plan_data.get("order_amount"),
