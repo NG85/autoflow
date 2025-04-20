@@ -1,4 +1,6 @@
+import json
 import traceback
+from typing import List
 from uuid import UUID
 from celery.utils.log import get_task_logger
 import pandas as pd
@@ -108,11 +110,14 @@ def build_crm_graph_index_for_document(
                     opportunity_data[key] = value
             
             # 如果商机有客户/负责人关联信息，创建一个简单的Account/我方对接人数据（从商机信息中提取）
-            if opportunity_data.get("customer_name") or opportunity_data.get("owner"):
+            customer_name = opportunity_data.get("customer_name")
+            owner_str = opportunity_data.get("owner")
+            if customer_name or owner_str:
+                owner = _parse_owner(owner_str=owner_str)
                 secondary_data = {
                     "account_id": opportunity_data.get("customer_id"),
-                    "account_name": opportunity_data.get("customer_name"),
-                    "internal_owner": opportunity_data.get("owner"),
+                    "account_name": customer_name,
+                    "internal_owner": owner,
                     "internal_department": opportunity_data.get("owner_main_department"),
                     "document_id": document_id,
                     "chunk_id": chunk_id,
@@ -134,10 +139,12 @@ def build_crm_graph_index_for_document(
                 if key not in ["crm_data_type"] and value is not None:
                     account_data[key] = value
             
-            # 如果客户有负责人信息，构建一个简单的我方对接人数据（从客户信息中提取）
-            if account_data.get("person_in_charge"):
+            # 如果客户有负责人信息，构建一个简单的InternalOwner数据（从客户信息中提取）
+            person_in_charge_str = account_data.get("person_in_charge")
+            if person_in_charge_str:
+                person_in_charge = _parse_owner(owner_str=person_in_charge_str)
                 secondary_data = {
-                    "internal_owner": account_data.get("person_in_charge"),
+                    "internal_owner": person_in_charge,
                     "internal_department": account_data.get("department"),
                     "document_id": document_id,
                     "chunk_id": chunk_id,
@@ -159,14 +166,16 @@ def build_crm_graph_index_for_document(
                 if key not in ["crm_data_type"] and value is not None:
                     contact_data[key] = value
             
-            customer_id = contact_data.get("customer_id") or contact_data.get("account_id")
+            # 如果联系人有客户/负责人信息，创建一个简单的Account/InternalOwner数据（从联系人信息中提取）
             customer_name = contact_data.get("customer_name")
-
-            # 如果联系人有客户信息，创建一个简单的Account数据（从联系人信息中提取）
-            if customer_name:
+            responsible_person_str = contact_data.get("responsible_person")
+            if customer_name or responsible_person_str:
+                responsible_person = _parse_owner(owner_str=responsible_person_str)
                 secondary_data = {
-                    "account_id": customer_id,
+                    "account_id": contact_data.get("customer_id") or contact_data.get("account_id"),
                     "account_name": customer_name,
+                    "internal_owner": responsible_person,
+                    "internal_department": contact_data.get("responsible_department"),
                     "document_id": document_id,
                     "chunk_id": chunk_id,
                 }
@@ -187,17 +196,20 @@ def build_crm_graph_index_for_document(
                 if key not in ["crm_data_type"] and value is not None:
                     order_data[key] = value
             
-            # 如果订单有客户/商机关联信息，创建一个简单的Account/Opportunity/我方对接人数据（从订单信息中提取）
-            if order_data.get("customer_name") or order_data.get("opportunity_name") or order_data.get("owner"):
-               secondary_data = {
-                   "account_id": order_data.get("customer_id"),
-                   "account_name": order_data.get("customer_name"),
-                   "opportunity_id": order_data.get("opportunity_id"),
-                   "opportunity_name": order_data.get("opportunity_name"),
-                   "internal_owner": order_data.get("owner"),
-                   "internal_department": order_data.get("owner_department"),
-                   "document_id": document_id,
-                   "chunk_id": chunk_id,
+            # 如果订单有客户/商机/负责人信息，创建一个简单的Account/Opportunity/InternalOwner数据（从订单信息中提取）
+            customer_name = order_data.get("customer_name")
+            opportunity_name = order_data.get("opportunity_name")
+            owner = order_data.get("owner")# owner字段已经是json类型
+            if customer_name or opportunity_name or owner:
+                secondary_data = {
+                    "account_id": order_data.get("customer_id"),
+                    "account_name": customer_name,
+                    "opportunity_id": order_data.get("opportunity_id"),
+                    "opportunity_name": opportunity_name,
+                    "internal_owner": owner,
+                    "internal_department": order_data.get("owner_department"),
+                    "document_id": document_id,
+                    "chunk_id": chunk_id,
                 }
             primary_data = order_data
             logger.info(f"Creating graph for order {order_id} with account {order_data.get('customer_name')}")
@@ -216,15 +228,17 @@ def build_crm_graph_index_for_document(
                 if key not in ["crm_data_type"] and value is not None:
                     payment_plan_data[key] = value
             
-            # 如果回款计划有订单/我方对接人关联信息，创建一个简单的Order/我方对接人数据（从回款计划信息中提取）
-            if payment_plan_data.get("order_id") or payment_plan_data.get("owner"):
-               secondary_data = {
-                   "order_id": payment_plan_data.get("order_id"),
-                   "order_amount": payment_plan_data.get("order_amount"),
-                   "internal_owner": payment_plan_data.get("owner"),
-                   "internal_department": payment_plan_data.get("owner_department"),
-                   "document_id": document_id,
-                   "chunk_id": chunk_id,
+            # 如果回款计划有订单/负责人信息，创建一个简单的Order/InternalOwner数据（从回款计划信息中提取）
+            order_id = payment_plan_data.get("order_id")
+            owner = payment_plan_data.get("owner")# owner字段已经是json类型
+            if order_id or owner:
+                secondary_data = {
+                    "order_id": order_id,
+                    "order_amount": payment_plan_data.get("order_amount"),
+                    "internal_owner": owner,
+                    "internal_department": payment_plan_data.get("owner_department"),
+                    "document_id": document_id,
+                    "chunk_id": chunk_id,
                 }
                 
             primary_data = payment_plan_data
@@ -306,3 +320,13 @@ def build_crm_graph_index_for_document(
             chunk.crm_index_result = error_msg
             session.add(chunk)
             session.commit()
+
+def _parse_owner(owner_str: str) -> List[str]:
+    """Parse owner string to list of strings."""
+    if not owner_str:
+        return []
+    try:
+        return json.loads(owner_str)
+    except json.JSONDecodeError:
+        logger.error(f"Failed to parse owner: {owner_str}")
+        return []

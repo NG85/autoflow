@@ -26,16 +26,23 @@ class CRMKnowledgeGraphBuilder:
             metadata=account_data
         )
     
-    def create_internal_owner_entity(self, data: Dict) -> InternalOwnerEntity:
+    def create_internal_owner_entity(self, data: Dict) -> List[InternalOwnerEntity]:
         """Create internal owner entity."""
-        internal_owner_name = data.get("internal_owner")
+        internal_owner = data.get("internal_owner")
         internal_department = data.get("internal_department")
-        return InternalOwnerEntity(
-            id=None,
-            name=internal_owner_name,
-            description=f"我方内部对接人{internal_owner_name}，主属部门{internal_department}",
-            metadata=data
-        )
+        if not internal_owner:
+            return []
+        
+        owners = internal_owner if isinstance(internal_owner, list) else [internal_owner]
+        return [
+            InternalOwnerEntity(
+                id=None,
+                name=owner,
+                description=f"我方对接人{owner}" + (f", 主属部门{internal_department}" if internal_department else ""),
+                metadata=data
+            )
+            for owner in owners
+        ]
         
     def create_account_detail_entity(self, account_data: Dict) -> AccountEntity:
         """Create account detail entity."""
@@ -43,7 +50,7 @@ class CRMKnowledgeGraphBuilder:
         return AccountEntity(
             id=None,
             name=account_name,
-            description=f"关于客户{account_name}的明细数据，包括客户行业、负责人、合作状态等",
+            description=f"关于客户{account_name}的明细数据，包括客户行业、等级、合作状态等",
             metadata=account_data
         )
         
@@ -181,35 +188,35 @@ class CRMKnowledgeGraphBuilder:
                     "unique_id": account_detail_entity.metadata.get("unique_id") or account_detail_entity.metadata.get("account_id")
                 }
             })
-            
             # 如果存在我方对接人数据，创建我方对接人实体
-            if secondary_data:
-                internal_owner_entity = self.create_internal_owner_entity(secondary_data)
-                entities_data.extend([
-                    {
-                        "name": internal_owner_entity.name,
-                        "description": internal_owner_entity.description,
-                        "meta": internal_owner_entity.metadata,
-                        "graph_type": GraphType.crm
-                    }
-                ])
-                relationships_data.append({
-                    "source_entity": account_entity.name,
-                    "target_entity": internal_owner_entity.name,
-                    "source_entity_description": account_entity.description,
-                    "target_entity_description": internal_owner_entity.description,
-                    "relationship_desc": f"客户{account_entity.name}的对接人是我方的{internal_owner_entity.name}",
-                    "meta": {
-                        **meta,
-                        "document_id": document_id,
-                        "chunk_id": chunk_id,
-                        "relation_type": "HANDLED_BY",
-                        "crm_data_type": crm_data_type,
-                        "source_type": CrmDataType.ACCOUNT,
-                        "target_type": CrmDataType.INTERNAL_OWNER,
-                        "unique_id": account_entity.metadata.get("unique_id") or account_entity.metadata.get("account_id")
-                    }
-                })
+            if secondary_data and secondary_data.get("internal_owner"):
+                internal_owner_entities = self.create_internal_owner_entity(secondary_data)
+                for internal_owner_entity in internal_owner_entities:
+                    entities_data.extend([
+                        {
+                            "name": internal_owner_entity.name,
+                            "description": internal_owner_entity.description,
+                            "meta": internal_owner_entity.metadata,
+                            "graph_type": GraphType.crm
+                        }
+                    ])
+                    relationships_data.append({
+                        "source_entity": account_detail_entity.name,
+                        "target_entity": internal_owner_entity.name,
+                        "source_entity_description": account_detail_entity.description,
+                        "target_entity_description": internal_owner_entity.description,
+                        "relationship_desc": f"客户{account_detail_entity.name}由我方对接人：{internal_owner_entity.name}负责维护",
+                        "meta": {
+                            **meta,
+                            "document_id": document_id,
+                            "chunk_id": chunk_id,
+                            "relation_type": "HANDLED_BY",
+                            "crm_data_type": crm_data_type,
+                            "source_type": CrmDataType.ACCOUNT,
+                            "target_type": CrmDataType.INTERNAL_OWNER,
+                            "unique_id": account_detail_entity.metadata.get("unique_id") or account_detail_entity.metadata.get("account_id")
+                        }
+                    })
                         
         elif crm_data_type == CrmDataType.CONTACT:
             # 创建联系人详情实体
@@ -241,32 +248,61 @@ class CRMKnowledgeGraphBuilder:
                 }
             })
             
-            # 如果客户实体存在，创建联系人详情-客户关系
             if secondary_data:
-                account_entity = self.create_account_entity(secondary_data) 
-                entities_data.append({
-                    "name": account_entity.name,
-                    "description": account_entity.description,
-                    "meta": account_entity.metadata,
-                    "graph_type": GraphType.crm
-                })
-                relationships_data.append({
-                    "source_entity": contact_detail_entity.name,
-                    "target_entity": account_entity.name,
-                    "source_entity_description": contact_detail_entity.description,
-                    "target_entity_description": account_entity.description,
-                    "relationship_desc": f"联系人{contact_detail_entity.name}属于客户{account_entity.name}",
-                    "meta": {
-                        **meta,
-                        "document_id": document_id,
-                        "chunk_id": chunk_id,
-                        "relation_type": "BELONGS_TO",
-                        "crm_data_type": crm_data_type,
-                        "source_type": CrmDataType.CONTACT,
-                        "target_type": CrmDataType.ACCOUNT,
-                        "unique_id": contact_detail_entity.metadata.get("unique_id") or contact_detail_entity.metadata.get("contact_id")
-                    }
-                })
+                # 如果客户实体存在，创建联系人详情-客户关系
+                if secondary_data.get("account_name"):
+                    account_entity = self.create_account_entity(secondary_data) 
+                    entities_data.append({
+                        "name": account_entity.name,
+                        "description": account_entity.description,
+                        "meta": account_entity.metadata,
+                        "graph_type": GraphType.crm
+                    })
+                    relationships_data.append({
+                        "source_entity": contact_detail_entity.name,
+                        "target_entity": account_entity.name,
+                        "source_entity_description": contact_detail_entity.description,
+                        "target_entity_description": account_entity.description,
+                        "relationship_desc": f"联系人{contact_detail_entity.name}属于客户{account_entity.name}",
+                        "meta": {
+                            **meta,
+                            "document_id": document_id,
+                            "chunk_id": chunk_id,
+                            "relation_type": "BELONGS_TO",
+                            "crm_data_type": crm_data_type,
+                            "source_type": CrmDataType.CONTACT,
+                            "target_type": CrmDataType.ACCOUNT,
+                            "unique_id": contact_detail_entity.metadata.get("unique_id") or contact_detail_entity.metadata.get("contact_id")
+                        }
+                    })
+                
+                # 如果我方对接人实体存在，创建联系人详情-我方对接人关系
+                if secondary_data.get("internal_owner"):
+                    internal_owner_entities = self.create_internal_owner_entity(secondary_data)
+                    for internal_owner_entity in internal_owner_entities:
+                        entities_data.append({
+                            "name": internal_owner_entity.name,
+                            "description": internal_owner_entity.description,
+                            "meta": internal_owner_entity.metadata,
+                            "graph_type": GraphType.crm
+                        })
+                        relationships_data.append({
+                            "source_entity": contact_detail_entity.name,
+                            "target_entity": internal_owner_entity.name,    
+                            "source_entity_description": contact_detail_entity.description,
+                            "target_entity_description": internal_owner_entity.description,
+                            "relationship_desc": f"客户联系人{contact_detail_entity.name}由我方对接人：{internal_owner_entity.name}负责对接",
+                            "meta": {
+                                **meta,
+                                "document_id": document_id, 
+                                "chunk_id": chunk_id,
+                                "relation_type": "HANDLED_BY",
+                                "crm_data_type": crm_data_type,
+                                "source_type": CrmDataType.CONTACT,
+                                "target_type": CrmDataType.INTERNAL_OWNER,
+                                "unique_id": contact_detail_entity.metadata.get("unique_id") or contact_detail_entity.metadata.get("contact_id")
+                            }
+                        })
 
         elif crm_data_type == CrmDataType.OPPORTUNITY:
             # 创建商机详情实体
@@ -301,7 +337,7 @@ class CRMKnowledgeGraphBuilder:
             
             if secondary_data:
                 # 如果客户实体存在，创建商机-客户关系
-                if hasattr(secondary_data, "account_name") and secondary_data.get("account_name"):
+                if secondary_data.get("account_name"):
                     account_entity = self.create_account_entity(secondary_data)
                     entities_data.append({
                         "name": account_entity.name,
@@ -327,31 +363,32 @@ class CRMKnowledgeGraphBuilder:
                         }
                     })
                 # 如果我方对接人实体存在，创建商机-我方对接人关系
-                if hasattr(secondary_data, "internal_owner") and secondary_data.get("internal_owner"):
-                    internal_owner_entity = self.create_internal_owner_entity(secondary_data)
-                    entities_data.append({
-                        "name": internal_owner_entity.name,
-                        "description": internal_owner_entity.description,
-                        "meta": internal_owner_entity.metadata,
-                        "graph_type": GraphType.crm
-                    })
-                    relationships_data.append({
-                        "source_entity": opportunity_detail_entity.name,
-                        "target_entity": internal_owner_entity.name,
-                        "source_entity_description": opportunity_detail_entity.description,
-                        "target_entity_description": internal_owner_entity.description,
-                        "relationship_desc": f"商机{opportunity_detail_entity.name}由我方的{internal_owner_entity.name}负责跟进",
-                        "meta": {
-                            **meta,
-                            "document_id": document_id,
-                            "chunk_id": chunk_id,
-                            "relation_type": "HANDLED_BY",
-                            "crm_data_type": crm_data_type,
-                            "source_type": CrmDataType.OPPORTUNITY,
-                            "target_type": CrmDataType.INTERNAL_OWNER,
-                            "unique_id": opportunity_detail_entity.metadata.get("unique_id") or opportunity_detail_entity.metadata.get("opportunity_id")
-                        }
-                    })
+                if secondary_data.get("internal_owner"):
+                    internal_owner_entities = self.create_internal_owner_entity(secondary_data)
+                    for internal_owner_entity in internal_owner_entities:
+                        entities_data.append({
+                            "name": internal_owner_entity.name,
+                            "description": internal_owner_entity.description,
+                            "meta": internal_owner_entity.metadata,
+                            "graph_type": GraphType.crm
+                        })
+                        relationships_data.append({
+                            "source_entity": opportunity_detail_entity.name,
+                            "target_entity": internal_owner_entity.name,
+                            "source_entity_description": opportunity_detail_entity.description,
+                            "target_entity_description": internal_owner_entity.description,
+                            "relationship_desc": f"商机{opportunity_detail_entity.name}由我方对接人：{internal_owner_entity.name}负责跟进",
+                            "meta": {
+                                **meta,
+                                "document_id": document_id,
+                                "chunk_id": chunk_id,
+                                "relation_type": "HANDLED_BY",
+                                "crm_data_type": crm_data_type,
+                                "source_type": CrmDataType.OPPORTUNITY,
+                                "target_type": CrmDataType.INTERNAL_OWNER,
+                                "unique_id": opportunity_detail_entity.metadata.get("unique_id") or opportunity_detail_entity.metadata.get("opportunity_id")
+                            }
+                        })
                     
         elif crm_data_type == CrmDataType.ORDER:
             # 创建订单详情实体
@@ -384,7 +421,7 @@ class CRMKnowledgeGraphBuilder:
             })
             if secondary_data:
                 # 如果客户实体存在，创建订单-客户关系
-                if hasattr(secondary_data, "account_name") and secondary_data.get("account_name"):
+                if secondary_data.get("account_name"):
                     account_entity = self.create_account_entity(secondary_data)
                     entities_data.append({
                         "name": account_entity.name,
@@ -410,7 +447,7 @@ class CRMKnowledgeGraphBuilder:
                         }
                     })
                 # 如果商机实体存在，创建订单-商机关系
-                if hasattr(secondary_data, "opportunity_name") and secondary_data.get("opportunity_name"):
+                if secondary_data.get("opportunity_name"):
                     opportunity_entity = self.create_opportunity_entity(secondary_data)
                     entities_data.append({
                         "name": opportunity_entity.name,
@@ -436,31 +473,32 @@ class CRMKnowledgeGraphBuilder:
                         }
                     })
                 # 如果我方对接人实体存在，创建订单-我方对接人关系
-                if hasattr(secondary_data, "internal_owner") and secondary_data.get("internal_owner"):
-                    internal_owner_entity = self.create_internal_owner_entity(secondary_data)
-                    entities_data.append({
-                        "name": internal_owner_entity.name,
-                        "description": internal_owner_entity.description,
-                        "meta": internal_owner_entity.metadata,
-                        "graph_type": GraphType.crm
-                    })
-                    relationships_data.append({
-                        "source_entity": order_detail_entity.name,
-                        "target_entity": internal_owner_entity.name,
-                        "source_entity_description": order_detail_entity.description,
-                        "target_entity_description": internal_owner_entity.description,
-                        "relationship_desc": f"订单{order_detail_entity.name}由我方的{internal_owner_entity.name}负责签订",
-                        "meta": {
-                            **meta,
-                            "document_id": document_id,
-                            "chunk_id": chunk_id,
-                            "relation_type": "HANDLED_BY",
-                            "crm_data_type": crm_data_type,
-                            "source_type": CrmDataType.ORDER,
-                            "target_type": CrmDataType.INTERNAL_OWNER,
-                            "unique_id": order_detail_entity.metadata.get("unique_id") or order_detail_entity.metadata.get("sales_order_number")
-                        }
-                    })
+                if secondary_data.get("internal_owner"):
+                    internal_owner_entities = self.create_internal_owner_entity(secondary_data)
+                    for internal_owner_entity in internal_owner_entities:
+                        entities_data.append({
+                            "name": internal_owner_entity.name,
+                            "description": internal_owner_entity.description,
+                            "meta": internal_owner_entity.metadata,
+                            "graph_type": GraphType.crm
+                        })
+                        relationships_data.append({
+                            "source_entity": order_detail_entity.name,
+                            "target_entity": internal_owner_entity.name,
+                            "source_entity_description": order_detail_entity.description,
+                            "target_entity_description": internal_owner_entity.description,
+                            "relationship_desc": f"订单{order_detail_entity.name}由我方对接人：{internal_owner_entity.name}负责签订",
+                            "meta": {
+                                **meta,
+                                "document_id": document_id,
+                                "chunk_id": chunk_id,
+                                "relation_type": "HANDLED_BY",
+                                "crm_data_type": crm_data_type,
+                                "source_type": CrmDataType.ORDER,
+                                "target_type": CrmDataType.INTERNAL_OWNER,
+                                "unique_id": order_detail_entity.metadata.get("unique_id") or order_detail_entity.metadata.get("sales_order_number")
+                            }
+                        })
                 
 
         elif crm_data_type == CrmDataType.PAYMENTPLAN:
@@ -495,7 +533,7 @@ class CRMKnowledgeGraphBuilder:
             
             if secondary_data:
                 # 如果订单实体存在，创建回款计划-订单关系
-                if hasattr(secondary_data, "order_name") and secondary_data.get("order_name"):
+                if secondary_data.get("order_name"):
                     order_entity = self.create_order_entity(secondary_data)
                     entities_data.append({
                         "name": order_entity.name,
@@ -522,35 +560,36 @@ class CRMKnowledgeGraphBuilder:
                     })
                     
                 # 如果我方对接人实体存在，创建回款计划-我方对接人关系
-                if hasattr(secondary_data, "internal_owner") and secondary_data.get("internal_owner"):
-                    internal_owner_entity = self.create_internal_owner_entity(secondary_data)
-                    entities_data.append({
-                        "name": internal_owner_entity.name,
-                        "description": internal_owner_entity.description,
-                        "meta": internal_owner_entity.metadata,
-                        "graph_type": GraphType.crm
-                    })
-                    relationships_data.append({
-                        "source_entity": payment_plan_detail_entity.name,
-                        "target_entity": internal_owner_entity.name,
-                        "source_entity_description": payment_plan_detail_entity.description,
-                        "target_entity_description": internal_owner_entity.description,
-                        "relationship_desc": f"回款计划{payment_plan_detail_entity.name}由我方的{internal_owner_entity.name}负责追款",
-                        "meta": {
-                            **meta,
-                            "document_id": document_id,
-                            "chunk_id": chunk_id,
-                            "relation_type": "HANDLED_BY",
-                            "crm_data_type": crm_data_type,
-                            "source_type": CrmDataType.PAYMENTPLAN,
-                            "target_type": CrmDataType.INTERNAL_OWNER,
-                            "unique_id": payment_plan_detail_entity.metadata.get("unique_id") or payment_plan_detail_entity.metadata.get("name")
-                        }
-                    })
+                if secondary_data.get("internal_owner"):
+                    internal_owner_entities = self.create_internal_owner_entity(secondary_data)
+                    for internal_owner_entity in internal_owner_entities:
+                        entities_data.append({
+                            "name": internal_owner_entity.name,
+                            "description": internal_owner_entity.description,
+                            "meta": internal_owner_entity.metadata,
+                            "graph_type": GraphType.crm
+                        })
+                        relationships_data.append({
+                            "source_entity": payment_plan_detail_entity.name,
+                            "target_entity": internal_owner_entity.name,
+                            "source_entity_description": payment_plan_detail_entity.description,
+                            "target_entity_description": internal_owner_entity.description,
+                            "relationship_desc": f"回款计划{payment_plan_detail_entity.name}由我方对接人：{internal_owner_entity.name}负责追款",
+                            "meta": {
+                                **meta,
+                                "document_id": document_id,
+                                "chunk_id": chunk_id,
+                                "relation_type": "HANDLED_BY",
+                                "crm_data_type": crm_data_type,
+                                "source_type": CrmDataType.PAYMENTPLAN,
+                                "target_type": CrmDataType.INTERNAL_OWNER,
+                                "unique_id": payment_plan_detail_entity.metadata.get("unique_id") or payment_plan_detail_entity.metadata.get("name")
+                            }
+                        })
         elif crm_data_type == CrmDataType.OPPORTUNITY_UPDATES:            
             # 创建商机-商机更新记录关系
             if secondary_data:
-                opportunity_entity = self.create_opportunity_entity(secondary_data)            # 创建商机更新记录详情实体
+                opportunity_entity = self.create_opportunity_entity(secondary_data)
                 opportunity_updates_detail_entity = self.create_opportunity_updates_entity(primary_data)
                 entities_data.extend([
                     {
