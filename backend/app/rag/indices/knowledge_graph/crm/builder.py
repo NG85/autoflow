@@ -42,6 +42,7 @@ class CRMKnowledgeGraphBuilder:
                 metadata=data
             )
             for owner in owners
+            if owner != ''
         ]
         
     def create_account_detail_entity(self, account_data: Dict) -> AccountEntity:
