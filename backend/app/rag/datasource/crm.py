@@ -501,12 +501,19 @@ class CRMDataSource(BaseDataSource):
         
         if entity:
             # Define the key fields to retain
-            key_fields = {"unique_id", "account_id", "account_name", "customer_id", "customer_name", "customer_level", "industry",
-                          "opportunity_id", "opportunity_name", "forecast_type", "opportunity_stage", "stage_status", "expected_closing_date",
-                          "sales_order_number", "order_id", "name", "plan_payment_status",
-                          "person_in_charge", "department", "owner", "owner_department", "owner_main_department",
-                          "responsible_person", "responsible_department"}
+            key_fields = {"unique_id"}
             
+            if data_type == CrmDataType.ACCOUNT:
+                key_fields.extend({"customer_name", "customer_level", "industry", "person_in_charge", "department"})
+            elif data_type == CrmDataType.CONTACT:
+                key_fields.extend({"name", "customer_id", "customer_name", "responsible_person", "responsible_department"})
+            elif data_type == CrmDataType.OPPORTUNITY:
+                key_fields.extend({"opportunity_name", "customer_id", "customer_name", "owner", "owner_main_department"})
+            elif data_type == CrmDataType.ORDER:
+                key_fields.extend({"sales_order_number", "customer_id", "customer_name", "opportunity_id", "opportunity_name", "owner", "owner_department"})
+            elif data_type == CrmDataType.PAYMENTPLAN:
+                key_fields.extend({"name", "order_id", "account_id", "account_name", "owner", "owner_department"})
+                
             for field_name in key_fields:
                 if hasattr(entity, field_name):
                     value = getattr(entity, field_name, None)

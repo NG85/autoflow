@@ -1,3 +1,4 @@
+from copy import deepcopy
 import json
 from typing import List, Tuple, Mapping, Any
 
@@ -93,7 +94,16 @@ def get_entity_description_embedding(
 def get_entity_metadata_embedding(
     metadata: Mapping[str, Any], embed_model: BaseEmbedding = None
 ) -> Embedding:
-    combined_text = json.dumps(metadata, ensure_ascii=False)
+    if metadata.get("category") == "crm":
+        new_metadata = deepcopy(metadata)
+        for key in [
+            "_node_content",
+            "_node_type",
+        ]:
+            new_metadata.pop(key, None)
+        combined_text = json.dumps(new_metadata, ensure_ascii=False)
+    else:
+        combined_text = json.dumps(metadata, ensure_ascii=False)
     return get_text_embedding(combined_text, embed_model)
 
 
