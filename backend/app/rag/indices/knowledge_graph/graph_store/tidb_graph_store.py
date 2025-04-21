@@ -54,7 +54,8 @@ def cosine_distance(v1, v2):
 
 
 class MergeEntities(dspy.Signature):
-    """As a knowledge expert assistant specialized in database technologies, evaluate the two provided entities. These entities have been pre-analyzed and have same name but different descriptions and metadata.
+    """As a knowledge integration assistant, evaluate two entities with identical names but different descriptions and metadata. Analyze their semantic meaning, contextual relationships, and domain-specific characteristics to determine conceptual equivalence.
+    
     Please carefully review the detailed descriptions and metadata for both entities to determine if they genuinely represent the same concept or object(entity).
     If you conclude that the entities are identical, merge the descriptions and metadata fields of the two entities into a single consolidated entity.
     If the entities are distinct despite their same name that may be due to different contexts or perspectives, do not merge the entities and return none as the merged entity.
