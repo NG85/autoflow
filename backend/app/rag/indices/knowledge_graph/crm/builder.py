@@ -33,6 +33,10 @@ class CRMKnowledgeGraphBuilder:
         for key in [
             "account_id",
             "account_name",
+            "opportunity_id",
+            "opportunity_name",
+            "order_id",
+            "order_amount",
             "chunk_id",
             "document_id",            
         ]:
