@@ -1,3 +1,4 @@
+from copy import deepcopy
 from typing import Any, Dict, List
 from app.rag.indices.knowledge_graph.crm.entity import (
     AccountEntity,
@@ -28,8 +29,16 @@ class CRMKnowledgeGraphBuilder:
     
     def create_internal_owner_entity(self, data: Dict) -> List[InternalOwnerEntity]:
         """Create internal owner entity."""
-        internal_owner = data.get("internal_owner")
-        internal_department = data.get("internal_department")
+        metadata = deepcopy(data)
+        for key in [
+            "account_id",
+            "account_name",
+            "chunk_id",
+            "document_id",            
+        ]:
+            metadata.pop(key, None)
+        internal_owner = metadata.get("internal_owner")
+        internal_department = metadata.get("internal_department")
         if not internal_owner:
             return []
         
@@ -39,7 +48,7 @@ class CRMKnowledgeGraphBuilder:
                 id=None,
                 name=owner,
                 description=f"我方对接人{owner}" + (f", 主属部门{internal_department}" if internal_department else ""),
-                metadata=data
+                metadata=metadata
             )
             for owner in owners
             if owner != ''
