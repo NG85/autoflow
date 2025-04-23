@@ -16,6 +16,7 @@ from app.rag.retrievers.knowledge_graph.schema import (
 from app.rag.knowledge_base.config import get_kb_embed_model, get_kb_dspy_llm
 from app.rag.indices.knowledge_graph.graph_store import TiDBGraphStore
 from app.repositories import knowledge_base_repo
+from app.rag.chat.crm_authority import CRMAuthority
 
 
 class KnowledgeGraphSimpleRetriever(BaseRetriever, KnowledgeGraphRetriever):
@@ -52,6 +53,12 @@ class KnowledgeGraphSimpleRetriever(BaseRetriever, KnowledgeGraphRetriever):
         metadata_filters = {}
         if self.config.metadata_filter and self.config.metadata_filter.enabled:
             metadata_filters = self.config.metadata_filter.filters
+        
+        # 应用查询包中的元数据过滤器
+        if hasattr(query_bundle, 'metadata_filters') and query_bundle.metadata_filters:
+            for filter_item in query_bundle.metadata_filters:
+                for key, value in filter_item.items():
+                    metadata_filters[key] = value
 
         entities, relationships = self._kg_store.retrieve_with_weight(
             query_bundle.query_str,
@@ -74,9 +81,21 @@ class KnowledgeGraphSimpleRetriever(BaseRetriever, KnowledgeGraphRetriever):
         ]
 
     def retrieve_knowledge_graph(
-        self, query_text: str
+        self, query_text: str, crm_authority: Optional[CRMAuthority] = None
     ) -> KnowledgeGraphRetrievalResult:
-        nodes_with_score = self._retrieve(QueryBundle(query_text))
+        metadata_filters = []
+        if crm_authority and not crm_authority.is_empty():
+            for crm_type, authorized_ids in crm_authority.authorized_items.items():
+                metadata_filters.append({
+                    "crm_data_type": crm_type,
+                    "unique_id": authorized_ids
+                })
+                
+        query_bundle = QueryBundle(
+            query_str=query_text,
+            metadata_filters=metadata_filters
+        )
+        nodes_with_score = self._retrieve(query_bundle)
         if len(nodes_with_score) == 0:
             return KnowledgeGraphRetrievalResult()
         node: KnowledgeGraphNode = nodes_with_score[0].node  # type:ignore

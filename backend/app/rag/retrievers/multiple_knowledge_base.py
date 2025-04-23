@@ -19,6 +19,7 @@ from app.rag.knowledge_base.selector import KBSelectMode, MultiKBSelector
 from app.rag.question_gen.query_decomposer import QueryDecomposer
 from app.rag.types import MyCBEventType
 from app.utils.dspy import get_dspy_lm_by_llama_llm
+from app.rag.chat.crm_authority import CRMAuthority
 
 
 class FusionRetrivalBaseConfig(BaseModel):
@@ -41,6 +42,7 @@ class MultiKBFusionRetriever(BaseRetriever):
         use_query_decompose: bool = True,
         use_async: bool = True,
         callback_manager: Optional[CallbackManager] = CallbackManager([]),
+        crm_authority: Optional[CRMAuthority] = None,
         **kwargs,
     ):
         super().__init__(callback_manager, **kwargs)
@@ -55,6 +57,18 @@ class MultiKBFusionRetriever(BaseRetriever):
             dspy_lm=self._dspy_lm,
             complied_program_path=settings.COMPLIED_INTENT_ANALYSIS_PROGRAM_PATH,
         )
+
+        # 设置权限过滤条件
+        if crm_authority and not crm_authority.is_empty():
+            for retriever in retrievers:
+                if hasattr(retriever, 'config') and hasattr(retriever.config, 'metadata_filter'):
+                    # 为每种 CRM 类型创建过滤条件
+                    for crm_type, authorized_ids in crm_authority.authorized_items.items():
+                        retriever.config.metadata_filter.enabled = True
+                        retriever.config.metadata_filter.filters = {
+                            "crm_data_type": crm_type,
+                            "unique_id": authorized_ids
+                        }
 
         # Setup multiple knowledge base selector.
         self._retriever_choices = retriever_choices

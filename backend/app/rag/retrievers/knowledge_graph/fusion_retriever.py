@@ -23,6 +23,7 @@ from app.rag.retrievers.knowledge_graph.schema import (
 )
 from app.rag.types import ChatMessageSate, MyCBEventType
 from app.repositories import knowledge_base_repo
+from app.rag.chat.crm_authority import CRMAuthority
 
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,7 @@ class KnowledgeGraphFusionRetriever(MultiKBFusionRetriever, KnowledgeGraphRetrie
         use_async: bool = True,
         config: KnowledgeGraphRetrieverConfig = KnowledgeGraphRetrieverConfig(),
         callback_manager: Optional[CallbackManager] = CallbackManager([]),
+        crm_authority: Optional[CRMAuthority] = None,
         **kwargs,
     ):
         self.use_query_decompose = use_query_decompose
@@ -50,13 +52,29 @@ class KnowledgeGraphFusionRetriever(MultiKBFusionRetriever, KnowledgeGraphRetrie
         retriever_choices = []
         knowledge_bases = knowledge_base_repo.get_by_ids(db_session, knowledge_base_ids)
         self.knowledge_bases = knowledge_bases
+        self.crm_authority = crm_authority
+        self.config = config
+        if crm_authority and not crm_authority.is_empty():
+            if not self.config.metadata_filter:
+                self.config.metadata_filter = KnowledgeGraphRetrieverConfig().metadata_filter
+                self.config.metadata_filter.enabled = True
+            elif not self.config.metadata_filter.enabled:
+                self.config.metadata_filter.enabled = True
+                
+            if not self.config.metadata_filter.filters:
+                self.config.metadata_filter.filters = {}
+                
+            for crm_type, authorized_ids in crm_authority.authorized_items.items():
+                self.config.metadata_filter.filters["crm_data_type"] = crm_type
+                self.config.metadata_filter.filters["unique_id"] = authorized_ids
+                
         for kb in knowledge_bases:
             self.knowledge_base_map[kb.id] = kb
             retrievers.append(
                 KnowledgeGraphSimpleRetriever(
                     db_session=db_session,
                     knowledge_base_id=kb.id,
-                    config=config,
+                    config=self.config,
                     callback_manager=callback_manager,
                 )
             )
@@ -82,7 +100,14 @@ class KnowledgeGraphFusionRetriever(MultiKBFusionRetriever, KnowledgeGraphRetrie
     def retrieve_knowledge_graph(
         self, query_text: str
     ) -> Generator[Tuple[ChatMessageSate, str], None, KnowledgeGraphRetrievalResult]:
-        retrieve_gen = self._retrieve(QueryBundle(query_text))
+        if self.crm_authority and not self.crm_authority.is_empty():
+            query_bundle = QueryBundle(
+                query_str=query_text,
+                metadata_filters=self.config.metadata_filter.filters
+            )
+            retrieve_gen = self._retrieve(query_bundle)
+        else:
+            retrieve_gen = self._retrieve(QueryBundle(query_str=query_text))
         
         try:
             # Forward the intermediate state and message of the generator

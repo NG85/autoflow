@@ -317,15 +317,17 @@ class ChatFlow:
             ),
         )
         # Initialize CRM authority control
+        user_id = UUID("01954119-73d7-770a-a0f8-e2f11eba4a34")
         self.crm_authority = get_user_crm_authority(
-            user_id=self.user.id if self.user else None
+            # user_id=self.user.id if self.user else None
+            user_id=user_id
         )
-        logger.info(f"CRM authority initialized for user {self.user.id if self.user else 'anonymous'}")
+        logger.info(f"CRM authority initialized for user {user_id}")
     
         if self.user and not self.crm_authority.is_empty():
             # Record user permission statistics information
             auth_stats = {k: len(v) for k, v in self.crm_authority.authorized_items.items()}
-            logger.info(f"User {self.user.id} has CRM access: {auth_stats}")
+            logger.info(f"User {user_id} has CRM access: {auth_stats}")
             
         # 2. Retrieve Knowledge graph related to the user question.
         (

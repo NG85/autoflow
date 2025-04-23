@@ -10,6 +10,7 @@ from llama_index.core.schema import NodeWithScore
 
 from app.exceptions import InternalServerError, KBNotFound
 from app.rag.chat.config import ChatEngineConfig
+from app.rag.chat.crm_authority import CRMAuthority
 from app.rag.chat.retrieve.retrieve_flow import RetrieveFlow
 
 router = APIRouter()
@@ -48,6 +49,7 @@ def legacy_retrieve_documents(
     similarity_top_k: Optional[int] = None,
     oversampling_factor: Optional[int] = 5,
     refine_question_with_kg: Optional[bool] = True,
+    crm_authority: Optional[CRMAuthority] = None,
 ) -> List[Document]:
     try:
         engine_config = get_override_engine_config(
@@ -63,7 +65,7 @@ def legacy_retrieve_documents(
             engine_name=chat_engine,
             engine_config=engine_config,
         )
-        return retriever.retrieve_documents(question)
+        return retriever.retrieve_documents(question, crm_authority=crm_authority)
     except KBNotFound as e:
         raise e
     except Exception as e:

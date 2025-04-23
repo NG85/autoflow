@@ -152,6 +152,9 @@ def get_user_crm_authority(user_id: Optional[UUID]) -> CRMAuthority:
             # Map the API returned type to the CrmDataType enum
             try:
                 crm_type = CrmDataType(data_type)
+                if crm_type == CrmDataType.STAGE or crm_type == CrmDataType.SALES_RECORD:
+                    # Ignore stage and sales record data
+                    continue
                 if crm_type not in authority.authorized_items:
                     authority.authorized_items[crm_type] = set()
                 authority.authorized_items[crm_type].add(data_id)

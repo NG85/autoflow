@@ -28,6 +28,7 @@ from app.rag.chat.crm_authority import (
     CRMAuthority,
     identify_crm_data_type,
 )
+from app.rag.retrievers.chunk.schema import MetadataFilterConfig
 
 dispatcher = get_dispatcher(__name__)
 logger = logging.getLogger(__name__)
@@ -69,19 +70,19 @@ class RetrieveFlow:
         self.knowledge_base_ids = [kb.id for kb in self.knowledge_bases]
         self.filtered_objects_count = 0
 
-    def retrieve(self, user_question: str) -> List[NodeWithScore]:
+    def retrieve(self, user_question: str, crm_authority: Optional[CRMAuthority] = None) -> List[NodeWithScore]:
         if self.engine_config.refine_question_with_kg:
             # 1. Retrieve Knowledge graph related to the user question.
-            _, knowledge_graph_context = self.search_knowledge_graph(user_question)
+            _, knowledge_graph_context = self.search_knowledge_graph(user_question, crm_authority=crm_authority)
 
             # 2. Refine the user question using knowledge graph and chat history.
             self._refine_user_question(user_question, knowledge_graph_context)
 
         # 3. Search relevant chunks based on the user question.
-        return self.search_relevant_chunks(user_question=user_question)
+        return self.search_relevant_chunks(user_question=user_question, crm_authority=crm_authority)
 
-    def retrieve_documents(self, user_question: str) -> List[DBDocument]:
-        nodes = self.retrieve(user_question)
+    def retrieve_documents(self, user_question: str, crm_authority: Optional[CRMAuthority] = None) -> List[DBDocument]:
+        nodes = self.retrieve(user_question, crm_authority=crm_authority)
         return self.get_documents_from_nodes(nodes)
 
     def search_knowledge_graph(
@@ -100,6 +101,7 @@ class RetrieveFlow:
                 config=KnowledgeGraphRetrieverConfig.model_validate(
                     kg_config.model_dump(exclude={"enabled", "using_intent_search"})
                 ),
+                crm_authority=crm_authority
             )
             try:
                 kg_gen = kg_retriever.retrieve_knowledge_graph(user_question)
@@ -118,21 +120,6 @@ class RetrieveFlow:
                     yield (ChatMessageSate.KG_RETRIEVAL, f"Knowledge graph retrieval failed: {str(e)}")
                     knowledge_graph = KnowledgeGraphRetrievalResult()
 
-                # Filter the knowledge graph results according to the CRM authority
-                if crm_authority and not crm_authority.is_empty():
-                    # Record the number of entities and their types before filtering
-                    if logger.isEnabledFor(logging.DEBUG):
-                        category_counts = {}
-                        for entity in knowledge_graph.entities:
-                            logger.debug(f"Retrieved entity before filtering: {entity}")
-                            meta = getattr(entity, "meta", {}) or {}
-                            category = meta.get("crm_data_type", "unknown")
-                            category_counts[category] = category_counts.get(category, 0) + 1
-                        logger.debug(f"Entity categories before filtering: {category_counts}")
-                    
-                    knowledge_graph, filtered_count = self.filter_knowledge_graph_by_authority(knowledge_graph, crm_authority)
-                    logger.info(f"Filtered {filtered_count} unauthorized objects from knowledge graph")
-                    self.filtered_objects_count += filtered_count
                 # Convert the knowledge graph to context text
                 knowledge_graph_context = self._get_knowledge_graph_context(knowledge_graph)
                 yield (ChatMessageSate.KG_RETRIEVAL, "Organizing and processing knowledge graph information")
@@ -175,20 +162,36 @@ class RetrieveFlow:
         )
 
     def search_relevant_chunks(self, user_question: str, crm_authority: Optional[CRMAuthority] = None) -> List[NodeWithScore]:
+        # 构建元数据过滤条件
+        metadata_filters = {}
+        if crm_authority and not crm_authority.is_empty():
+            # 为每种CRM类型创建过滤条件
+            for crm_type, authorized_ids in crm_authority.authorized_items.items():
+                # 使用元数据过滤来限制只返回用户有权限的CRM数据
+                metadata_filters["crm_data_type"] = crm_type
+                metadata_filters["unique_id"] = authorized_ids
+        
+        # 创建检索器配置
+        config = self.engine_config.vector_search
+        if metadata_filters:
+            # 如果存在权限过滤条件，则启用元数据过滤
+            if not config.metadata_filter:
+                config.metadata_filter = MetadataFilterConfig()
+            config.metadata_filter.enabled = True
+            config.metadata_filter.filters = metadata_filters
+        
+        # 创建检索器
         retriever = ChunkFusionRetriever(
             db_session=self.db_session,
             knowledge_base_ids=self.knowledge_base_ids,
             llm=self._llm,
-            config=self.engine_config.vector_search,
+            config=config,
             use_query_decompose=False,
             use_async=True,
         )
+        
+        # 执行检索
         nodes = retriever.retrieve(QueryBundle(user_question))
-
-        # Filter the nodes according to the CRM authority
-        if crm_authority and not crm_authority.is_empty():
-            nodes, filtered_count = self.filter_chunks_by_authority(nodes, crm_authority)
-            self.filtered_objects_count += filtered_count
         
         return nodes
                 

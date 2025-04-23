@@ -686,6 +686,7 @@ class TiDBGraphStore(KnowledgeGraphStore):
         )
 
         if relationship_meta_filters:
+            logger.info(f"Applying relationship meta filters: {relationship_meta_filters}")
             for k, v in relationship_meta_filters.items():
                 query = query.where(relationships_alias.meta[k] == v)
 
