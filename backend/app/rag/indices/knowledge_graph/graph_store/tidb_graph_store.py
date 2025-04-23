@@ -687,8 +687,24 @@ class TiDBGraphStore(KnowledgeGraphStore):
 
         if relationship_meta_filters:
             logger.info(f"Applying relationship meta filters: {relationship_meta_filters}")
-            for k, v in relationship_meta_filters.items():
-                query = query.where(relationships_alias.meta[k] == v)
+            filter_conditions = self.parse_mongo_style_filter(relationship_meta_filters)
+            
+            for field, op, value in filter_conditions:
+                json_field = relationships_alias.meta[field]
+                if op == "$eq":
+                    logger.info("add query condition with $eq")
+                    query = query.where(json_field == value)
+                elif op == "$ne":
+                    query = query.where(json_field != value)
+                elif op == "$in":
+                    logger.info("add query condition with $in")
+                    query = query.where(json_field.in_(value))
+                elif op == "$nin":
+                    query = query.where(~json_field.in_(value))
+                elif op == "$gt":
+                    query = query.where(json_field > value)
+                # TODO: support more operations
+              
 
         if visited_relationships:
             query = query.where(
@@ -808,6 +824,16 @@ class TiDBGraphStore(KnowledgeGraphStore):
 
         return new_entity_set
 
+    def parse_mongo_style_filter(self, filters):
+        conditions = []
+        for field, condition in filters.items():
+            if isinstance(condition, dict):
+                for op, value in condition.items():
+                    conditions.append((field, op, value))
+            else:
+                conditions.append((field, "$eq", condition))
+        return conditions
+    
     def fetch_similar_entities(
         self,
         embedding: list,

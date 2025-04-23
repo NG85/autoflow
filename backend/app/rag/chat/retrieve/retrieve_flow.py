@@ -188,6 +188,7 @@ class RetrieveFlow:
             config=config,
             use_query_decompose=False,
             use_async=True,
+            crm_authority=crm_authority
         )
         
         # 执行检索

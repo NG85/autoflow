@@ -9,6 +9,7 @@ from app.rag.retrievers.chunk.simple_retriever import (
     ChunkSimpleRetriever,
 )
 from app.rag.retrievers.chunk.schema import (
+    MetadataFilterConfig,
     RetrievedChunkDocument,
     VectorSearchRetrieverConfig,
     ChunksRetrievalResult,
@@ -18,6 +19,7 @@ from app.rag.retrievers.chunk.helpers import map_nodes_to_chunks
 from app.rag.retrievers.multiple_knowledge_base import MultiKBFusionRetriever
 from app.rag.knowledge_base.selector import KBSelectMode
 from app.repositories import knowledge_base_repo, document_repo
+from app.rag.chat.crm_authority import CRMAuthority
 
 
 class ChunkFusionRetriever(MultiKBFusionRetriever, ChunkRetriever):
@@ -31,12 +33,38 @@ class ChunkFusionRetriever(MultiKBFusionRetriever, ChunkRetriever):
         use_async: bool = True,
         config: VectorSearchRetrieverConfig = VectorSearchRetrieverConfig(),
         callback_manager: Optional[CallbackManager] = CallbackManager([]),
+        crm_authority: Optional[CRMAuthority] = None,
         **kwargs,
     ):
         # Prepare vector search retrievers for knowledge bases.
         retrievers = []
         retriever_choices = []
         knowledge_bases = knowledge_base_repo.get_by_ids(db_session, knowledge_base_ids)
+        self.crm_authority = crm_authority
+        self.config = config
+
+        if crm_authority and not crm_authority.is_empty():
+            # 确保metadata_filter存在并启用
+            if not self.config.metadata_filter:
+                self.config.metadata_filter = VectorSearchRetrieverConfig().metadata_filter or MetadataFilterConfig()
+            
+            self.config.metadata_filter.enabled = True
+
+            # 初始化filters字典
+            if not self.config.metadata_filter.filters:
+                self.config.metadata_filter.filters = {}
+            
+            # 将CRM权限信息写入filters
+            crm_type_filters = []
+            unique_id_filters = []
+            for crm_type, authorized_ids in crm_authority.authorized_items.items():
+                crm_type_filters.append(crm_type)
+                unique_id_filters.extend(authorized_ids)
+            
+            # 使用IN操作符将所有权限条件写入
+            self.config.metadata_filter.filters["crm_data_type"] = crm_type_filters
+            self.config.metadata_filter.filters["unique_id"] = unique_id_filters
+                
         for kb in knowledge_bases:
             retrievers.append(
                 ChunkSimpleRetriever(
