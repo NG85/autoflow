@@ -20,18 +20,18 @@ class ExtractPlaybookTriplet(dspy.Signature):
       First, identify significant entities from the text:
         * Personas (who): Organizations or departments that are potential customers
           Examples:
-          - "Enterprise IT Department in Healthcare"
-          - "Bank's Security Operations Team"
-          - "Manufacturing Company's R&D Division"
-          - "Marketing Manager in Financial Services"
+          - "Hotel Revenue Management Department"
+          - "Independent Hotel Owner"
+          - "Hotel Chain's Marketing Team"
+          - "Front Desk Manager in Boutique Hotels"
         * Pain Points (what): Business challenges, problems, needs
         * Features (how): Solutions, capabilities, functionalities
         * Cases (proof): Customer success cases and implementation scenarios
 
       Important Classification Rules:
-        - Technical terms (e.g., "TiDB", "TiKV") should never be classified as personas
+        - Technical terms (e.g., "PMS", "CRS", "Channel Manager") should never be classified as personas
         - Terms containing "system", "service", "tool", "platform" should be classified as features
-        - Terms containing "Department", "Team", "Manager", "Director" should be classified as personas
+        - Terms containing "Department", "Team", "Manager", "Owner", "Director" should be classified as personas
         - Terms containing "case", "customer success", "implementation scenario" should be classified as cases
         - Case entities must contain measurable results and implementation details
         - Generic terms without clear classification should be excluded
@@ -46,25 +46,24 @@ class ExtractPlaybookTriplet(dspy.Signature):
       A. "Persona experiences Pain Point":
         Must include these core elements in description:
         - Problem identification
-        - Impact on business operations (with metrics if possible)
+        - Impact on hotel operations (with metrics if possible)
         - Frequency or pattern of occurrence
-        Example: "Enterprise IT Directors face system integration challenges weekly, resulting in 20% productivity loss."
+        Example: "Hotel Revenue Managers face distribution channel management challenges daily, resulting in 15% revenue leakage."
       
       B. "Pain Point is addressed by Feature":
         Must include these core elements in description:
         - Solution mechanism
         - Effectiveness (with metrics if possible)
         - Time to value
-        Example: "The integration challenges are resolved through automated integration, reducing integration time by 90% with immediate productivity gains after 2-day setup."
+        Example: "The channel management challenges are resolved through automated rate parity control, increasing direct bookings by 30% within first month of implementation."
 
       C. "Feature is demonstrated by Case":
         Must include these core elements in description:
-        - Industry and business scenario (domain)
+        - Hotel type and scenario (domain)
         - Quantifiable implementation results (outcomes)
         - At least 1 related feature/product (features)
-        Example: "HTAP capability is demonstrated in a financial risk control case, reducing query latency by 80% for Bank X"
+        Example: "Direct booking engine capability is demonstrated in a boutique hotel chain case, increasing direct revenue by 45% for Hotel Group X"
     
-
       Critical Rules for Relationships:
         - Must follow exact sequence: Persona -> Pain Point -> Feature -> Case
         - Each relationship must be part of a complete chain
