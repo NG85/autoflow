@@ -134,6 +134,7 @@ Knowledge Graph Context:
 
 Data Access Status:
 Filtered entities due to permissions: {{has_filtered_data}}
+Note: When data is filtered due to permission restrictions, the response may be incomplete due to limited available information.
 
 ---------------------
 
@@ -173,6 +174,7 @@ Refinement Protocol:
 
 4. Permission and Language Handling:
    - Add scope limitations if data filtering occurred
+   - If {{has_filtered_data}} is True, include a note that the answer may be incomplete due to permission restrictions
    - Maintain original linguistic style and language
    - Include answer language hint in the refined question
 
@@ -194,7 +196,7 @@ Follow-up Question:
 "查一下订单情况？"
 
 Refined Question:
-"客户'兰州银行'的商机'2024核心升级'所关联的订单ORD-2024-003的信息是什么？比如订单金额、交付状态、关联的回款计划等。(Answer language: Chinese)"
+"请提供客户'兰州银行'的'2024核心升级'商机关联的订单ORD-2024-003的详细信息，包括订单金额、订单状态、回款计划以及其他相关信息。请注意，由于权限限制，可能无法获取完整信息。(Answer language: Chinese)"
 
 Example 2:
 Chat History:
@@ -225,7 +227,7 @@ Follow-up Question:
 "这个商机的负责人是谁？"
 
 Refined Question:
-"客户A的商机'数字化转型'的负责人是谁？(Answer language: Chinese)"
+"客户A的商机'数字化转型'的我方负责人是谁？请提供该负责人的具体信息。如果因权限限制导致数据不完整，请在回答中说明。(Answer language: Chinese)"
 
 ---------------------
 
@@ -287,6 +289,10 @@ RESPONSE GUIDELINES
       2. Contact the relevant department or team for more details
       3. Specify your question further so I can try to provide more targeted information"
 
+   c) When data access is limited ({{has_filtered_data}} is True):
+      "Please note that some data has been filtered due to access permissions. This may affect the completeness of my answer. 
+      The information provided is based only on the data you have access to."
+
 3. Tone and Style:
    - Use consultative phrases like "Based on typical implementations..." 
    - Include strategic recommendations
@@ -323,6 +329,7 @@ FORMATTING REQUIREMENTS
    - Use markdown footnote syntax (e.g., [^1]) for sources
    - Each footnote must correspond to a unique source
    - Example: [^1]: [TiDB Overview | PingCAP Docs](https://docs.pingcap.com/tidb/stable/overview)
+   - Avoid excessive use of markdown graph formats as they reduce readability
 
 2. Language:
    - Match the language of the original question unless specified otherwise
