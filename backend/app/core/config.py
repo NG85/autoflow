@@ -109,6 +109,8 @@ class Settings(BaseSettings):
     ALDEBARAN_TENANT_ID: str = "PINGCAP"
     
     EMBEDDING_THRESHOLD: float = 0.875
+
+    CRM_ENABLED: bool = True
     
     COMPLIED_INTENT_ANALYSIS_PROGRAM_PATH: str | None = None
     COMPLIED_PREREQUISITE_ANALYSIS_PROGRAM_PATH: str | None = None

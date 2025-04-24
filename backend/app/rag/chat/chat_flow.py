@@ -308,24 +308,26 @@ class ChatFlow:
         # self.competitor_knowledge_base = knowledge_base_repo.must_get(self.db_session, self.competitor_knowledge_base_id, False)
         # self.retrieve_flow.knowledge_bases.append(self.competitor_knowledge_base)
         
-        # 1. Identity verification and permission check step
-        yield ChatEvent(
-            event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
-            payload=ChatStreamMessagePayload(
-                state=ChatMessageSate.AUTHORIZATION,
-                display="Verifying data access permissions",
-            ),
-        )
-        # Initialize CRM authority control
-        self.crm_authority = get_user_crm_authority(
-            user_id=self.user.id if self.user else None
-        )
-        logger.info(f"CRM authority initialized for user {self.user.id if self.user else 'anonymous'}")
-    
-        if self.user and not self.crm_authority.is_empty():
-            # Record user permission statistics information
-            auth_stats = {k: len(v) for k, v in self.crm_authority.authorized_items.items()}
-            logger.info(f"User {self.user.id} has CRM access: {auth_stats}")
+        self.crm_authority = None
+        if settings.CRM_ENABLED:
+            # 1. Identity verification and permission check step
+            yield ChatEvent(
+                event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
+                payload=ChatStreamMessagePayload(
+                    state=ChatMessageSate.AUTHORIZATION,
+                    display="Verifying data access permissions",
+                ),
+            )
+            # Initialize CRM authority control
+            self.crm_authority = get_user_crm_authority(
+                user_id=self.user.id if self.user else None
+            )
+            logger.info(f"CRM authority initialized for user {self.user.id if self.user else 'anonymous'}")
+        
+            if self.user and not self.crm_authority.is_empty():
+                # Record user permission statistics information
+                auth_stats = {k: len(v) for k, v in self.crm_authority.authorized_items.items()}
+                logger.info(f"User {self.user.id} has CRM access: {auth_stats}")
             
         # 2. Retrieve Knowledge graph related to the user question.
         (
