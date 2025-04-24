@@ -1,6 +1,7 @@
 from abc import ABC
 from typing import Any, Dict, Optional
 
+from llama_index.core.vector_stores import MetadataFilters
 from pydantic import BaseModel
 
 from app.models import Document
@@ -14,7 +15,7 @@ class RerankerConfig(BaseModel):
 
 class MetadataFilterConfig(BaseModel):
     enabled: bool = True
-    filters: Dict[str, Any] = None
+    filters: Dict[str, Any] | MetadataFilters = None
 
 
 class VectorSearchRetrieverConfig(BaseModel):

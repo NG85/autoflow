@@ -120,6 +120,7 @@ class RetrieveFlow:
                     yield (ChatMessageSate.KG_RETRIEVAL, f"Knowledge graph retrieval failed: {str(e)}")
                     knowledge_graph = KnowledgeGraphRetrievalResult()
 
+                logger.info(f"Fetched knowledge graph with {knowledge_graph.entities} entities, {knowledge_graph.relationships} relationships")
                 # Convert the knowledge graph to context text
                 knowledge_graph_context = self._get_knowledge_graph_context(knowledge_graph)
                 yield (ChatMessageSate.KG_RETRIEVAL, "Organizing and processing knowledge graph information")

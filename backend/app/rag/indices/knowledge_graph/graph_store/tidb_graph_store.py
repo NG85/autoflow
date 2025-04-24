@@ -22,6 +22,8 @@ from app.rag.indices.knowledge_graph.graph_store.helpers import (
     calculate_relationship_score,
     get_entity_metadata_embedding,
     get_query_embedding,
+    parse_mongo_style_filter,
+    apply_filter_condition,
     DEFAULT_RANGE_SEARCH_CONFIG,
     DEFAULT_WEIGHT_COEFFICIENT_CONFIG,
     DEFAULT_DEGREE_COEFFICIENT,
@@ -687,24 +689,8 @@ class TiDBGraphStore(KnowledgeGraphStore):
 
         if relationship_meta_filters:
             logger.info(f"Applying relationship meta filters: {relationship_meta_filters}")
-            filter_conditions = self.parse_mongo_style_filter(relationship_meta_filters)
-            
-            for field, op, value in filter_conditions:
-                json_field = relationships_alias.meta[field]
-                if op == "$eq":
-                    logger.info("add query condition with $eq")
-                    query = query.where(json_field == value)
-                elif op == "$ne":
-                    query = query.where(json_field != value)
-                elif op == "$in":
-                    logger.info("add query condition with $in")
-                    query = query.where(json_field.in_(value))
-                elif op == "$nin":
-                    query = query.where(~json_field.in_(value))
-                elif op == "$gt":
-                    query = query.where(json_field > value)
-                # TODO: support more operations
-              
+            filter_conditions = parse_mongo_style_filter(relationship_meta_filters)
+            query = query.where(apply_filter_condition(relationships_alias, filter_conditions))
 
         if visited_relationships:
             query = query.where(

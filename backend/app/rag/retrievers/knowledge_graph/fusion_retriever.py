@@ -59,13 +59,9 @@ class KnowledgeGraphFusionRetriever(MultiKBFusionRetriever, KnowledgeGraphRetrie
         if crm_authority and not crm_authority.is_empty():
             # 确保metadata_filter存在并启用
             if not self.config.metadata_filter:
-                self.config.metadata_filter = KnowledgeGraphRetrieverConfig().metadata_filter or MetadataFilterConfig()
+                self.config.metadata_filter = MetadataFilterConfig()
             
             self.config.metadata_filter.enabled = True
-            
-            # 初始化filters字典
-            if not self.config.metadata_filter.filters:
-                self.config.metadata_filter.filters = {}
             
             # 将CRM权限信息写入filters
             crm_type_filters = []
@@ -74,10 +70,19 @@ class KnowledgeGraphFusionRetriever(MultiKBFusionRetriever, KnowledgeGraphRetrie
                 crm_type_filters.append(crm_type)
                 unique_id_filters.extend(authorized_ids)
             
-            # 使用IN操作符将所有权限条件写入
-            self.config.metadata_filter.filters["crm_data_type"] = {"$in": crm_type_filters}
-            self.config.metadata_filter.filters["unique_id"] = {"$in": unique_id_filters}
-                
+            # 使用复合条件：category != 'crm' OR (crm_data_type in crm_type_filters AND unique_id in unique_id_filters)
+            # self.config.metadata_filter.filters = {
+            #     "$or": [
+            #         {"category": {"$ne": "crm"}},
+            #         {
+            #             "$and": [
+            #                 {"crm_data_type": {"$in": crm_type_filters}},
+            #                 {"unique_id": {"$in": unique_id_filters}}
+            #             ]
+            #         }
+            #     ]
+            # }
+
         for kb in knowledge_bases:
             self.knowledge_base_map[kb.id] = kb
             retrievers.append(
