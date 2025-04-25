@@ -18,7 +18,7 @@ from .chat_engine import ChatEngine, ChatEngineUpdate
 from .chat import Chat, ChatUpdate, ChatVisibility, ChatFilters, ChatOrigin
 from .chat_message import ChatMessage
 from .document import Document, DocIndexTaskStatus, DocumentCategory, DocumentMetadata
-from .chunk import Chunk, KgIndexStatus
+from .chunk import Chunk, KgIndexStatus, PlaybookKgIndexStatus, CrmKgIndexStatus
 from .auth import User, UserSession
 from .api_key import ApiKey, PublicApiKey
 from .site_setting import SiteSetting

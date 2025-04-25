@@ -20,6 +20,7 @@ if settings.ENVIRONMENT == Environment.LOCAL:
 # they will shut down, which closes all connections, so we need to recycle the connections
 engine = create_engine(
     str(settings.SQLALCHEMY_DATABASE_URI),
+    connect_args={"autocommit": True},
     pool_size=20,
     max_overflow=40,
     pool_recycle=300,

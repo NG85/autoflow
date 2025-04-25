@@ -42,6 +42,13 @@ class PlaybookKgIndexStatus(str, enum.Enum):
     COMPLETED = "completed"
     FAILED = "failed"
 
+class CrmKgIndexStatus(str, enum.Enum):
+    NOT_STARTED = "not_started"
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
 # Notice: DO NOT forget to modify the definition in `get_kb_chunk_model` to
 # keep the table structure on both sides consistent.
 class Chunk(UUIDBaseModel, UpdatableBaseModel, table=True):
@@ -71,6 +78,9 @@ class Chunk(UUIDBaseModel, UpdatableBaseModel, table=True):
     
     playbook_index_status: PlaybookKgIndexStatus = PlaybookKgIndexStatus.NOT_STARTED
     playbook_index_result: str = Field(sa_column=Column(Text, nullable=True))
+
+    crm_index_status: CrmKgIndexStatus = CrmKgIndexStatus.NOT_STARTED
+    crm_index_result: str = Field(sa_column=Column(Text, nullable=True))
 
     __tablename__ = "chunks"
 
@@ -119,6 +129,9 @@ def get_kb_chunk_model(kb: KnowledgeBase) -> Type[SQLModel]:
 
         playbook_index_status: PlaybookKgIndexStatus = PlaybookKgIndexStatus.NOT_STARTED
         playbook_index_result: str = Field(sa_column=Column(Text, nullable=True))
+        
+        crm_index_status: CrmKgIndexStatus = CrmKgIndexStatus.NOT_STARTED
+        crm_index_result: str = Field(sa_column=Column(Text, nullable=True))
 
         created_at: Optional[datetime] = Field(
             default=None,

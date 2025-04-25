@@ -124,10 +124,14 @@ Response:
 DEFAULT_CONDENSE_QUESTION_PROMPT = """\
 Current Date: {{current_date}}
 ---------------------
-The prerequisite questions and their relevant knowledge for the user's main question.
+
+Knowledge Graph Context:
+{{graph_knowledges}}
+
 ---------------------
 
-{{graph_knowledges}}
+Data Access Status:
+Note: The knowledge graph data provided has already been filtered based on permissions. The response may be incomplete due to limited available information.
 
 ---------------------
 
@@ -226,16 +230,23 @@ Followup question:
 
 ---------------------
 
-Refined standalone question:
+Refined Question (include answer language hint):
 """
 
 
 DEFAULT_TEXT_QA_PROMPT = """\
+You are a helpful AI assistant. Your task is to provide accurate and helpful answers to user questions based on the provided knowledge.
+
 Current Date: {{current_date}}
----------------------
 
 知识图谱信息：
 {{graph_knowledges}}
+
+Context Documents:
+<<context_str>>
+
+Data Access Status:
+Note: The knowledge graph and context data provided has already been filtered based on permissions. The response may be incomplete due to limited available information.
 
 ---------------------
 上下文信息：
@@ -361,7 +372,7 @@ Current Date: {{current_date}}
 The Original questions is:
 {{original_question}}
 
-The Refined Question used to search:
+Refined Question used to search:
 <<query_str>>
 
 Answer:

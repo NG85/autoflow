@@ -1,11 +1,12 @@
 import logging
 from uuid import UUID
-from typing import List, Optional, Annotated
+from typing import Dict, List, Optional, Annotated
 from http import HTTPStatus
 
 from pydantic import (
     BaseModel,
     field_validator,
+    model_validator,
 )
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from fastapi.responses import StreamingResponse
@@ -27,6 +28,8 @@ from app.rag.chat.chat_service import (
 )
 from app.rag.types import MessageRole, ChatMessage
 from app.exceptions import InternalServerError
+from app.models.chat import ChatType
+from app.api.routes.models import ChatMode
 
 logger = logging.getLogger(__name__)
 
@@ -34,14 +37,16 @@ router = APIRouter()
 
 
 class ChatRequest(BaseModel):
+    chat_type: ChatType = ChatType.DEFAULT
     messages: List[ChatMessage]
     chat_engine: str = "default"
     chat_id: Optional[UUID] = None
     stream: bool = True
-
+    chat_mode: ChatMode = ChatMode.DEFAULT
+    
     @field_validator("messages")
     @classmethod
-    def check_messages(cls, messages: List[ChatMessage]) -> List[ChatMessage]:
+    def check_messages(cls, messages: List[ChatMessage], values: Dict) -> List[ChatMessage]:
         if not messages:
             raise ValueError("messages cannot be empty")
         for m in messages:
@@ -51,10 +56,27 @@ class ChatRequest(BaseModel):
                 raise ValueError("message content cannot be empty")
             if len(m.content) > 10000:
                 raise ValueError("message content cannot exceed 1000 characters")
-        if messages[-1].role != MessageRole.USER:
+        chat_type = getattr(values, "chat_type", None)
+        if chat_type == ChatType.DEFAULT and messages[-1].role != MessageRole.USER:
             raise ValueError("last message must be from user")
         return messages
-
+         
+    @model_validator(mode="after")
+    def validate_chat_mode(self) -> 'ChatRequest':
+        if self.chat_type == ChatType.CLIENT_VISIT_GUIDE and self.chat_mode == ChatMode.DEFAULT:
+            raise ValueError("chat_mode must be specified when chat_type is CLIENT_VISIT_GUIDE")
+        if self.chat_type == ChatType.DEFAULT and self.chat_mode != ChatMode.DEFAULT:
+            raise ValueError("chat_mode must be DEFAULT when chat_type is DEFAULT")
+   
+        if self.chat_mode == ChatMode.SAVE_CVG_REPORT:
+            if not self.chat_id:
+                raise ValueError("chat_id is required when chat_mode is SAVE_CVG_REPORT")
+            if len(self.messages) % 2 != 0:
+                raise ValueError("messages must contain even number of elements")
+            for i in range(0, len(self.messages), 2):
+                if self.messages[i].role != MessageRole.USER or self.messages[i+1].role != MessageRole.ASSISTANT:
+                    raise ValueError("messages must contain alternating user and assistant messages")
+        return self
 
 @router.post("/chats")
 def chats(
@@ -67,6 +89,10 @@ def chats(
     browser_id = request.state.browser_id
 
     try:
+        incoming_cookie = request.headers.get("cookie")
+        if incoming_cookie:
+            logger.debug(f"Incoming cookie: {incoming_cookie}")
+
         chat_flow = ChatFlow(
             db_session=session,
             user=user,
@@ -75,6 +101,9 @@ def chats(
             chat_id=chat_request.chat_id,
             chat_messages=chat_request.messages,
             engine_name=chat_request.chat_engine,
+            chat_type=chat_request.chat_type,
+            chat_mode=chat_request.chat_mode,
+            incoming_cookie=incoming_cookie,
         )
 
         if chat_request.stream:

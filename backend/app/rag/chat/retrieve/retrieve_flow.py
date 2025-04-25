@@ -24,6 +24,10 @@ from app.rag.retrievers.knowledge_graph.schema import (
 from app.rag.retrievers.chunk.fusion_retriever import ChunkFusionRetriever
 from app.repositories import document_repo
 from app.rag.types import ChatMessageSate
+from app.rag.chat.crm_authority import (
+    CRMAuthority,
+    identify_crm_data_type,
+)
 
 dispatcher = get_dispatcher(__name__)
 logger = logging.getLogger(__name__)
@@ -80,7 +84,7 @@ class RetrieveFlow:
         return self.get_documents_from_nodes(nodes)
 
     def search_knowledge_graph(
-        self, user_question: str
+        self, user_question: str, crm_authority: Optional[CRMAuthority] = None
     ) -> Generator[Tuple[ChatMessageSate, str], None, Tuple[KnowledgeGraphRetrievalResult, str]]:
         kg_config = self.engine_config.knowledge_graph
         knowledge_graph = KnowledgeGraphRetrievalResult()
@@ -95,6 +99,7 @@ class RetrieveFlow:
                 config=KnowledgeGraphRetrieverConfig.model_validate(
                     kg_config.model_dump(exclude={"enabled", "using_intent_search"})
                 ),
+                crm_authority=crm_authority
             )
             try:
                 kg_gen = kg_retriever.retrieve_knowledge_graph(user_question)
@@ -112,7 +117,8 @@ class RetrieveFlow:
                     logger.error(f"Knowledge graph retrieval process error: {e}")
                     yield (ChatMessageSate.KG_RETRIEVAL, f"Knowledge graph retrieval failed: {str(e)}")
                     knowledge_graph = KnowledgeGraphRetrievalResult()
-                
+
+                logger.info(f"Fetched knowledge graph with {knowledge_graph.entities} entities, {knowledge_graph.relationships} relationships")
                 # Convert the knowledge graph to context text
                 knowledge_graph_context = self._get_knowledge_graph_context(knowledge_graph)
                 yield (ChatMessageSate.KG_RETRIEVAL, "Organizing and processing knowledge graph information")
@@ -121,7 +127,7 @@ class RetrieveFlow:
                 logger.error(f"Error in knowledge graph search: {e}")
                 yield (ChatMessageSate.KG_RETRIEVAL, f"Error during knowledge graph search: {str(e)}")
         else:
-                yield (ChatMessageSate.KG_RETRIEVAL, "Knowledge graph search is disabled, skip it")
+            yield (ChatMessageSate.KG_RETRIEVAL, "Knowledge graph search is disabled, skip it")
         return knowledge_graph, knowledge_graph_context
 
     def _get_knowledge_graph_context(
@@ -154,7 +160,7 @@ class RetrieveFlow:
             ),
         )
 
-    def search_relevant_chunks(self, user_question: str) -> List[NodeWithScore]:
+    def search_relevant_chunks(self, user_question: str, crm_authority: Optional[CRMAuthority] = None) -> List[NodeWithScore]:
         retriever = ChunkFusionRetriever(
             db_session=self.db_session,
             knowledge_base_ids=self.knowledge_base_ids,
@@ -162,8 +168,13 @@ class RetrieveFlow:
             config=self.engine_config.vector_search,
             use_query_decompose=False,
             use_async=True,
+            crm_authority=crm_authority
         )
-        return retriever.retrieve(QueryBundle(user_question))
+        nodes = retriever.retrieve(QueryBundle(user_question))
+
+        
+        return nodes
+                
 
     def get_documents_from_nodes(self, nodes: List[NodeWithScore]) -> List[DBDocument]:
         document_ids = [n.node.metadata["document_id"] for n in nodes]
@@ -183,3 +194,90 @@ class RetrieveFlow:
             )
             for doc in documents
         ]
+
+
+    def filter_knowledge_graph_by_authority(
+        self,
+        knowledge_graph: KnowledgeGraphRetrievalResult,
+        crm_authority: CRMAuthority
+    ) -> Tuple[KnowledgeGraphRetrievalResult, int]:
+        """Filter the knowledge graph results according to the CRM authority"""
+        count = 0
+        if not crm_authority or crm_authority.is_empty():
+            return knowledge_graph, count
+            
+        filtered_entities = []
+        filtered_relationships = []
+                
+        # Filter entities
+        for entity in knowledge_graph.entities:
+            is_authorized = True
+            # Only process CRM related entities
+            entity_type, entity_id = identify_crm_data_type(entity)
+            if entity_type and entity_id:
+                if not crm_authority.is_authorized(entity_type, entity_id):
+                    is_authorized = False
+                    count += 1
+                    logger.debug(f"Filtering out unauthorized {entity_type.value} entity: {entity_id}")
+               
+            # Retain non-CRM entities or entities with permission
+            if is_authorized:
+                filtered_entities.append(entity)
+        
+        # Filter relationships
+        for rel in knowledge_graph.relationships:
+            is_authorized = True
+            # Only check the CRM type relationships
+            relationship_type, relationship_id = identify_crm_data_type(rel)
+            if relationship_type and relationship_id:
+                if not crm_authority.is_authorized(relationship_type, relationship_id):
+                    is_authorized = False
+                    count += 1
+                    logger.debug(f"Filtering out unauthorized {relationship_type.value} relationship: {relationship_id}")
+            
+            # Retain non-CRM relationships or relationships with permission
+            if is_authorized:
+                filtered_relationships.append(rel)
+        
+        # Update the filtered knowledge graph
+        result = knowledge_graph.model_copy()
+        result.entities = filtered_entities
+        result.relationships = filtered_relationships
+        
+        logger.info(f"Applied CRM authority filter on knowledge graph: {len(filtered_entities)}/{len(knowledge_graph.entities)} entities, "
+                    f"{len(filtered_relationships)}/{len(knowledge_graph.relationships)} relationships kept")
+        
+        return result, count
+    
+    
+    def filter_chunks_by_authority(
+        self,
+        nodes: List[NodeWithScore],
+        crm_authority: CRMAuthority
+    ) -> Tuple[List[NodeWithScore], int]:
+        """Filter the document chunks results according to the CRM authority"""
+        if not crm_authority or crm_authority.is_empty():
+            return nodes, 0
+            
+        filtered_nodes = []
+        count = 0
+        for node in nodes:
+            is_authorized = True
+            logger.debug(f"Filtering chunks by CRM authority: {crm_authority}, node: {node}")
+            # Check the node metadata
+            if hasattr(node, "metadata") and node.metadata:
+                logger.debug(f"Node metadata before filtering: {node.metadata}")
+                # Only process the documents with the CRM type mark
+                chunk_entity_type, chunk_entity_id = identify_crm_data_type(node, "metadata")
+                if chunk_entity_type and chunk_entity_id:
+                    if not crm_authority.is_authorized(chunk_entity_type, chunk_entity_id):
+                        is_authorized = False
+                        count += 1
+                        logger.debug(f"Filtering out unauthorized {chunk_entity_type.value} entity: {chunk_entity_id}")
+  
+            # Retain the node with permission
+            if is_authorized:
+                filtered_nodes.append(node)
+        
+        logger.info(f"Applied CRM authority filter on document chunks: {len(filtered_nodes)}/{len(nodes)} chunks kept")
+        return filtered_nodes, count

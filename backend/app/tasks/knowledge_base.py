@@ -13,7 +13,6 @@ from app.models import (
 from app.rag.datasource import get_data_source_loader
 from app.repositories import knowledge_base_repo, document_repo
 from .build_index import build_index_for_document
-from .build_playbook_index import build_playbook_index_for_document
 from ..models.chunk import get_kb_chunk_model
 from ..models.entity import get_kb_entity_model
 from ..models.relationship import get_kb_relationship_model
@@ -71,11 +70,6 @@ def import_documents_from_kb_datasource(kb_id: int, data_source_id: int):
                 session.commit()
 
                 build_index_for_document.delay(kb_id, document.id)
-                             
-                logger.info(f"Document meta: {document.meta}")
-                if document.meta["category"] == "playbook":
-                    logger.info(f"Need to build playbook index for document #{document.id}")
-                    build_playbook_index_for_document.delay(kb_id, document.id)
                     
         stats_for_knowledge_base.delay(kb_id)
         logger.info(

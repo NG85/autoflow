@@ -86,6 +86,32 @@ class Feature(Entity):
         }
     )
 
+class Cases(Entity):
+    """Represents a case entity"""
+    
+    metadata: Mapping[str, Any] = Field(
+        description=(
+            "The covariates to claim the case entity including:\n"
+            "- topic: Always 'case'\n"
+            "- domain: domain of the case (industry + business scenario, e.g. 'financial risk control')\n"
+            "- features: list of related features/products\n"
+            "- outcomes: implementation results (must include quantifiable metrics)\n"
+            "- references: (optional) reference customer/implementation period information"
+        ),
+        json_schema_extra={
+            "required": ["topic", "domain", "features", "outcomes"],
+            "properties": {
+                "topic": {"type": "string", "const": "case"},
+                "domain": {"type": "string"},
+                "features": {
+                    "type": "array",
+                    "items": {"type": "string"}
+                },
+                "outcomes": {"type": "string"},
+                "references": {"type": "string"}
+            }
+        }
+    )
 
 class Competitor(Entity):
     """Represents a competitor product entity."""

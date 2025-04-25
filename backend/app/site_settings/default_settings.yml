@@ -5,41 +5,39 @@ website:
     description: "The title of the website."
     client: true
   description:
-    default: "Knowledge Graph based RAG that built with TiDB Serverless Vector Storage and LlamaIndex"
+    default: "Sales Intelligent Assistant (Sia)"
     data_type: str
     description: "The description of the website."
     client: true
   homepage_title:
-    default: "Ask anything about TiDB"
+    default: "Ask me Anything"
     data_type: str
     description: "The title of the homepage."
     client: true
   homepage_example_questions:
     default:
-      - "What is TiDB?"
-      - "Does TiDB support FOREIGN KEY?"
-      - "Does TiDB support serverless?"
+      - "你是谁"
+      - "你能做什么"
+      - "你是个知识库吗"
     data_type: list
     description: "The example questions on the homepage."
     client: true
   homepage_footer_links:
     default:
       - text: "Release Notes"
-        href: "https://tidb.ai/docs/changelog"
-      - text: "Powered by TiDB Vector"
-        href: "https://tidb.cloud/ai"
-      - text: "© 2025 PingCAP"
-        href: "https://pingcap.com"
+        href: "https://zhizhenzhihe.com"
+      - text: "© 2025 APTSell"
+        href: "https://zhizhenzhihe.com"
     data_type: list
     description: "The footer links on the homepage."
     client: true
   logo_in_dark_mode:
-    default: "https://tidb.ai/tidb-ai-light.svg"
+    default: "https://media.murmured.me/images/aptsell_dark.svg"
     data_type: str
     description: "The logo in dark mode."
     client: true
   logo_in_light_mode:
-    default: "https://tidb.ai/tidb-ai.svg"
+    default: "https://media.murmured.me/images/aptsell_dark.svg"
     data_type: str
     description: "The logo in light mode."
     client: true
@@ -67,24 +65,24 @@ website:
 custom_js:
   custom_js_example_questions:
     default:
-      - "What is TiDB?"
-      - "Does TiDB support FOREIGN KEY?"
-      - "Does TiDB support serverless?"
+      - "你是谁"
+      - "你能做什么"
+      - "你是个知识库吗"
     data_type: list
     description: "The example questions on the custom_js."
     client: true
   custom_js_button_label:
-    default: "Ask AI"
+    default: "Ask me Anything"
     data_type: str
     description: "The button label on the custom_js."
     client: true
   custom_js_button_img_src:
-    default: "https://tidb.ai/tidb-ai-widget.svg"
+    default: "https://media.murmured.me/images/aptsell_dark.svg"
     data_type: str
     description: "The button image on the custom_js."
     client: true
   custom_js_logo_src:
-    default: "https://tidb.ai/tidb-ai-widget.svg"
+    default: "https://media.murmured.me/images/aptsell_dark.svg"
     data_type: str
     description: "The logo on the custom_js."
     client: true
@@ -118,7 +116,7 @@ chat:
 
 upload:
   max_upload_file_size:
-    default: 10485760    # 10 MiB
+    default: 104857600    # 100 MiB
     data_type: int
     description: "Max body size (in bytes) of upload file."
     client: true

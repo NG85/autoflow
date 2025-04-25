@@ -9,6 +9,7 @@ from pypdf import PdfReader
 from app.models import Document, Upload, DocumentMetadata
 from app.file_storage import default_file_storage
 from app.types import MimeTypes
+from app.core.config import settings
 from .base import BaseDataSource
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,11 @@ class FileDataSource(BaseDataSource):
             if upload is None:
                 logger.error(f"Upload with id {upload_id} not found")
                 continue
+            # handle customer uploads
+            if upload.path.startswith(settings.TOS_PATH_PREFIX):
+                upload.path = upload.path[len(settings.TOS_PATH_PREFIX.rstrip('/')):]
+                if upload.path.startswith('/'):
+                    upload.path = upload.path[1:]
 
             with default_file_storage.open(upload.path) as f:
                 if upload.mime_type == MimeTypes.PDF:

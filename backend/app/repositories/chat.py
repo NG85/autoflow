@@ -1,6 +1,6 @@
 import enum
 from uuid import UUID
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime, UTC, date, timedelta
 from collections import defaultdict
 
@@ -48,6 +48,8 @@ class ChatRepo(BaseRepo):
         #     query = query.where(Chat.user_id == filters.user_id)
         if filters.engine_id:
             query = query.where(Chat.engine_id == filters.engine_id)
+        if filters.chat_type:
+            query = query.where(Chat.chat_type == filters.chat_type)
 
         query = query.order_by(Chat.created_at.desc())
         return paginate(session, query, params)
@@ -96,6 +98,13 @@ class ChatRepo(BaseRepo):
             .where(ChatMessage.chat_id == chat.id)
             .order_by(ChatMessage.ordinal.desc())
         ).first()
+        
+    def get_max_message_ordinal(self, session: Session, chat_id: UUID) -> int:
+        """Get the maximum ordinal value for messages in a chat"""
+        return session.exec(
+            select(func.max(ChatMessage.ordinal))
+            .where(ChatMessage.chat_id == chat_id)
+        ).first() or 0
 
     def get_messages(
         self,
@@ -137,12 +146,8 @@ class ChatRepo(BaseRepo):
         chat_message: ChatMessage,
     ) -> ChatMessage:
         if not chat_message.ordinal:
-            last_message = self.get_last_message(session, chat)
-            if last_message:
-                ordinal = last_message.ordinal + 1
-            else:
-                ordinal = 1
-            chat_message.ordinal = ordinal
+            max_ordinal = self.get_max_message_ordinal(session, chat.id)
+            chat_message.ordinal = max_ordinal + 1
         chat_message.chat_id = chat.id
         chat_message.user_id = chat.user_id
         session.add(chat_message)
@@ -150,6 +155,37 @@ class ChatRepo(BaseRepo):
         session.refresh(chat_message)
         return chat_message
 
+    def create_chat_with_messages(
+        self,
+        session: Session,
+        chat: Chat,
+        messages: List[ChatMessage]
+    ) -> Tuple[Chat, List[ChatMessage]]:
+        """Create chat and messages in a single transaction"""
+        with session.begin():
+            # Add chat record
+            session.add(chat)
+            session.flush()  # Generate ID but don't commit
+            
+            max_ordinal = self.get_max_message_ordinal(session, chat.id)
+            # Set message chat_id and add messages
+            for message in messages:
+                message.chat_id = chat.id
+                message.created_at = message.updated_at = datetime.now(UTC)
+                message.ordinal = max_ordinal + 1
+                max_ordinal += 1
+            
+            session.add_all(messages)
+            # The transaction will be committed automatically when it ends
+        
+        # Refresh objects to get all database generated values
+        session.refresh(chat)
+        for message in messages:
+            session.refresh(message)
+        
+        return chat, messages
+
+        
     def find_recent_assistant_messages_by_goal(
         self, session: Session, metadata: Dict[str, Any], days: int = 15
     ) -> List[ChatMessage]:
@@ -185,6 +221,63 @@ class ChatRepo(BaseRepo):
         # Order by created_at in descending order
         query = query.order_by(desc(ChatMessage.created_at))
 
+        return session.exec(query).all()
+
+    def find_best_answer_for_question(
+        self, session: Session, user_question: str
+    ) -> List[ChatMessage]:
+        """Find best answer messages for a specific user question.
+
+        This method finds assistant messages that:
+        1. Are marked as best answers
+        2. Are responses (ordinal=2) to the exact user question
+        3. Were created within the last 15 days
+
+        Args:
+            session: Database session
+            user_question: The exact question text to search for
+
+        Returns:
+            List of matching assistant messages marked as best answers
+        """
+        cutoff = datetime.now(UTC) - timedelta(days=15)
+
+        # First, get all best answers from assistant (using the is_best_answer index)
+        best_answer_chat_ids = (
+            select(ChatMessage.chat_id)
+            .where(
+                ChatMessage.is_best_answer == 1,  # Using the index for efficiency
+                ChatMessage.role == "assistant",
+                ChatMessage.ordinal == 2,
+                ChatMessage.created_at >= cutoff
+            )
+        )
+
+        # Then, find user questions that match our target question and belong to chats with best answers
+        matching_chat_ids = (
+            select(ChatMessage.chat_id)
+            .where(
+                ChatMessage.chat_id.in_(best_answer_chat_ids),
+                ChatMessage.role == "user",
+                ChatMessage.ordinal == 1,
+                ChatMessage.content == user_question.strip()
+            )
+        )
+
+        # Finally, get the best answers that correspond to the matching user questions
+        query = (
+            select(ChatMessage)
+            .where(
+                ChatMessage.is_best_answer == 1,
+                ChatMessage.role == "assistant",
+                ChatMessage.ordinal == 2,
+                ChatMessage.chat_id.in_(matching_chat_ids)
+            )
+        )
+
+        query = query.order_by(desc(ChatMessage.created_at))
+
+        # Execute the query and return all results
         return session.exec(query).all()
 
     def chat_trend_by_user(
