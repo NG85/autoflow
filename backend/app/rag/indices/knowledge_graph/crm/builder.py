@@ -74,7 +74,7 @@ class CRMKnowledgeGraphBuilder:
         return ContactEntity(
             id=None,
             name=contact_name,
-            description=f"客户联系人{contact_name}",
+            description=f"联系人{contact_name}",
             metadata=contact_data
         )
         
@@ -84,7 +84,7 @@ class CRMKnowledgeGraphBuilder:
         return ContactEntity(
             id=None,
             name=contact_name,
-            description=f"关于客户联系人{contact_name}的明细数据，包括联系方式、所属部门、职位等",
+            description=f"关于联系人{contact_name}的明细数据，包括联系方式、所属部门、职位等",
             metadata=contact_data
         )
            
@@ -305,7 +305,7 @@ class CRMKnowledgeGraphBuilder:
                             "target_entity": internal_owner_entity.name,    
                             "source_entity_description": contact_detail_entity.description,
                             "target_entity_description": internal_owner_entity.description,
-                            "relationship_desc": f"客户联系人{contact_detail_entity.name}由我方对接人：{internal_owner_entity.name}负责对接",
+                            "relationship_desc": f"联系人{contact_detail_entity.name}由我方对接人：{internal_owner_entity.name}负责对接",
                             "meta": {
                                 **meta,
                                 "document_id": document_id, 

@@ -67,7 +67,6 @@ class RetrieveFlow:
             knowledge_bases or self.engine_config.get_knowledge_bases(self.db_session)
         )
         self.knowledge_base_ids = [kb.id for kb in self.knowledge_bases]
-        self.filtered_objects_count = 0
 
     def retrieve(self, user_question: str) -> List[NodeWithScore]:
         if self.engine_config.refine_question_with_kg:
@@ -100,6 +99,7 @@ class RetrieveFlow:
                 config=KnowledgeGraphRetrieverConfig.model_validate(
                     kg_config.model_dump(exclude={"enabled", "using_intent_search"})
                 ),
+                crm_authority=crm_authority
             )
             try:
                 kg_gen = kg_retriever.retrieve_knowledge_graph(user_question)
@@ -118,21 +118,7 @@ class RetrieveFlow:
                     yield (ChatMessageSate.KG_RETRIEVAL, f"Knowledge graph retrieval failed: {str(e)}")
                     knowledge_graph = KnowledgeGraphRetrievalResult()
 
-                # Filter the knowledge graph results according to the CRM authority
-                if crm_authority and not crm_authority.is_empty():
-                    # Record the number of entities and their types before filtering
-                    if logger.isEnabledFor(logging.DEBUG):
-                        category_counts = {}
-                        for entity in knowledge_graph.entities:
-                            logger.debug(f"Retrieved entity before filtering: {entity}")
-                            meta = getattr(entity, "meta", {}) or {}
-                            category = meta.get("crm_data_type", "unknown")
-                            category_counts[category] = category_counts.get(category, 0) + 1
-                        logger.debug(f"Entity categories before filtering: {category_counts}")
-                    
-                    knowledge_graph, filtered_count = self.filter_knowledge_graph_by_authority(knowledge_graph, crm_authority)
-                    logger.info(f"Filtered {filtered_count} unauthorized objects from knowledge graph")
-                    self.filtered_objects_count += filtered_count
+                logger.info(f"Fetched knowledge graph with {knowledge_graph.entities} entities, {knowledge_graph.relationships} relationships")
                 # Convert the knowledge graph to context text
                 knowledge_graph_context = self._get_knowledge_graph_context(knowledge_graph)
                 yield (ChatMessageSate.KG_RETRIEVAL, "Organizing and processing knowledge graph information")
@@ -182,13 +168,10 @@ class RetrieveFlow:
             config=self.engine_config.vector_search,
             use_query_decompose=False,
             use_async=True,
+            crm_authority=crm_authority
         )
         nodes = retriever.retrieve(QueryBundle(user_question))
 
-        # Filter the nodes according to the CRM authority
-        if crm_authority and not crm_authority.is_empty():
-            nodes, filtered_count = self.filter_chunks_by_authority(nodes, crm_authority)
-            self.filtered_objects_count += filtered_count
         
         return nodes
                 

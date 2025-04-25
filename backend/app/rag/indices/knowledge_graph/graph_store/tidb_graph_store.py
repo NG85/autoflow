@@ -22,6 +22,8 @@ from app.rag.indices.knowledge_graph.graph_store.helpers import (
     calculate_relationship_score,
     get_entity_metadata_embedding,
     get_query_embedding,
+    parse_mongo_style_filter,
+    apply_filter_condition,
     DEFAULT_RANGE_SEARCH_CONFIG,
     DEFAULT_WEIGHT_COEFFICIENT_CONFIG,
     DEFAULT_DEGREE_COEFFICIENT,
@@ -665,9 +667,19 @@ class TiDBGraphStore(KnowledgeGraphStore):
                     embedding
                 ).label("embedding_distance"),
             )
-            .options(defer(self._relationship_model.description_vec))
+            .options(defer(self._relationship_model.description_vec)))
+        
+        # Apply meta filters to the base query before limiting
+        if relationship_meta_filters:
+            logger.debug(f"Applying relationship meta filters: {relationship_meta_filters}")
+            filter_conditions = parse_mongo_style_filter(relationship_meta_filters)
+            subquery = subquery.where(apply_filter_condition(self._relationship_model, filter_conditions))
+        
+        # Create subquery with ordering and limit
+        subquery = (
+            subquery
             .order_by(asc("embedding_distance"))
-            .limit(limit * 10)
+            #.limit(limit * 10)
         ).subquery()
 
         relationships_alias = aliased(self._relationship_model, subquery)
@@ -686,13 +698,9 @@ class TiDBGraphStore(KnowledgeGraphStore):
             .where(relationships_alias.weight >= 0)
         )
 
-        if relationship_meta_filters:
-            for k, v in relationship_meta_filters.items():
-                query = query.where(relationships_alias.meta[k] == v)
-
         if visited_relationships:
             query = query.where(
-                self._relationship_model.id.notin_(visited_relationships)
+                relationships_alias.id.notin_(visited_relationships)
             )
 
         if distance_range != (0.0, 1.0):
@@ -705,7 +713,7 @@ class TiDBGraphStore(KnowledgeGraphStore):
 
         if visited_entities:
             query = query.where(
-                self._relationship_model.source_entity_id.in_(visited_entities)
+                relationships_alias.source_entity_id.in_(visited_entities)
             )
 
         query = query.order_by(asc("embedding_distance")).limit(limit)

@@ -197,7 +197,7 @@ def format_contact_info(contact) -> List[str]:
     
     content = []
     contact_name = getattr(contact, 'name', 'None') or '未知联系人'
-    content.append(f"# 客户联系人：{contact_name}")
+    content.append(f"# 联系人：{contact_name}")
         
     # 获取联系人模型的列注释和字段名
     column_comments, valid_columns = get_column_comments_and_names(type(contact))

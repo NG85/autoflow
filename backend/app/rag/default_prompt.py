@@ -133,8 +133,7 @@ Knowledge Graph Context:
 ---------------------
 
 Data Access Status:
-Filtered entities due to permissions: {{has_filtered_data}}
-Note: When data is filtered due to permission restrictions, the response may be incomplete due to limited available information.
+Note: The knowledge graph data provided has already been filtered based on permissions. The response may be incomplete due to limited available information.
 
 ---------------------
 
@@ -145,18 +144,18 @@ Refinement Protocol:
 
 1. Entity and Relationship Analysis:
    - Identify central entities in the question and map to knowledge graph entities
-   - Analyze CRM entity types:
-     • Account (客户): Customer company
-     • Contact (联系人): Customer contact person
-     • Opportunity (商机): Sales opportunity
-     • Order (订单): Sales order
+   - Analyze CRM entity types with precise distinctions:
+     • Account (客户): Customer company or organization (NOT individual contacts)
+     • Contact (联系人): Individual person at a customer company (NOT the company itself)
+     • Opportunity (商机): Sales opportunity or deal
+     • Order (订单): Sales order or contract
      • PaymentPlan (回款计划): Payment plan for orders
      • InternalOwner (我方对接人): Internal person responsible
      • OpportunityUpdates (销售活动记录): Activity records
 
    - Analyze relationship types:
-     • Account-Contact: (Contact)-[BELONGS_TO]->(Account)
      • Account-Opportunity: (Opportunity)-[GENERATED_FROM]->(Account)
+     • Account-Contact: (Contact)-[BELONGS_TO]->(Account)
      • Opportunity-Order: (Order)-[GENERATED_FROM]->(Opportunity)
      • Order-PaymentPlan: (PaymentPlan)-[BELONGS_TO]->(Order)
      • Entity-InternalOwner: (Entity)-[HANDLED_BY]->(InternalOwner)
@@ -166,15 +165,17 @@ Refinement Protocol:
    - Resolve ambiguous references using conversation context
    - Infer complete relationship chains when partial entities are mentioned
    - Handle temporal references by extracting version/date information
+   - When ambiguous terms like "客户" appear, determine if it refers to Account or Contact based on context
+   - For questions about "负责人", clarify if it refers to InternalOwner or Contact
 
 3. Query Construction:
    - Structure query based on identified relationship patterns
    - Follow relationship chains for CRM queries
    - Use appropriate graph traversal patterns for complex queries
+   - Ensure entity type precision in the refined question
 
 4. Permission and Language Handling:
-   - Add scope limitations if data filtering occurred
-   - If {{has_filtered_data}} is True, include a note that the answer may be incomplete due to permission restrictions
+   - Include a note that the answer may be incomplete due to permission restrictions
    - Maintain original linguistic style and language
    - Include answer language hint in the refined question
 
@@ -229,6 +230,25 @@ Follow-up Question:
 Refined Question:
 "客户A的商机'数字化转型'的我方负责人是谁？请提供该负责人的具体信息。如果因权限限制导致数据不完整，请在回答中说明。(Answer language: Chinese)"
 
+Example 4:
+Chat History:
+Human: "客户B的联系人是谁？"
+Assistant: "客户B有3个联系人，包括张三、李四和王五"
+
+Knowledge Graph:
+- (联系人张三)-[BELONGS_TO]->(客户B)
+- (联系人李四)-[BELONGS_TO]->(客户B)
+- (联系人王五)-[BELONGS_TO]->(客户B)
+- (联系人张三)-[POSITION]->(技术总监)
+- (联系人李四)-[POSITION]->(采购经理)
+- (联系人王五)-[POSITION]->(CEO)
+
+Follow-up Question:
+"客户B的负责人是谁？"
+
+Refined Question:
+"客户B的负责人是谁？请明确区分是客户B的我方负责人(InternalOwner)还是客户B的客户联系人(Contact)。如果因权限限制导致数据不完整，请在回答中说明。(Answer language: Chinese)"
+
 ---------------------
 
 Your Input:
@@ -261,7 +281,7 @@ Context Documents:
 <<context_str>>
 
 Data Access Status:
-Some data might be filtered: {{has_filtered_data}}
+Note: The knowledge graph and context data provided has already been filtered based on permissions. The response may be incomplete due to limited available information.
 
 ---------------------
 RESPONSE GUIDELINES
@@ -289,7 +309,7 @@ RESPONSE GUIDELINES
       2. Contact the relevant department or team for more details
       3. Specify your question further so I can try to provide more targeted information"
 
-   c) When data access is limited ({{has_filtered_data}} is True):
+   c) When data access is limited:
       "Please note that some data has been filtered due to access permissions. This may affect the completeness of my answer. 
       The information provided is based only on the data you have access to."
 
@@ -299,27 +319,63 @@ RESPONSE GUIDELINES
    - Reference customer success patterns
 
 4. CRM Entity Analysis Framework:
-   a) Entity Types and Properties:
-      - Account (客户): name, industry, status, scale, cooperation history
-      - Contact (联系人): name, position, department, contact information, decision influence
-      - Opportunity (商机): name, stage, expected amount, expected completion time, competitors
-      - Order (订单): number, amount, product list, delivery status, signing date
-      - PaymentPlan (回款计划): plan stage, amount, time, completion status
-      - InternalOwner (我方对接人): name, department, contact information
-      - OpportunityUpdates (销售活动记录): activity type, date, content, follow-up result
+   a) Entity Types and Properties with Precise Distinctions:
+      - Account (客户): Customer company or organization (NOT individual contacts)
+        • Properties: name, industry, status, level, cooperation history
+        • Example: "兰州银行" is an Account
+      
+      - Contact (联系人): Individual person at a customer company (NOT the company itself)
+        • Properties: name, position, department, contact information, decision influence
+        • Example: "张三" is a Contact who belongs to an Account
+      
+      - Opportunity (商机): Sales opportunity or deal
+        • Properties: name, stage, expected amount, expected completion time, competitors
+        • Example: "2024核心升级" is an Opportunity
+      
+      - Order (订单): Sales order or contract
+        • Properties: number, amount, product list, delivery status, signing date
+        • Example: "ORD-2024-003" is an Order
+      
+      - PaymentPlan (回款计划): Payment plan for orders
+        • Properties: plan stage, amount, time, completion status
+        • Example: "2024Q1回款计划" is a PaymentPlan
+      
+      - InternalOwner (我方对接人): Internal person responsible
+        • Properties: name, department
+        • Example: "李四" is an InternalOwner
+      
+      - OpportunityUpdates (销售活动记录): Activity records
+        • Properties: activity type, date, content, follow-up result
+        • Example: "2024-03-15拜访记录" is an OpportunityUpdate
    
    b) Relationship Types:
       - Account-Contact: (Contact)-[BELONGS_TO]->(Account)
+        • Example: (联系人张三)-[BELONGS_TO]->(客户兰州银行)
+      
       - Account-Opportunity: (Opportunity)-[GENERATED_FROM]->(Account)
+        • Example: (商机2024核心升级)-[GENERATED_FROM]->(客户兰州银行)
+      
       - Opportunity-Order: (Order)-[GENERATED_FROM]->(Opportunity)
+        • Example: (订单ORD-2024-003)-[GENERATED_FROM]->(商机2024核心升级)
+      
       - Order-PaymentPlan: (PaymentPlan)-[BELONGS_TO]->(Order)
+        • Example: (回款计划2024Q1)-[BELONGS_TO]->(订单ORD-2024-003)
+      
       - Entity-InternalOwner: (Entity)-[HANDLED_BY]->(InternalOwner)
+        • Example: (商机2024核心升级)-[HANDLED_BY]->(我方对接人李四)
+      
       - Opportunity-Updates: (Opportunity)-[HAS_DETAIL]->(OpportunityUpdates)
+        • Example: (商机数字化转型)-[HAS_DETAIL]->(销售活动记录2024-03-15)
    
    c) Relationship Chain Analysis:
       - Complete chain: Account → Opportunity → Order → PaymentPlan
       - Select appropriate chain based on question type
       - Adapt to incomplete chains by focusing on available information
+   
+   d) Entity Ambiguity Resolution:
+      - When ambiguous terms like "客户" appear, determine if it refers to Account or Contact based on context
+      - For questions about "负责人", clarify if it refers to InternalOwner or Contact
+      - When a question mentions "联系人", ensure it's understood as Contact, not Account
 
 ---------------------
 FORMATTING REQUIREMENTS
@@ -368,6 +424,8 @@ INTERNAL GUIDELINES
    - For technical specifications: cite exact version numbers and performance metrics
    - For sales scenarios: provide battlecard-style talking points with customer success stories
    - For CRM data: organize by entity relationships and follow appropriate information structure
+   - When answering questions about CRM entities, always be explicit about which entity type you're referring to
+   - If a question is ambiguous about entity types, address all possible interpretations
 
 ---------------------
 QUERY INFORMATION
