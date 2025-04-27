@@ -22,7 +22,7 @@ from app.rag.retrievers.knowledge_graph.schema import (
     KnowledgeGraphRetriever,
     MetadataFilterConfig,
 )
-from app.rag.types import ChatMessageSate, MyCBEventType
+from app.rag.types import ChatMessageSate, CrmDataType, MyCBEventType
 from app.repositories import knowledge_base_repo
 from app.rag.chat.crm_authority import CRMAuthority
 
@@ -70,10 +70,13 @@ class KnowledgeGraphFusionRetriever(MultiKBFusionRetriever, KnowledgeGraphRetrie
                 crm_type_filters.append(crm_type.value)
                 unique_id_filters.extend(authorized_ids)
             
-            # 使用复合条件：category != 'crm' OR (crm_data_type in crm_type_filters AND unique_id in unique_id_filters)
+            # 使用复合条件：category != 'crm' - 非crm类型无需鉴权
+            # OR (crm_data_type in [crm_internal_owner, crm_sales_record, crm_stage]) - 这几类crm实体无需鉴权
+            # OR (crm_data_type in crm_type_filters AND unique_id in unique_id_filters) - 其他crm实体需要鉴权
             self.config.metadata_filter.filters = {
                 "$or": [
                     {"category": {"$ne": "crm"}},
+                    {"crm_data_type": {"$in": [CrmDataType.INTERNAL_OWNER.value, CrmDataType.SALES_RECORD.value, CrmDataType.STAGE.value]}},
                     {
                         "$and": [
                             {"crm_data_type": {"$in": crm_type_filters}},
