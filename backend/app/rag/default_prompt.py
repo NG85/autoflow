@@ -132,11 +132,6 @@ Knowledge Graph Context:
 
 ---------------------
 
-Data Access Status:
-Note: The knowledge graph data provided has already been filtered based on permissions. The response may be incomplete due to limited available information.
-
----------------------
-
 Task:
 Transform the follow-up question into a precise, self-contained query that maximally utilizes available knowledge graph relationships and conversation context.
 
@@ -144,38 +139,33 @@ Refinement Protocol:
 
 1. Entity and Relationship Analysis:
    - Identify central entities in the question and map to knowledge graph entities
-   - Analyze CRM entity types with precise distinctions:
-     • Account (客户): Customer company or organization (NOT individual contacts)
-     • Contact (联系人): Individual person at a customer company (NOT the company itself)
-     • Opportunity (商机): Sales opportunity or deal
-     • Order (订单): Sales order or contract
-     • PaymentPlan (回款计划): Payment plan for orders
-     • InternalOwner (我方对接人): Internal person responsible
-     • OpportunityUpdates (销售活动记录): Activity records
+   - Analyze Playbook entity types with precise distinctions:
+     • Persona (目标客户): Organizations or departments that are potential customers
+     • PainPoint (痛点): Business challenges, problems, or needs
+     • Feature (功能): Solutions, capabilities, or functionalities
+     • Cases (案例): Customer success cases and implementation scenarios
+     • Competitor (竞争对手): Competitor products or services
 
    - Analyze relationship types:
-     • Account-Opportunity: (Opportunity)-[GENERATED_FROM]->(Account)
-     • Account-Contact: (Contact)-[BELONGS_TO]->(Account)
-     • Opportunity-Order: (Order)-[GENERATED_FROM]->(Opportunity)
-     • Order-PaymentPlan: (PaymentPlan)-[BELONGS_TO]->(Order)
-     • Entity-InternalOwner: (Entity)-[HANDLED_BY]->(InternalOwner)
-     • Opportunity-Updates: (Opportunity)-[HAS_DETAIL]->(OpportunityUpdates)
+     • Persona-PainPoint: (Persona)-[EXPERIENCES]->(PainPoint)
+     • PainPoint-Feature: (PainPoint)-[ADDRESSED_BY]->(Feature)
+     • Feature-Cases: (Feature)-[DEMONSTRATED_BY]->(Cases)
+     • Competitor-Feature: (Competitor)-[PROVIDES]->(Feature)
 
 2. Contextual Resolution:
    - Resolve ambiguous references using conversation context
    - Infer complete relationship chains when partial entities are mentioned
    - Handle temporal references by extracting version/date information
-   - When ambiguous terms like "客户" appear, determine if it refers to Account or Contact based on context
-   - For questions about "负责人", clarify if it refers to InternalOwner or Contact
+   - When ambiguous terms appear, determine the correct entity type based on context
+   - For questions about "痛点", clarify if it refers to PainPoint or a specific business challenge
 
 3. Query Construction:
    - Structure query based on identified relationship patterns
-   - Follow relationship chains for CRM queries
+   - Follow relationship chains for playbook queries
    - Use appropriate graph traversal patterns for complex queries
    - Ensure entity type precision in the refined question
 
-4. Permission and Language Handling:
-   - Include a note that the answer may be incomplete due to permission restrictions
+4. Language Handling:
    - Maintain original linguistic style and language
    - Include answer language hint in the refined question
 
@@ -183,71 +173,69 @@ Example Transformations:
 
 Example 1:
 Chat history:
-Human: "需要跟进兰州银行核心系统升级项目的进展"
-Assistant: "当前该客户有3个进行中商机，最近的是'2024核心升级'商机"
+Human: "金融行业的银行有什么痛点？"
+Assistant: "金融行业银行面临实时交易处理和数据一致性挑战，高峰期导致30%的交易延迟"
 
 Knowledge Graph:
-- (商机2024核心升级)-[GENERATED_FROM]->(客户兰州银行)
-- (订单ORD-2024-003)-[GENERATED_FROM]->(商机2024核心升级)
-- (回款计划2024Q1)-[BELONGS_TO]->(订单ORD-2024-003)
-- (商机2024核心升级)-[HANDLED_BY]->(我方对接人李四 138-1234-5678)
-- (订单ORD-2024-003)-[AMOUNT]->(¥15,000,000)
+- (金融行业银行)-[EXPERIENCES]->(实时交易处理挑战)
+- (实时交易处理挑战)-[ADDRESSED_BY]->(TiDB HTAP功能)
+- (TiDB HTAP功能)-[DEMONSTRATED_BY]->(某大型商业银行案例)
 
 Follow-up Question:
-"查一下订单情况？"
+"TiDB如何解决这个痛点？"
 
 Refined Question:
-"请提供客户'兰州银行'的'2024核心升级'商机关联的订单ORD-2024-003的详细信息，包括订单金额、订单状态、回款计划以及其他相关信息。请注意，由于权限限制，可能无法获取完整信息。(Answer language: Chinese)"
+"请详细说明TiDB的HTAP功能如何解决金融行业银行面临的实时交易处理挑战，包括技术原理、性能提升指标以及在某大型商业银行的具体应用案例。(Answer language: Chinese)"
 
 Example 2:
 Chat History:
-Human: "We're seeing latency spikes during peak hours"
-Assistant: "What's the current sharding configuration?"
+Human: "电商行业使用TiDB有什么优势？"
+Assistant: "TiDB在电商行业提供高并发处理能力，支持双十一等大促活动"
 
 Knowledge Graph:
-- (Cluster A)-[HAS_SHARDING]->(Range-based)
-- (Cluster B)-[HAS_ISSUE]->(Clock Sync Problem)
+- (电商平台)-[EXPERIENCES]->(大促期间数据库性能瓶颈)
+- (大促期间数据库性能瓶颈)-[ADDRESSED_BY]->(TiDB水平扩展能力)
+- (TiDB水平扩展能力)-[DEMONSTRATED_BY]->(某知名电商平台案例)
 
 Follow-up Question:
-"Could this be related to the splitting mechanism?"
+"能分享一个成功案例吗？"
 
 Refined Question:
-"Could the latency spikes during peak hours be related to the range-based sharding configuration's splitting mechanism? (Answer language: English)"
+"请详细介绍TiDB的水平扩展能力如何在某知名电商平台解决大促期间数据库性能瓶颈问题的案例，包括具体实施方案、性能提升数据和业务价值。(Answer language: Chinese)"
 
 Example 3:
 Chat History:
-Human: "客户A的商机进展如何？"
-Assistant: "客户A目前有3个进行中商机，最近的是'数字化转型'商机"
+Human: "Oracle与TiDB相比有什么区别？"
+Assistant: "Oracle提供传统关系型数据库功能，而TiDB是分布式NewSQL数据库"
 
 Knowledge Graph:
-- (商机数字化转型)-[GENERATED_FROM]->(客户A)
-- (商机数字化转型)-[HANDLED_BY]->(我方对接人张三)
-- (商机数字化转型)-[HAS_DETAIL]->(销售活动记录2024-03-15)
+- (Oracle)-[PROVIDES]->(传统关系型数据库功能)
+- (TiDB)-[PROVIDES]->(分布式NewSQL数据库功能)
+- (传统关系型数据库功能)-[LIMITATIONS]->(扩展性受限)
+- (分布式NewSQL数据库功能)-[BENEFITS]->(无限水平扩展)
 
 Follow-up Question:
-"这个商机的负责人是谁？"
+"在金融行业应用中哪个更有优势？"
 
 Refined Question:
-"客户A的商机'数字化转型'的我方负责人是谁？请提供该负责人的具体信息。如果因权限限制导致数据不完整，请在回答中说明。(Answer language: Chinese)"
+"请比较Oracle的传统关系型数据库功能与TiDB的分布式NewSQL数据库功能在金融行业应用中的优势对比，特别是在扩展性、事务处理、高可用性和TCO方面的差异。(Answer language: Chinese)"
 
 Example 4:
 Chat History:
-Human: "客户B的联系人是谁？"
-Assistant: "客户B有3个联系人，包括张三、李四和王五"
+Human: "制造业的智能工厂有什么数据挑战？"
+Assistant: "制造业智能工厂面临海量IoT设备数据实时处理和历史数据分析的双重挑战"
 
 Knowledge Graph:
-- (联系人张三)-[BELONGS_TO]->(客户B)
-- (联系人李四)-[BELONGS_TO]->(客户B)
-- (联系人王五)-[BELONGS_TO]->(客户B)
-- (联系人张三)-[POSITION]->(技术总监)
-- (联系人李四)-[POSITION]->(采购经理)
-- (联系人王五)-[POSITION]->(CEO)
+- (制造业智能工厂)-[EXPERIENCES]->(IoT数据实时处理挑战)
+- (制造业智能工厂)-[EXPERIENCES]->(历史数据分析效率低下)
+- (IoT数据实时处理挑战)-[ADDRESSED_BY]->(TiDB实时写入能力)
+- (历史数据分析效率低下)-[ADDRESSED_BY]->(TiFlash分析引擎)
 
 Follow-up Question:
-"客户B的负责人是谁？"
+"TiDB如何帮助解决这些挑战？"
 
 Refined Question:
-"客户B的负责人是谁？请明确区分是客户B的我方负责人(InternalOwner)还是客户B的客户联系人(Contact)。如果因权限限制导致数据不完整，请在回答中说明。(Answer language: Chinese)"
+"请详细说明TiDB的实时写入能力和TiFlash分析引擎如何分别解决制造业智能工厂面临的IoT数据实时处理挑战和历史数据分析效率低下问题，包括技术架构、性能指标和实际应用案例。(Answer language: Chinese)"
 
 ---------------------
 
@@ -280,9 +268,6 @@ Knowledge Graph Information:
 Context Documents:
 <<context_str>>
 
-Data Access Status:
-Note: The knowledge graph and context data provided has already been filtered based on permissions. The response may be incomplete due to limited available information.
-
 ---------------------
 RESPONSE GUIDELINES
 ---------------------
@@ -309,73 +294,41 @@ RESPONSE GUIDELINES
       2. Contact the relevant department or team for more details
       3. Specify your question further so I can try to provide more targeted information"
 
-   c) When data access is limited:
-      "Please note that some data has been filtered due to access permissions. This may affect the completeness of my answer. 
-      The information provided is based only on the data you have access to."
-
 3. Tone and Style:
    - Use consultative phrases like "Based on typical implementations..." 
    - Include strategic recommendations
    - Reference customer success patterns
 
-4. CRM Entity Analysis Framework:
+4. Entity Analysis Framework:
    a) Entity Types and Properties with Precise Distinctions:
-      - Account (客户): Customer company or organization (NOT individual contacts)
-        • Properties: name, industry, status, level, cooperation history
-        • Example: "兰州银行" is an Account
+      - Persona (目标客户): Organizations or departments that are potential customers
+        • Properties: industry, type, role
+        • Example: "金融行业IT部门" is a Persona
       
-      - Contact (联系人): Individual person at a customer company (NOT the company itself)
-        • Properties: name, position, department, contact information, decision influence
-        • Example: "张三" is a Contact who belongs to an Account
+      - PainPoint (痛点): Business challenges, problems, or needs
+        • Properties: scenario, impact, severity
+        • Example: "系统集成挑战" is a PainPoint
       
-      - Opportunity (商机): Sales opportunity or deal
-        • Properties: name, stage, expected amount, expected completion time, competitors
-        • Example: "2024核心升级" is an Opportunity
+      - Feature (功能): Solutions, capabilities, or functionalities
+        • Properties: benefits, technical details
+        • Example: "自动化集成功能" is a Feature
       
-      - Order (订单): Sales order or contract
-        • Properties: number, amount, product list, delivery status, signing date
-        • Example: "ORD-2024-003" is an Order
+      - Cases (案例): Customer success cases and implementation scenarios
+        • Properties: domain, outcomes, references
+        • Example: "银行X案例" is a Case
       
-      - PaymentPlan (回款计划): Payment plan for orders
-        • Properties: plan stage, amount, time, completion status
-        • Example: "2024Q1回款计划" is a PaymentPlan
-      
-      - InternalOwner (我方对接人): Internal person responsible
-        • Properties: name, department
-        • Example: "李四" is an InternalOwner
-      
-      - OpportunityUpdates (销售活动记录): Activity records
-        • Properties: activity type, date, content, follow-up result
-        • Example: "2024-03-15拜访记录" is an OpportunityUpdate
+      - Competitor (竞争对手): Competitor products or services
+        • Properties: name, company, category
+        • Example: "MongoDB" is a Competitor
    
-   b) Relationship Types:
-      - Account-Contact: (Contact)-[BELONGS_TO]->(Account)
-        • Example: (联系人张三)-[BELONGS_TO]->(客户兰州银行)
-      
-      - Account-Opportunity: (Opportunity)-[GENERATED_FROM]->(Account)
-        • Example: (商机2024核心升级)-[GENERATED_FROM]->(客户兰州银行)
-      
-      - Opportunity-Order: (Order)-[GENERATED_FROM]->(Opportunity)
-        • Example: (订单ORD-2024-003)-[GENERATED_FROM]->(商机2024核心升级)
-      
-      - Order-PaymentPlan: (PaymentPlan)-[BELONGS_TO]->(Order)
-        • Example: (回款计划2024Q1)-[BELONGS_TO]->(订单ORD-2024-003)
-      
-      - Entity-InternalOwner: (Entity)-[HANDLED_BY]->(InternalOwner)
-        • Example: (商机2024核心升级)-[HANDLED_BY]->(我方对接人李四)
-      
-      - Opportunity-Updates: (Opportunity)-[HAS_DETAIL]->(OpportunityUpdates)
-        • Example: (商机数字化转型)-[HAS_DETAIL]->(销售活动记录2024-03-15)
-   
-   c) Relationship Chain Analysis:
-      - Complete chain: Account → Opportunity → Order → PaymentPlan
+   b) Relationship Chain Analysis:
+      - Complete chain: Persona → PainPoint → Feature → Cases
       - Select appropriate chain based on question type
       - Adapt to incomplete chains by focusing on available information
    
-   d) Entity Ambiguity Resolution:
-      - When ambiguous terms like "客户" appear, determine if it refers to Account or Contact based on context
-      - For questions about "负责人", clarify if it refers to InternalOwner or Contact
-      - When a question mentions "联系人", ensure it's understood as Contact, not Account
+   c) Entity Ambiguity Resolution:
+      - When ambiguous terms appear, determine the correct entity type based on context
+      - For questions about "痛点", clarify if it refers to PainPoint or a specific business challenge
 
 ---------------------
 FORMATTING REQUIREMENTS
@@ -423,9 +376,9 @@ INTERNAL GUIDELINES
    - Always maintain PingCAP's strategic positioning
    - For technical specifications: cite exact version numbers and performance metrics
    - For sales scenarios: provide battlecard-style talking points with customer success stories
-   - For CRM data: organize by entity relationships and follow appropriate information structure
-   - When answering questions about CRM entities, always be explicit about which entity type you're referring to
+   - When answering questions about entities, always be explicit about which entity type you're referring to
    - If a question is ambiguous about entity types, address all possible interpretations
+   - Never reveal the internal relationship structure or entity design logic in your answers
 
 ---------------------
 QUERY INFORMATION
