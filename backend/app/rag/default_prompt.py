@@ -171,52 +171,61 @@ Refinement Protocol:
 Example Transformations:
 
 Example 1:
-Chat history:
-Human: "电商行业的客户通常有什么痛点？"
-Assistant: "电商行业客户通常面临库存管理和订单处理的挑战"
+Chat History:
+Human: "SaaS行业的客户通常遇到哪些销售挑战？"
+Assistant: "SaaS行业客户常见的挑战包括获客成本高、线索转化率低、销售周期长等问题。"
 
 Knowledge Graph:
-- (电商运营负责人)-[HAS_PAIN_POINT]->(库存管理困难)
-- (库存管理困难)-[SOLVED_BY]->(智能库存预测)
-- (智能库存预测)-[DEMONSTRATED_IN]->(某知名电商平台案例)
+
+(销售负责人)-[HAS_PAIN_POINT]->(线索转化率低)
+
+(线索转化率低)-[SOLVED_BY]->(智能线索评分系统)
+
+(智能线索评分系统)-[DEMONSTRATED_IN]->(某知名SaaS公司应用案例)
 
 Follow-up Question:
-"我们有什么解决方案？"
+"致趣百川可以怎么帮助提高线索转化率？"
 
 Refined Question:
-"针对电商行业客户角色'电商运营负责人'的痛点'库存管理困难'，致趣百川提供了哪些功能或解决方案？这些解决方案有哪些成功案例？请提供详细信息。如果因权限限制导致数据不完整，请在回答中说明。(Answer language: Chinese)"
+"针对SaaS行业客户角色'销售负责人'在'线索转化率低'这一痛点，致趣百川提供了哪些具体功能或解决方案？是否有成功案例可以参考？"
 
 Example 2:
 Chat History:
-Human: "What pain points do marketing directors typically face?"
-Assistant: "Marketing directors often struggle with campaign performance measurement and ROI tracking"
+Human: "制造业客户在拓展新市场时通常面临什么问题？"
+Assistant: "制造业客户在拓展新市场时，经常遇到客户信息分散、潜客培育周期长的问题。"
 
 Knowledge Graph:
-- (Marketing Director)-[HAS_PAIN_POINT]->(Campaign ROI Tracking)
-- (Campaign ROI Tracking)-[SOLVED_BY]->(Advanced Analytics Dashboard)
-- (Advanced Analytics Dashboard)-[DEMONSTRATED_IN]->(Global Brand Success Story)
+
+(市场拓展经理)-[HAS_PAIN_POINT]->(潜客培育周期长)
+
+(潜客培育周期长)-[SOLVED_BY]->(自动化营销旅程管理)
+
+(自动化营销旅程管理)-[DEMONSTRATED_IN]->(某大型制造企业案例)
 
 Follow-up Question:
-"Can you tell me about our dashboard solution?"
+"致趣百川有什么具体做法来缩短潜客培育周期？"
 
 Refined Question:
-"What features does the 'Advanced Analytics Dashboard' solution offer to address the 'Campaign ROI Tracking' pain point experienced by 'Marketing Directors'? Please include any success stories or case studies that demonstrate its effectiveness. (Answer language: English)"
+"针对制造业客户角色'市场拓展经理'在'潜客培育周期长'这一痛点，致趣百川提供了哪些具体功能或策略？有相关的落地实践案例吗？"
 
 Example 3:
 Chat History:
-Human: "金融行业的客户有哪些痛点？"
-Assistant: "金融行业客户通常面临数据安全和合规性的挑战"
+Human: "B2B企业在客户数据管理方面的痛点有哪些？"
+Assistant: "B2B企业在客户数据管理上常见痛点包括数据孤岛、数据更新滞后、客户画像不完整。"
 
 Knowledge Graph:
-- (金融机构合规官)-[HAS_PAIN_POINT]->(合规报告生成耗时)
-- (合规报告生成耗时)-[SOLVED_BY]->(自动化合规报告工具)
-- (自动化合规报告工具)-[DEMONSTRATED_IN]->(某大型银行实施案例)
+
+(数据运营经理)-[HAS_PAIN_POINT]->(客户画像不完整)
+
+(客户画像不完整)-[SOLVED_BY]->(统一客户数据平台CDP)
+
+(统一客户数据平台CDP)-[DEMONSTRATED_IN]->(某B2B科技企业案例)
 
 Follow-up Question:
-"这个工具有什么特点？"
+"致趣百川的数据平台能解决哪些具体问题？"
 
 Refined Question:
-"致趣百川的'自动化合规报告工具'具有哪些特点和功能，它如何解决金融机构合规官面临的'合规报告生成耗时'痛点？有没有相关的成功案例可以分享？如果因权限限制导致数据不完整，请在回答中说明。(Answer language: Chinese)"
+"针对B2B行业客户角色'数据运营经理'在'客户画像不完整'这一痛点，致趣百川的统一客户数据平台CDP有哪些功能？是否有应用案例可以分享？"
 
 ---------------------
 
@@ -343,6 +352,7 @@ INTERNAL GUIDELINES
    - For technical specifications: cite exact version numbers and performance metrics
    - For sales scenarios: provide battlecard-style talking points with customer success stories
    - For playbook data: organize by entity relationships following the Persona → Pain Point → Feature → Case sequence
+   - Never expose internal system design details about playbook relationships and entities in final answers to users
 
 ---------------------
 QUERY INFORMATION
