@@ -6,7 +6,6 @@ from sqlalchemy import Column, Enum, Text, JSON, DateTime
 from sqlmodel import (
     SQLModel,
     Field,
-    Relationship as SQLModelRelationship,
     Relationship as SQLRelationship,
 )
 from tidb_vector.sqlalchemy import VectorType
@@ -47,13 +46,13 @@ class Relationship(RelationshipBase, table=True):
             VectorType(settings.EMBEDDING_DIMS), comment="hnsw(distance=cosine)"
         )
     )
-    source_entity: Entity = SQLModelRelationship(
+    source_entity: Entity = SQLRelationship(
         sa_relationship_kwargs={
             "primaryjoin": "Relationship.source_entity_id == Entity.id",
             "lazy": "joined",
         },
     )
-    target_entity: Entity = SQLModelRelationship(
+    target_entity: Entity = SQLRelationship(
         sa_relationship_kwargs={
             "primaryjoin": "Relationship.target_entity_id == Entity.id",
             "lazy": "joined",
