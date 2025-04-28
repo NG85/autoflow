@@ -9,7 +9,6 @@ from llama_index.core.schema import TransformComponent
 
 from sqlmodel import Session
 from app.models.knowledge_base import (
-    IndexMethod,
     ChunkSplitter,
     ChunkingMode,
     KnowledgeBase,
@@ -27,7 +26,7 @@ from app.rag.indices.knowledge_graph import KnowledgeGraphIndex
 from app.models import Document, Chunk, Entity, Relationship
 from app.rag.node_parser.file.markdown import MarkdownNodeParser
 from app.types import MimeTypes
-from app.utils.dspy import get_dspy_lm_by_llama_llm
+from app.rag.llms.dspy import get_dspy_lm_by_llama_llm
 from app.models.enums import GraphType
 from app.rag.indices.knowledge_graph.graph_store.helpers import get_entity_description_embedding, get_entity_metadata_embedding, get_relationship_description_embedding
 from app.rag.node_parser.single_node import SingleNodeParser

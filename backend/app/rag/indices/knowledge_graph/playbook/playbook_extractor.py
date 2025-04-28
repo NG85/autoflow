@@ -1,8 +1,8 @@
 import logging
 from typing import List, Optional, Tuple
 import dspy
-from dspy.functional import TypedPredictor
 import pandas as pd
+from dspy import Predict
 from llama_index.core.schema import BaseNode
 
 from app.rag.indices.knowledge_graph.extractor import SimpleGraphExtractor, get_relation_metadata_from_node
@@ -196,8 +196,8 @@ class PlaybookExtractor(SimpleGraphExtractor):
         super().__init__(dspy_lm, complied_extract_program_path, GraphType.playbook)
       
         # Create playbook extraction with proper template assignment
-        self.extract_prog.prog_graph = TypedPredictor(ExtractPlaybookTriplet)
-        self.extract_prog.prog_covariates = TypedPredictor(ExtractPlaybookCovariate)
+        self.extract_prog.prog_graph = Predict(ExtractPlaybookTriplet)
+        self.extract_prog.prog_covariates = Predict(ExtractPlaybookCovariate)
 
           
     def _get_competitor_info(self, node: BaseNode) -> Optional[dict]:

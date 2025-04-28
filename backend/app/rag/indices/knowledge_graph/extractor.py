@@ -99,8 +99,8 @@ class Extractor(dspy.Module):
     def __init__(self, dspy_lm: dspy.LM):
         super().__init__()
         self.dspy_lm = dspy_lm
-        self.prog_graph = TypedPredictor(ExtractGraphTriplet)
-        self.prog_covariates = TypedPredictor(ExtractCovariate)
+        self.prog_graph = Predict(ExtractGraphTriplet)
+        self.prog_covariates = Predict(ExtractCovariate)
     
 
     def get_llm_output_config(self):
