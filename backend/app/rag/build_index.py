@@ -7,7 +7,7 @@ from llama_index.core.llms.llm import LLM
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.schema import TransformComponent
 
-from sqlmodel import Session
+from sqlmodel import SQLModel, Session
 from app.models.knowledge_base import (
     ChunkSplitter,
     ChunkingMode,
@@ -23,7 +23,7 @@ from app.rag.knowledge_base.index_store import (
     get_kb_tidb_graph_store,
 )
 from app.rag.indices.knowledge_graph import KnowledgeGraphIndex
-from app.models import Document, Chunk, Entity, Relationship
+from app.models import Document
 from app.rag.node_parser.file.markdown import MarkdownNodeParser
 from app.types import MimeTypes
 from app.rag.llms.dspy import get_dspy_lm_by_llama_llm
@@ -144,7 +144,7 @@ class IndexService:
         return transformations
 
     def build_vector_index_for_chunk(
-        self, session: Session, db_chunk: Chunk
+        self, session: Session, db_chunk: Type[SQLModel]
     ):
         """
         Build vector index from existing chunks.
@@ -176,7 +176,7 @@ class IndexService:
         return
   
     def build_vector_index_for_entity(
-        self, session: Session, db_entity: Entity
+        self, session: Session, db_entity: Type[SQLModel]
     ):
         """
         Build vector embeddings for entity's description and meta fields.
@@ -216,7 +216,7 @@ class IndexService:
          
 
     def build_vector_index_for_relationship(
-        self, session: Session, db_relationship: Relationship
+        self, session: Session, db_relationship: Type[SQLModel]
     ):
         """
         Build vector embeddings for relationship's description field.
@@ -249,7 +249,7 @@ class IndexService:
             logger.error(f"Failed to build vector embeddings for relationship #{db_relationship.id}: {str(e)}")
             raise
 
-    def build_kg_index_for_chunk(self, session: Session, db_chunk: Type[Chunk]):
+    def build_kg_index_for_chunk(self, session: Session, db_chunk: Type[SQLModel]):
         """Build knowledge graph index from chunk.
 
         Build knowledge graph index will do the following:
@@ -273,7 +273,7 @@ class IndexService:
 
         return
 
-    def build_playbook_kg_index_for_chunk(self, session: Session, db_chunk: Type[Chunk]):
+    def build_playbook_kg_index_for_chunk(self, session: Session, db_chunk: Type[SQLModel]):
         """Build Playbook knowledge graph index from chunk.
 
         Build playbook knowledge graph index will do the following:
