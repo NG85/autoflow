@@ -49,8 +49,9 @@ def parse_chat_messages(
     chat_messages: List[ChatMessage],
 ) -> tuple[str, List[ChatMessage]]:
     user_question = chat_messages[-1].content
+    user_question_args = chat_messages[-1].additional_kwargs
     chat_history = chat_messages[:-1]
-    return user_question, chat_history
+    return user_question, user_question_args, chat_history
 
 _EMBEDDING_CACHE:Dict[str, Dict[str, Any]] = {}
 _EMBEDDING_LOCK = threading.Lock()
@@ -91,7 +92,7 @@ class ChatFlow:
         self.chat_mode = chat_mode
         self.incoming_cookie = incoming_cookie
         # Load chat engine and chat session.
-        self.user_question, self.chat_history = parse_chat_messages(chat_messages)
+        self.user_question, self.user_question_args, self.chat_history = parse_chat_messages(chat_messages)
         
         if chat_id:
             # FIXME:
@@ -1324,6 +1325,8 @@ class ChatFlow:
         aldebaran_cvgg_url = settings.ALDEBARAN_CVGG_URL
         # Build request body
         payload = {
+            "account_name": self.user_question_args.get("account_name", ""),
+            "account_id": self.user_question_args.get("account_id", ""),
             "content": self.user_question,
             "tenant_id": settings.ALDEBARAN_TENANT_ID,
         }
