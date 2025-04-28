@@ -95,7 +95,6 @@ class RetrieveFlow:
                 knowledge_base_ids=[kb.id for kb in self.knowledge_bases],
                 llm=self._llm,
                 use_query_decompose=kg_config.using_intent_search,
-                use_async=True,
                 config=KnowledgeGraphRetrieverConfig.model_validate(
                     kg_config.model_dump(exclude={"enabled", "using_intent_search"})
                 ),
@@ -167,7 +166,6 @@ class RetrieveFlow:
             llm=self._llm,
             config=self.engine_config.vector_search,
             use_query_decompose=False,
-            use_async=True,
             crm_authority=crm_authority
         )
         nodes = retriever.retrieve(QueryBundle(user_question))
