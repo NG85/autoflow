@@ -650,6 +650,27 @@ class ChatFlow:
         with self._trace_manager.span(
             name="generate_answer", input=user_question
         ) as span:
+            # Use LLM to generate a fallback response if no relevant chunks are found.
+            if not relevant_chunks or len(relevant_chunks) == 0:
+                fallback_prompt = default_prompt.FALLBACK_PROMPT
+                no_content_message = self._fast_llm.predict(
+                    prompt=get_prompt_by_jinja2_template(
+                        fallback_prompt,
+                        original_question=user_question,
+                    )
+                )
+                yield ChatEvent(
+                    event_type=ChatEventType.TEXT_PART,
+                    payload=no_content_message,
+                )
+                span.end(
+                    output=no_content_message,
+                    metadata={
+                        "source_documents": [],
+                    },
+                )
+                return no_content_message, []
+                
             # Initialize response synthesizer.
             text_qa_template = get_prompt_by_jinja2_template(
                 self.engine_config.llm.text_qa_prompt,

@@ -864,31 +864,15 @@ The response should be natural and conversational while maintaining accuracy to 
 """
 
 FALLBACK_PROMPT = """
-Original Question: {{original_question}}
+User's Original Question: {{original_question}}
 
-There is no relevant information found. Respond naturally as if having a conversation:
+No relevant content found. Please respond in the same language as the user's question.
 
-1. Be direct and honest about the information gap
-2. Keep the tone casual and friendly
-3. If helpful, suggest what additional info might help
-4. Match the user's language and style
+Acknowledge that you couldn't find relevant information for this question without using any greeting phrases like "Hello" or "Dear customer". Briefly mention possible reasons:
+- The information may not be in the knowledge base yet
+- The question may need more specific details
 
-Possible reasons for the information gap:
-- The question may be outside your knowledge scope
-- The user may not have permission to access the relevant content
-- The information may not yet be included in the knowledge base
+Assurance that you're continuously learning and the knowledge base is being updated to better support them in the future
 
-Rules:
-- No made-up information
-- No misleading guidance
-- For technical questions: suggest official docs
-- For urgent issues: express understanding while being honest
-- Suggest rephrasing the question or contacting an administrator for more help
-
-Avoid:
-- Template responses
-- Unnecessary apologies
-- Redundant explanations
-
-Your response will be shown directly to the user.
+Keep your response concise and professional while being honest about the current knowledge limitations. Start your response directly with the acknowledgment without any greeting.
 """
