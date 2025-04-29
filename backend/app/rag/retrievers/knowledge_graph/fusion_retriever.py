@@ -167,9 +167,18 @@ class KnowledgeGraphFusionRetriever(MultiKBFusionRetriever, KnowledgeGraphRetrie
             for query_tuple, query_result in zip(task_queries, task_results):
                 results[query_tuple] = query_result
                 total_nodes += len(query_result)
-                
-            yield (ChatMessageSate.KG_QUERY_EXECUTION, f"Retrieval completed and found {total_nodes} related nodes")
-            return self._fusion(query_bundle.query_str, results)
+        
+            fused_results = self._fusion(query_bundle.query_str, results)
+            # Count entities and relationships in fused results
+            entity_count = 0
+            relationship_count = 0
+            if fused_results and len(fused_results) > 0:
+                node = fused_results[0].node
+                entity_count = len(node.entities)
+                relationship_count = len(node.relationships)
+            
+            yield (ChatMessageSate.KG_QUERY_EXECUTION, f"Knowledge graph retrieval and fusion completed with {entity_count} entities and {relationship_count} relationships")
+            return fused_results
 
 
     def _gen_sub_queries(self, query_bundle: QueryBundle) -> List[QueryBundle]:
