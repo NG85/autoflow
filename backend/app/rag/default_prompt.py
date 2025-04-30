@@ -68,7 +68,10 @@ The prerequisite questions and their relevant knowledge for the user's main ques
 ---------------------
 
 Task:
-Given the conversation between the user and ASSISTANT, along with the follow-up message from the user, and the provided prerequisite questions and relevant knowledge, determine if the user's question is clear and specific enough for a confident response. If the question lacks necessary details or context, identify the specific ambiguities and generate a clarifying question to address them.
+Given the conversation between the user and ASSISTANT, along with the follow-up message from the user, and the provided prerequisite questions and relevant knowledge, determine if the user's question is clear and specific enough for a confident response. 
+
+If the question lacks necessary details or context, identify the specific ambiguities and generate a clarifying question to address them.
+If the question is clear and answerable, return exact "False" as the response.
 
 Instructions:
 1. Assess Information Sufficiency:
