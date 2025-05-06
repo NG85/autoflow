@@ -68,7 +68,10 @@ The prerequisite questions and their relevant knowledge for the user's main ques
 ---------------------
 
 Task:
-Given the conversation between the user and ASSISTANT, along with the follow-up message from the user, and the provided prerequisite questions and relevant knowledge, determine if the user's question is clear and specific enough for a confident response. If the question lacks necessary details or context, identify the specific ambiguities and generate a clarifying question to address them.
+Given the conversation between the user and ASSISTANT, along with the follow-up message from the user, and the provided prerequisite questions and relevant knowledge, determine if the user's question is clear and specific enough for a confident response. 
+
+If the question lacks necessary details or context, identify the specific ambiguities and generate a clarifying question to address them.
+If the question is clear and answerable, return exact "False" as the response.
 
 Instructions:
 1. Assess Information Sufficiency:
@@ -168,6 +171,12 @@ Refinement Protocol:
 4. Language Handling:
    - Maintain original linguistic style and language
    - Include answer language hint in the refined question
+
+5. Output Formatting:
+   - When generating the final refined question, NEVER expose system internal relationship descriptors (like HANDLED_BY, BELONGS_TO, GENERATED_FROM, HAS_DETAIL)
+   - Use natural language to describe relationships in the final output
+   - Example: "客户'兰州银行'的'2024核心升级'商机关联的订单" instead of "客户-[GENERATED_FROM]->商机-[GENERATED_FROM]->订单"
+   - The internal relationship descriptors can be used in the thinking process (prompt chain) but should not appear in the final output
 
 Example Transformations:
 
@@ -299,7 +308,13 @@ RESPONSE GUIDELINES
    - Include strategic recommendations
    - Reference customer success patterns
 
-4. Entity Analysis Framework:
+4. Avoid Internal Implementation Details:
+   - Never expose system internal relationship descriptors (like HANDLED_BY, BELONGS_TO, GENERATED_FROM, HAS_DETAIL) in responses
+   - These are internal implementation details used for retrieval and analysis, not for user-facing communication
+   - Instead, use natural language to describe relationships (e.g., "张三是兰州银行的联系人" instead of "张三-[BELONGS_TO]->兰州银行")
+   - Focus on the business meaning of relationships rather than their technical representation
+
+5. Entity Analysis Framework:
    a) Entity Types and Properties with Precise Distinctions:
       - Persona (目标客户): Organizations or departments that are potential customers
         • Properties: industry, type, role
@@ -343,6 +358,14 @@ FORMATTING REQUIREMENTS
 2. Language:
    - Match the language of the original question unless specified otherwise
 
+3. Relationship Description:
+   - Always describe relationships in natural language without exposing internal descriptors
+   - Use business terminology instead of technical implementation details
+   - Examples:
+     • "张三是兰州银行的联系人" (not "张三-[BELONGS_TO]->兰州银行")
+     • "李四是该商机的负责人" (not "商机-[HANDLED_BY]->李四")
+     • "该订单来自2024核心升级商机" (not "订单-[GENERATED_FROM]->商机")
+
 ---------------------
 INTERNAL GUIDELINES
 ---------------------
@@ -378,7 +401,8 @@ INTERNAL GUIDELINES
    - For sales scenarios: provide battlecard-style talking points with customer success stories
    - When answering questions about entities, always be explicit about which entity type you're referring to
    - If a question is ambiguous about entity types, address all possible interpretations
-   - Never reveal the internal relationship structure or entity design logic in your answers
+   - Never expose system internal relationship descriptors (HANDLED_BY, BELONGS_TO, etc.) in responses - use natural language instead
+   - Internal relationship descriptors can be used in the thinking process (prompt chain) but must be translated to natural language in the final output
 
 ---------------------
 QUERY INFORMATION
@@ -792,4 +816,18 @@ For different types of identity questions, use the corresponding section of info
 4. For knowledge base questions: Explain that you're more than just a knowledge base - you're an interactive sales assistant that can provide personalized support throughout the sales process.
 
 The response should be natural and conversational while maintaining accuracy to your defined identity.
+"""
+
+FALLBACK_PROMPT = """
+User's Original Question: {{original_question}}
+
+No relevant content found. Please respond in the same language as the user's question.
+
+Acknowledge that you couldn't find relevant information for this question without using any greeting phrases like "Hello" or "Dear customer". Briefly mention possible reasons:
+- The information may not be in the knowledge base yet
+- The question may need more specific details
+
+Assurance that you're continuously learning and the knowledge base is being updated to better support them in the future
+
+Keep your response concise and professional while being honest about the current knowledge limitations. Start your response directly with the acknowledgment without any greeting.
 """

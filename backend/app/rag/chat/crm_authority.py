@@ -97,7 +97,7 @@ def get_user_crm_authority(user_id: Optional[UUID]) -> CRMAuthority:
         # Build request body
         payload = {
             "dataId": "",
-            "highSeasAccounts": True,
+            "highSeasAccounts": False,
             "type": "",
             "userId": str(user_id)
         }

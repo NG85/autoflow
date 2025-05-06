@@ -49,8 +49,9 @@ def parse_chat_messages(
     chat_messages: List[ChatMessage],
 ) -> tuple[str, List[ChatMessage]]:
     user_question = chat_messages[-1].content
+    user_question_args = chat_messages[-1].additional_kwargs
     chat_history = chat_messages[:-1]
-    return user_question, chat_history
+    return user_question, user_question_args, chat_history
 
 _EMBEDDING_CACHE:Dict[str, Dict[str, Any]] = {}
 _EMBEDDING_LOCK = threading.Lock()
@@ -91,7 +92,7 @@ class ChatFlow:
         self.chat_mode = chat_mode
         self.incoming_cookie = incoming_cookie
         # Load chat engine and chat session.
-        self.user_question, self.chat_history = parse_chat_messages(chat_messages)
+        self.user_question, self.user_question_args, self.chat_history = parse_chat_messages(chat_messages)
         
         if chat_id:
             # FIXME:
@@ -359,6 +360,7 @@ class ChatFlow:
                     db_user_message=db_user_message,
                     response_text=need_clarify_response,
                     knowledge_graph=knowledge_graph,
+                    source_documents=[],
                 )
                 return None, []
             
@@ -513,7 +515,7 @@ class ChatFlow:
     def _refine_user_question(
         self,
         user_question: str,
-        chat_history: Optional[List[ChatMessage]] = list,
+        chat_history: Optional[List[ChatMessage]] = [],
         refined_question_prompt: Optional[str] = None,
         knowledge_graph_context: str = "",
         annotation_silent: bool = False,
@@ -561,7 +563,7 @@ class ChatFlow:
     def _clarify_question(
         self,
         user_question: str,
-        chat_history: Optional[List[ChatMessage]] = list,
+        chat_history: Optional[List[ChatMessage]] = [],
         knowledge_graph_context: str = "",
     ) -> Generator[ChatEvent, None, Tuple[bool, str]]:
         """
@@ -650,6 +652,27 @@ class ChatFlow:
         with self._trace_manager.span(
             name="generate_answer", input=user_question
         ) as span:
+            # Use LLM to generate a fallback response if no relevant chunks are found.
+            if not relevant_chunks or len(relevant_chunks) == 0:
+                fallback_prompt = default_prompt.FALLBACK_PROMPT
+                no_content_message = self._fast_llm.predict(
+                    prompt=get_prompt_by_jinja2_template(
+                        fallback_prompt,
+                        original_question=user_question,
+                    )
+                )
+                yield ChatEvent(
+                    event_type=ChatEventType.TEXT_PART,
+                    payload=no_content_message,
+                )
+                span.end(
+                    output=no_content_message,
+                    metadata={
+                        "source_documents": [],
+                    },
+                )
+                return no_content_message, []
+                
             # Initialize response synthesizer.
             text_qa_template = get_prompt_by_jinja2_template(
                 self.engine_config.llm.text_qa_prompt,
@@ -764,7 +787,7 @@ class ChatFlow:
         db_user_message: ChatMessage,
         response_text: str,
         knowledge_graph: KnowledgeGraphRetrievalResult = KnowledgeGraphRetrievalResult(),
-        source_documents: Optional[List[SourceDocument]] = list,
+        source_documents: Optional[List[SourceDocument]] = [],
         annotation_silent: bool = False,
     ):
         if not annotation_silent:
@@ -831,14 +854,20 @@ class ChatFlow:
         goal, response_format = self.user_question, {}
         if settings.ENABLE_QUESTION_CACHE and len(self.chat_history) == 0:
             try:
-                logger.info(f"start to find_best_answer_for_question with question: {self.user_question}")
+                logger.info(
+                    f"start to find_best_answer_for_question with question: {self.user_question}"
+                )
                 cache_messages = chat_repo.find_best_answer_for_question(
                     self.db_session, self.user_question
                 )
                 if cache_messages and len(cache_messages) > 0:
-                    logger.info(f"find_best_answer_for_question result {len(cache_messages)} for question {self.user_question}")
+                    logger.info(
+                        f"find_best_answer_for_question result {len(cache_messages)} for question {self.user_question}"
+                    )
             except Exception as e:
-                logger.error(f"Failed to find best answer for question {self.user_question}: {e}")
+                logger.error(
+                    f"Failed to find best answer for question {self.user_question}: {e}"
+                )
 
         if not cache_messages or len(cache_messages) == 0:
             try:
@@ -847,10 +876,11 @@ class ChatFlow:
 
                 # 2. Check if the goal provided enough context information or need to clarify.
                 if self.engine_config.clarify_question:
-                    need_clarify, need_clarify_response = (
-                        yield from self._clarify_question(
-                            user_question=goal, chat_history=self.chat_history
-                        )
+                    (
+                        need_clarify,
+                        need_clarify_response,
+                    ) = yield from self._clarify_question(
+                        user_question=goal, chat_history=self.chat_history
                     )
                     if need_clarify:
                         yield from self._chat_finish(
@@ -1303,6 +1333,8 @@ class ChatFlow:
         aldebaran_cvgg_url = settings.ALDEBARAN_CVGG_URL
         # Build request body
         payload = {
+            "account_name": self.user_question_args.get("account_name", ""),
+            "account_id": self.user_question_args.get("account_id", ""),
             "content": self.user_question,
             "tenant_id": settings.ALDEBARAN_TENANT_ID,
         }

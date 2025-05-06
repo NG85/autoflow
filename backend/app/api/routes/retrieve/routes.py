@@ -14,7 +14,7 @@ from app.rag.retrievers.chunk.fusion_retriever import (
 from app.exceptions import KBNotFound
 from app.rag.retrievers.chunk.schema import ChunksRetrievalResult
 from app.rag.llms.resolver import get_llm_or_default
-from .models import ChunksRetrivalRequest, KnowledgeGraphRetrivalRequest
+from .models import ChunksRetrievalRequest, KnowledgeGraphRetrievalRequest
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 def retrieve_chunks(
     db_session: SessionDep,
     user: CurrentSuperuserDep,
-    request: ChunksRetrivalRequest,
+    request: ChunksRetrievalRequest,
 ) -> ChunksRetrievalResult:
     try:
         config = request.retrieval_config
@@ -34,7 +34,6 @@ def retrieve_chunks(
             knowledge_base_ids=config.knowledge_base_ids,
             llm=llm,
             use_query_decompose=config.use_query_decompose,
-            kb_select_mode=config.kb_select_mode,
             config=config.vector_search,
         )
         return retriever.retrieve_chunks(request.query, config.full_documents)
@@ -49,7 +48,7 @@ def retrieve_chunks(
 def retrieve_knowledge_graph(
     db_session: SessionDep,
     user: CurrentSuperuserDep,
-    request: KnowledgeGraphRetrivalRequest,
+    request: KnowledgeGraphRetrievalRequest,
 ) -> KnowledgeGraphRetrievalResult:
     try:
         config = request.retrieval_config
@@ -59,7 +58,6 @@ def retrieve_knowledge_graph(
             knowledge_base_ids=config.knowledge_base_ids,
             llm=llm,
             use_query_decompose=config.use_query_decompose,
-            kb_select_mode=config.kb_select_mode,
             config=config.knowledge_graph,
         )
         return retriever.retrieve_knowledge_graph(request.query)

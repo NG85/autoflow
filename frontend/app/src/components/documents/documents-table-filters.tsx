@@ -8,221 +8,183 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useForm } from '@tanstack/react-form';
 import { Table as ReactTable } from '@tanstack/react-table';
 import { capitalCase } from 'change-case-all';
-import { ChevronDownIcon } from 'lucide-react';
+import { ChevronDownIcon, UploadIcon } from 'lucide-react';
+import { DateRangePicker } from '@/components/date-range-picker';
+import { DateRange } from 'react-day-picker';
+import { NextLink } from '@/components/nextjs/NextLink';
 
-export function DocumentsTableFilters ({ onFilterChange }: { table: ReactTable<Document>, onFilterChange: (data: ListDocumentsTableFilters) => void }) {
+interface DocumentsTableFiltersProps {
+  knowledgeBaseId: number;
+  table: ReactTable<Document>;
+  onFilterChange: (data: ListDocumentsTableFilters) => void;
+}
+
+export function DocumentsTableFilters ({ knowledgeBaseId, table, onFilterChange }: DocumentsTableFiltersProps) {
   const form = useForm({
     validators: {
       onChange: listDocumentsFiltersSchema,
     },
-    onSubmit: ({ value }) => {
-      onFilterChange?.(listDocumentsFiltersSchema.parse(value));
+    defaultValues: {
+      search: undefined,
+      mime_type: undefined,
+      index_status: undefined,
+    },
+    onSubmit: async ({ value }) => {
+      const filters = listDocumentsFiltersSchema.parse(value);
+      onFilterChange?.(filters);
     },
   });
 
   return (
     <Form form={form}>
-      <Collapsible asChild>
-        <form className="space-y-4" {...formDomEventHandlers(form)}>
-          <div className="flex gap-2 items-center">
+      <div className="flex flex-col gap-4">
+        {/* Top row - Search and Upload */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
             <FormField
-              name="name"
-              render={(field) => (
-                <FormItem className="flex-1">
-                  <FormControl>
-                    <Input
-                      name={field.name}
-                      onBlur={field.handleBlur}
-                      onChange={ev => field.handleChange(ev.target.value)}
-                      value={field.state.value ?? ''}
-                      placeholder="Search..."
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <CollapsibleTrigger className="group text-sm flex items-center py-1.5 hover:underline focus:underline outline-none">
-              Advanced Filters
-              <ChevronDownIcon className="size-4 mr-1 transition-transform group-data-[state=open]:rotate-180" />
-            </CollapsibleTrigger>
-          </div>
-          <CollapsibleContent className="py-2 space-y-4">
-            <FormField
-              name="source_uri"
+              name="search"
               render={(field) => (
                 <FormItem>
                   <FormControl>
                     <Input
                       name={field.name}
+                      className="h-8 text-sm w-[500px]"
                       onBlur={field.handleBlur}
                       onChange={ev => field.handleChange(ev.target.value)}
                       value={field.state.value ?? ''}
-                      placeholder="Search Source URI..."
+                      placeholder="Search name or source..."
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          form.handleSubmit();
+                        }
+                      }}
                     />
                   </FormControl>
-                  <FormMessage />
                 </FormItem>
               )}
             />
-            <div className="grid grid-cols-2 gap-4">
-              <FormField
-                name="mime_type"
-                render={(field) => (
-                  <FormItem>
-                    <FormControl>
-                      <Select value={field.state.value ?? ''} name={field.name} onValueChange={field.handleChange}>
-                        <SelectTrigger onBlur={field.handleBlur}>
-                          <SelectValue placeholder={<span className="text-muted-foreground">Select Document Type...</span>} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {mimeTypes.map(mime => (
-                            <SelectItem key={mime.value} value={mime.value}>
-                              {mime.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                name="index_status"
-                render={(field) => (
-                  <FormItem>
-                    <FormControl>
-                      <Select value={field.state.value ?? ''} name={field.name} onValueChange={field.handleChange}>
-                        <SelectTrigger onBlur={field.handleBlur}>
-                          <SelectValue placeholder={<span className="text-muted-foreground">Select Index Status...</span>} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {indexStatuses.map(indexStatus => (
-                            <SelectItem key={indexStatus} value={indexStatus}>
-                              {capitalCase(indexStatus)}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                name="created_at_start"
-                render={(field) => (
-                  <FormItem>
-                    <FormLabel>Created After</FormLabel>
-                    <FormControl>
-                      <Input
-                        name={field.name}
-                        onBlur={field.handleBlur}
-                        onChange={ev => field.handleChange(ev.target.valueAsDate)}
-                        type="datetime-local"
-                        value={field.state.value ?? ''}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                name="created_at_end"
-                render={(field) => (
-                  <FormItem>
-                    <FormLabel>Created Before</FormLabel>
-                    <FormControl>
-                      <Input
-                        name={field.name}
-                        onBlur={field.handleBlur}
-                        onChange={ev => field.handleChange(ev.target.valueAsDate)}
-                        type="datetime-local"
-                        value={field.state.value ?? ''}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                name="updated_at_start"
-                render={(field) => (
-                  <FormItem>
-                    <FormLabel>Updated After</FormLabel>
-                    <FormControl>
-                      <Input
-                        name={field.name}
-                        onBlur={field.handleBlur}
-                        onChange={ev => field.handleChange(ev.target.valueAsDate)}
-                        type="datetime-local"
-                        value={field.state.value ?? ''}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                name="updated_at_end"
-                render={(field) => (
-                  <FormItem>
-                    <FormLabel>Updated Before</FormLabel>
-                    <FormControl>
-                      <Input
-                        name={field.name}
-                        onBlur={field.handleBlur}
-                        onChange={ev => field.handleChange(ev.target.valueAsDate)}
-                        type="datetime-local"
-                        value={field.state.value ?? ''}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                name="last_modified_at_start"
-                render={(field) => (
-                  <FormItem>
-                    <FormLabel>Last Modified After</FormLabel>
-                    <FormControl>
-                      <Input
-                        name={field.name}
-                        onBlur={field.handleBlur}
-                        onChange={ev => field.handleChange(ev.target.valueAsDate)}
-                        type="datetime-local"
-                        value={field.state.value ?? ''}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                name="last_modified_at_end"
-                render={(field) => (
-                  <FormItem>
-                    <FormLabel>Last Modified Before</FormLabel>
-                    <FormControl>
-                      <Input
-                        name={field.name}
-                        onBlur={field.handleBlur}
-                        onChange={ev => field.handleChange(ev.target.valueAsDate)}
-                        type="datetime-local"
-                        value={field.state.value ?? ''}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
-          </CollapsibleContent>
-          <Button type="submit">Search</Button>
-        </form>
-      </Collapsible>
+            <Button 
+              type="submit" 
+              size="sm" 
+              className="h-8 px-3"
+              onClick={(e) => {
+                e.preventDefault();
+                form.handleSubmit();
+              }}
+            >
+              Search
+            </Button>
+          </div>
+          <div className="flex items-center gap-2">
+            <NextLink
+              href={`/knowledge-bases/${knowledgeBaseId}/data-sources/new?type=file`}
+              variant="secondary"
+              className="h-8 text-sm px-3"
+            >
+              <UploadIcon className="mr-2 size-3" />
+              Upload
+            </NextLink>
+          </div>
+        </div>
+
+        {/* Bottom row - Filters */}
+        <div className="flex items-center gap-2">
+
+          <FormField
+            name="mime_type"
+            render={(field) => (
+              <FormItem>
+                <Select value={field.state.value ?? ''} name={field.name} onValueChange={field.handleChange}>
+                  <SelectTrigger className="h-8 text-sm font-normal hover:bg-accent min-w-[120px]" onBlur={field.handleBlur}>
+                    <SelectValue placeholder="Document Type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {mimeTypes.map(mime => (
+                      <SelectItem key={mime.value} value={mime.value}>
+                        {mime.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            name="index_status"
+            render={(field) => (
+              <FormItem>
+                <Select value={field.state.value ?? ''} name={field.name} onValueChange={field.handleChange}>
+                  <SelectTrigger className="h-8 text-sm font-normal hover:bg-accent min-w-[120px]" onBlur={field.handleBlur}>
+                    <SelectValue placeholder="Index Status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {indexStatuses.map(indexStatus => (
+                      <SelectItem key={indexStatus} value={indexStatus}>
+                        {capitalCase(indexStatus)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            name="created_at"
+            render={(field) => (
+              <FormItem>
+                <DateRangePicker
+                  value={field.state.value ? { from: field.state.value[0], to: field.state.value[1] } : undefined}
+                  onChange={(range) => field.handleChange(range ? [range.from, range.to] : undefined)}
+                  placeholder="Created Time"
+                  className="w-[180px]"
+                  size="sm"
+                />
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            name="updated_at"
+            render={(field) => (
+              <FormItem>
+                <DateRangePicker
+                  value={field.state.value ? { from: field.state.value[0], to: field.state.value[1] } : undefined}
+                  onChange={(range) => field.handleChange(range ? [range.from, range.to] : undefined)}
+                  placeholder="Updated Time"
+                  className="w-[180px]"
+                  size="sm"
+                />
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            name="last_modified_at"
+            render={(field) => (
+              <FormItem>
+                <DateRangePicker
+                  value={field.state.value ? { from: field.state.value[0], to: field.state.value[1] } : undefined}
+                  onChange={(range) => field.handleChange(range ? [range.from, range.to] : undefined)}
+                  placeholder="Last Modified Time"
+                  className="w-[180px]"
+                  size="sm"
+                />
+              </FormItem>
+            )}
+          />
+
+          <Button 
+            variant="ghost" 
+            className="text-sm font-normal h-8 px-2 hover:bg-accent"
+            onClick={() => form.reset()}
+          >
+            Clear filters
+          </Button>
+        </div>
+      </div>
     </Form>
   );
 }
