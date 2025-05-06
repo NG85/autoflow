@@ -11,7 +11,7 @@ import requests
 from langfuse.llama_index import LlamaIndexInstrumentor
 from langfuse.llama_index._context import langfuse_instrumentor_context
 from llama_index.core import get_response_synthesizer
-from llama_index.core.base.llms.types import ChatMessage
+from llama_index.core.base.llms.types import ChatMessage, MessageRole
 from llama_index.core.schema import NodeWithScore
 from sqlmodel import Session
 from app.core.config import settings
@@ -31,7 +31,7 @@ from app.rag.chat.stream_protocol import (
     ChatStreamMessagePayload,
 )
 from app.rag.retrievers.knowledge_graph.schema import KnowledgeGraphRetrievalResult
-from app.rag.types import ChatEventType, MessageRole, ChatMessageSate
+from app.rag.types import ChatEventType, ChatMessageSate
 from app.rag.utils import parse_goal_response_format
 from app.repositories import chat_repo, knowledge_base_repo
 from app.site_settings import SiteSetting
