@@ -138,7 +138,7 @@ Knowledge Graph Context:
 Task:
 Transform the follow-up question into a precise, self-contained query that maximally utilizes available knowledge graph relationships and conversation context.
 
-Refinement Protocol:
+Core Guidelines:
 
 1. Entity and Relationship Analysis:
    - Identify central entities in the question and map to knowledge graph entities
@@ -172,11 +172,10 @@ Refinement Protocol:
    - Maintain original linguistic style and language
    - Include answer language hint in the refined question
 
-5. Output Formatting:
-   - When generating the final refined question, NEVER expose system internal relationship descriptors (like HANDLED_BY, BELONGS_TO, GENERATED_FROM, HAS_DETAIL)
-   - Use natural language to describe relationships in the final output
-   - Example: "客户'兰州银行'的'2024核心升级'商机关联的订单" instead of "客户-[GENERATED_FROM]->商机-[GENERATED_FROM]->订单"
-   - The internal relationship descriptors can be used in the thinking process (prompt chain) but should not appear in the final output
+5. Output Requirements:
+   - The refined query should be expressed in natural language, ensuring clarity and conversational flow.
+   - Include answer language hint.
+   - If applicable, note any permission limitations.
 
 Example Transformations:
 
@@ -278,7 +277,7 @@ Context Documents:
 <<context_str>>
 
 ---------------------
-RESPONSE GUIDELINES
+GENERAL FRAMEWORK
 ---------------------
 
 1. Answer Structure:
@@ -350,21 +349,21 @@ FORMATTING REQUIREMENTS
 ---------------------
 
 1. Answer Format:
-   - Use markdown footnote syntax (e.g., [^1]) for sources
-   - Each footnote must correspond to a unique source
+   - Use markdown footnote syntax (e.g., [^1]) for sources.
+   - Each footnote must correspond to a unique source.
    - Example: [^1]: [TiDB Overview | PingCAP Docs](https://docs.pingcap.com/tidb/stable/overview)
-   - Avoid excessive use of markdown graph formats as they reduce readability
+   - Footnotes should be placed at the bottom of the response.
+   - If no external source is applicable, omit footnotes gracefully.
+   - Tables are allowed to enhance clarity, but avoid using code blocks, graph blocks, or blockquotes in markdown unless the user explicitly requests them, to maintain natural language readability
 
 2. Language:
-   - Match the language of the original question unless specified otherwise
-
+   - Match the language of the original question unless specified otherwise.
+   - In mixed-language scenarios, prioritize the dominant language of the question.
+   
 3. Relationship Description:
-   - Always describe relationships in natural language without exposing internal descriptors
-   - Use business terminology instead of technical implementation details
-   - Examples:
-     • "张三是兰州银行的联系人" (not "张三-[BELONGS_TO]->兰州银行")
-     • "李四是该商机的负责人" (not "商机-[HANDLED_BY]->李四")
-     • "该订单来自2024核心升级商机" (not "订单-[GENERATED_FROM]->商机")
+   - Use natural language (not technical descriptors).
+   - Avoid semi-technical expressions like "subclass of"; prefer natural alternatives like "is a type of" or "belongs to".
+   - Ensure relationship explanations are easy to understand for non-technical readers.
 
 ---------------------
 INTERNAL GUIDELINES
@@ -472,6 +471,7 @@ Instructions:
 5. Use the same language with the chat message content.
 6. Each question should end with a question mark.
 7. Each question should be in a new line, DO NOT add any indexes or blank lines, just output the questions.
+8. If the original question is about Sia's capabilities or introduction, limit the follow-up questions to this topic without excessive guidance.
 
 Now, generate 2-3 follow-up questions below:
 """
