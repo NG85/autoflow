@@ -29,7 +29,7 @@ from app.models import (
     KnowledgeBase,
 )
 from app.repositories import (
-    embed_model_repo,
+    embedding_model_repo,
     llm_repo,
     data_source_repo,
     knowledge_base_repo,
@@ -77,7 +77,9 @@ def create_knowledge_base(
             create.llm_id = llm_repo.must_get_default(session).id
 
         if not create.embedding_model_id:
-            create.embedding_model_id = embed_model_repo.must_get_default(session).id
+            create.embedding_model_id = embedding_model_repo.must_get_default(
+                session
+            ).id
 
         knowledge_base = KnowledgeBase(
             name=create.name,
