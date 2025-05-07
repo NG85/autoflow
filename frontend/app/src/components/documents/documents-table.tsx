@@ -50,10 +50,10 @@ const getColumns = (kbId: number) => [
   helper.accessor('id', { header: "ID", cell: mono }),
   helper.display({
     id: 'name', 
-    header: 'NAME', 
+    header: 'NAME',
     cell: ({ row }) =>
       <DocumentPreviewDialog
-        title={row.original.source_uri}
+        title={row.original.name}
         name={row.original.name}
         mime={row.original.mime_type}
         content={row.original.content}
