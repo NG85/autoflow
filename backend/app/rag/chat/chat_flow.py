@@ -13,6 +13,8 @@ from langfuse.llama_index._context import langfuse_instrumentor_context
 from llama_index.core import get_response_synthesizer
 from llama_index.core.base.llms.types import ChatMessage, MessageRole
 from llama_index.core.schema import NodeWithScore
+from llama_index.core.prompts.rich import RichPromptTemplate
+
 from sqlmodel import Session
 from app.core.config import settings
 from app.exceptions import ChatNotFound
@@ -36,7 +38,6 @@ from app.rag.types import ChatEventType, ChatMessageSate
 from app.rag.utils import parse_goal_response_format
 from app.repositories import chat_repo, knowledge_base_repo
 from app.site_settings import SiteSetting
-from app.utils.jinja2 import get_prompt_by_jinja2_template
 from app.utils.tracing import LangfuseContextManager
 from app.rag import default_prompt
 from app.rag.chat.crm_authority import CRMAuthority, get_user_crm_authority
@@ -539,14 +540,13 @@ class ChatFlow:
                     ),
                 )
 
+            prompt_template = RichPromptTemplate(refined_question_prompt)
             refined_question = self._fast_llm.predict(
-                get_prompt_by_jinja2_template(
-                    refined_question_prompt,
-                    graph_knowledges=knowledge_graph_context,
-                    chat_history=chat_history,
-                    question=user_question,
-                    current_date=datetime.now().strftime("%Y-%m-%d"),
-                ),
+                prompt_template,
+                graph_knowledges=knowledge_graph_context,
+                chat_history=chat_history,
+                question=user_question,
+                current_date=datetime.now().strftime("%Y-%m-%d"),
             )
 
             if not annotation_silent:
@@ -587,19 +587,18 @@ class ChatFlow:
                 "knowledge_graph_context": knowledge_graph_context,
             },
         ) as span:
-            clarity_result = (
-                self._fast_llm.predict(
-                    prompt=get_prompt_by_jinja2_template(
-                        self.engine_config.llm.clarifying_question_prompt,
-                        graph_knowledges=knowledge_graph_context,
-                        chat_history=chat_history,
-                        question=user_question,
-                    ),
-                )
-                .strip()
-                .strip(".\"'!")
+            prompt_template = RichPromptTemplate(
+                self.engine_config.llm.clarifying_question_prompt
             )
 
+            prediction = self._fast_llm.predict(
+                prompt_template,
+                graph_knowledges=knowledge_graph_context,
+                chat_history=chat_history,
+                question=user_question,
+            )
+            # TODO: using structured output to get the clarity result.
+            clarity_result = prediction.strip().strip(".\"'!")
             need_clarify = clarity_result.lower() != "false"
             need_clarify_response = clarity_result if need_clarify else ""
 
@@ -656,12 +655,10 @@ class ChatFlow:
         ) as span:
             # Use LLM to generate a fallback response if no relevant chunks are found.
             if not relevant_chunks or len(relevant_chunks) == 0:
-                fallback_prompt = default_prompt.FALLBACK_PROMPT
+                fallback_prompt = RichPromptTemplate(default_prompt.FALLBACK_PROMPT)
                 no_content_message = self._fast_llm.predict(
-                    prompt=get_prompt_by_jinja2_template(
-                        fallback_prompt,
-                        original_question=user_question,
-                    )
+                    fallback_prompt,
+                    original_question=user_question,
                 )
                 yield ChatEvent(
                     event_type=ChatEventType.TEXT_PART,
@@ -676,8 +673,10 @@ class ChatFlow:
                 return no_content_message, []
                 
             # Initialize response synthesizer.
-            text_qa_template = get_prompt_by_jinja2_template(
-                self.engine_config.llm.text_qa_prompt,
+            text_qa_template = RichPromptTemplate(
+                template_str=self.engine_config.llm.text_qa_prompt
+            )
+            text_qa_template = text_qa_template.partial_format(
                 current_date=datetime.now().strftime("%Y-%m-%d"),
                 graph_knowledges=knowledge_graph_context,
                 original_question=self.user_question,
@@ -1073,13 +1072,12 @@ class ChatFlow:
                 )
 
             # Analyze the question
+            prompt_template = self.engine_config.llm.analyze_competitor_related_prompt
             analysis_result = self._fast_llm.predict(
-                get_prompt_by_jinja2_template(
-                    self.engine_config.llm.analyze_competitor_related_prompt,
-                    question=user_question,
-                    chat_history=chat_history,
-                    current_date=datetime.now().strftime("%Y-%m-%d"),
-                )
+                prompt_template,
+                question=user_question,
+                chat_history=chat_history,
+                current_date=datetime.now().strftime("%Y-%m-%d"),
             )
                        
             try:
