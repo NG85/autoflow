@@ -199,8 +199,9 @@ def build_crm_graph_index_for_document(
             # 如果订单有客户/商机/负责人信息，创建一个简单的Account/Opportunity/InternalOwner数据（从订单信息中提取）
             customer_name = order_data.get("customer_name")
             opportunity_name = order_data.get("opportunity_name")
-            owner = order_data.get("owner")# owner字段已经是json类型
-            if customer_name or opportunity_name or owner:
+            owner_str = order_data.get("owner")
+            if customer_name or opportunity_name or owner_str:
+                owner = _parse_owner(owner_str=owner_str)
                 secondary_data = {
                     "account_id": order_data.get("customer_id"),
                     "account_name": customer_name,
@@ -230,8 +231,9 @@ def build_crm_graph_index_for_document(
             
             # 如果回款计划有订单/负责人信息，创建一个简单的Order/InternalOwner数据（从回款计划信息中提取）
             order_id = payment_plan_data.get("order_id")
-            owner = payment_plan_data.get("owner")# owner字段已经是json类型
-            if order_id or owner:
+            owner_str = payment_plan_data.get("owner")
+            if order_id or owner_str:
+                owner = _parse_owner(owner_str=owner_str)
                 secondary_data = {
                     "order_id": order_id,
                     "order_amount": payment_plan_data.get("order_amount"),
@@ -326,7 +328,23 @@ def _parse_owner(owner_str: str) -> List[str]:
     if not owner_str:
         return []
     try:
+        # First try to parse as JSON
         return json.loads(owner_str)
     except json.JSONDecodeError:
-        logger.error(f"Failed to parse owner: {owner_str}")
-        return []
+        try:
+            # If JSON parsing fails, try to parse string format like "['李玉龙']"
+            if owner_str.startswith('[') and owner_str.endswith(']'):
+                # Remove brackets and split by comma
+                content = owner_str[1:-1].strip()
+                if not content:
+                    return []
+                # Handle single item case
+                if not content.startswith("'") and not content.startswith('"'):
+                    return [content]
+                # Split by comma and clean up quotes
+                items = [item.strip().strip("'").strip('"') for item in content.split(',')]
+                return [item for item in items if item]
+            return [owner_str]
+        except Exception:
+            logger.error(f"Failed to parse owner: {owner_str}")
+            return []
