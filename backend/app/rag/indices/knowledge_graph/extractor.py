@@ -101,39 +101,10 @@ class Extractor(dspy.Module):
         self.dspy_lm = dspy_lm
         self.prog_graph = Predict(ExtractGraphTriplet)
         self.prog_covariates = Predict(ExtractCovariate)
-    
-
-    def get_llm_output_config(self):
-        if "openai" in self.dspy_lm.provider.lower():
-            return {
-                "response_format": {"type": "json_object"},
-            }
-        elif "ollama" in self.dspy_lm.provider.lower():
-            # ollama support set format=json in the top-level request config, but not in the request's option
-            # https://github.com/ollama/ollama/blob/5e2653f9fe454e948a8d48e3c15c21830c1ac26b/api/types.go#L70
-            return {}
-        elif "bedrock" in self.dspy_lm.provider.lower():
-            # Fix: add bedrock branch to fix 'Malformed input request' error
-            # subject must not be valid against schema {"required":["messages"]}: extraneous key [response_mime_type] is not permitted
-            return {"max_tokens": 8192}
-        elif "giteeai" in self.dspy_lm.provider.lower() or "qwen" in self.dspy_lm.model_name.lower():
-            # For Qwen models via GiteeAI or other providers, use a simplified format
-            # to ensure proper JSON structure with metadata as a dictionary
-            return {
-                "response_format": {"type": "json_object"},
-                "max_tokens": 8192,
-            }
-        else:
-            return {
-                "response_mime_type": "application/json",
-            }
 
     def forward(self, text):
         with dspy.settings.context(lm=self.dspy_lm):
-            pred_graph = self.prog_graph(
-                text=text,
-                config=self.get_llm_output_config(),
-            )
+            pred_graph = self.prog_graph(text=text)
                     
             logger.debug(f"Debug: Predicted graph output: {pred_graph}")
             # extract the covariates
@@ -149,7 +120,6 @@ class Extractor(dspy.Module):
                 pred_covariates = self.prog_covariates(
                     text=text,
                     entities=entities_for_covariates,
-                    config=self.get_llm_output_config(),
                 )
                 logger.debug((f"Debug: prog_covariates output before JSON parsing: {pred_covariates}"))
             except Exception as e:
