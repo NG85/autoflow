@@ -20,44 +20,41 @@ class CRMKnowledgeGraphBuilder:
     def create_account_entity(self, account_data: Dict) -> AccountEntity:
         """Create account entity."""
         account_name = account_data.get("account_name") or account_data.get("customer_name")
+        
+        metadata = {}
+        metadata["account_name"] = account_name
+        if "account_id" in account_data:
+            metadata["account_id"] = account_data["account_id"]
+
         return AccountEntity(
             id=None,
             name=account_name,
             description=f"客户{account_name}",
-            metadata=account_data
+            metadata=metadata
         )
-    
+
     def create_internal_owner_entity(self, data: Dict) -> List[InternalOwnerEntity]:
         """Create internal owner entity."""
-        metadata = deepcopy(data)
-        for key in [
-            "account_id",
-            "account_name",
-            "opportunity_id",
-            "opportunity_name",
-            "order_id",
-            "order_amount",
-            "chunk_id",
-            "document_id",            
-        ]:
-            metadata.pop(key, None)
-        internal_owner = metadata.get("internal_owner")
-        internal_department = metadata.get("internal_department")
+        internal_owner = data.get("internal_owner")
+        internal_department = data.get("internal_department")
         if not internal_owner:
             return []
-        
-        owners = internal_owner if isinstance(internal_owner, list) else [internal_owner]
+
+        owners = internal_owner if isinstance(internal_owner, list) else [internal_owner]                    
         return [
             InternalOwnerEntity(
                 id=None,
                 name=owner,
                 description=f"我方对接人{owner}" + (f", 主属部门{internal_department}" if internal_department else ""),
-                metadata=metadata
+                metadata={
+                    "internal_owner": owner,
+                    "internal_department": internal_department,
+                }
             )
             for owner in owners
             if owner != ''
         ]
-        
+                
     def create_account_detail_entity(self, account_data: Dict) -> AccountEntity:
         """Create account detail entity."""
         account_name = account_data.get("account_name") or account_data.get("customer_name")
@@ -71,11 +68,17 @@ class CRMKnowledgeGraphBuilder:
     def create_contact_entity(self, contact_data: Dict) -> ContactEntity:
         """Create contact entity."""
         contact_name = contact_data.get("contact_name") or contact_data.get("name")
+        
+        metadata = {}
+        metadata["contact_name"] = contact_name
+        if "contact_id" in contact_data:
+            metadata["contact_id"] = contact_data["contact_id"]
+
         return ContactEntity(
             id=None,
             name=contact_name,
             description=f"联系人{contact_name}",
-            metadata=contact_data
+            metadata=metadata
         )
         
     def create_contact_detail_entity(self, contact_data: Dict) -> ContactEntity:
@@ -91,11 +94,17 @@ class CRMKnowledgeGraphBuilder:
     def create_opportunity_entity(self, opportunity_data: Dict) -> OpportunityEntity:
         """Create opportunity entity."""
         opportunity_name = opportunity_data.get("opportunity_name")
+        
+        metadata = {}
+        metadata["opportunity_name"] = opportunity_name
+        if "opportunity_id" in opportunity_data:
+            metadata["opportunity_id"] = opportunity_data["opportunity_id"]
+            
         return OpportunityEntity(
             id=None,
             name=opportunity_name,
             description=f"商机{opportunity_name}",
-            metadata=opportunity_data
+            metadata=metadata
         )
     
     def create_opportunity_detail_entity(self, opportunity_data: Dict) -> OpportunityEntity:
@@ -111,21 +120,35 @@ class CRMKnowledgeGraphBuilder:
     def create_opportunity_updates_entity(self, opportunity_updates_data: Dict) -> OpportunityUpdatesEntity:
         """Create opportunity updates entity."""
         opportunity_name = opportunity_updates_data.get("opportunity_name")
+        
+        metadata = {}
+        metadata["opportunity_name"] = opportunity_name
+        if "opportunity_id" in opportunity_updates_data:
+            metadata["opportunity_id"] = opportunity_updates_data["opportunity_id"]
+
         return OpportunityUpdatesEntity(
             id=None,
             name=f"商机{opportunity_name}的活动更新记录",
             description=f"关于商机{opportunity_name}的销售活动更新记录，包括活动更新类型及时间、下一步行动计划、关键干系人、成单概率等",
-            metadata=opportunity_updates_data
+            metadata=metadata
         )
 
     def create_order_entity(self, order_data: Dict) -> OrderEntity:
         """Create order entity."""
         order_name = order_data.get("sales_order_number") or order_data.get("order_id")
+        
+        metadata = {}
+        metadata["order_name"] = order_name
+        if "order_id" in order_data:
+            metadata["order_id"] = order_data["order_id"]
+        if "order_amount" in order_data:
+            metadata["order_amount"] = order_data["order_amount"]
+
         return OrderEntity(
             id=None,
             name=order_name,
             description=f"订单{order_name}",
-            metadata=order_data
+            metadata=metadata
         )
         
     def create_order_detail_entity(self, order_data: Dict) -> OrderEntity:
@@ -138,15 +161,22 @@ class CRMKnowledgeGraphBuilder:
             metadata=order_data
         )
     
-    def create_payment_plan_entity(self, payment_plan_data: Dict) -> PaymentPlanEntity:
-        """Create payment plan entity."""
-        payment_plan_name = payment_plan_data.get("name") or payment_plan_data.get("payment_plan_id")
-        return PaymentPlanEntity(
-            id=None,
-            name=payment_plan_name, 
-            description=f"回款计划{payment_plan_name}",
-            metadata=payment_plan_data
-        )
+    # def create_payment_plan_entity(self, payment_plan_data: Dict) -> PaymentPlanEntity:
+    #     """Create payment plan entity."""
+    #     payment_plan_name = payment_plan_data.get("name") or payment_plan_data.get("payment_plan_id")
+        
+    #     metadata = {}
+    #     if "payment_plan_id" in payment_plan_data:
+    #         metadata["payment_plan_id"] = payment_plan_data["payment_plan_id"]
+    #     if "unique_id" in payment_plan_data:
+    #         metadata["unique_id"] = payment_plan_data["unique_id"]
+
+    #     return PaymentPlanEntity(
+    #         id=None,
+    #         name=payment_plan_name, 
+    #         description=f"回款计划{payment_plan_name}",
+    #         metadata=metadata
+    #     )
         
     def create_payment_plan_detail_entity(self, payment_plan_data: Dict) -> PaymentPlanEntity:
         """Create payment plan detail entity."""
@@ -434,32 +464,32 @@ class CRMKnowledgeGraphBuilder:
                     }
             })
             if secondary_data:
-                # 如果客户实体存在，创建订单-客户关系
-                if secondary_data.get("account_name"):
-                    account_entity = self.create_account_entity(secondary_data)
-                    entities_data.append({
-                        "name": account_entity.name,
-                        "description": account_entity.description,
-                        "meta": account_entity.metadata,
-                        "graph_type": GraphType.crm
-                    })
-                    relationships_data.append({
-                        "source_entity": order_detail_entity.name,
-                        "target_entity": account_entity.name,
-                        "source_entity_description": order_detail_entity.description,
-                        "target_entity_description": account_entity.description,
-                        "relationship_desc": f"订单{order_detail_entity.name}来自于客户{account_entity.name}",
-                        "meta": {
-                            **meta,
-                            "document_id": document_id,
-                            "chunk_id": chunk_id,
-                            "relation_type": "GENERATED_FROM",
-                            "crm_data_type": crm_data_type,
-                            "source_type": CrmDataType.ORDER,
-                            "target_type": CrmDataType.ACCOUNT,
-                            "unique_id": order_detail_entity.metadata.get("unique_id") or order_detail_entity.metadata.get("sales_order_number")
-                        }
-                    })
+                # # 如果客户实体存在，创建订单-客户关系
+                # if secondary_data.get("account_name"):
+                #     account_entity = self.create_account_entity(secondary_data)
+                #     entities_data.append({
+                #         "name": account_entity.name,
+                #         "description": account_entity.description,
+                #         "meta": account_entity.metadata,
+                #         "graph_type": GraphType.crm
+                #     })
+                #     relationships_data.append({
+                #         "source_entity": order_detail_entity.name,
+                #         "target_entity": account_entity.name,
+                #         "source_entity_description": order_detail_entity.description,
+                #         "target_entity_description": account_entity.description,
+                #         "relationship_desc": f"订单{order_detail_entity.name}来自于客户{account_entity.name}",
+                #         "meta": {
+                #             **meta,
+                #             "document_id": document_id,
+                #             "chunk_id": chunk_id,
+                #             "relation_type": "GENERATED_FROM",
+                #             "crm_data_type": crm_data_type,
+                #             "source_type": CrmDataType.ORDER,
+                #             "target_type": CrmDataType.ACCOUNT,
+                #             "unique_id": order_detail_entity.metadata.get("unique_id") or order_detail_entity.metadata.get("sales_order_number")
+                #         }
+                #     })
                 # 如果商机实体存在，创建订单-商机关系
                 if secondary_data.get("opportunity_name"):
                     opportunity_entity = self.create_opportunity_entity(secondary_data)

@@ -203,8 +203,8 @@ def build_crm_graph_index_for_document(
             if customer_name or opportunity_name or owner_str:
                 owner = _parse_owner(owner_str=owner_str)
                 secondary_data = {
-                    "account_id": order_data.get("customer_id"),
-                    "account_name": customer_name,
+                    # "account_id": order_data.get("customer_id"),
+                    # "account_name": customer_name,
                     "opportunity_id": order_data.get("opportunity_id"),
                     "opportunity_name": opportunity_name,
                     "internal_owner": owner,
