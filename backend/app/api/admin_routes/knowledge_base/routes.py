@@ -7,8 +7,6 @@ from app.rag.knowledge_base.index_store import (
     init_kb_tidb_vector_store,
     init_kb_tidb_graph_store,
 )
-from app.repositories.embedding_model import embed_model_repo
-from app.repositories.llm import llm_repo
 from app.models.enums import GraphType
 
 from .models import (
