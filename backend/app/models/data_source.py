@@ -20,6 +20,7 @@ class DataSourceType(str, Enum):
     FILE = "file"
     WEB_SITEMAP = "web_sitemap"
     WEB_SINGLE_PAGE = "web_single_page"
+    CRM = "crm"
 
 
 class DataSource(UpdatableBaseModel, table=True):

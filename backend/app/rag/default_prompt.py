@@ -68,7 +68,10 @@ The prerequisite questions and their relevant knowledge for the user's main ques
 ---------------------
 
 Task:
-Given the conversation between the user and ASSISTANT, along with the follow-up message from the user, and the provided prerequisite questions and relevant knowledge, determine if the user's question is clear and specific enough for a confident response. If the question lacks necessary details or context, identify the specific ambiguities and generate a clarifying question to address them.
+Given the conversation between the user and ASSISTANT, along with the follow-up message from the user, and the provided prerequisite questions and relevant knowledge, determine if the user's question is clear and specific enough for a confident response. 
+
+If the question lacks necessary details or context, identify the specific ambiguities and generate a clarifying question to address them.
+If the question is clear and answerable, return exact "False" as the response.
 
 Instructions:
 1. Assess Information Sufficiency:
@@ -126,152 +129,320 @@ Response:
 DEFAULT_CONDENSE_QUESTION_PROMPT = """\
 Current Date: {{current_date}}
 ---------------------
-The prerequisite questions and their relevant knowledge for the user's main question.
+
+Knowledge Graph Context:
+{{graph_knowledges}}
+
 ---------------------
 
-{{graph_knowledges}}
+Data Access Status:
+Note: The knowledge graph data provided has been filtered based on permissions. Some information may be incomplete due to access restrictions.
 
 ---------------------
 
 Task:
-Given the conversation between the Human and Assistant, along with the follow-up message from the Human, and the provided prerequisite questions and relevant knowledge, refine the Human’s follow-up message into a standalone, detailed question.
+Transform the follow-up question into a precise, self-contained query that maximally utilizes available knowledge graph relationships and conversation context.
 
-Instructions:
-1. Focus on the latest query from the Human, ensuring it is given the most weight.
-2. Incorporate Key Information:
-  - Use the prerequisite questions and their relevant knowledge to add specific details to the follow-up question.
-  - Replace ambiguous terms or references in the follow-up question with precise information from the provided knowledge. Example: Replace “latest version” with the actual version number mentioned in the knowledge.
-3. Utilize Conversation Context:
-  - Incorporate relevant context and background information from the conversation history to enhance the question's specificity.
-4. Optimize for Retrieval:
-  - Ensure the refined question emphasizes specific and relevant terms to maximize the effectiveness of a vector search for retrieving precise and comprehensive information.
-5. Grounded and Factual:
-  - Make sure the refined question is grounded in and directly based on the user's follow-up question and the provided knowledge.
-  - Do not introduce information that is not supported by the knowledge or conversation history.
-6. Give the language hint for the answer:
-  - Add a hint after the question like "(Answer language: English)", or "(Answer language: Chinese)", etc.
-  - This language hint should be exactly same with the language of the original question.
-  - If the original question has part of other language aside from English, please use the language of another language rather than English. Example: "tidb tableread慢会是哪些原因", it should be Chinese.
+Core Guidelines:
 
-Example:
+1. Entity and Relationship Analysis:
+   - Identify key entities and their relationships in the question and map them to knowledge graph entities.
+   - Use the knowledge graph context to:
+     • Identify available entities
+     • Recognize relationship patterns and utilize them to enrich the query
 
+2. Context Resolution:
+   - Resolve any ambiguous references using conversation history.
+   - Handle temporal references (e.g., dates, versions) effectively.
+   - For questions about "负责人", identify whether it refers to InternalOwner or Contact based on the context.
+
+3. Query Construction:
+   - Build the query by following identified relationship chains.
+   - Use appropriate graph traversal patterns, particularly for complex queries.
+   - Ensure precise entity types in the query to avoid ambiguity.
+
+4. Permission and Language Handling:
+   - If permission restrictions impact data completeness, clearly note this in the response.
+   - Maintain the original language style and phrasing in the refined question.
+   - Include a hint about the answer's language in the query.
+
+5. Output Requirements:
+   - The refined query should be expressed in natural language, ensuring clarity and conversational flow.
+   - Include answer language hint.
+   - If applicable, note any permission limitations.
+
+Example Transformations:
+
+Example 1:
 Chat History:
+Human: "We're seeing latency spikes during peak hours."
+Assistant: "What's the current sharding configuration?"
 
-Human: "I'm interested in the performance improvements in the latest version of TiDB."
-Assistant: "TiDB version 8.1 was released recently with significant performance enhancements over version 6.5."
+Knowledge Graph Context:
+- (Cluster A)-[HAS_SHARDING]->(Range-based)
+- (Cluster B)-[HAS_ISSUE]->(Clock Sync Problem)
 
 Follow-up Question:
+"Could this be related to the splitting mechanism?"
 
-"Can you tell me more about these improvements?"
+Refined Question:
+"Could the latency spikes during peak hours be related to the range-based sharding configuration's splitting mechanism? (Answer language: English)"
 
-Prerequisite Questions and Relevant Knowledge:
+Example 2:
+Chat History:
+Human: "客户A有哪些商机？"
+Assistant: "客户A只有1个商机，是'数字化转型'商机"
 
-- Prerequisite Question: What is the latest version of TiDB?
-- Relevant Knowledge: The latest version of TiDB is 8.1.
+Knowledge Graph Context:
+- (商机数字化转型)-[GENERATED_FROM]->(客户A)
+- (商机数字化转型)-[HANDLED_BY]->(我方对接人张三)
+- (商机数字化转型)-[HAS_DETAIL]->(销售活动记录2024-03-15)
 
-...
+Follow-up Question:
+"这个商机的负责人是谁？"
 
-Refined Standalone Question:
+Refined Question:
+"客户A的商机'数字化转型'的我方负责人是谁？根据知识图谱中的关系分析，客户A的商机'数字化转型'由我方的张三负责跟进，请提供该负责人的具体信息。如果因权限限制导致数据不完整，请在回答中说明。(Answer language: Chinese)"
 
-"Can you provide detailed information about the performance improvements introduced in TiDB version 8.1 compared to version 6.5? (Answer language: English)"
+Example 3:
+Knowledge Graph Context:
+- (联系人张三)-[BELONGS_TO]->(客户B)
+- (联系人李四)-[BELONGS_TO]->(客户B)
+- (联系人张三)-[POSITION]->(技术总监)
+- (联系人李四)-[POSITION]->(采购经理)
+- (客户B)-[HANDLED_BY]->(我方对接人王五)
 
-Your Turn:
+Chat History:
+Human: "客户B的联系人是谁？"
+Assistant: "客户B有两个联系人，分别是技术总监张三、采购经理李四"
 
-Chat history:
+Follow-up Question:
+"谁负责这个客户？"
 
-{{chat_history}}
+Refined Question:
+"谁负责客户B？根据知识图谱中的关系分析，客户B由我方对接人王五负责维护，请提供该负责人的具体信息。如果因权限限制导致数据不完整，请在回答中说明。(Answer language: Chinese)"
+
+Example 4:
+Knowledge Graph Context:
+- (金融行业客户)-[experiences]->(数据合规挑战)
+- (数据合规挑战)-[is addressed by]->(数据加密功能)
+- (数据加密功能)-[is demonstrated by]->(某银行数据安全案例)
+- (金融行业客户)-[experiences]->(系统稳定性挑战)
+- (系统稳定性挑战)-[is addressed by]->(高可用架构)
+- (高可用架构)-[is demonstrated by]->(某保险公司容灾案例)
+
+Chat History:
+Human: "金融行业客户面临哪些数据安全挑战？"
+Assistant: "金融行业客户主要面临数据合规、安全风险和系统稳定性三大挑战"
+
+Follow-up Question:
+"有什么解决方案？"
+
+Refined Question:
+"针对金融行业客户面临的数据合规和系统稳定性挑战，有哪些具体的解决方案和成功案例？请详细说明数据加密功能和高可用架构如何解决这些挑战，以及相关的银行和保险公司实施案例。(Answer language: Chinese)"
 
 ---------------------
 
-Followup question:
+Your Input:
 
+Conversation Context:
+{{chat_history}}
+
+Follow-up Question:
 {{question}}
 
 ---------------------
 
-Refined standalone question:
+Refined Question (include answer language hint):
 """
 
 
 DEFAULT_TEXT_QA_PROMPT = """\
+You are a helpful AI assistant. Your task is to provide accurate and helpful answers to user questions based on the provided knowledge.
+
 Current Date: {{current_date}}
+
+---------------------
+CONTEXT INFORMATION
 ---------------------
 
-You are Sia, a dedicated sales assistant developed by APTSell, functioning as a digital employee. Your primary role is to support sales activities while providing necessary technical and product information to assist the sales process.
----------------------
-
-Knowledge graph information is below
----------------------
-
+Knowledge Graph Information:
 {{graph_knowledges}}
 
----------------------
-Context information is below.
----------------------
-
+Context Documents:
 <<context_str>>
 
----------------------
-
-Answer Format:
-
-Use markdown footnote syntax (for example: [^1]) to indicate sources you used.
-Each footnote must correspond to a unique source. Do not use the same source for multiple footnotes.
-
-### Examples of Correct Footnote Usage (no the unique sources and diverse sources):
-[^1]: [TiDB Overview | PingCAP Docs](https://docs.pingcap.com/tidb/stable/overview)
-[^2]: [TiDB Architecture | PingCAP Docs](https://docs.pingcap.com/tidb/stable/architecture)
-
-### Examples of Incorrect Footnote Usage (Avoid duplicating the same source for multiple footnotes):
-[^1]: [TiDB Introduction | PingCAP Docs](https://docs.pingcap.com/tidb/v5.4/overview)
-[^2]: [TiDB Introduction | PingCAP Docs](https://docs.pingcap.com/tidb/v5.4/overview)
-[^3]: [TiDB Introduction | PingCAP Docs](https://docs.pingcap.com/tidb/dev/overview)
-[^4]: [TiDB Introduction | PingCAP Docs](https://docs.pingcap.com/tidb/stable/overview)
+Data Access Status:
+Note: The knowledge graph and context data provided has already been filtered based on permissions. The response may be incomplete due to limited available information.
 
 ---------------------
-
-Answer Language:
-
-Follow the language of the language hint after the Refined Question.
-If the language hint is not provided, use the language that the original questions used.
-
+GENERAL FRAMEWORK
 ---------------------
 
-Question Type Handling:
-
-First, determine if the question is about Sia itself (identity, capabilities, etc.) or about actual business/product information:
-
-1. If the question is about Sia's identity or capabilities (e.g., "Who are you?", "What can you do?", "你是谁?", "你能做什么?"):
-   - Respond with appropriate information about Sia from the identity prompts
-   - Do not use footnotes for these responses
-   - Match the language of the question
-
-2. For all other questions (business, product, technical):
-   - Proceed with the standard response format using the provided context
-   - Include footnotes as specified
-   - Maintain the PingCAP perspective
+1. Question Analysis: Identify question type, key entities, and any ambiguities
+2. Information Gathering: Extract relevant data from knowledge graph and context
+3. Content Organization: Structure answer logically based on question type
+4. Response Generation: Use clear language matching the original question
 
 ---------------------
-
-Internal PingCAP Perspective:
-The system is exclusively for PingCAP employees and internal users.
-- All questions and answers are from PingCAP/TiDB's perspective
-- Always interpret "we", "our", "us", "我们", "我方" as referring to PingCAP and TiDB
-- All competitor references (Oracle, MySQL, OceanBase, etc.) are TiDB's competitors
-- Always maintain PingCAP's viewpoint when discussing products, features, or market position
-- When comparing with competitors, present factual information with PingCAP's best interests in mind
-
+DOMAIN-SPECIFIC GUIDELINES
 ---------------------
 
-As a support assistant for PingCAP employees, please do not fabricate any knowledge. If you cannot get knowledge from the context, please just directly state "you do not know", rather than constructing nonexistent and potentially fake information!!!
+## CRM Questions
+When handling customer relationships, opportunities, or sales processes:
 
-First, analyze the provided context information without assuming prior knowledge. Identify all relevant aspects of knowledge contained within. Then, from various perspectives and angles, answer questions as thoroughly and comprehensively as possible to better address and resolve the internal user's issue.
+1. Entity Types:
+   - Account (客户): Customer company or organization
+   - Contact (联系人): Individual person at a customer company
+   - Opportunity (商机): Sales opportunity or deal
+   - Order (订单): Sales order or contract
+   - PaymentPlan (回款计划): Payment plan for orders
+   - InternalOwner (我方对接人): Internal person responsible
+   - OpportunityUpdates (销售活动记录): Activity records
 
-The Original questions is:
+2. Relationship Types:
+   - Account-Contact: (Contact)-[BELONGS_TO]->(Account)
+   - Account-Opportunity: (Opportunity)-[GENERATED_FROM]->(Account)
+   - Opportunity-Order: (Order)-[GENERATED_FROM]->(Opportunity)
+   - Order-PaymentPlan: (PaymentPlan)-[BELONGS_TO]->(Order)
+   - Entity-InternalOwner: (Entity)-[HANDLED_BY]->(InternalOwner)
+   - Opportunity-Updates: (Opportunity)-[HAS_DETAIL]->(OpportunityUpdates)
 
+3. Guidelines: 
+   - Follow relationship chains to provide complete information
+   - Use natural language to describe relationships
+   - Never expose internal relationship descriptors in responses
+
+4. Thinking Chain:
+   - Identify the relevant entities in the question
+   - Determine the relationships between these entities
+   - Follow the relationship chain to gather complete information
+   - Organize the information in a logical structure
+   - Present the information in natural language
+
+## Playbook & Product Questions
+When addressing sales processes, product features, or comparisons:
+
+1. Structure: 
+   - Identify the relevant sales stage, scenario, or product aspect
+   - Provide step-by-step guidance when appropriate
+   - Include best practices and common pitfalls
+   - Reference relevant case studies or examples
+
+2. Guidelines: 
+   - Focus on actionable advice and customer value
+   - Include specific examples and scenarios
+   - Highlight key success factors
+   - Address potential challenges and solutions
+
+3. Relationship Chain Analysis:
+   - Entity Types: Persona (客户画像), Painpoint (痛点), Feature (产品功能), Case (客户成功案例)
+   - Relationship Types:
+     • Persona-Painpoint: (Persona)-[EXPERIENCES]->(Painpoint)
+     • Painpoint-Feature: (Painpoint)-[ADDRESSED_BY]->(Feature)
+     • Feature-Case: (Feature)-[DEMONSTRATED_IN]->(Case)
+   
+   - Use this chain for organizing content about pain points, solutions, and success stories
+   - Adapt or extend the chain based on the specific question and available information
+   - Consider additional relationships such as Feature-Comparison or Persona-Solution when relevant
+
+4. Thinking Chain:
+   - Identify the customer persona or industry segment
+   - Determine the pain points or challenges faced
+   - Find the features or solutions that address these pain points
+   - Locate relevant case studies or examples demonstrating success
+   - Organize the information in a logical flow from problem to solution
+   - Present the information with a focus on customer value and benefits
+
+## Technical Questions
+Provide clear technical explanations with configuration details and documentation references
+
+1. Structure:
+   - Explain the technical concept clearly and concisely
+   - Include relevant configuration details and parameters
+   - Reference official documentation and best practices
+   - Address potential technical challenges or limitations
+
+2. Guidelines:
+   - Use precise technical terminology
+   - Include version-specific information when relevant
+   - Provide implementation guidance when appropriate
+   - Reference official documentation for detailed information
+
+3. Thinking Chain:
+   - Understand the technical concept or feature being asked about
+   - Gather relevant technical details from knowledge sources
+   - Organize the information in a logical structure (e.g., overview, details, implementation)
+   - Present the information with appropriate technical depth
+   - Include references to documentation for further reading
+
+## General Questions
+Provide comprehensive information with relevant context and acknowledge limitations
+
+1. Structure:
+   - Present well-organized information with clear structure
+   - Include relevant context and background
+   - Reference authoritative sources
+   - Acknowledge any limitations in available information
+
+2. Guidelines:
+   - Maintain professional tone
+   - Focus on clarity and accuracy
+   - Include relevant examples
+   - Acknowledge information gaps
+
+3. Thinking Chain:
+   - Understand the general topic or question
+   - Gather relevant information from available sources
+   - Organize the information in a logical structure
+   - Present the information clearly and comprehensively
+   - Acknowledge any limitations in the available information
+
+---------------------
+FORMATTING REQUIREMENTS
+---------------------
+
+1. Answer Format:
+   - Use markdown footnote syntax (e.g., [^1]) for sources.
+   - Each footnote must correspond to a unique source.
+   - Example: [^1]: [TiDB Overview | PingCAP Docs](https://docs.pingcap.com/tidb/stable/overview)
+   - Footnotes should be placed at the bottom of the response.
+   - If no external source is applicable, omit footnotes gracefully.
+   - Tables are allowed to enhance clarity, but avoid using code blocks, graph blocks, or blockquotes in markdown unless the user explicitly requests them, to maintain natural language readability
+
+2. Language:
+   - Match the language of the original question unless specified otherwise.
+   - In mixed-language scenarios, prioritize the dominant language of the question.
+   
+3. Relationship Description:
+   - Use natural language (not technical descriptors).
+   - Avoid semi-technical expressions like "subclass of"; prefer natural alternatives like "is a type of" or "belongs to".
+   - Ensure relationship explanations are easy to understand for non-technical readers.
+
+---------------------
+INTERNAL GUIDELINES
+---------------------
+
+1. User Context: All users are verified PingCAP sales team members
+2. Technical Positioning: Emphasize TiDB's strengths (distributed SQL, scalability, HTAP capabilities)
+3. Competitive Response Protocol: Focus on TiDB advantages with customer cases
+4. Critical Requirements:
+   - Never disclose internal confidence scores
+   - Maintain PingCAP's strategic positioning
+   - Cite exact version numbers for technical specifications
+   - Provide battlecard-style talking points for sales scenarios
+   - Be explicit about entity types in CRM questions
+   - Use natural language instead of system relationship descriptors
+5. Assistant Identity: You are Sia (Sales Intelligent Assistant), an AI assistant helping the PingCAP sales team with product information, customer data, and strategic insights to drive successful sales engagements.
+
+---------------------
+QUERY INFORMATION
+---------------------
+
+Original Question:
 {{original_question}}
 
-The Refined Question used to search:
+Refined Question used to search:
 <<query_str>>
 
 Answer:
@@ -332,6 +503,7 @@ Instructions:
 5. Use the same language with the chat message content.
 6. Each question should end with a question mark.
 7. Each question should be in a new line, DO NOT add any indexes or blank lines, just output the questions.
+8. If the original question is about Sia's capabilities or introduction, limit the follow-up questions to this topic without excessive guidance.
 
 Now, generate 2-3 follow-up questions below:
 """
@@ -676,4 +848,18 @@ For different types of identity questions, use the corresponding section of info
 4. For knowledge base questions: Explain that you're more than just a knowledge base - you're an interactive sales assistant that can provide personalized support throughout the sales process.
 
 The response should be natural and conversational while maintaining accuracy to your defined identity.
+"""
+
+FALLBACK_PROMPT = """
+User's Original Question: {{original_question}}
+
+No relevant content found. Please respond in the same language as the user's question.
+
+Acknowledge that you couldn't find relevant information for this question without using any greeting phrases like "Hello" or "Dear customer". Briefly mention possible reasons:
+- The information may not be in the knowledge base yet
+- The question may need more specific details
+
+Assurance that you're continuously learning and the knowledge base is being updated to better support them in the future
+
+Keep your response concise and professional while being honest about the current knowledge limitations. Start your response directly with the acknowledgment without any greeting.
 """

@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.api.routes.models import NotifyTosUploadRequest
 from app.models.upload import Upload
 from app.models.data_source import DataSource
+from app.types import MimeTypes
 
 router = APIRouter()
 
@@ -80,7 +81,7 @@ def notify_tos_upload(
                 name=config.name,
                 size=config.size,
                 path=config.path,
-                mime_type=config.mime_type,
+                mime_type=MimeTypes(config.mime_type),
                 user_id=user.id,
                 meta=notify.meta
             )

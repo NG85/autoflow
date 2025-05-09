@@ -7,9 +7,8 @@ from pydantic import BaseModel
 class LLMProvider(str, enum.Enum):
     OPENAI = "openai"
     GEMINI = "gemini"
-    # TODO: remove ANTHROPIC_VERTEX as it's deprecated.
-    ANTHROPIC_VERTEX = "anthropic_vertex"
-    VERTEX = "vertex"
+    VERTEX_AI = "vertex_ai"
+    ANTHROPIC_VERTEX = "anthropic_vertex"  # Deprecated, use VERTEX_AI instead
     OPENAI_LIKE = "openai_like"
     BEDROCK = "bedrock"
     OLLAMA = "ollama"
@@ -69,7 +68,7 @@ llm_provider_options: List[LLMProviderOption] = [
         provider_display_name="Gemini",
         provider_description="The Gemini API and Google AI Studio help you start working with Google's latest models. Access the whole Gemini model family and turn your ideas into real applications that scale.",
         provider_url="https://ai.google.dev/gemini-api",
-        default_llm_model="models/gemini-1.5-flash",
+        default_llm_model="models/gemini-2.0-flash",
         llm_model_description="Find the model code at https://ai.google.dev/gemini-api/docs/models/gemini",
         credentials_display_name="Google API Key",
         credentials_description="The API key of Google AI Studio, you can find it in https://aistudio.google.com/app/apikey",
@@ -77,15 +76,31 @@ llm_provider_options: List[LLMProviderOption] = [
         default_credentials="AIza****",
     ),
     LLMProviderOption(
+        provider=LLMProvider.VERTEX_AI,
+        provider_display_name="Vertex AI",
+        provider_description="Vertex AI is a fully-managed, unified AI development platform for building and using generative AI.",
+        provider_url="https://cloud.google.com/vertex-ai",
+        default_llm_model="gemini-1.5-flash",
+        llm_model_description="Find more in https://cloud.google.com/model-garden",
+        credentials_display_name="Google Credentials JSON",
+        credentials_description="The JSON Object of Google Credentials, refer to https://cloud.google.com/docs/authentication/provide-credentials-adc#on-prem",
+        credentials_type="dict",
+        default_credentials={
+            "type": "service_account",
+            "project_id": "****",
+            "private_key_id": "****",
+        },
+    ),
+    LLMProviderOption(
         provider=LLMProvider.OLLAMA,
         provider_display_name="Ollama",
         provider_description="Ollama is a lightweight framework for building and running large language models.",
         provider_url="https://ollama.com",
-        default_llm_model="llama3.1",
+        default_llm_model="llama3.2",
         llm_model_description="Find more in https://ollama.com/library",
         default_config={
             "base_url": "http://localhost:11434",
-            "context_window": 4096,
+            "context_window": 8192,
             "request_timeout": 60 * 10,
         },
         config_description=(
@@ -119,27 +134,11 @@ llm_provider_options: List[LLMProviderOption] = [
         default_credentials="****",
     ),
     LLMProviderOption(
-        provider=LLMProvider.VERTEX,
-        provider_display_name="Vertex AI",
-        provider_description="Vertex AI is a fully-managed, unified AI development platform for building and using generative AI.",
-        provider_url="https://cloud.google.com/vertex-ai",
-        default_llm_model="gemini-1.5-flash",
-        llm_model_description="Find more in https://cloud.google.com/model-garden",
-        credentials_display_name="Google Credentials JSON",
-        credentials_description="The JSON Object of Google Credentials, refer to https://cloud.google.com/docs/authentication/provide-credentials-adc#on-prem",
-        credentials_type="dict",
-        default_credentials={
-            "type": "service_account",
-            "project_id": "****",
-            "private_key_id": "****",
-        },
-    ),
-    LLMProviderOption(
         provider=LLMProvider.BEDROCK,
         provider_display_name="Bedrock",
         provider_description="Amazon Bedrock is a fully managed foundation models service.",
         provider_url="https://docs.aws.amazon.com/bedrock/",
-        default_llm_model="anthropic.claude-3-5-sonnet-20241022-v1:0",
+        default_llm_model="anthropic.claude-3-7-sonnet-20250219-v1:0",
         llm_model_description="",
         credentials_display_name="AWS Bedrock Credentials JSON",
         credentials_description="The JSON Object of AWS Credentials, refer to https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html#cli-configure-files-global",

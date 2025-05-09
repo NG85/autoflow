@@ -3,7 +3,7 @@ from datetime import datetime, UTC
 
 from sqlalchemy import UUID, and_, delete, or_
 from sqlalchemy.orm.attributes import flag_modified
-from sqlmodel import select, Session, func, update
+from sqlmodel import SQLModel, select, Session, func, update
 from fastapi_pagination import Params, Page
 from fastapi_pagination.ext.sqlmodel import paginate
 
@@ -18,11 +18,12 @@ from app.models import (
     Document,
     DocIndexTaskStatus,
     KgIndexStatus,
-    Chunk,
+    CrmKgIndexStatus,
+    PlaybookKgIndexStatus,
     KnowledgeBaseDataSource,
 )
 from app.models.chat_engine import ChatEngine
-from app.models.chunk import PlaybookKgIndexStatus, get_kb_chunk_model
+from app.models.chunk import get_kb_chunk_model
 from app.models.data_source import DataSource
 from app.models.knowledge_base import IndexMethod
 from app.repositories.base_repo import BaseRepo
@@ -30,6 +31,7 @@ from app.repositories.chunk import ChunkRepo
 from app.repositories.graph import get_kb_graph_repo
 from app.models.entity import get_kb_entity_model
 from app.models.relationship import get_kb_relationship_model
+from app.models.document import DocumentCategory
 
 class KnowledgeBaseRepo(BaseRepo):
     model_cls = KnowledgeBase
@@ -237,7 +239,7 @@ class KnowledgeBaseRepo(BaseRepo):
     def batch_update_chunk_status(
         self,
         session: Session,
-        chunk_model: Type[Chunk],
+        chunk_model: Type[SQLModel],
         chunk_ids: list[int],
         status: KgIndexStatus,
     ):
@@ -253,7 +255,7 @@ class KnowledgeBaseRepo(BaseRepo):
     def batch_update_playbook_chunk_status(
         self,
         session: Session,
-        chunk_model: Type[Chunk],
+        chunk_model: Type[SQLModel],
         chunk_ids: list[int],
         status: PlaybookKgIndexStatus,
     ):
@@ -261,6 +263,22 @@ class KnowledgeBaseRepo(BaseRepo):
             update(chunk_model)
             .where(chunk_model.id.in_(chunk_ids))
             .values(playbook_index_status=status)
+        )
+        session.exec(stmt)
+        session.commit()
+        
+        
+    def batch_update_crm_chunk_status(
+        self,
+        session: Session,
+        chunk_model: Type[SQLModel],
+        chunk_ids: list[int],
+        status: CrmKgIndexStatus,
+    ):
+        stmt = (
+            update(chunk_model)
+            .where(chunk_model.id.in_(chunk_ids))
+            .values(crm_index_status=status)
         )
         session.exec(stmt)
         session.commit()
@@ -291,6 +309,7 @@ class KnowledgeBaseRepo(BaseRepo):
         stmt = select(chunk_model.id).where(
             chunk_model.document.has(Document.knowledge_base_id == kb.id),
             chunk_model.playbook_index_status == PlaybookKgIndexStatus.FAILED,
+            chunk_model.document.has(func.json_extract(Document.meta, "$.category") == DocumentCategory.PLAYBOOK)
         )
         chunk_ids = session.exec(stmt).all()
 
@@ -310,9 +329,7 @@ class KnowledgeBaseRepo(BaseRepo):
             chunk_model.document.has(
                 and_(
                     Document.knowledge_base_id == kb.id,
-                    func.json_unquote(
-                        func.json_extract(Document.meta, "$.category")
-                    ) == "playbook"
+                    func.json_unquote(func.json_extract(Document.meta, "$.category")) == DocumentCategory.PLAYBOOK
                 )
             ),
             or_(
@@ -328,6 +345,49 @@ class KnowledgeBaseRepo(BaseRepo):
         )
 
         return chunk_ids
+
+
+    def set_failed_crm_documents_chunks_status_to_pending(
+        self, session: Session, kb: KnowledgeBase
+    ) -> list[int]:
+        chunk_model = get_kb_chunk_model(kb)
+        stmt = select(chunk_model.id).where(
+            chunk_model.document.has(Document.knowledge_base_id == kb.id),
+            chunk_model.crm_index_status == CrmKgIndexStatus.FAILED,
+            chunk_model.document.has(func.json_extract(Document.meta, "$.category") == DocumentCategory.CRM),
+        )
+
+        chunk_ids = session.exec(stmt).all()
+
+        # Update crm document chunks status.
+        self.batch_update_crm_chunk_status(
+            session, chunk_model, chunk_ids, CrmKgIndexStatus.PENDING
+        )
+
+        documents = ChunkRepo(chunk_model).get_documents_by_chunk_ids(session, chunk_ids=chunk_ids)
+        return [document.id for document in documents]
+        
+    def prepare_documents_to_build_crm_index(
+        self, session: Session, kb: KnowledgeBase
+    ) -> list[int]:
+        
+        chunk_model = get_kb_chunk_model(kb)
+        stmt = select(chunk_model.id).where(
+            chunk_model.document.has(
+                and_(
+                    Document.knowledge_base_id == kb.id,
+                    func.json_unquote(func.json_extract(Document.meta, "$.category")) == DocumentCategory.CRM
+                )
+            ),
+            or_(
+                chunk_model.crm_index_status == CrmKgIndexStatus.FAILED,
+                chunk_model.crm_index_status == CrmKgIndexStatus.NOT_STARTED
+            )
+        )
+        chunk_ids = session.exec(stmt).all()
+        
+        documents = ChunkRepo(chunk_model).get_documents_by_chunk_ids(session, chunk_ids=chunk_ids)
+        return [document.id for document in documents]
 
     def list_vector_index_built_errors(
         self,

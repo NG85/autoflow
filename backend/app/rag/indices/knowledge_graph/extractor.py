@@ -2,8 +2,9 @@ import logging
 from copy import deepcopy
 import pandas as pd
 import dspy
-from dspy.functional import TypedPredictor
 from typing import Mapping, Optional, List
+
+from dspy import Predict
 from llama_index.core.schema import BaseNode
 
 from app.rag.indices.knowledge_graph.schema import (
@@ -110,37 +111,12 @@ class Extractor(dspy.Module):
     def __init__(self, dspy_lm: dspy.LM):
         super().__init__()
         self.dspy_lm = dspy_lm
-        with dspy.settings.context(instructions=EXTRACTION_TEMPLATE):
-            self.prog_graph = TypedPredictor(ExtractGraphTriplet)
-
-        with dspy.settings.context(instructions=COVARIATE_TEMPLATE):
-            self.prog_covariates = TypedPredictor(ExtractCovariate)
-    
-
-    def get_llm_output_config(self):
-        if "openai" in self.dspy_lm.provider.lower():
-            return {
-                "response_format": {"type": "json_object"},
-            }
-        elif "ollama" in self.dspy_lm.provider.lower():
-            # ollama support set format=json in the top-level request config, but not in the request's option
-            # https://github.com/ollama/ollama/blob/5e2653f9fe454e948a8d48e3c15c21830c1ac26b/api/types.go#L70
-            return {}
-        elif "bedrock" in self.dspy_lm.provider.lower():
-            # Fix: add bedrock branch to fix 'Malformed input request' error
-            # subject must not be valid against schema {"required":["messages"]}: extraneous key [response_mime_type] is not permitted
-            return {"max_tokens": 8192}
-        else:
-            return {
-                "response_mime_type": "application/json",
-            }
+        self.prog_graph = Predict(ExtractGraphTriplet)
+        self.prog_covariates = Predict(ExtractCovariate)
 
     def forward(self, text):
         with dspy.settings.context(lm=self.dspy_lm):
-            pred_graph = self.prog_graph(
-                text=text,
-                config=self.get_llm_output_config(),
-            )
+            pred_graph = self.prog_graph(text=text)
                     
             logger.debug(f"Debug: Predicted graph output: {pred_graph}")
             # extract the covariates
@@ -156,7 +132,6 @@ class Extractor(dspy.Module):
                 pred_covariates = self.prog_covariates(
                     text=text,
                     entities=entities_for_covariates,
-                    config=self.get_llm_output_config(),
                 )
                 logger.debug((f"Debug: prog_covariates output before JSON parsing: {pred_covariates}"))
             except Exception as e:
@@ -186,6 +161,12 @@ class SimpleGraphExtractor:
         pred = self.extract_prog(text=text)
         logger.info(f"pred output: {pred}")
         metadata = get_relation_metadata_from_node(node)
+
+        # Ensure all entities have proper metadata dictionary structure
+        for entity in pred.knowledge.entities:
+            if entity.metadata is None or not isinstance(entity.metadata, dict):
+                entity.metadata = {"topic": "Unknown", "status": "auto-generated"}
+
         return self._to_df(
             pred.knowledge.entities, pred.knowledge.relationships, metadata
         )

@@ -59,11 +59,25 @@ class ChatMessageSate(int, enum.Enum):
     TRACE = 0
     SOURCE_NODES = 1
     IDENTITY_DETECTION = 2
-    KG_RETRIEVAL = 3
-    REFINE_QUESTION = 4
-    SEARCH_RELATED_DOCUMENTS = 5
-    GENERATE_ANSWER = 6
-    ANALYZE_COMPETITOR_RELATED = 7
-    INITIALIZATION = 8
+    AUTHORIZATION = 3
+    KG_RETRIEVAL = 4
+    REFINE_QUESTION = 5
+    SEARCH_RELATED_DOCUMENTS = 6
+    GENERATE_ANSWER = 7
+    ANALYZE_COMPETITOR_RELATED = 8
+    INITIALIZATION = 9
     KG_QUERY_EXECUTION = 9
     FINISHED = 10
+    
+    
+class CrmDataType(str, enum.Enum):
+    ACCOUNT = "crm_account"
+    CONTACT = "crm_contact"
+    INTERNAL_OWNER = "crm_internal_owner"
+    OPPORTUNITY = "crm_opportunity"
+    OPPORTUNITY_UPDATES = "crm_opportunity_updates"
+    ORDER = "crm_order"
+    PAYMENTPLAN = "crm_payment_plan"
+    STAGE = "crm_stage"
+    SALES_RECORD = "crm_sales_record"
+    # TODO: Add more other CRM types

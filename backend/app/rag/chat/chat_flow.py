@@ -1,7 +1,9 @@
+import hashlib
 import json
 import logging
 from datetime import datetime, UTC
-from typing import List, Optional, Generator, Tuple, Any
+import threading
+from typing import Dict, List, Optional, Generator, Tuple, Any
 from urllib.parse import urljoin
 from uuid import UUID
 
@@ -36,6 +38,9 @@ from app.site_settings import SiteSetting
 from app.utils.jinja2 import get_prompt_by_jinja2_template
 from app.utils.tracing import LangfuseContextManager
 from app.rag import default_prompt
+from app.rag.chat.crm_authority import CRMAuthority, get_user_crm_authority
+from app.models.chat import ChatType
+from app.api.routes.models import ChatMode
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +49,20 @@ def parse_chat_messages(
     chat_messages: List[ChatMessage],
 ) -> tuple[str, List[ChatMessage]]:
     user_question = chat_messages[-1].content
+    user_question_args = chat_messages[-1].additional_kwargs
     chat_history = chat_messages[:-1]
-    return user_question, chat_history
+    return user_question, user_question_args, chat_history
 
+_EMBEDDING_CACHE:Dict[str, Dict[str, Any]] = {}
+_EMBEDDING_LOCK = threading.Lock()
+
+PROMPT_TYPE_MAPPING = {
+    "identity_full": default_prompt.IDENTITY_FULL_PROMPT,
+    "identity_brief": default_prompt.IDENTITY_BRIEF_PROMPT,
+    "capabilities": default_prompt.CAPABILITIES_PROMPT,
+    "knowledge_base": default_prompt.KNOWLEDGE_BASE_PROMPT,
+    "greeting": default_prompt.IDENTITY_BRIEF_PROMPT,
+}
 
 class ChatFlow:
     _trace_manager: LangfuseContextManager
@@ -61,15 +77,23 @@ class ChatFlow:
         chat_messages: List[ChatMessage],
         engine_name: str = "default",
         chat_id: Optional[UUID] = None,
+        chat_type: ChatType = ChatType.DEFAULT,
+        chat_mode: ChatMode = ChatMode.DEFAULT,
+        incoming_cookie: Optional[str] = None,
     ) -> None:
         self.chat_id = chat_id
         self.db_session = db_session
         self.user = user
         self.browser_id = browser_id
         self.engine_name = engine_name
-
+        self.origin = origin
+        self.chat_type = chat_type
+        self.chat_messages = chat_messages
+        self.chat_mode = chat_mode
+        self.incoming_cookie = incoming_cookie
         # Load chat engine and chat session.
-        self.user_question, self.chat_history = parse_chat_messages(chat_messages)
+        self.user_question, self.user_question_args, self.chat_history = parse_chat_messages(chat_messages)
+        
         if chat_id:
             # FIXME:
             #   only chat owner or superuser can access the chat,
@@ -107,26 +131,35 @@ class ChatFlow:
                     user_id=self.user.id if self.user else None,
                     browser_id=self.browser_id,
                     origin=origin,
-                    visibility=ChatVisibility.PUBLIC
-                    if not self.user
-                    else ChatVisibility.PRIVATE,
-                ),
+                    visibility=(
+                        ChatVisibility.PUBLIC
+                        if not self.user
+                        else ChatVisibility.PRIVATE
+                    ),
+                    chat_type=self.chat_type
+                )
             )
             chat_id = self.db_chat_obj.id
             # slack/discord may create a new chat with history messages
-            now = datetime.now(UTC)
-            for i, m in enumerate(self.chat_history):
-                chat_repo.create_message(
+            # now = datetime.now(UTC)
+            # for i, m in enumerate(self.chat_history):
+            #     chat_repo.create_message(
+            #         session=self.db_session,
+            #         chat=self.db_chat_obj,
+            #         chat_message=DBChatMessage(
+            #             role=m.role,
+            #             content=m.content,
+            #             ordinal=i + 1,
+            #             created_at=now,
+            #             updated_at=now,
+            #             finished_at=now,
+            #         ),
+            #     )
+            if self.chat_history and len(self.chat_history) > 0:
+                chat_repo.create_chat_with_messages(
                     session=self.db_session,
                     chat=self.db_chat_obj,
-                    chat_message=DBChatMessage(
-                        role=m.role,
-                        content=m.content,
-                        ordinal=i + 1,
-                        created_at=now,
-                        updated_at=now,
-                        finished_at=now,
-                    ),
+                    messages=self.chat_history,
                 )
 
         # Init Langfuse for tracing.
@@ -140,36 +173,58 @@ class ChatFlow:
             enabled=enable_langfuse,
         )
         self._trace_manager = LangfuseContextManager(instrumentor)
+        
+        # Lazy initialization.
+        self._llm_initialized = False
+        self._kb_initialized = False
+        self._retrieve_flow_initialized = False
 
-        # Init LLM.
-        self._llm = self.engine_config.get_llama_llm(self.db_session)
-        self._fast_llm = self.engine_config.get_fast_llama_llm(self.db_session)
-        self._fast_dspy_lm = self.engine_config.get_fast_dspy_lm(self.db_session)
+    # Init LLM.
+    def _ensure_llm_initialized(self):
+        if not self._llm_initialized:
+            self._llm = self.engine_config.get_llama_llm(self.db_session)
+            self._fast_llm = self.engine_config.get_fast_llama_llm(self.db_session)
+            self._fast_dspy_lm = self.engine_config.get_fast_dspy_lm(self.db_session)
+            self._llm_initialized = True
 
-        # Load knowledge bases.
-        self.knowledge_bases = self.engine_config.get_knowledge_bases(self.db_session)
-        self.knowledge_base_ids = [kb.id for kb in self.knowledge_bases]
-
-        # Init retrieve flow.
-        self.retrieve_flow = RetrieveFlow(
-            db_session=self.db_session,
-            engine_name=self.engine_name,
-            engine_config=self.engine_config,
-            llm=self._llm,
-            fast_llm=self._fast_llm,
-            knowledge_bases=self.knowledge_bases,
-        )
-
+    # Load knowledge bases.
+    def _ensure_kb_initialized(self):
+        if not self._kb_initialized:
+            self.knowledge_bases = self.engine_config.get_knowledge_bases(self.db_session)
+            self.knowledge_base_ids = [kb.id for kb in self.knowledge_bases]
+            self._kb_initialized = True
+            
+    # Init retrieve flow.
+    def _ensure_retrieve_flow_initialized(self):
+        if not self._retrieve_flow_initialized:
+            self._ensure_llm_initialized()
+            self._ensure_kb_initialized()
+            self.retrieve_flow = RetrieveFlow(
+                db_session=self.db_session,
+                engine_name=self.engine_name,
+                engine_config=self.engine_config,
+                llm=self._llm,
+                fast_llm=self._fast_llm,
+                knowledge_bases=self.knowledge_bases,
+            )
+            self._retrieve_flow_initialized = True
+    
     def chat(self) -> Generator[ChatEvent | str, None, None]:
         try:
+            # This is the save cvg report command
+            if self.chat_type == ChatType.CLIENT_VISIT_GUIDE and self.chat_mode == ChatMode.SAVE_CVG_REPORT:
+                yield from self._save_cvg_messages()
+                return
+            
             with self._trace_manager.observe(
                 trace_name="ChatFlow",
-                user_id=self.user.email
-                if self.user
-                else f"anonymous-{self.browser_id}",
+                user_id=(
+                    self.user.email if self.user else f"anonymous-{self.browser_id}"
+                ),
                 metadata={
                     "is_external_engine": self.engine_config.is_external_engine,
                     "chat_engine_config": self.engine_config.screenshot(),
+                    "chat_type": self.chat_type,
                 },
                 tags=[f"chat_engine:{self.engine_name}"],
                 release=settings.ENVIRONMENT,
@@ -180,12 +235,19 @@ class ChatFlow:
                         "chat_history": self.chat_history,
                     }
                 )
-
-                if self.engine_config.is_external_engine:
-                    yield from self._external_chat()
+                if self.chat_type == ChatType.CLIENT_VISIT_GUIDE and self.chat_mode == ChatMode.CREATE_CVG_REPORT:
+                        # This is the create cvg report command
+                        data, message = yield from self._generate_client_visit_guide()
+                        trace.update(output={
+                            "data": data,
+                            "message": message,
+                        })
                 else:
-                    response_text, source_documents = yield from self._builtin_chat()
-                    trace.update(output=response_text)
+                    if self.engine_config.is_external_engine:
+                        yield from self._external_chat()
+                    else:
+                        response_text, source_documents = yield from self._builtin_chat()
+                        trace.update(output=response_text)
         except Exception as e:
             logger.exception(e)
             yield ChatEvent(
@@ -198,15 +260,15 @@ class ChatFlow:
     ) -> Generator[ChatEvent | str, None, Tuple[Optional[str], List[Any]]]:
         ctx = langfuse_instrumentor_context.get().copy()
         db_user_message, db_assistant_message = yield from self._chat_start()
-        langfuse_instrumentor_context.get().update(ctx)
         # Add initialization status display
         yield ChatEvent(
             event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
             payload=ChatStreamMessagePayload(
                 state=ChatMessageSate.INITIALIZATION,
-                display="Initializing chat session and starting thinking",
+                display="Initializing chat session and starting flow",
             ),
         )
+        langfuse_instrumentor_context.get().update(ctx)
         
         yield ChatEvent(
             event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
@@ -226,7 +288,7 @@ class ChatFlow:
                 ),
             )
             logger.info(f"Detected identity question of type: {identity_type}")
-            identity_response = self._handle_identity_question(identity_type)
+            identity_response = PROMPT_TYPE_MAPPING.get(identity_type)
             
             with self._trace_manager.span(name="identity_response") as span:
                 span.end(output={"identity_type": identity_type, "response_length": len(identity_response)})
@@ -246,14 +308,38 @@ class ChatFlow:
         # self.competitor_knowledge_base_id = 240001
         # self.competitor_knowledge_base = knowledge_base_repo.must_get(self.db_session, self.competitor_knowledge_base_id, False)
         # self.retrieve_flow.knowledge_bases.append(self.competitor_knowledge_base)
-                
-        # 1. Retrieve Knowledge graph related to the user question.
+        
+        self.crm_authority = None
+        if settings.CRM_ENABLED:
+            # 1. Identity verification and permission check step
+            yield ChatEvent(
+                event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
+                payload=ChatStreamMessagePayload(
+                    state=ChatMessageSate.AUTHORIZATION,
+                    display="Verifying data access permissions",
+                ),
+            )
+            # Initialize CRM authority control
+            self.crm_authority = get_user_crm_authority(
+                user_id=self.user.id if self.user else None
+            )
+            logger.info(f"CRM authority initialized for user {self.user.id if self.user else 'anonymous'}")
+        
+            if self.user and not self.crm_authority.is_empty():
+                # Record user permission statistics information
+                auth_stats = {k: len(v) for k, v in self.crm_authority.authorized_items.items()}
+                logger.info(f"User {self.user.id} has CRM access: {auth_stats}")
+            
+        # 2. Retrieve Knowledge graph related to the user question.
         (
             knowledge_graph,
             knowledge_graph_context,
-        ) = yield from self._search_knowledge_graph(user_question=self.user_question)
+        ) = yield from self._search_knowledge_graph(
+            user_question=self.user_question,
+            crm_authority=self.crm_authority,
+        )
 
-        # 2. Refine the user question using knowledge graph and chat history.
+        # 3. Refine the user question using knowledge graph and chat history.
         refined_question = yield from self._refine_user_question(
             user_question=self.user_question,
             chat_history=self.chat_history,
@@ -261,7 +347,7 @@ class ChatFlow:
             refined_question_prompt=self.engine_config.llm.condense_question_prompt,
         )
 
-        # 3. Check if the question provided enough context information or need to clarify.
+        # 4. Check if the question provided enough context information or need to clarify.
         if self.engine_config.clarify_question:
             need_clarify, need_clarify_response = yield from self._clarify_question(
                 user_question=refined_question,
@@ -274,6 +360,7 @@ class ChatFlow:
                     db_user_message=db_user_message,
                     response_text=need_clarify_response,
                     knowledge_graph=knowledge_graph,
+                    source_documents=[],
                 )
                 return None, []
             
@@ -288,12 +375,13 @@ class ChatFlow:
         #     logger.info(f"Restore the original knowledge base since the question is not competitor related")
         #     self.retrieve_flow.knowledge_bases = self.backup_knowledge_bases
              
-        # 4. Use refined question to search for relevant chunks.
+        # 5. Use refined question to search for relevant chunks.
         relevant_chunks = yield from self._search_relevance_chunks(
-            user_question=refined_question
+            user_question=refined_question,
+            crm_authority=self.crm_authority
         )
 
-        # 5. Generate a response using the refined question and related chunks
+        # 6. Generate a response using the refined question and related chunks
         response_text, source_documents = yield from self._generate_answer(
             user_question=refined_question,
             knowledge_graph_context=knowledge_graph_context,
@@ -311,15 +399,15 @@ class ChatFlow:
         return response_text, source_documents
 
     def _chat_start(
-        self,
-    ) -> Generator[ChatEvent, None, Tuple[DBChatMessage, DBChatMessage]]:
+            self,
+        ) -> Generator[ChatEvent, None, Tuple[DBChatMessage, DBChatMessage]]:
         db_user_message = chat_repo.create_message(
             session=self.db_session,
             chat=self.db_chat_obj,
             chat_message=DBChatMessage(
                 role=MessageRole.USER.value,
                 trace_url=self._trace_manager.trace_url,
-                content=self.user_question,
+                content=self.user_question.strip(),
             ),
         )
         db_assistant_message = chat_repo.create_message(
@@ -344,6 +432,7 @@ class ChatFlow:
     def _search_knowledge_graph(
         self,
         user_question: str,
+        crm_authority: Optional[CRMAuthority] = None,
         annotation_silent: bool = False,
     ) -> Generator[ChatEvent, None, Tuple[KnowledgeGraphRetrievalResult, str]]:
         kg_config = self.engine_config.knowledge_graph
@@ -371,7 +460,12 @@ class ChatFlow:
                         ),
                     )
 
-            kg_search_gen = self.retrieve_flow.search_knowledge_graph(user_question)
+
+            self._ensure_retrieve_flow_initialized()
+            kg_search_gen = self.retrieve_flow.search_knowledge_graph(
+                user_question,
+                crm_authority=crm_authority
+            )
             knowledge_graph = KnowledgeGraphRetrievalResult()
             knowledge_graph_context = ""
             
@@ -421,7 +515,7 @@ class ChatFlow:
     def _refine_user_question(
         self,
         user_question: str,
-        chat_history: Optional[List[ChatMessage]] = list,
+        chat_history: Optional[List[ChatMessage]] = [],
         refined_question_prompt: Optional[str] = None,
         knowledge_graph_context: str = "",
         annotation_silent: bool = False,
@@ -469,7 +563,7 @@ class ChatFlow:
     def _clarify_question(
         self,
         user_question: str,
-        chat_history: Optional[List[ChatMessage]] = list,
+        chat_history: Optional[List[ChatMessage]] = [],
         knowledge_graph_context: str = "",
     ) -> Generator[ChatEvent, None, Tuple[bool, str]]:
         """
@@ -523,7 +617,7 @@ class ChatFlow:
             return need_clarify, need_clarify_response
 
     def _search_relevance_chunks(
-        self, user_question: str
+        self, user_question: str, crm_authority: Optional[CRMAuthority] = None
     ) -> Generator[ChatEvent, None, List[NodeWithScore]]:
         with self._trace_manager.span(
             name="search_relevance_chunks", input=user_question
@@ -536,8 +630,11 @@ class ChatFlow:
                 ),
             )
 
-            relevance_chunks = self.retrieve_flow.search_relevant_chunks(user_question)
-
+            relevance_chunks = self.retrieve_flow.search_relevant_chunks(
+                user_question,
+                crm_authority=crm_authority
+            )
+            
             span.end(
                 output={
                     "relevance_chunks": relevance_chunks,
@@ -555,6 +652,27 @@ class ChatFlow:
         with self._trace_manager.span(
             name="generate_answer", input=user_question
         ) as span:
+            # Use LLM to generate a fallback response if no relevant chunks are found.
+            if not relevant_chunks or len(relevant_chunks) == 0:
+                fallback_prompt = default_prompt.FALLBACK_PROMPT
+                no_content_message = self._fast_llm.predict(
+                    prompt=get_prompt_by_jinja2_template(
+                        fallback_prompt,
+                        original_question=user_question,
+                    )
+                )
+                yield ChatEvent(
+                    event_type=ChatEventType.TEXT_PART,
+                    payload=no_content_message,
+                )
+                span.end(
+                    output=no_content_message,
+                    metadata={
+                        "source_documents": [],
+                    },
+                )
+                return no_content_message, []
+                
             # Initialize response synthesizer.
             text_qa_template = get_prompt_by_jinja2_template(
                 self.engine_config.llm.text_qa_prompt,
@@ -637,11 +755,13 @@ class ChatFlow:
                         "external_request_id": external_request_id,
                         "qa_content": qa_content,
                     },
-                    headers={
-                        "Authorization": f"Bearer {post_verification_token}",
-                    }
-                    if post_verification_token
-                    else {},
+                    headers=(
+                        {
+                            "Authorization": f"Bearer {post_verification_token}",
+                        }
+                        if post_verification_token
+                        else {}
+                    ),
                     timeout=10,
                 )
                 resp.raise_for_status()
@@ -667,7 +787,7 @@ class ChatFlow:
         db_user_message: ChatMessage,
         response_text: str,
         knowledge_graph: KnowledgeGraphRetrievalResult = KnowledgeGraphRetrievalResult(),
-        source_documents: Optional[List[SourceDocument]] = list,
+        source_documents: Optional[List[SourceDocument]] = [],
         annotation_silent: bool = False,
     ):
         if not annotation_silent:
@@ -712,11 +832,11 @@ class ChatFlow:
     #  share some common methods through ChatMixin or BaseChatFlow.
     def _external_chat(self) -> Generator[ChatEvent | str, None, None]:
         db_user_message, db_assistant_message = yield from self._chat_start()
-
+        self._ensure_retrieve_flow_initialized()
         identity_type = self._detect_identity_question(self.user_question)
         if identity_type:
             logger.info(f"Detected identity question of type: {identity_type}")
-            identity_response = self._handle_identity_question(identity_type)
+            identity_response = PROMPT_TYPE_MAPPING.get(identity_type)
             
             with self._trace_manager.span(name="identity_response") as span:
                 span.end(output={"identity_type": identity_type, "response_length": len(identity_response)})
@@ -730,48 +850,72 @@ class ChatFlow:
             
             return
         
-        goal, response_format = self.user_question, {}
-        try:
-            # 1. Generate the goal with the user question, knowledge graph and chat history.
-            goal, response_format = yield from self._generate_goal()
-
-            # 2. Check if the goal provided enough context information or need to clarify.
-            if self.engine_config.clarify_question:
-                need_clarify, need_clarify_response = yield from self._clarify_question(
-                    user_question=goal, chat_history=self.chat_history
-                )
-                if need_clarify:
-                    yield from self._chat_finish(
-                        db_assistant_message=db_assistant_message,
-                        db_user_message=db_user_message,
-                        response_text=need_clarify_response,
-                        annotation_silent=True,
-                    )
-                    return
-        except Exception as e:
-            goal = self.user_question
-            logger.warning(
-                f"Failed to generate refined goal, fallback to use user question as goal directly: {e}",
-                exc_info=True,
-                extra={},
-            )
-
         cache_messages = None
-        if settings.ENABLE_QUESTION_CACHE:
+        goal, response_format = self.user_question, {}
+        if settings.ENABLE_QUESTION_CACHE and len(self.chat_history) == 0:
             try:
                 logger.info(
-                    f"start to find_recent_assistant_messages_by_goal with goal: {goal}, response_format: {response_format}"
+                    f"start to find_best_answer_for_question with question: {self.user_question}"
                 )
-                cache_messages = chat_repo.find_recent_assistant_messages_by_goal(
-                    self.db_session,
-                    {"goal": goal, "Lang": response_format.get("Lang", "English")},
-                    90,
+                cache_messages = chat_repo.find_best_answer_for_question(
+                    self.db_session, self.user_question
                 )
-                logger.info(
-                    f"find_recent_assistant_messages_by_goal result {len(cache_messages)} for goal {goal}"
-                )
+                if cache_messages and len(cache_messages) > 0:
+                    logger.info(
+                        f"find_best_answer_for_question result {len(cache_messages)} for question {self.user_question}"
+                    )
             except Exception as e:
-                logger.error(f"Failed to find recent assistant messages by goal: {e}")
+                logger.error(
+                    f"Failed to find best answer for question {self.user_question}: {e}"
+                )
+
+        if not cache_messages or len(cache_messages) == 0:
+            try:
+                # 1. Generate the goal with the user question, knowledge graph and chat history.
+                goal, response_format = yield from self._generate_goal()
+
+                # 2. Check if the goal provided enough context information or need to clarify.
+                if self.engine_config.clarify_question:
+                    (
+                        need_clarify,
+                        need_clarify_response,
+                    ) = yield from self._clarify_question(
+                        user_question=goal, chat_history=self.chat_history
+                    )
+                    if need_clarify:
+                        yield from self._chat_finish(
+                            db_assistant_message=db_assistant_message,
+                            db_user_message=db_user_message,
+                            response_text=need_clarify_response,
+                            annotation_silent=True,
+                        )
+                        return
+            except Exception as e:
+                goal = self.user_question
+                logger.warning(
+                    f"Failed to generate refined goal, fallback to use user question as goal directly: {e}",
+                    exc_info=True,
+                    extra={},
+                )
+
+            cache_messages = None
+            if settings.ENABLE_QUESTION_CACHE:
+                try:
+                    logger.info(
+                        f"start to find_recent_assistant_messages_by_goal with goal: {goal}, response_format: {response_format}"
+                    )
+                    cache_messages = chat_repo.find_recent_assistant_messages_by_goal(
+                        self.db_session,
+                        {"goal": goal, "Lang": response_format.get("Lang", "English")},
+                        90,
+                    )
+                    logger.info(
+                        f"find_recent_assistant_messages_by_goal result {len(cache_messages)} for goal {goal}"
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"Failed to find recent assistant messages by goal: {e}"
+                    )
 
         stream_chat_api_url = (
             self.engine_config.external_engine_config.stream_chat_api_url
@@ -1038,7 +1182,7 @@ class ChatFlow:
                 # Knowledge base questions
                 "Are you just a knowledge base?": "knowledge_base",
                 "你只是一个知识库吗": "knowledge_base",
-                "你是个人知识库吗": "knowledge_base",
+                "你是个知识库吗": "knowledge_base",
                 "你是知识库吗": "knowledge_base",
                 "你只是知识库吗": "knowledge_base",
                 "你是搜索工具吗": "knowledge_base",
@@ -1063,34 +1207,64 @@ class ChatFlow:
                 "good evening": "greeting",
             }
             
+            global _EMBEDDING_CACHE, _EMBEDDING_LOCK
+            cache_key = hashlib.md5(json.dumps(sorted(identity_questions.keys())).encode()).hexdigest()
+            
+            with _EMBEDDING_LOCK:
+                if cache_key not in _EMBEDDING_CACHE:
+                    # Calculate embeddings for predefined questions and cache them
+                    questions = list(identity_questions.keys())
+                    batch_embeddings = embed_model.get_text_embedding_batch(questions)
 
-            # Calculate embeddings for predefined questions (only once)
-            if not hasattr(self, '_identity_question_embeddings'):
-                self._identity_question_embeddings = {}
-                for question, category in identity_questions.items():
-                    self._identity_question_embeddings[question] = {
-                        'embedding': embed_model.get_query_embedding(question),
-                        'category': category
+                    embeddings = {
+                        q: {
+                            'embedding': batch_embeddings[i],
+                            'category': identity_questions[q]
+                        }
+                        for i, q in enumerate(questions)
                     }
+                    _EMBEDDING_CACHE[cache_key] = embeddings
+                    logger.info(f"Generated new embeddings cache: {cache_key}")
+            
+            self._identity_question_embeddings = _EMBEDDING_CACHE[cache_key]
             
             # Find the closest match using cosine similarity
             import numpy as np
             best_similarity = -1
             best_category = None
             
-            for question, data in self._identity_question_embeddings.items():
-                # Calculate cosine similarity (1 - cosine_distance)
-                similarity = 1 - (1 - np.dot(user_question_embedding, data['embedding']) / 
-                                 (np.linalg.norm(user_question_embedding) * np.linalg.norm(data['embedding'])))
-                
-                if similarity > best_similarity:
-                    best_similarity = similarity
-                    best_category = data['category']
+            # Pre-calculate the norm of the user question
+            user_norm = np.linalg.norm(user_question_embedding)
             
-            logger.info(f"Best category: {best_category}, similarity: {best_similarity:.4f}")
+            # for question, data in self._identity_question_embeddings.items():
+            #     # Calculate cosine similarity (1 - cosine_distance)
+            #     similarity = np.dot(user_question_embedding, data['embedding']) / (user_norm * np.linalg.norm(data['embedding']))
+                
+            #     if similarity > best_similarity:
+            #         best_similarity = similarity
+            #         best_category = data['category']
+            
+            
+            # Vectorized calculation (faster than loop)
+            if not hasattr(self, '_identity_emb_matrix'):
+                embeddings = [data['embedding'] for data in self._identity_question_embeddings.values()]
+                self._identity_emb_matrix = np.array(embeddings)
+                self._identity_categories = [data['category'] for data in self._identity_question_embeddings.values()]
+                # Pre-calculate norms and store as column vector
+                self._identity_norms = np.linalg.norm(self._identity_emb_matrix, axis=1, keepdims=True)
+
+            user_emb = np.array(user_question_embedding).reshape(1, -1)
+            dot_products = np.dot(self._identity_emb_matrix, user_emb.T)
+            similarities = dot_products / (self._identity_norms * user_norm)
+
+            # Find the maximum similarity index
+            max_index = np.argmax(similarities)
+            best_similarity = similarities[max_index][0]
+            best_category = self._identity_categories[max_index]
             
             # Use a threshold to determine if it's a match
-            similarity_threshold = 0.87  # Adjust based on testing
+            similarity_threshold = settings.EMBEDDING_THRESHOLD  # Adjust based on testing
+            logger.info(f"Best category: {best_category}, similarity: {best_similarity:.4f}")
             if best_similarity >= similarity_threshold:
                 logger.info(f"Embedding identity detection for '{user_question}': {best_category} (similarity: {best_similarity:.4f})")
                 return best_category
@@ -1103,51 +1277,98 @@ class ChatFlow:
         # 2. Return None if no match is found, indicating the question is not about the assistant's identity
         return None
 
-
-    def _handle_identity_question(self, identity_type: str) -> str:
-        """ Generate response based on the identity question type"""
-        # 1. Get the corresponding prompt template
-        prompt_mapping = {
-            "identity_full": default_prompt.IDENTITY_FULL_PROMPT,
-            "identity_brief": default_prompt.IDENTITY_BRIEF_PROMPT,
-            "capabilities": default_prompt.CAPABILITIES_PROMPT,
-            "knowledge_base": default_prompt.KNOWLEDGE_BASE_PROMPT,
-            "greeting": default_prompt.IDENTITY_BRIEF_PROMPT,
-        }
-        
-        content = prompt_mapping.get(identity_type, default_prompt.IDENTITY_FULL_PROMPT)
-        
-        # 2. For simple types, use the template content directly
-        if identity_type in ["identity_brief", "capabilities", "knowledge_base", "greeting"]:
-            return content
-        
-        # 3. For complex types, use LLM to generate a more natural response
+    def _save_cvg_messages(self) -> Generator[ChatEvent | str, None, None]:
+        """Save user command and cvg report as chat messages"""                    
         try:
-            system_prompt = default_prompt.IDENTITY_SYSTEM_PROMPT
-            user_prompt = f"""As Sia, the AI sales assistant, a user asked about your identity. 
-Please respond with a natural, conversational tone using this information:
-
-    {content}"""
+            db_messages = []
+            now = datetime.now(UTC)
+            for message in self.chat_messages:
+                db_message = DBChatMessage(
+                    chat_id=self.db_chat_obj.id,
+                    role=message.role,
+                    content=message.content,
+                    user_id=self.user.id if self.user else None,
+                    meta=message.additional_kwargs if message.additional_kwargs else {},
+                    created_at=now,
+                    updated_at=now,
+                    finished_at=now
+                )
+                db_messages.append(db_message)
             
-            response = self._llm.chat(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ]
+            self.db_chat_obj, messages = chat_repo.create_chat_with_messages(
+                self.db_session,
+                self.db_chat_obj,
+                db_messages
             )
             
-            if hasattr(response, 'content'):
-                return response.content
-            elif isinstance(response, dict) and 'content' in response:
-                return response['content']
-            elif isinstance(response, str):
-                return response
-            else:
-                # Fallback to the template content if we can't extract the response
-                logger.warning(f"Unexpected response format from LLM: {type(response)}")
-                return content
-            
+            yield ChatEvent(
+                event_type=ChatEventType.DATA_PART,
+                payload=ChatStreamDataPayload(
+                    chat=self.db_chat_obj,
+                    user_message=db_messages[-2],
+                    assistant_message=db_messages[-1],
+                ),
+            )
         except Exception as e:
-            logger.error(f"Error generating identity response with LLM: {e}")
-            # Return the template content when an error occurs
-            return content
+            logger.error(f"Failed to save cvg messages: {e}")
+            raise
+        
+    
+    # TECHDEBT: Refactor to independent strategy class.
+    def _generate_client_visit_guide(self) -> Generator[ChatEvent | str, None, Tuple[Optional[dict], Optional[str]]]:
+        """Invoke external service to generate client visit guide"""
+        db_user_message, db_assistant_message = yield from self._chat_start()
+        # Add initialization status display
+        yield ChatEvent(
+            event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
+            payload=ChatStreamMessagePayload(
+                state=ChatMessageSate.INITIALIZATION,
+                display="Initializing chat session and starting generation flow",
+            ),
+        )
+        ctx = langfuse_instrumentor_context.get().copy()
+        langfuse_instrumentor_context.get().update(ctx)
+    
+        # Invoke external document generation service
+        aldebaran_cvgg_url = settings.ALDEBARAN_CVGG_URL
+        # Build request body
+        payload = {
+            "account_name": self.user_question_args.get("account_name", ""),
+            "account_id": self.user_question_args.get("account_id", ""),
+            "content": self.user_question,
+            "tenant_id": settings.ALDEBARAN_TENANT_ID,
+        }
+        response = requests.post(aldebaran_cvgg_url, json=payload, timeout=300, headers={"cookie": self.incoming_cookie})
+        data = None
+        error_message = None
+        try:
+            response.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"HTTP error occurred: {e}")
+            error_message = "报告服务响应异常，请稍后再试"
+                
+        if error_message:
+            with self._trace_manager.span(name="client_visit_guide_generation") as span:
+                span.end(output=error_message)
+             
+            yield from self._chat_finish(
+                db_assistant_message=db_assistant_message,
+                db_user_message=db_user_message,
+                response_text=error_message,
+                source_documents=[]
+            )
+        else:
+            # Parse JSON response
+            result = response.json()
+            data = result["data"]
+            with self._trace_manager.span(name="client_visit_guide_generation") as span:
+                span.end(output={json.dumps(data)})
+                        
+            yield from self._chat_finish(
+                db_assistant_message=db_assistant_message,
+                db_user_message=db_user_message,
+                response_text=json.dumps(data),
+                source_documents=[]
+            )
+            
+        return data, error_message

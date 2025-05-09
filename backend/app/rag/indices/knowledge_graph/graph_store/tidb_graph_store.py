@@ -2,11 +2,11 @@ import dspy
 import logging
 import numpy as np
 import tidb_vector
-from dspy.functional import TypedPredictor
 from deepdiff import DeepDiff
 from typing import List, Optional, Tuple, Dict, Set, Type, Any
 from collections import defaultdict
 
+from dspy import Predict
 from llama_index.core.embeddings.utils import EmbedType, resolve_embed_model
 from llama_index.embeddings.openai import OpenAIEmbedding, OpenAIEmbeddingModelType
 import sqlalchemy
@@ -22,6 +22,8 @@ from app.rag.indices.knowledge_graph.graph_store.helpers import (
     calculate_relationship_score,
     get_entity_metadata_embedding,
     get_query_embedding,
+    parse_mongo_style_filter,
+    apply_filter_condition,
     DEFAULT_RANGE_SEARCH_CONFIG,
     DEFAULT_WEIGHT_COEFFICIENT_CONFIG,
     DEFAULT_DEGREE_COEFFICIENT,
@@ -38,10 +40,8 @@ from app.rag.retrievers.knowledge_graph.schema import (
     RetrievedKnowledgeGraph,
 )
 from app.models import (
-    Entity as DBEntity,
-    Relationship as DBRelationship,
-    Chunk as DBChunk,
     KnowledgeBase,
+    EntityType,
 )
 from app.models import EntityType
 from app.models.enums import GraphType
@@ -54,7 +54,8 @@ def cosine_distance(v1, v2):
 
 
 class MergeEntities(dspy.Signature):
-    """As a knowledge expert assistant specialized in database technologies, evaluate the two provided entities. These entities have been pre-analyzed and have same name but different descriptions and metadata.
+    """As a knowledge integration assistant, evaluate two entities with identical names but different descriptions and metadata. Analyze their semantic meaning, contextual relationships, and domain-specific characteristics to determine conceptual equivalence.
+    
     Please carefully review the detailed descriptions and metadata for both entities to determine if they genuinely represent the same concept or object(entity).
     If you conclude that the entities are identical, merge the descriptions and metadata fields of the two entities into a single consolidated entity.
     If the entities are distinct despite their same name that may be due to different contexts or perspectives, do not merge the entities and return none as the merged entity.
@@ -73,7 +74,7 @@ class MergeEntities(dspy.Signature):
 
 class MergeEntitiesProgram(dspy.Module):
     def __init__(self):
-        self.prog = TypedPredictor(MergeEntities)
+        self.prog = Predict(MergeEntities)
 
     def forward(self, entities: List[Entity]):
         if len(entities) != 2:
@@ -88,12 +89,12 @@ class TiDBGraphStore(KnowledgeGraphStore):
         self,
         knowledge_base: KnowledgeBase,
         dspy_lm: dspy.LM,
+        entity_db_model: Type[SQLModel],
+        relationship_db_model: Type[SQLModel],
+        chunk_db_model: Type[SQLModel],
         session: Optional[Session] = None,
         embed_model: Optional[EmbedType] = None,
         description_similarity_threshold=0.9,
-        entity_db_model: Type[SQLModel] = DBEntity,
-        relationship_db_model: Type[SQLModel] = DBRelationship,
-        chunk_db_model: Type[SQLModel] = DBChunk,
         graph_type: GraphType = GraphType.general,
     ):
         self.knowledge_base = knowledge_base
@@ -664,9 +665,19 @@ class TiDBGraphStore(KnowledgeGraphStore):
                     embedding
                 ).label("embedding_distance"),
             )
-            .options(defer(self._relationship_model.description_vec))
+            .options(defer(self._relationship_model.description_vec)))
+        
+        # Apply meta filters to the base query before limiting
+        if relationship_meta_filters:
+            logger.debug(f"Applying relationship meta filters: {relationship_meta_filters}")
+            filter_conditions = parse_mongo_style_filter(relationship_meta_filters)
+            subquery = subquery.where(apply_filter_condition(self._relationship_model, filter_conditions))
+        
+        # Create subquery with ordering and limit
+        subquery = (
+            subquery
             .order_by(asc("embedding_distance"))
-            .limit(limit * 10)
+            #.limit(limit * 10)
         ).subquery()
 
         relationships_alias = aliased(self._relationship_model, subquery)
@@ -685,14 +696,8 @@ class TiDBGraphStore(KnowledgeGraphStore):
             .where(relationships_alias.weight >= 0)
         )
 
-        if relationship_meta_filters:
-            for k, v in relationship_meta_filters.items():
-                query = query.where(relationships_alias.meta[k] == v)
-
         if visited_relationships:
-            query = query.where(
-                self._relationship_model.id.notin_(visited_relationships)
-            )
+            query = query.where(subquery.c.id.notin_(visited_relationships))
 
         if distance_range != (0.0, 1.0):
             # embedding_distance between the range
@@ -703,9 +708,7 @@ class TiDBGraphStore(KnowledgeGraphStore):
             ).params(min_distance=distance_range[0], max_distance=distance_range[1])
 
         if visited_entities:
-            query = query.where(
-                self._relationship_model.source_entity_id.in_(visited_entities)
-            )
+            query = query.where(subquery.c.source_entity_id.in_(visited_entities))
 
         query = query.order_by(asc("embedding_distance")).limit(limit)
 

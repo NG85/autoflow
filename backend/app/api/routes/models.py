@@ -1,3 +1,4 @@
+import enum
 from typing import List
 from pydantic import BaseModel
 
@@ -38,4 +39,10 @@ class NotifyTosUploadRequest(BaseModel):
     data_source_type: DataSourceType
     config: List[TosUploadConfig]
     meta: dict
-    
+
+
+class ChatMode(str, enum.Enum):
+    CREATE_CVG_REPORT = "create_cvg_report"
+    SAVE_CVG_REPORT = "save_cvg_report"
+    CVG_CHAT = "cvg_chat"
+    DEFAULT = "default"

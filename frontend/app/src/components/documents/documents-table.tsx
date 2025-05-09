@@ -10,22 +10,25 @@ import { DatasourceCell } from '@/components/cells/reference';
 import { DataTableRemote } from '@/components/data-table-remote';
 import { DocumentPreviewDialog } from '@/components/document-viewer';
 import { DocumentsTableFilters } from '@/components/documents/documents-table-filters';
-import { NextLink } from '@/components/nextjs/NextLink';
 import { getErrorMessage } from '@/lib/errors';
 import type { ColumnDef } from '@tanstack/react-table';
 import { createColumnHelper } from '@tanstack/table-core';
 import { TrashIcon, UploadIcon, BlocksIcon, WrenchIcon, DownloadIcon } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
 
 const helper = createColumnHelper<Document>();
 
 
 
 const getColumns = (kbId: number) => [
-  helper.accessor('id', { header: "#", cell: mono }),
+  helper.accessor('id', { header: "ID", cell: mono }),
   helper.display({
-    id: 'name', header: 'Name', cell: ({ row }) =>
+    id: 'name', 
+    header: 'NAME', 
+    cell: ({ row }) =>
       <DocumentPreviewDialog
         title={row.original.source_uri}
         name={row.original.name}
@@ -34,17 +37,18 @@ const getColumns = (kbId: number) => [
       />,
   }),
   helper.accessor('source_uri', {
-    header: "Source URI",
+    header: "SOURCE URI",
     cell: link({
       icon: <DownloadIcon className="size-3" />,
       truncate: true,
     }),
   }),
-  helper.accessor('data_source', { header: "Data source", cell: ctx => <DatasourceCell {...ctx.getValue()} /> }),
-  helper.accessor('updated_at', { header: "Last updated", cell: datetime }),
-  helper.accessor('index_status', { header: "Index status", cell: mono }),
+  helper.accessor('data_source', { header: "DATA SOURCE", cell: ctx => <DatasourceCell {...ctx.getValue()} /> }),
+  helper.accessor('updated_at', { header: "LAST UPDATED", cell: datetime }),
+  helper.accessor('index_status', { header: "INDEX STATUS", cell: mono }),
   helper.display({
     id: 'op',
+    header: 'ACTIONS',
     cell: actions(row => [
       {
         type: 'label',
@@ -120,15 +124,12 @@ export function DocumentsTable ({ knowledgeBaseId }: { knowledgeBaseId: number }
   return (
     <DataTableRemote
       toolbar={((table) => (
-        <div className="space-y-2">
-          <NextLink
-            href={`/knowledge-bases/${knowledgeBaseId}/data-sources/new?type=file`}
-            variant="secondary"
-          >
-            <UploadIcon />
-            Upload documents
-          </NextLink>
-          <DocumentsTableFilters table={table} onFilterChange={setFilters} />
+          <div className="py-1">
+            <DocumentsTableFilters
+              knowledgeBaseId={knowledgeBaseId}
+              table={table}
+              onFilterChange={setFilters}
+            />
         </div>
       ))}
       columns={columns}
