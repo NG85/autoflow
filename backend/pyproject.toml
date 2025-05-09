@@ -1,9 +1,10 @@
 [project]
-name = "aptsell-ai-python"
-version = "0.0.1"
-description = "APTSell Python Backend"
+name = "tidb-ai-backend"
+version = "0.2.9"
+description = "The Backend Server for TiDB.AI"
 authors = [
-    { name = "zensolst", email = "admin@zensolst.com" }
+    { name = "wd0517", email = "me@wangdi.ink" },
+    { name = "mini256", email = "minianter@gmail.com" }
 ]
 readme = "README.md"
 requires-python = ">= 3.9"
