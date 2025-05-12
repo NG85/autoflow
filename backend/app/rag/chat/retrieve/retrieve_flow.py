@@ -5,6 +5,7 @@ from typing import Generator, List, Optional, Tuple
 from llama_index.core.instrumentation import get_dispatcher
 from llama_index.core.llms import LLM
 from llama_index.core.schema import NodeWithScore, QueryBundle
+from llama_index.core.prompts.rich import RichPromptTemplate
 from pydantic import BaseModel
 from sqlmodel import Session
 
@@ -12,7 +13,6 @@ from app.models import (
     Document as DBDocument,
     KnowledgeBase,
 )
-from app.utils.jinja2 import get_prompt_by_jinja2_template
 from app.rag.chat.config import ChatEngineConfig
 from app.rag.retrievers.knowledge_graph.fusion_retriever import (
     KnowledgeGraphFusionRetriever,
@@ -133,31 +133,34 @@ class RetrieveFlow:
         self, knowledge_graph: KnowledgeGraphRetrievalResult
     ) -> str:
         if self.engine_config.knowledge_graph.using_intent_search:
-            kg_context_template = get_prompt_by_jinja2_template(
-                self.engine_config.llm.intent_graph_knowledge,
-                # For forward compatibility considerations.
+            kg_context_template = RichPromptTemplate(
+                self.engine_config.llm.intent_graph_knowledge
+            )
+            return kg_context_template.format(
                 sub_queries=knowledge_graph.to_subqueries_dict(),
             )
-            return kg_context_template.template
         else:
-            kg_context_template = get_prompt_by_jinja2_template(
-                self.engine_config.llm.normal_graph_knowledge,
+            kg_context_template = RichPromptTemplate(
+                self.engine_config.llm.normal_graph_knowledge
+            )
+            return kg_context_template.format(
                 entities=knowledge_graph.entities,
                 relationships=knowledge_graph.relationships,
             )
-            return kg_context_template.template
 
     def _refine_user_question(
         self, user_question: str, knowledge_graph_context: str
     ) -> str:
-        return self._fast_llm.predict(
-            get_prompt_by_jinja2_template(
-                self.engine_config.llm.condense_question_prompt,
-                graph_knowledges=knowledge_graph_context,
-                question=user_question,
-                current_date=datetime.now().strftime("%Y-%m-%d"),
-            ),
+        prompt_template = RichPromptTemplate(
+            self.engine_config.llm.condense_question_prompt
         )
+        refined_question = self._fast_llm.predict(
+            prompt_template,
+            graph_knowledges=knowledge_graph_context,
+            question=user_question,
+            current_date=datetime.now().strftime("%Y-%m-%d"),
+        )
+        return refined_question.strip().strip(".\"'!")
 
     def search_relevant_chunks(self, user_question: str, crm_authority: Optional[CRMAuthority] = None) -> List[NodeWithScore]:
         retriever = ChunkFusionRetriever(

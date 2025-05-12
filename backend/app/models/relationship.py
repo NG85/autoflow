@@ -16,6 +16,7 @@ from app.models.knowledge_base import KnowledgeBase
 from app.models.enums import GraphType
 from app.models.knowledge_base_scoped.table_naming import get_kb_vector_dims
 from app.utils.namespace import format_namespace
+from app.logger import logger
 
 
 class RelationshipPublic(BaseModel):
@@ -47,6 +48,13 @@ def get_dynamic_relationship_model(
     entity_model_name = entity_model.__name__
     relationship_table_name = f"relationships_{namespace}"
     relationship_model_name = f"Relationship_{namespace}_{vector_dimension}"
+
+    logger.info(
+        "Dynamic create relationship model (dimension: %s, table: %s, model: %s)",
+        vector_dimension,
+        relationship_table_name,
+        relationship_model_name,
+    )
 
     class Relationship(SQLModel):
         id: Optional[int] = Field(default=None, primary_key=True)

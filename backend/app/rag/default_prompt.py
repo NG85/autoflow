@@ -8,21 +8,15 @@ Knowledge sub-queries:
 Sub-query: {{ sub_query }}
 
   - Entities:
-
 {% for entity in data['entities'] %}
-
     - Name: {{ entity.name }}
-    - Description: {{ entity.description }}
-
+      Description: {{ entity.description }}
 {% endfor %}
 
   - Relationships:
-
 {% for relationship in data['relationships'] %}
-
     - Description: {{ relationship.rag_description }}
-    - Weight: {{ relationship.weight }}
-
+      Weight: {{ relationship.weight }}
 {% endfor %}
 
 {% endfor %}
@@ -35,10 +29,8 @@ Given a list of relationships of a knowledge graph as follows. When there is a c
 Entities:
 
 {% for entity in entities %}
-
 - Name: {{ entity.name }}
-- Description: {{ entity.description }}
-
+  Description: {{ entity.description }}
 {% endfor %}
 
 ---------------------
@@ -260,7 +252,6 @@ Follow-up Question:
 Refined Question (include answer language hint):
 """
 
-
 DEFAULT_TEXT_QA_PROMPT = """\
 You are a helpful AI assistant. Your task is to provide accurate and helpful answers to user questions based on the provided knowledge.
 
@@ -274,7 +265,7 @@ Knowledge Graph Information:
 {{graph_knowledges}}
 
 Context Documents:
-<<context_str>>
+{{context_str}}
 
 ---------------------
 GENERAL FRAMEWORK
@@ -411,45 +402,10 @@ Original Question:
 {{original_question}}
 
 Refined Question used to search:
-<<query_str>>
+
+{{query_str}}
 
 Answer:
-"""
-
-DEFAULT_REFINE_PROMPT = """\
-The Original questions is:
-
-{{original_question}}
-
-Refined Question used to search:
-<<query_str>>
-
----------------------
-We have provided an existing answer:
----------------------
-
-<<existing_answer>>
-
----------------------
-We have the opportunity to refine the existing answer (only if needed) with some more knowledge graph and context information below.
-
----------------------
-Knowledge graph information is below
----------------------
-
-{{graph_knowledges}}
-
----------------------
-Context information is below.
----------------------
-
-<<context_msg>>
-
----------------------
-Given the new context, refine the original answer to better answer the query. If the context isn't useful, return the original answer.
-And the answer should use the same language with the question. If the answer has different language with the original question, please translate it to the same language with the question.
-
-Refined Answer:
 """
 
 DEFAULT_FURTHER_QUESTIONS_PROMPT = """\
