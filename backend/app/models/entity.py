@@ -43,7 +43,7 @@ def get_kb_entity_model(kb: KnowledgeBase) -> Type[SQLModel]:
     return get_dynamic_entity_model(vector_dimension, str(kb.id))
 
 
-@lru_cache(maxsize=None)
+@lru_cache(maxsize=20)
 def get_dynamic_entity_model(
     vector_dimension: int,
     namespace: Optional[str] = None,

@@ -37,7 +37,7 @@ def get_kb_relationship_model(kb: KnowledgeBase) -> Type[SQLModel]:
     return get_dynamic_relationship_model(vector_dimension, str(kb.id), entity_model)
 
 
-@lru_cache(maxsize=None)
+@lru_cache(maxsize=20)
 def get_dynamic_relationship_model(
     vector_dimension: int,
     namespace: Optional[str] = None,
