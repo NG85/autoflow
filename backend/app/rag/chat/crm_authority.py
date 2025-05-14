@@ -98,7 +98,7 @@ def get_user_crm_authority(user_id: Optional[UUID]) -> CRMAuthority:
         payload = {
             "dataId": "",
             "highSeasAccounts": False,
-            "type": "",
+            "type": "crm_opportunity",
             "userId": str(user_id)
         }
         

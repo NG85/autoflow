@@ -68,25 +68,25 @@ class CRMDataSource(BaseDataSource):
             if self.config_obj.include_opportunities:
                 yield from self._load_opportunity_documents(db_session)
                     
-            # Load account documents
-            if self.config_obj.include_accounts:
-                yield from self._load_account_documents(db_session)
+            # # Load account documents
+            # if self.config_obj.include_accounts:
+            #     yield from self._load_account_documents(db_session)
                     
-            # Load contact documents
-            if self.config_obj.include_contacts:
-                yield from self._load_contact_documents(db_session)
+            # # Load contact documents
+            # if self.config_obj.include_contacts:
+            #     yield from self._load_contact_documents(db_session)
 
-            # Load order documents
-            if self.config_obj.include_orders:
-                yield from self._load_order_documents(db_session)
+            # # Load order documents
+            # if self.config_obj.include_orders:
+            #     yield from self._load_order_documents(db_session)
                     
-            # Load payment plan documents
-            if self.config_obj.include_payment_plans:
-                yield from self._load_payment_plan_documents(db_session)
+            # # Load payment plan documents
+            # if self.config_obj.include_payment_plans:
+            #     yield from self._load_payment_plan_documents(db_session)
                     
-            # Load sales record documents
-            if self.config_obj.include_updates:
-                yield from self._load_opportunity_updates_documents(db_session)
+            # # Load sales record documents
+            # if self.config_obj.include_updates:
+            #     yield from self._load_opportunity_updates_documents(db_session)
                 
         finally:
             # Close the session we created ourselves
@@ -129,12 +129,11 @@ class CRMDataSource(BaseDataSource):
             
             entities = db_session.exec(query).all()
             
-            # Get related data as needed
-            related_data = get_related_data_func(db_session, entities)
-            
             # Create a Document for each entity
             for entity in entities:
                 try:
+                    # Get related data as needed
+                    related_data = get_related_data_func(db_session, entity.unique_id)
                     # Create a Document using the provided function
                     document = create_document_func(entity, related_data)
                     yield document
@@ -195,13 +194,44 @@ class CRMDataSource(BaseDataSource):
     def _load_opportunity_documents(self, db_session: Session) -> Generator[Document, None, None]:
         """Load opportunity documents from database."""
         
-        def get_related_data(session, opportunities):
-            # No related data for opportunity
-            return {}
+        def get_related_data(session, opportunity_id):
+            # Get related orders (opportunity vs order is 1:1 relationship)
+            orders_query = select(CRMOrder).filter(CRMOrder.opportunity_id==opportunity_id)
+            orders = db_session.exec(orders_query).all()
+            
+            # Get related opportunity updates (opportunity vs updates is 1:N relationship)
+            updates_query = select(CRMOpportunityUpdates).filter(CRMOpportunityUpdates.opportunity_id==opportunity_id)
+            opportunity_updates = db_session.exec(updates_query).all()
+            
+            # Get related payment plans for each order (order vs paymentplan is 1:N relationship)
+            orders_with_payment_plans = []
+            total_payment_plans = 0
+            
+            for order in orders:
+                # Get related payment plans for each order (order vs paymentplan is 1:N relationship)
+                payment_plans_query = select(CRMPaymentPlan).filter(
+                    CRMPaymentPlan.order_id==order.unique_id,
+                    (CRMPaymentPlan.is_deleted.is_(False) | CRMPaymentPlan.is_deleted.is_(None))
+                )
+                order_payment_plans = db_session.exec(payment_plans_query).all()
+                
+                # Store the order and its related payment plans together
+                orders_with_payment_plans.append({
+                    "order": order,
+                    "payment_plans": order_payment_plans
+                })
+                total_payment_plans += len(order_payment_plans)
+            
+            logger.info(f"Found opportunity {opportunity_id} with {len(orders)} orders, {total_payment_plans} payment plans, and {len(opportunity_updates)} updates")
+            
+            return {
+                "orders_with_payment_plans": orders_with_payment_plans,
+                "opportunity_updates": opportunity_updates
+            }
            
         def create_document(opportunity, related_data):
             # Create and return the document
-            return self._create_opportunity_document(opportunity)
+            return self._create_opportunity_document(opportunity, related_data)
         
         return self._load_entity_documents(
             db_session=db_session,
@@ -326,11 +356,11 @@ class CRMDataSource(BaseDataSource):
             create_document_func=create_document
         )
      
-    def _create_opportunity_document(self, opportunity) -> Document:
+    def _create_opportunity_document(self, opportunity, related_data) -> Document:
         """Create a Document object for a single opportunity."""
         # Create document content
         content = []
-        content.extend(format_opportunity_info(opportunity))        
+        content.extend(format_opportunity_info(opportunity, related_data))        
         content_str = "\n".join(content)
         
         # Create metadata
@@ -339,7 +369,7 @@ class CRMDataSource(BaseDataSource):
         doc_datetime = datetime.now()
         # Create Document object
         return Document(
-            name=f"{opportunity.opportunity_name or '未命名商机'}",
+            name=f"{opportunity.opportunity_name or '未命名商机'}.md",
             hash=hash(content_str),
             content=content_str,
             mime_type=MimeTypes.MARKDOWN,
