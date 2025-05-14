@@ -1,5 +1,5 @@
 import enum
-from functools import lru_cache
+from app.utils.singleflight_cache import singleflight_cache
 from typing import Optional, List, Dict, Type
 
 from sqlmodel import (
@@ -43,7 +43,7 @@ def get_kb_entity_model(kb: KnowledgeBase) -> Type[SQLModel]:
     return get_dynamic_entity_model(vector_dimension, str(kb.id))
 
 
-@lru_cache(maxsize=20)
+@singleflight_cache
 def get_dynamic_entity_model(
     vector_dimension: int,
     namespace: Optional[str] = None,

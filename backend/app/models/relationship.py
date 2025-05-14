@@ -1,5 +1,5 @@
 from datetime import datetime
-from functools import lru_cache
+from app.utils.singleflight_cache import singleflight_cache
 from typing import Optional, Type
 from uuid import UUID
 
@@ -37,7 +37,7 @@ def get_kb_relationship_model(kb: KnowledgeBase) -> Type[SQLModel]:
     return get_dynamic_relationship_model(vector_dimension, str(kb.id), entity_model)
 
 
-@lru_cache(maxsize=20)
+@singleflight_cache
 def get_dynamic_relationship_model(
     vector_dimension: int,
     namespace: Optional[str] = None,
