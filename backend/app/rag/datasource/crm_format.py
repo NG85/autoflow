@@ -606,7 +606,7 @@ def format_opportunity_updates(updates, opportunity_name: str) -> List[str]:
         update_type = getattr(update, 'update_type', '未知分类')
         
         date_str = record_date.strftime("%Y-%m-%d") if isinstance(record_date, date) else "未知日期"
-        content.append(f"\n## {date_str} {update_type}类型销售活动")
+        content.append(f"\n## {date_str} {update_type}类的销售活动")
         
         # 处理摘要信息 - 优先显示
         if 'summary' in valid_columns and getattr(update, 'summary'):
@@ -799,7 +799,7 @@ def format_order_info(order) -> List[str]:
             try:
                 # 对于利润表字段，处理为Markdown表格
                 if field_name == "profit_statement" and value:
-                    new_value = '\n'
+                    new_value = '\n\n'
                     new_value += "| 序号 | 文件名 | 扩展名 | 创建时间 | 文件大小 | 文件路径 |\n"
                     new_value += "|------|--------|--------|-----------|----------|-----------|\n"
                     for idx, item in enumerate(value, 1):
@@ -1029,7 +1029,8 @@ def format_payment_plan_info(payment_plan) -> List[str]:
             try:
                 # 对于附件字段，处理为Markdown表格
                 if field_name == "attachment" and value:
-                    new_value += "\n| 序号 | 文件名 | 扩展名 | 创建时间 | 文件大小 | 文件路径 |\n"
+                    new_value = '\n\n'
+                    new_value += "| 序号 | 文件名 | 扩展名 | 创建时间 | 文件大小 | 文件路径 |\n"
                     new_value += "|------|--------|--------|-----------|----------|-----------|\n"
                     for idx, item in enumerate(value, 1):
                         time_str = datetime.fromtimestamp(item['create_time'] / 1000).strftime("%Y-%m-%d %H:%M:%S")

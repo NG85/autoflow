@@ -12,11 +12,11 @@ class LocalFileStorage(FileStorage):
     def open(self, name: str, mode: str = "rb") -> IO:
         return open(self.path(name), mode)
 
-    def save(self, name: str, content: IO) -> None:
+    def save(self, name: str, content: IO | str) -> None:
         path = self.path(name)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "wb") as f:
-            f.write(content.read())
+            f.write(content.read() if isinstance(content, IO) else content.encode('utf-8'))
 
     def delete(self, name: str) -> None:
         os.remove(self.path(name))

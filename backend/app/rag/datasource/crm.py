@@ -23,6 +23,7 @@ from app.rag.datasource.crm_format import(
     format_opportunity_updates,
     get_column_comments_and_names
 )
+from app.rag.datasource.crm_to_file import save_crm_to_file
 from app.models.document import DocumentCategory
 from app.rag.types import CrmDataType
 
@@ -31,18 +32,18 @@ logger = logging.getLogger(__name__)
 
 class CRMDataSourceConfig(BaseModel):
     """Config for CRM data source"""
-    include_accounts: bool = True
-    include_contacts: bool = True
-    include_updates: Optional[bool] = True
-    include_opportunities: bool = True
-    include_orders: Optional[bool] = True
-    include_payment_plans: Optional[bool] = True
-    account_filter: Optional[str] = None
-    contact_filter: Optional[str] = None
+    # include_accounts: Optional[bool] = False
+    # include_contacts: Optional[bool] = True
+    # include_updates: Optional[bool] = True
+    # include_opportunities: Optional[bool] = True
+    # include_orders: Optional[bool] = True
+    # include_payment_plans: Optional[bool] = True
+    # account_filter: Optional[str] = None
+    # contact_filter: Optional[str] = None
     opportunity_filter: Optional[str] = None
-    opportunity_updates_filter: Optional[str] = None
-    order_filter: Optional[str] = None
-    payment_plan_filter: Optional[str] = None
+    # opportunity_updates_filter: Optional[str] = None
+    # order_filter: Optional[str] = None
+    # payment_plan_filter: Optional[str] = None
     max_count: Optional[int] = None
     batch_size: int = 100
 
@@ -65,8 +66,8 @@ class CRMDataSource(BaseDataSource):
             
         try:
             # Load opportunity documents
-            if self.config_obj.include_opportunities:
-                yield from self._load_opportunity_documents(db_session)
+            # if self.config_obj.include_opportunities:
+            yield from self._load_opportunity_documents(db_session)
                     
             # # Load account documents
             # if self.config_obj.include_accounts:
@@ -367,16 +368,19 @@ class CRMDataSource(BaseDataSource):
         metadata = self._create_metadata(opportunity, CrmDataType.OPPORTUNITY)
         
         doc_datetime = datetime.now()
+        upload = save_crm_to_file(opportunity, content_str, doc_datetime, metadata)
+        metadata["upload_file_id"] = upload.id
+        logger.info(f"Created opportunity document {upload.id} with metadata {metadata}")
         # Create Document object
         return Document(
-            name=f"{opportunity.opportunity_name or '未命名商机'}.md",
+            name=upload.name if upload else f"{getattr(opportunity, 'opportunity_name', '未具名商机')}_{getattr(opportunity, 'unique_id')}.md",
             hash=hash(content_str),
             content=content_str,
             mime_type=MimeTypes.MARKDOWN,
             knowledge_base_id=self.knowledge_base_id,
             data_source_id=self.data_source_id,
             user_id=self.user_id,
-            source_uri="crm_database/opportunities",
+            source_uri=upload.path if upload else f"crm/{getattr(opportunity, 'unique_id')}.md",
             created_at=doc_datetime,
             updated_at=doc_datetime,
             last_modified_at=doc_datetime,

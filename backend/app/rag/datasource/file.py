@@ -76,6 +76,7 @@ class FileDataSource(BaseDataSource):
                     "product_category": meta.get("product_category", "Unknown Category")
                 })
                 
+            meta.update({"upload_file_id": upload_id})
             document = Document(
                 name=upload.name,
                 hash=hash(content),
