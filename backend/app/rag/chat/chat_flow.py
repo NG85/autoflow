@@ -121,6 +121,13 @@ class ChatFlow:
                 ChatMessage(role=m.role, content=m.content, additional_kwargs={})
                 for m in chat_repo.get_messages(self.db_session, self.db_chat_obj)
             ]
+            
+            if self.chat_type == ChatType.CLIENT_VISIT_GUIDE and self.chat_mode == ChatMode.CREATE_CVG_REPORT:
+                title = self.user_question_args.get("account_name", "")
+                if title:
+                    title = f"{title}{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                    chat_repo.update_title(self.db_session, self.db_chat_obj, title)
+
         else:
             self.engine_config = ChatEngineConfig.load_from_db(db_session, engine_name)
             self.db_chat_engine = self.engine_config.get_db_chat_engine()
