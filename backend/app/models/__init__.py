@@ -31,3 +31,4 @@ from .reranker_model import RerankerModel, AdminRerankerModel
 from .recommend_question import RecommendQuestion
 from .evaluation_task import EvaluationTask, EvaluationTaskItem, EvaluationStatus
 from .evaluation_dataset import EvaluationDataset, EvaluationDatasetItem
+from .file_permission import FilePermission

@@ -11,7 +11,7 @@ from sqlmodel import (
 
 from app.models.base import UpdatableBaseModel
 from app.types import MimeTypes
-from app.models.document import DocumentMetadata
+from app.models.document import DocumentCategory, DocumentMetadata
 
 class Upload(UpdatableBaseModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -28,15 +28,17 @@ class Upload(UpdatableBaseModel, table=True):
     )
     meta: dict = Field(default={}, sa_column=Column(JSON))
 
+    @property
+    def category(self) -> DocumentCategory:
+        return DocumentCategory(self.meta.get('category', DocumentCategory.GENERAL.value))
+    
+    @category.setter
+    def category(self, value: DocumentCategory):
+        if not self.meta:
+            self.meta = {}
+        self.meta['category'] = value.value
+
     __tablename__ = "uploads"
-
-    def set_metadata(self, metadata: DocumentMetadata):
-        self.meta = metadata.model_dump()
-
-    def get_metadata(self) -> DocumentMetadata | None:
-        if isinstance(self.meta, dict):
-            return DocumentMetadata(**self.meta)
-        return DocumentMetadata()
 
     def set_metadata(self, metadata: DocumentMetadata):
         self.meta = metadata.model_dump()

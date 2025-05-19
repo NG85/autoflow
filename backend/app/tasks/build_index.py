@@ -19,7 +19,6 @@ from app.repositories.chunk import ChunkRepo
 from app.models.entity import get_kb_entity_model
 from app.models.relationship import get_kb_relationship_model
 from app.models.document import DocumentCategory
-from app.tasks.build_crm_index import build_crm_graph_index_for_document
 from app.tasks.build_playbook_index import build_playbook_index_for_document
 
 logger = get_task_logger(__name__)
@@ -88,22 +87,22 @@ def build_index_for_document(self, knowledge_base_id: int, document_id: int):
         return
 
     # Build knowledge graph index.
-    if doc_category == DocumentCategory.CRM:
-        logger.info(f"Need to build crm index for document #{document_id}")
-        build_crm_graph_index_for_document.delay(knowledge_base_id, document_id)
-    else:
-        if doc_category == DocumentCategory.PLAYBOOK:
-            logger.info(f"Need to build playbook index for document #{document_id}")
-            build_playbook_index_for_document.delay(knowledge_base_id, document_id)
-        
-        with Session(engine, expire_on_commit=False) as session:
-            kb = knowledge_base_repo.must_get(session, knowledge_base_id)
-            if IndexMethod.KNOWLEDGE_GRAPH not in kb.index_methods:
-                return
-            chunk_repo = ChunkRepo(get_kb_chunk_model(kb))
-            chunks = chunk_repo.get_document_chunks(session, document_id)
-            for chunk in chunks:
-                build_kg_index_for_chunk.delay(knowledge_base_id, chunk.id)
+    # if doc_category == DocumentCategory.CRM:
+    #     logger.info(f"Need to build crm index for document #{document_id}")
+    #     build_crm_graph_index_for_document.delay(knowledge_base_id, document_id)
+    # else:
+    if doc_category == DocumentCategory.PLAYBOOK or doc_category == DocumentCategory.CRM:
+        logger.info(f"Need to build playbook index for document #{document_id}")
+        build_playbook_index_for_document.delay(knowledge_base_id, document_id)
+    
+    with Session(engine, expire_on_commit=False) as session:
+        kb = knowledge_base_repo.must_get(session, knowledge_base_id)
+        if IndexMethod.KNOWLEDGE_GRAPH not in kb.index_methods:
+            return
+        chunk_repo = ChunkRepo(get_kb_chunk_model(kb))
+        chunks = chunk_repo.get_document_chunks(session, document_id)
+        for chunk in chunks:
+            build_kg_index_for_chunk.delay(knowledge_base_id, chunk.id)
 
 
 @celery_app.task

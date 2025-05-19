@@ -9,6 +9,9 @@ from llama_index.core.vector_stores.types import (
     BasePydanticVectorStore,
     VectorStoreQuery,
     VectorStoreQueryResult,
+    MetadataFilters,
+    FilterOperator,
+    FilterCondition,
 )
 from llama_index.core.vector_stores.utils import (
     metadata_dict_to_node,
@@ -21,9 +24,12 @@ from sqlmodel import (
     select,
     asc,
     alias,
+    and_,
+    or_,
 )
 from tidb_vector.sqlalchemy import VectorAdaptor
 from app.core.db import engine
+from sqlalchemy.sql import func
 
 
 logger = logging.getLogger(__name__)
@@ -178,9 +184,6 @@ class TiDBVectorStore(BasePydanticVectorStore):
         Raises:
             ValueError: If the query embedding is not provided.
         """
-        # TODO:
-        # - Support advanced query filters
-        # - Support both pre-filter and post-filter
         if query.query_embedding is None:
             raise ValueError("Query embedding must be provided.")
 
@@ -194,9 +197,83 @@ class TiDBVectorStore(BasePydanticVectorStore):
             ),
         )
 
-        if query.filters:
-            for f in query.filters.filters:
-                subquery = subquery.stmt(self._chunk_db_model.meta[f.key] == f.value)
+        def build_filter_condition(filters: MetadataFilters):
+            """Build filter condition recursively, support compound conditions (AND, OR) and multiple operators"""
+            if not filters.filters:
+                return None
+
+            conditions = []
+            for f in filters.filters:
+                if isinstance(f, MetadataFilters):
+                    # recursively handle nested compound conditions
+                    sub_condition = build_filter_condition(f)
+                    if sub_condition is not None:
+                        conditions.append(sub_condition)
+                else:
+                    # handle single filter condition
+                    meta_value = self._chunk_db_model.meta[f.key].as_string()
+                    filter_value = f.value
+
+                    logger.debug(f"Building filter condition: {f.key} {f.operator} {filter_value}")
+                    # build condition based on operator type
+                    if f.operator == FilterOperator.EQ:
+                        conditions.append(meta_value == filter_value)
+                    elif f.operator == FilterOperator.NE:
+                        conditions.append(meta_value != filter_value)
+                    elif f.operator == FilterOperator.GT:
+                        conditions.append(meta_value > filter_value)
+                    elif f.operator == FilterOperator.GTE:
+                        conditions.append(meta_value >= filter_value)
+                    elif f.operator == FilterOperator.LT:
+                        conditions.append(meta_value < filter_value)
+                    elif f.operator == FilterOperator.LTE:
+                        conditions.append(meta_value <= filter_value)
+                    elif f.operator == FilterOperator.IN:
+                        conditions.append(meta_value.in_(filter_value))
+                    elif f.operator == FilterOperator.NIN:
+                        conditions.append(~meta_value.in_(filter_value))
+                    elif f.operator == FilterOperator.CONTAINS:
+                        conditions.append(meta_value.contains(filter_value))
+                    elif f.operator == FilterOperator.IS_EMPTY:
+                        conditions.append(or_(
+                            meta_value.is_(None),
+                            meta_value == "",
+                            meta_value == "[]"
+                        ))
+                    elif f.operator == FilterOperator.TEXT_MATCH:
+                        conditions.append(meta_value.contains(str(filter_value)))
+                    elif f.operator == FilterOperator.TEXT_MATCH_INSENSITIVE:
+                        conditions.append(func.lower(meta_value).contains(func.lower(str(filter_value))))
+                    elif f.operator == FilterOperator.ANY:
+                        # for ANY operator, we need to check if meta_value contains any value in filter_value
+                        any_conditions = [meta_value.contains(str(item)) for item in filter_value]
+                        conditions.append(or_(*any_conditions))
+                    elif f.operator == FilterOperator.ALL:
+                        # for ALL operator, we need to check if meta_value contains all values in filter_value
+                        all_conditions = [meta_value.contains(str(item)) for item in filter_value]
+                        conditions.append(and_(*all_conditions))
+                    else:
+                        # default use equal operator
+                        conditions.append(meta_value == filter_value)
+            
+            # merge conditions based on condition type
+            if not conditions:
+                return None
+                
+            if filters.condition == FilterCondition.AND:
+                return and_(*conditions)
+            else:  # FilterCondition.OR
+                return or_(*conditions)
+
+        if query.filters and isinstance(query.filters, MetadataFilters):
+            logger.debug(f"Add metadata filter to vector store query: {len(query.filters)}")
+            filter_condition = build_filter_condition(query.filters)
+            if filter_condition is not None:
+                subquery = subquery.where(filter_condition)
+
+        if query.doc_ids:
+            logger.debug(f"Add document_id filter to vector store query: {len(query.doc_ids)}")
+            subquery = subquery.where(self._chunk_db_model.document_id.in_(query.doc_ids))
 
         sub = alias(
             subquery.order_by(asc("distance"))

@@ -36,7 +36,7 @@ from app.rag.llms.dspy import get_dspy_lm_by_llama_llm
 from app.rag.retrievers.knowledge_graph.schema import KnowledgeGraphRetrievalResult
 from app.rag.types import ChatEventType, ChatMessageSate
 from app.rag.utils import parse_goal_response_format
-from app.repositories import chat_repo, knowledge_base_repo
+from app.repositories import chat_repo, file_permission_repo
 from app.site_settings import SiteSetting
 from app.utils.tracing import LangfuseContextManager
 from app.rag import default_prompt
@@ -315,21 +315,28 @@ class ChatFlow:
         # self.competitor_knowledge_base = knowledge_base_repo.must_get(self.db_session, self.competitor_knowledge_base_id, False)
         # self.retrieve_flow.knowledge_bases.append(self.competitor_knowledge_base)
         
+        self.granted_files = []
         self.crm_authority = None
+        # 1. Identity verification and permission check step
+        yield ChatEvent(
+            event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
+            payload=ChatStreamMessagePayload(
+                state=ChatMessageSate.AUTHORIZATION,
+                display="Verifying data access permissions",
+            ),
+        )
+        
+        # 1.1. Get the user's granted documents
+        user_id = self.user.id if self.user else None
+        self.granted_files = file_permission_repo.get_user_accessible_file_ids(self.db_session, user_id)
+        logger.debug(f"User {user_id} granted files: {len(self.granted_files)}")
+
         if settings.CRM_ENABLED:
-            # 1. Identity verification and permission check step
-            yield ChatEvent(
-                event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
-                payload=ChatStreamMessagePayload(
-                    state=ChatMessageSate.AUTHORIZATION,
-                    display="Verifying data access permissions",
-                ),
-            )
-            # Initialize CRM authority control
+            # 1.2. Initialize CRM authority control
             self.crm_authority = get_user_crm_authority(
-                user_id=self.user.id if self.user else None
+                user_id=user_id
             )
-            logger.info(f"CRM authority initialized for user {self.user.id if self.user else 'anonymous'}")
+            logger.info(f"CRM authority initialized for user {user_id}")
         
             if self.user and not self.crm_authority.is_empty():
                 # Record user permission statistics information
@@ -341,8 +348,7 @@ class ChatFlow:
             knowledge_graph,
             knowledge_graph_context,
         ) = yield from self._search_knowledge_graph(
-            user_question=self.user_question,
-            crm_authority=self.crm_authority,
+            user_question=self.user_question
         )
 
         # 3. Refine the user question using knowledge graph and chat history.
@@ -383,8 +389,7 @@ class ChatFlow:
              
         # 5. Use refined question to search for relevant chunks.
         relevant_chunks = yield from self._search_relevance_chunks(
-            user_question=refined_question,
-            crm_authority=self.crm_authority
+            user_question=refined_question
         )
 
         # 6. Generate a response using the refined question and related chunks
@@ -438,7 +443,6 @@ class ChatFlow:
     def _search_knowledge_graph(
         self,
         user_question: str,
-        crm_authority: Optional[CRMAuthority] = None,
         annotation_silent: bool = False,
     ) -> Generator[ChatEvent, None, Tuple[KnowledgeGraphRetrievalResult, str]]:
         kg_config = self.engine_config.knowledge_graph
@@ -470,11 +474,12 @@ class ChatFlow:
             self._ensure_retrieve_flow_initialized()
             kg_search_gen = self.retrieve_flow.search_knowledge_graph(
                 user_question,
-                crm_authority=crm_authority
+                crm_authority=self.crm_authority,
+                granted_files=self.granted_files
             )
             knowledge_graph = KnowledgeGraphRetrievalResult()
             knowledge_graph_context = ""
-            
+            stage = ChatMessageSate.KG_RETRIEVAL
             try:
                 while True:
                     try:
@@ -621,7 +626,7 @@ class ChatFlow:
             return need_clarify, need_clarify_response
 
     def _search_relevance_chunks(
-        self, user_question: str, crm_authority: Optional[CRMAuthority] = None
+        self, user_question: str
     ) -> Generator[ChatEvent, None, List[NodeWithScore]]:
         with self._trace_manager.span(
             name="search_relevance_chunks", input=user_question
@@ -636,7 +641,8 @@ class ChatFlow:
 
             relevance_chunks = self.retrieve_flow.search_relevant_chunks(
                 user_question,
-                crm_authority=crm_authority
+                crm_authority=self.crm_authority,
+                granted_files=self.granted_files
             )
             
             span.end(

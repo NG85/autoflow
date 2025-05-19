@@ -9,3 +9,4 @@ from .knowledge_base import knowledge_base_repo
 from .feedback import feedback_repo
 from .llm import llm_repo
 from .embedding_model import embedding_model_repo
+from .file_permission import file_permission_repo
