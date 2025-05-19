@@ -1,5 +1,5 @@
 import os
-from typing import IO
+from typing import IO, Union
 
 from app.file_storage.base import FileStorage
 from app.core.config import settings
@@ -12,11 +12,14 @@ class LocalFileStorage(FileStorage):
     def open(self, name: str, mode: str = "rb") -> IO:
         return open(self.path(name), mode)
 
-    def save(self, name: str, content: IO | str) -> None:
+    def save(self, name: str, content: Union[str, bytes, IO]) -> None:
         path = self.path(name)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "wb") as f:
-            f.write(content.read() if isinstance(content, IO) else content.encode('utf-8'))
+            if isinstance(content, (str, bytes)):
+                f.write(content.encode('utf-8') if isinstance(content, str) else content)
+            else:
+                f.write(content.read())
 
     def delete(self, name: str) -> None:
         os.remove(self.path(name))
