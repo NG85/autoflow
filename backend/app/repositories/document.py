@@ -74,5 +74,13 @@ class DocumentRepo(BaseRepo):
         stmt = select(Document).where(Document.id.in_(document_ids))
         return session.exec(stmt).all()
 
+    def fetch_ids_by_file_ids(self, session: Session, file_ids: list[int]) -> list[int]:
+        stmt = select(Document.id).where(
+            or_(
+                Document.file_id.in_(file_ids),
+                Document.file_id.is_(None)
+            )
+        )
+        return session.exec(stmt).all()
 
 document_repo = DocumentRepo()

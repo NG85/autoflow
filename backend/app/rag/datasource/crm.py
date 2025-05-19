@@ -369,7 +369,6 @@ class CRMDataSource(BaseDataSource):
         
         doc_datetime = datetime.now()
         upload = save_crm_to_file(opportunity, content_str, doc_datetime, metadata)
-        metadata["upload_file_id"] = upload.id
         logger.info(f"Created opportunity document {upload.id} with metadata {metadata}")
         # Create Document object
         return Document(
@@ -380,6 +379,7 @@ class CRMDataSource(BaseDataSource):
             knowledge_base_id=self.knowledge_base_id,
             data_source_id=self.data_source_id,
             user_id=self.user_id,
+            file_id=upload.id,
             source_uri=upload.path if upload else f"crm/{getattr(opportunity, 'unique_id')}.md",
             created_at=doc_datetime,
             updated_at=doc_datetime,
@@ -535,18 +535,21 @@ class CRMDataSource(BaseDataSource):
         
         if entity:
             # Define the key fields to retain
-            key_fields = {"unique_id", "account_id", "account_name", "customer_id", "customer_name", "customer_level", "industry",
-                          "opportunity_id", "opportunity_name", "forecast_type", "opportunity_stage", "stage_status", "expected_closing_date",
-                          "sales_order_number", "order_id", "name", "plan_payment_status",
-                          "person_in_charge", "department", "owner", "owner_department", "owner_main_department",
-                          "responsible_person", "responsible_department"}
+            # key_fields = {"unique_id", "account_id", "account_name", "customer_id", "customer_name", "customer_level", "industry",
+            #               "opportunity_id", "opportunity_name", "forecast_type", "opportunity_stage", "stage_status", "expected_closing_date",
+            #               "sales_order_number", "order_id", "name", "plan_payment_status",
+            #               "person_in_charge", "department", "owner", "owner_department", "owner_main_department",
+            #               "responsible_person", "responsible_department"}
             
-            for field_name in key_fields:
-                if hasattr(entity, field_name):
-                    value = getattr(entity, field_name, None)
-                    if value is None:
-                        continue
+            # for field_name in key_fields:
+            #     if hasattr(entity, field_name):
+            #         value = getattr(entity, field_name, None)
+            #         if value is None:
+            #             continue
                     
-                    metadata[field_name] = value if isinstance(value, str) else str(value) if value else ""
+            #         metadata[field_name] = value if isinstance(value, str) else str(value) if value else ""
+
+            value = getattr(entity, "unique_id", None)
+            metadata["unique_id"] = value if isinstance(value, str) else str(value) if value else ""
         
         return metadata

@@ -21,7 +21,7 @@ from app.rag.retrievers.knowledge_graph.schema import (
     MetadataFilterConfig,
 )
 from app.rag.types import ChatMessageSate, CrmDataType, MyCBEventType
-from app.repositories import knowledge_base_repo
+from app.repositories import knowledge_base_repo, document_repo
 from app.rag.chat.crm_authority import CRMAuthority
 
 
@@ -40,6 +40,7 @@ class KnowledgeGraphFusionRetriever(MultiKBFusionRetriever, KnowledgeGraphRetrie
         config: KnowledgeGraphRetrieverConfig = KnowledgeGraphRetrieverConfig(),
         callback_manager: Optional[CallbackManager] = CallbackManager([]),
         crm_authority: Optional[CRMAuthority] = None,
+        granted_files: Optional[List[int]] = None,
         **kwargs,
     ):
         self.use_query_decompose = use_query_decompose
@@ -80,7 +81,9 @@ class KnowledgeGraphFusionRetriever(MultiKBFusionRetriever, KnowledgeGraphRetrie
                     }
                 ]
             }
-
+        filter_doc_ids = document_repo.fetch_ids_by_file_ids(db_session, granted_files)
+        logger.debug(f"Will filter knowledge graph by granted document ids: {filter_doc_ids}")
+        
         for kb in knowledge_bases:
             self.knowledge_base_map[kb.id] = kb
             retrievers.append(
@@ -89,6 +92,7 @@ class KnowledgeGraphFusionRetriever(MultiKBFusionRetriever, KnowledgeGraphRetrie
                     knowledge_base_id=kb.id,
                     config=config,
                     callback_manager=callback_manager,
+                    filter_doc_ids=filter_doc_ids
                 )
             )
 

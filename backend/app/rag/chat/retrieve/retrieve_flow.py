@@ -84,7 +84,7 @@ class RetrieveFlow:
         return self.get_documents_from_nodes(nodes)
 
     def search_knowledge_graph(
-        self, user_question: str, crm_authority: Optional[CRMAuthority] = None
+        self, user_question: str, crm_authority: Optional[CRMAuthority] = None, granted_files: Optional[List[int]] = None
     ) -> Generator[Tuple[ChatMessageSate, str], None, Tuple[KnowledgeGraphRetrievalResult, str]]:
         kg_config = self.engine_config.knowledge_graph
         knowledge_graph = KnowledgeGraphRetrievalResult()
@@ -98,7 +98,8 @@ class RetrieveFlow:
                 config=KnowledgeGraphRetrieverConfig.model_validate(
                     kg_config.model_dump(exclude={"enabled", "using_intent_search"})
                 ),
-                crm_authority=crm_authority
+                crm_authority=crm_authority,
+                granted_files=granted_files
             )
             try:
                 kg_gen = kg_retriever.retrieve_knowledge_graph(user_question)
@@ -162,14 +163,15 @@ class RetrieveFlow:
         )
         return refined_question.strip().strip(".\"'!")
 
-    def search_relevant_chunks(self, user_question: str, crm_authority: Optional[CRMAuthority] = None) -> List[NodeWithScore]:
+    def search_relevant_chunks(self, user_question: str, crm_authority: Optional[CRMAuthority] = None, granted_files: Optional[List[int]] = None) -> List[NodeWithScore]:
         retriever = ChunkFusionRetriever(
             db_session=self.db_session,
             knowledge_base_ids=self.knowledge_base_ids,
             llm=self._llm,
             config=self.engine_config.vector_search,
             use_query_decompose=False,
-            crm_authority=crm_authority
+            crm_authority=crm_authority,
+            granted_files=granted_files
         )
         nodes = retriever.retrieve(QueryBundle(user_question))
 

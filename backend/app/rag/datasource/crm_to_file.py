@@ -28,7 +28,6 @@ def save_crm_to_file(opportunity, doc_content, doc_datetime, doc_metadata):
                 updated_at=doc_datetime
             )
             document_metadata = DocumentMetadata(
-                category=doc_metadata.pop("category", DocumentCategory.CRM),
                 **doc_metadata
             )
             upload.set_metadata(document_metadata)
