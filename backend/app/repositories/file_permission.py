@@ -55,6 +55,21 @@ class FilePermissionRepo(BaseRepo):
             if category:
                 base_conditions.append(self._get_category_condition(category, operator))
     
+            # 检查该用户在权限表中是否有任何记录
+            has_permissions = session.exec(
+                select(FilePermission.id).where(
+                    FilePermission.user_id == user_id
+                ).limit(1)
+            ).first() is not None
+
+            if not has_permissions:
+                # # 如果该用户在权限表中没有任何记录，返回所有文件ID
+                # return session.exec(
+                #     select(Upload.id).where(*base_conditions)
+                # ).all()
+                # 如果该用户在权限表中没有任何记录，返回空列表 - 代表所有文件权限都公开
+                return []
+
             # 1. 获取没有权限记录的文件（默认公开）
             public_files = select(Upload.id).where(
                 and_(

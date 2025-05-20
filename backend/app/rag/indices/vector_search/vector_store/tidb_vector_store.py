@@ -266,14 +266,17 @@ class TiDBVectorStore(BasePydanticVectorStore):
                 return or_(*conditions)
 
         if query.filters and isinstance(query.filters, MetadataFilters):
-            logger.debug(f"Add metadata filter to vector store query: {len(query.filters)}")
+            logger.debug(f"Add metadata filter to vector store query: {query.filters}")
             filter_condition = build_filter_condition(query.filters)
             if filter_condition is not None:
                 subquery = subquery.where(filter_condition)
 
-        if query.doc_ids:
+        if query.doc_ids and len(query.doc_ids) > 0:
             logger.debug(f"Add document_id filter to vector store query: {len(query.doc_ids)}")
             subquery = subquery.where(self._chunk_db_model.document_id.in_(query.doc_ids))
+        else:
+            # No document_id filter, query all chunks
+            logger.debug("No document_id filter, query all chunks from vector store")
 
         sub = alias(
             subquery.order_by(asc("distance"))

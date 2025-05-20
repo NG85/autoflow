@@ -75,6 +75,11 @@ class DocumentRepo(BaseRepo):
         return session.exec(stmt).all()
 
     def fetch_ids_by_file_ids(self, session: Session, file_ids: list[int]) -> list[int]:
+        if not file_ids:
+            # 如果 file_ids 为空列表，返回空列表表示所有文档
+            return []
+            
+        # 当 file_ids 不为空时，使用 in_ 操作符
         stmt = select(Document.id).where(
             or_(
                 Document.file_id.in_(file_ids),
