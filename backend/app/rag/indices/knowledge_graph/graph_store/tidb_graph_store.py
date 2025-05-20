@@ -670,9 +670,12 @@ class TiDBGraphStore(KnowledgeGraphStore):
                 ).label("embedding_distance"),
             )
             .options(defer(self._relationship_model.description_vec)))
-        if filter_doc_ids:
+        if filter_doc_ids and len(filter_doc_ids) > 0:
             logger.debug(f"Add document_id filter to knowledge graph query: {len(filter_doc_ids)}")
             subquery = subquery.where(self._relationship_model.document_id.in_(filter_doc_ids))
+        else:
+            # No document_id filter, query all relationships
+            logger.debug("No document_id filter, query all relationships from knowledge graph")
 
         # Apply meta filters to the base query before limiting
         if relationship_meta_filters:
