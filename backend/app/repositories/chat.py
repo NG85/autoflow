@@ -73,6 +73,17 @@ class ChatRepo(BaseRepo):
             raise ChatNotFound(chat_id)
         return chat
 
+    def update_title(
+        self,
+        session: Session,
+        chat: Chat,
+        title: str,
+    ) -> Chat:
+        chat.title = title
+        session.commit()
+        session.refresh(chat)
+        return chat
+    
     def update(
         self,
         session: Session,

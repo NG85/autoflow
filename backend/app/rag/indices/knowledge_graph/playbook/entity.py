@@ -10,21 +10,20 @@ class Persona(Entity):
         description=(
             "The covariates to claim the persona entity including:\n"
             "- topic: Always 'persona'\n"
-            "- industry: Target industry of the organization\n"
-            "- persona_type: Type of organization or department (e.g., 'Enterprise Company', 'IT Department', 'Security Team')\n"
+            "- industry: (Optional) Target industry of the organization\n"
+            "- persona_type: (Optional) Type of organization or department (e.g., 'Enterprise Company', 'IT Department', 'Security Team')\n"
             "- role: (Optional) Object containing role information:\n"
-            "  - title: Job position or title (use 'Unspecified Role' if not explicitly mentioned)\n"
-            "  - level: One of ['c_level', 'middle_management', 'operational_staff']"
+            "  - title: (Optional) Job position or title (use 'Unspecified Role' if not explicitly mentioned)\n"
+            "  - level: (Optional) One of ['c_level', 'middle_management', 'operational_staff']"
         ),
         json_schema_extra={
-            "required": ["topic", "industry", "persona_type", "role", "role_level"],
+            "required": ["topic"],
             "properties": {
                 "topic": {"type": "string", "const": "persona"},
                 "industry": {"type": "string"},
                 "persona_type": {"type": "string"},
                 "role": {
                     "type": "object",
-                    "required": ["title", "level"],
                     "properties": {
                         "title": {"type": "string"},
                         "level": {
@@ -45,12 +44,12 @@ class PainPoint(Entity):
         description=(
             "The covariates to claim the pain point entity including:\n"
             "- topic: Always 'pain_point'\n"
-            "- scenario: Specific context or situation\n"
-            "- impact: Business or operational impact\n"
-            "- severity: (optional) Level of severity"
+            "- scenario: (Optional) Specific context or situation\n"
+            "- impact: (Optional) Business or operational impact\n"
+            "- severity: (Optional) Level of severity"
         ),
         json_schema_extra={
-            "required": ["topic", "scenario", "impact"],
+            "required": ["topic"],
             "properties": {
                 "topic": {"type": "string"},
                 "scenario": {"type": "string"},
@@ -68,12 +67,12 @@ class Feature(Entity):
         description=(
             "The covariates to claim the feature entity including:\n"
             "- topic: Always 'feature'\n"
-            "- source: Product source ('own' or competitor product name), defaults to 'own' for backward compatibility\n"
-            "- benefits: List of specific business benefits\n"
-            "- technical_details: (optional) Technical specifications and requirements"
+            "- source: (Optional) Product source ('own' or competitor product name), defaults to 'own' for backward compatibility\n"
+            "- benefits: (Optional) List of specific business benefits\n"
+            "- technical_details: (Optional) Technical specifications and requirements"
         ),
         json_schema_extra={
-            "required": ["topic", "benefits"],
+            "required": ["topic"],
             "properties": {
                 "topic": {"type": "string"},
                 "source": {"type": "string", "default": "own"},
@@ -93,13 +92,13 @@ class Cases(Entity):
         description=(
             "The covariates to claim the case entity including:\n"
             "- topic: Always 'case'\n"
-            "- domain: domain of the case (industry + business scenario, e.g. 'financial risk control')\n"
-            "- features: list of related features/products\n"
-            "- outcomes: implementation results (must include quantifiable metrics)\n"
-            "- references: (optional) reference customer/implementation period information"
+            "- domain: (Optional) domain of the case (industry + business scenario, e.g. 'financial risk control')\n"
+            "- features: (Optional) list of related features/products\n"
+            "- outcomes: (Optional) implementation results (must include quantifiable metrics)\n"
+            "- references: (Optional) reference customer/implementation period information"
         ),
         json_schema_extra={
-            "required": ["topic", "domain", "features", "outcomes"],
+            "required": ["topic"],
             "properties": {
                 "topic": {"type": "string", "const": "case"},
                 "domain": {"type": "string"},
@@ -120,12 +119,12 @@ class Competitor(Entity):
         description=(
             "The covariates to claim the competitor product entity including:\n"
             "- topic: Always 'competitor'\n"
-            "- name: Product name (e.g., 'MongoDB Atlas', 'Oracle Database')\n"
-            "- company: Company that owns the product\n"
-            "- category: Product category (e.g., 'Database', 'Data Migration Tool')\n"
+            "- name: (Optional) Product name (e.g., 'MongoDB Atlas', 'Oracle Database')\n"
+            "- company: (Optional) Company that owns the product\n"
+            "- category: (Optional) Product category (e.g., 'Database', 'Data Migration Tool')\n"
         ),
         json_schema_extra={
-            "required": ["topic", "name", "company", "category"],
+            "required": ["topic"],
             "properties": {
                 "topic": {"type": "string", "const": "competitor"},
                 "name": {"type": "string"},

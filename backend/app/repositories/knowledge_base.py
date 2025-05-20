@@ -309,7 +309,10 @@ class KnowledgeBaseRepo(BaseRepo):
         stmt = select(chunk_model.id).where(
             chunk_model.document.has(Document.knowledge_base_id == kb.id),
             chunk_model.playbook_index_status == PlaybookKgIndexStatus.FAILED,
-            chunk_model.document.has(func.json_extract(Document.meta, "$.category") == DocumentCategory.PLAYBOOK)
+            or_(
+                chunk_model.document.has(func.json_extract(Document.meta, "$.category") == DocumentCategory.PLAYBOOK),
+                chunk_model.document.has(func.json_extract(Document.meta, "$.category") == DocumentCategory.CRM)
+            )
         )
         chunk_ids = session.exec(stmt).all()
 
@@ -329,7 +332,10 @@ class KnowledgeBaseRepo(BaseRepo):
             chunk_model.document.has(
                 and_(
                     Document.knowledge_base_id == kb.id,
-                    func.json_unquote(func.json_extract(Document.meta, "$.category")) == DocumentCategory.PLAYBOOK
+                    or_(
+                        func.json_unquote(func.json_extract(Document.meta, "$.category")) == DocumentCategory.PLAYBOOK,
+                        func.json_unquote(func.json_extract(Document.meta, "$.category")) == DocumentCategory.CRM
+                    )
                 )
             ),
             or_(

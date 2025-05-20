@@ -496,6 +496,7 @@ class TiDBGraphStore(KnowledgeGraphStore):
         # experimental feature to filter relationships based on meta, can be removed in the future
         relationship_meta_filters: dict = {},
         session: Optional[Session] = None,
+        filter_doc_ids: Optional[List[int]] = None,
     ) -> Tuple[List[RetrievedEntity], List[RetrievedRelationship]]:
         if not embedding:
             assert query, "Either query or embedding must be provided"
@@ -508,6 +509,7 @@ class TiDBGraphStore(KnowledgeGraphStore):
             with_degree=with_degree,
             relationship_meta_filters=relationship_meta_filters,
             session=session,
+            filter_doc_ids=filter_doc_ids
         )
 
         all_relationships = set(relationships)
@@ -547,6 +549,7 @@ class TiDBGraphStore(KnowledgeGraphStore):
                     with_degree=with_degree,
                     relationship_meta_filters=relationship_meta_filters,
                     session=session,
+                    filter_doc_ids=filter_doc_ids
                 )
 
                 all_relationships.update(new_relationships)
@@ -656,6 +659,7 @@ class TiDBGraphStore(KnowledgeGraphStore):
         with_degree: bool = False,
         relationship_meta_filters: Dict = {},
         session: Optional[Session] = None,
+        filter_doc_ids: Optional[List[int]] = None,
     ) -> Tuple[List[SQLModel], List[SQLModel]]:
         # select the relationships to rank
         subquery = (
@@ -666,7 +670,10 @@ class TiDBGraphStore(KnowledgeGraphStore):
                 ).label("embedding_distance"),
             )
             .options(defer(self._relationship_model.description_vec)))
-        
+        if filter_doc_ids:
+            logger.debug(f"Add document_id filter to knowledge graph query: {len(filter_doc_ids)}")
+            subquery = subquery.where(self._relationship_model.document_id.in_(filter_doc_ids))
+
         # Apply meta filters to the base query before limiting
         if relationship_meta_filters:
             logger.debug(f"Applying relationship meta filters: {relationship_meta_filters}")

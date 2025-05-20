@@ -35,6 +35,9 @@ class ExtractPlaybookTriplet(dspy.Signature):
         - Terms containing "case", "customer success", "implementation scenario" should be classified as cases
         - Case entities must contain measurable results and implementation details
         - Generic terms without clear classification should be excluded
+        - Only extract entities that are explicitly mentioned in the text
+        - Do not infer or make assumptions about missing information
+        - Each entity must have clear evidence in the source text
             
     2. Establish Relationships:
       Valid Relationship Patterns:
@@ -75,12 +78,14 @@ class ExtractPlaybookTriplet(dspy.Signature):
         - No relationships between same entity types
         - Both source and target entities must exist and be valid
         - Must use exact entity names in relationships
+        - Only extract relationships that are explicitly mentioned in the text
+        - Do not infer or make assumptions about relationships
           
     3. Quality Guidelines:
       Basic Entity Information:
         - Each entity MUST have:
-          * name: Clear, specific identifier
-          * description: Detailed description in complete sentences
+          * name: Clear, specific identifier (must be from source text)
+          * description: Detailed description in complete sentences (must be based on source text)
           * metadata.topic: Must be exactly one of: "persona", "pain_point", "feature", or "case"
        
       Relationship Rules:
@@ -94,6 +99,7 @@ class ExtractPlaybookTriplet(dspy.Signature):
         - Both source and target entities must be valid
         - Relationship descriptions must be specific and verifiable
         - Must use exact entity names in relationships
+        - Only extract relationships that are explicitly mentioned in the text
 
     Please only response in JSON format:
     {
@@ -127,26 +133,26 @@ class ExtractPlaybookCovariate(dspy.Signature):
     1. Persona entities:
         {
             "topic": "persona",  # Must be first field and keep unchanged from input
-            "industry": "specific industry name",  # Required
-            "persona_type": "organization or department type",  # Required
+            "industry": "specific industry name",  # Optional
+            "persona_type": "organization or department type",  # Optional
             "role": {  # Optional object
-                "title": "specific job title",  # Required if role is present
-                "level": "c_level|middle_management|operational_staff"  # Required if role is present
+                "title": "specific job title",  # Optional
+                "level": "c_level|middle_management|operational_staff"  # Optional
             }
         }
 
     2. Pain Point entities:
         {
             "topic": "pain_point",  # Must be first field and keep unchanged from input
-            "scenario": "specific context",  # Required
-            "impact": "quantifiable business impact",  # Required
+            "scenario": "specific context",  # Optional
+            "impact": "quantifiable business impact",  # Optional
             "severity": "Critical|High|Medium|Low"  # Optional
         }
         
     3. Feature entities:
         {
             "topic": "feature",  # Must be first field and keep unchanged from input
-            "benefits": ["specific business benefit 1", "benefit 2"],  # Required, must be array
+            "benefits": ["specific business benefit 1", "benefit 2"],  # Optional, must be array if present
             "technical_details": {  # Optional
                 "key1": "value1",
                 "key2": "value2"
@@ -155,19 +161,18 @@ class ExtractPlaybookCovariate(dspy.Signature):
     4. Case entities:
         {
             "topic": "case",  # Must be first field and keep unchanged from input
-            "domain": "specific industry name",  # Required
-            "features": ["product/feature name 1", "product/feature name 2"],  # Required, array format
-            "outcomes": "quantifiable implementation results",  # Required
+            "domain": "specific industry name",  # Optional
+            "features": ["product/feature name 1", "product/feature name 2"],  # Optional, array format if present
+            "outcomes": "quantifiable implementation results",  # Optional
             "references": "reference customer/implementation period information",  # Optional
         }
 
     Requirements:
     1. Field Requirements:
        - Topic field must be first and keep the value from input entity unchanged
-       - Each entity must have all required fields for its type
-       - Optional fields should only be included if clear information is present in the text
-       - The 'role' object for Personas must include both title and level if present
-       - Empty or null values are not allowed for required fields
+       - Only extract fields that are explicitly mentioned in the source text
+       - Do not infer or make assumptions about missing information
+       - Empty or null values are not allowed for any field
     
     2. Data Quality:
        - All values must be specific and verifiable in the source text
