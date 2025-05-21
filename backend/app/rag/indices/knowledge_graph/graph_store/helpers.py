@@ -3,6 +3,7 @@ from typing import List, Tuple, Mapping, Any
 
 from llama_index.embeddings.openai import OpenAIEmbedding, OpenAIEmbeddingModelType
 from llama_index.core.base.embeddings.base import BaseEmbedding, Embedding
+from sqlalchemy import and_, or_
 
 # The configuration for the weight coefficient
 # format: ((min_weight, max_weight), coefficient)
@@ -110,3 +111,138 @@ def get_relationship_description_embedding(
         f"{relationship_desc} -> {target_entity_name}({target_entity_description}) "
     )
     return get_text_embedding(combined_text, embed_model)
+
+
+def parse_mongo_style_filter(filters):
+    """
+    Parse MongoDB-style filters into SQLAlchemy conditions.
+    
+    Args:
+        filters: A dictionary containing MongoDB-style filter conditions.
+                Can include $or and $and for compound conditions.
+    
+    Returns:
+        A list of tuples (field, operator, value) for simple conditions,
+        or a tuple (operator, conditions) for compound conditions.
+    """
+    if filters is None:
+        return []
+
+    if not isinstance(filters, dict):
+        return []
+    
+    conditions = []
+    
+    # Handle special operators $or and $and
+    if "$or" in filters:
+        or_conditions = []
+        for condition in filters["$or"]:
+            or_conditions.append(parse_mongo_style_filter(condition))
+        return ("$or", or_conditions)
+    
+    if "$and" in filters:
+        and_conditions = []
+        for condition in filters["$and"]:
+            and_conditions.append(parse_mongo_style_filter(condition))
+        return ("$and", and_conditions)
+    
+    # Handle regular field conditions
+    for field, condition in filters.items():
+        if isinstance(condition, dict):
+            for op, value in condition.items():
+                conditions.append((field, op, value))
+        else:
+            conditions.append((field, "$eq", condition))
+    
+    return conditions
+
+def _get_filter_condition(json_field, op, value):
+    """
+    Helper method to create SQLAlchemy filter conditions based on MongoDB-style operators.
+    
+    Args:
+        json_field: The JSON field to filter on
+        op: The operator to apply
+        value: The value to compare against
+        
+    Returns:
+        SQLAlchemy filter condition
+    """
+    if op == "$eq":
+        return json_field == value
+    elif op == "$ne":
+        return json_field != value
+    elif op == "$in":
+        return json_field.in_(value)
+    elif op == "$nin":
+        return json_field.notin_(value)
+    elif op == "$gt":
+        return json_field > value
+    elif op == "$gte":
+        return json_field >= value
+    elif op == "$lt":
+        return json_field < value
+    elif op == "$lte":
+        return json_field <= value
+    # TODO: support more operations
+    
+    return None
+
+
+def apply_filter_condition(model_alias, condition):
+    """
+    Apply filter conditions recursively for nested compound conditions.
+    
+    Args:
+        model_alias: The SQLAlchemy model alias to apply conditions to
+        condition: The condition to apply, can be a tuple (operator, conditions) for compound conditions
+                    or a list of (field, operator, value) tuples for simple conditions
+    
+    Returns:
+        SQLAlchemy filter condition
+    """
+    if isinstance(condition, tuple) and condition[0] in ["$or", "$and"]:
+        operator, conditions = condition
+        if operator == "$or":
+            # Handle OR conditions
+            or_conditions = []
+            for sub_condition in conditions:
+                if isinstance(sub_condition, tuple) and sub_condition[0] in ["$or", "$and"]:
+                    # Recursively handle nested compound conditions
+                    nested_condition = apply_filter_condition(model_alias, sub_condition)
+                    or_conditions.append(nested_condition)
+                else:
+                    # Handle simple conditions
+                    for field, op, value in sub_condition:
+                        json_field = model_alias.meta[field]
+                        or_conditions.append(_get_filter_condition(json_field, op, value))
+            
+            if or_conditions:
+                return or_(*or_conditions)
+        elif operator == "$and":
+            # Handle AND conditions
+            and_conditions = []
+            for sub_condition in conditions:
+                if isinstance(sub_condition, tuple) and sub_condition[0] in ["$or", "$and"]:
+                    # Recursively handle nested compound conditions
+                    nested_condition = apply_filter_condition(model_alias, sub_condition)
+                    and_conditions.append(nested_condition)
+                else:
+                    # Handle simple conditions
+                    for field, op, value in sub_condition:
+                        json_field = model_alias.meta[field]
+                        and_conditions.append(_get_filter_condition(json_field, op, value))
+            
+            if and_conditions:
+                return and_(*and_conditions)
+    else:
+        # Handle simple conditions
+        conditions = []
+        for field, op, value in condition:
+            json_field = model_alias.meta[field]
+            conditions.append(_get_filter_condition(json_field, op, value))
+        
+        if conditions:
+            return and_(*conditions)
+    
+    return None

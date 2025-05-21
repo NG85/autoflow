@@ -22,6 +22,8 @@ from app.rag.indices.knowledge_graph.graph_store.helpers import (
     calculate_relationship_score,
     get_entity_metadata_embedding,
     get_query_embedding,
+    parse_mongo_style_filter,
+    apply_filter_condition,
     DEFAULT_RANGE_SEARCH_CONFIG,
     DEFAULT_WEIGHT_COEFFICIENT_CONFIG,
     DEFAULT_DEGREE_COEFFICIENT,
@@ -484,6 +486,7 @@ class TiDBGraphStore(KnowledgeGraphStore):
         # experimental feature to filter relationships based on meta, can be removed in the future
         relationship_meta_filters: dict = {},
         session: Optional[Session] = None,
+        filter_doc_ids: Optional[List[int]] = None,
     ) -> Tuple[List[RetrievedEntity], List[RetrievedRelationship]]:
         if not embedding:
             assert query, "Either query or embedding must be provided"
@@ -496,6 +499,7 @@ class TiDBGraphStore(KnowledgeGraphStore):
             with_degree=with_degree,
             relationship_meta_filters=relationship_meta_filters,
             session=session,
+            filter_doc_ids=filter_doc_ids,
         )
 
         all_relationships = set(relationships)
@@ -535,6 +539,7 @@ class TiDBGraphStore(KnowledgeGraphStore):
                     with_degree=with_degree,
                     relationship_meta_filters=relationship_meta_filters,
                     session=session,
+                    filter_doc_ids=filter_doc_ids,
                 )
 
                 all_relationships.update(new_relationships)
@@ -644,6 +649,7 @@ class TiDBGraphStore(KnowledgeGraphStore):
         with_degree: bool = False,
         relationship_meta_filters: Dict = {},
         session: Optional[Session] = None,
+        filter_doc_ids: Optional[List[int]] = None,
     ) -> Tuple[List[SQLModel], List[SQLModel]]:
         # select the relationships to rank
         subquery = (
@@ -653,7 +659,24 @@ class TiDBGraphStore(KnowledgeGraphStore):
                     embedding
                 ).label("embedding_distance"),
             )
-            .options(defer(self._relationship_model.description_vec))
+            .options(defer(self._relationship_model.description_vec)))
+
+        if filter_doc_ids and len(filter_doc_ids) > 0:
+            logger.debug(f"Add document_id filter to knowledge graph query: {len(filter_doc_ids)}")
+            subquery = subquery.where(self._relationship_model.document_id.in_(filter_doc_ids))
+        else:
+            # No document_id filter, query all relationships
+            logger.debug("No document_id filter, query all relationships from knowledge graph")
+
+        # Apply meta filters to the base query before limiting
+        if relationship_meta_filters:
+            logger.debug(f"Applying relationship meta filters: {relationship_meta_filters}")
+            filter_conditions = parse_mongo_style_filter(relationship_meta_filters)
+            subquery = subquery.where(apply_filter_condition(self._relationship_model, filter_conditions))
+            
+        # Create subquery with ordering and limit
+        subquery = (
+            subquery
             .order_by(asc("embedding_distance"))
             .limit(limit * 10)
         ).subquery()

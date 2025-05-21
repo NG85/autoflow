@@ -27,6 +27,7 @@ class KnowledgeGraphSimpleRetriever(BaseRetriever, KnowledgeGraphRetriever):
         knowledge_base_id: int,
         config: KnowledgeGraphRetrieverConfig,
         callback_manager: Optional[CallbackManager] = CallbackManager([]),
+        filter_doc_ids: Optional[List[int]] = None,
         **kwargs,
     ):
         super().__init__(callback_manager, **kwargs)
@@ -35,6 +36,7 @@ class KnowledgeGraphSimpleRetriever(BaseRetriever, KnowledgeGraphRetriever):
         self.knowledge_base = knowledge_base_repo.must_get(
             db_session, knowledge_base_id
         )
+        self.filter_doc_ids = filter_doc_ids
         self.embed_model = get_kb_embed_model(db_session, self.knowledge_base)
         self.embed_model.callback_manager = callback_manager
         self.chunk_db_model = get_kb_chunk_model(self.knowledge_base)
@@ -64,6 +66,7 @@ class KnowledgeGraphSimpleRetriever(BaseRetriever, KnowledgeGraphRetriever):
             include_meta=self.config.include_meta,
             with_degree=self.config.with_degree,
             relationship_meta_filters=metadata_filters,
+            filter_doc_ids=self.filter_doc_ids
         )
         return [
             NodeWithScore(
