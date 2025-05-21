@@ -1,6 +1,7 @@
 import logging
 
 from typing import Dict, List, Optional, Any, Union
+from app.rag.indices.vector_search.filters.filter_evaluator import FilterEvaluator
 from llama_index.core import QueryBundle
 from llama_index.core.postprocessor.types import BaseNodePostprocessor
 from llama_index.core.schema import BaseNode, NodeWithScore
@@ -64,69 +65,8 @@ class MetadataPostFilter(BaseNodePostprocessor):
         if self.filters is None or not isinstance(self.filters, MetadataFilters):
             return True
 
-        return self._evaluate_filters(node, self.filters)
 
-    def _evaluate_filters(self, node: BaseNode, filters: MetadataFilters) -> bool:
-        """Recursively evaluate filter conditions, supporting compound conditions (AND, OR) and multiple operators"""
-        if not filters.filters:
+        if not self.filters.filters:
             return True
-
-        # Evaluate all sub-filter conditions based on the condition type (AND/OR)
-        results = []
-        for f in filters.filters:
-            if isinstance(f, MetadataFilters):
-                # Recursively process nested compound conditions
-                result = self._evaluate_filters(node, f)
-            else:
-                # Process single filter conditions
-                result = self._evaluate_single_filter(node, f)
-            results.append(result)
-
-        # Return results based on the condition type
-        if filters.condition == FilterCondition.OR:
-            return any(results)
-        else:  # Default to AND
-            return all(results)
-
-    def _evaluate_single_filter(self, node: BaseNode, filter: MetadataFilter) -> bool:
-        """Evaluate a single filter condition, supporting multiple operators"""
-        if filter.key not in node.metadata:
-            return False
-
-        value = node.metadata[filter.key]
-        filter_value = filter.value
-
-        logger.debug(f"Evaluating filter: {filter.key} {filter.operator} {filter_value} against {value}")
-        # Compare based on the operator type
-        if filter.operator == FilterOperator.EQ:
-            return value == filter_value
-        elif filter.operator == FilterOperator.NE:
-            return value != filter_value
-        elif filter.operator == FilterOperator.GT:
-            return value > filter_value
-        elif filter.operator == FilterOperator.GTE:
-            return value >= filter_value
-        elif filter.operator == FilterOperator.LT:
-            return value < filter_value
-        elif filter.operator == FilterOperator.LTE:
-            return value <= filter_value
-        elif filter.operator == FilterOperator.IN:
-            return value in filter_value
-        elif filter.operator == FilterOperator.NIN:
-            return value not in filter_value
-        elif filter.operator == FilterOperator.CONTAINS:
-            return filter_value in value
-        elif filter.operator == FilterOperator.IS_EMPTY:
-            return value is None or value == "" or (isinstance(value, list) and len(value) == 0)
-        elif filter.operator == FilterOperator.TEXT_MATCH:
-            return str(filter_value) in str(value)
-        elif filter.operator == FilterOperator.TEXT_MATCH_INSENSITIVE:
-            return str(filter_value).lower() in str(value).lower()
-        elif filter.operator == FilterOperator.ANY:
-            return any(item in value for item in filter_value)
-        elif filter.operator == FilterOperator.ALL:
-            return all(item in value for item in filter_value)
-        else:
-            # Default to the equal operator
-            return value == filter_value
-
+        
+        return FilterEvaluator.evaluate_conditions(self.filters, metadata=node.metadata)

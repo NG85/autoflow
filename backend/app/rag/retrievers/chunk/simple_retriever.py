@@ -41,7 +41,7 @@ class ChunkSimpleRetriever(BaseRetriever, ChunkRetriever):
         db_session: Optional[Session] = None,
         callback_manager: CallbackManager = CallbackManager([]),
         filter_doc_ids: Optional[List[int]] = None,
-        query_metadata_filters: Optional[MetadataFilters] = None,
+        chunk_metadata_filters: Optional[MetadataFilters] = None,
     ):
         super().__init__()
         if not knowledge_base_id:
@@ -54,7 +54,7 @@ class ChunkSimpleRetriever(BaseRetriever, ChunkRetriever):
         self._embed_model = get_kb_embed_model(db_session, self._kb)
         self._embed_model.callback_manager = callback_manager
         self._filter_doc_ids = filter_doc_ids
-        self._query_metadata_filters = query_metadata_filters
+        self._chunk_metadata_filters = chunk_metadata_filters
 
         # Init vector store.
         self._vector_store = TiDBVectorStore(
@@ -94,9 +94,9 @@ class ChunkSimpleRetriever(BaseRetriever, ChunkRetriever):
             VectorStoreQuery(
                 query_str=query_bundle.query_str,
                 query_embedding=query_bundle.embedding,
-                doc_ids=self._filter_doc_ids,
                 similarity_top_k=self._config.similarity_top_k or self._config.top_k,
-                filters=self._query_metadata_filters
+                doc_ids=self._filter_doc_ids,
+                filters=self._chunk_metadata_filters
             )
         )
         nodes = self._build_node_list_from_query_result(result)

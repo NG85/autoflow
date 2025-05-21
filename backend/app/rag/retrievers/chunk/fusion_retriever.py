@@ -47,7 +47,7 @@ class ChunkFusionRetriever(MultiKBFusionRetriever, ChunkRetriever):
         self.crm_authority = crm_authority
         self.config = config
         
-        query_metadata_filters = None
+        chunk_metadata_filters = None
         if crm_authority and not crm_authority.is_empty():
             # 将CRM权限信息写入filters
             crm_type_filters = []
@@ -60,7 +60,7 @@ class ChunkFusionRetriever(MultiKBFusionRetriever, ChunkRetriever):
             # OR (crm_data_type in [crm_internal_owner, crm_sales_record, crm_stage]) - 这几类crm实体无需鉴权
             # OR (crm_data_type in crm_type_filters AND unique_id in unique_id_filters) - 其他crm实体需要鉴权
             # if not self.config.metadata_filter.filters:
-            query_metadata_filters = MetadataFilters(
+            chunk_metadata_filters = MetadataFilters(
                 filters=[
                     MetadataFilter(key="category", value="crm", operator=FilterOperator.NE),
                     MetadataFilter(key="crm_data_type", value=[CrmDataType.INTERNAL_OWNER.value, CrmDataType.SALES_RECORD.value, CrmDataType.STAGE.value], operator=FilterOperator.IN),
@@ -86,7 +86,7 @@ class ChunkFusionRetriever(MultiKBFusionRetriever, ChunkRetriever):
                     callback_manager=callback_manager,
                     db_session=db_session,
                     filter_doc_ids=filter_doc_ids,
-                    query_metadata_filters=query_metadata_filters
+                    chunk_metadata_filters=chunk_metadata_filters
                 )
             )
 
