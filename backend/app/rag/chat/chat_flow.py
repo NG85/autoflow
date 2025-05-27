@@ -34,7 +34,7 @@ from app.rag.chat.stream_protocol import (
 )
 from app.rag.llms.dspy import get_dspy_lm_by_llama_llm
 from app.rag.retrievers.knowledge_graph.schema import KnowledgeGraphRetrievalResult
-from app.rag.types import ChatEventType, ChatMessageSate
+from app.rag.types import ChatEventType, ChatMessageSate, CrmDataType
 from app.rag.utils import parse_goal_response_format
 from app.repositories import chat_repo, file_permission_repo
 from app.site_settings import SiteSetting
@@ -340,11 +340,18 @@ class ChatFlow:
 
         if settings.CRM_ENABLED:
             # 1.2. Initialize CRM authority control
-            self.crm_authority = get_user_crm_authority(
+            self.crm_authority, self.crm_role = get_user_crm_authority(
                 user_id=user_id
             )
-            logger.info(f"CRM authority initialized for user {user_id}")
-        
+            
+            def is_empty_role(role: Optional[str]) -> bool:
+                return role is None or not role.strip()
+
+            if is_empty_role(self.crm_role) and self.crm_authority.is_empty():
+                # If the user is not an admin and has no CRM access, fake authority to ensure no matches in filtering
+                self.crm_authority.authorized_items.setdefault(CrmDataType.OPPORTUNITY, set()).add(f'faked-auth-list-for-{user_id}')
+                logger.info(f"User {user_id} has no CRM access, created faked authority as placeholder")
+    
             if self.user and not self.crm_authority.is_empty():
                 # Record user permission statistics information
                 auth_stats = {k: len(v) for k, v in self.crm_authority.authorized_items.items()}
