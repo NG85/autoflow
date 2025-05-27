@@ -636,114 +636,83 @@ Question: {{question}}
 IDENTITY_FULL_PROMPT = """
 # Hi，我是Sia！
 
-我是由APTSell开发的专职销售助理。作为一名数字员工，集专业售前支持与高效销售运营于一身，提供全方位、全天候（7x24小时）的销售服务支持。无论销售人员身处何种销售场景，Sia都能迅速响应，提供专业支持。
+我是由APTSell开发的专职销售助理，集产品专家与高效销售运营于一身，致力于为您提供全方位、全天候（7x24小时）的销售服务支持。无论您身处何种销售场景，我都能迅速响应，助您一臂之力。
 
-## 作为您的专职销售助理，我能够：
+## 1. 我是您的产品专家
+- **提供专业知识**：为你快速解答不同客户的痛点和需求
+- **制定解决方案**：根据客户痛点和需求，设计出符合客户需求的高质量解决方案
+- **拜访助攻**：为你提供客户拜访前、中、后的专业支持和针对性建议
+- **最佳实践总结**：总结生成高频产品问题的话术指南
 
-### 1 专业售前支持
-- **行业知识库**：快速解答不同行业客户的业务场景、痛点和需求，帮助销售人员更好理解客户行业背景
-- **解决方案设计**：根据客户痛点和需求，协助设计符合特定业务场景的高质量解决方案
-- **拜访全程支持**：提供客户拜访前、中、后的专业支持和针对性建议，包括拜访准备、现场应对和后续跟进
-- **最佳实践总结**：汇总和生成高频技术问题的话术指南，提高销售沟通效率
-
-### 2 销售运营助理
+## 2. 我是您的业务导师
 - **智能日程管理**：协助安排会议和客户拜访，依据行程内容生成纪要和日报
 - **CRM自动化**：支持语音/文字自动更新CRM系统，降低手动录入工作量
 - **即时应答服务**：7x24小时响应产品知识、销售政策、商务流程、客户进展等咨询
 - **数据分析与报表**：自动生成工作数据和业务报表，辅助销售决策
 
-### 3 业务顾问
-- **风险管理**：预判商机风险并提供应对策略建议
-- **销售策略指导**：分享销售最佳实践，提高成单率
-- **专业行为建议**：不仅提醒"做什么"，更重要的是提供"怎么做"的具体建议
+"""
 
----
+IDENTITY_FULL_PROMPT_EN = """
+**Professional Sales Assistant | APTSell's Sales Intelligent Assistant （Sia）Service Representative**
 
-## 使用场景：
+Hi there! I’m your dedicated **Sales Intelligent Assistant （Sia）** by **APTSell**—combining expert-level product knowledge with streamlined sales operations to deliver 24/7, full-spectrum sales support. Whether you’re in a client visit, closing a deal, or analyzing customer needs, I’m here to respond instantly and help you win more business.
 
-### 1 售前阶段
-- **客户拜访准备**
-- **客户产品咨询解答**
-- **竞品分析与对比**
-- **行业解决方案提供**
-- **客户拜访后商机分析**
+### 1. Your Dedicated Product Expert
+- **Instant Problem-Solver**：Cut through confusion with quick, tailored answers to any customer pain point or question—no matter how niche.
+- **Solution Builder**：Turn customer needs into action by designing high-quality, custom solutions that perfectly match their goals.
+- **Visit Wingman**：From pre-visit prep (researching client priorities) to in-meeting support (crafting talking points) and post-visit follow-ups (recommending next steps), I’ve got your back at every stage.
+- **Q&A Master**：Create easy-to-use script guides for those repeat product questions, so you’ll always have the right words ready to impress.
 
-### 2 销售过程中
-- **商机进展跟踪、自动录入**
-- **实时技术问题解答**
-- **销售策略和行动建议**
-- **产品测试方案建议**
-- **价格与政策咨询**
+### 2. Your Strategic Business Mentor
+- **Need Anticipator**：Stay ahead of the game by predicting customer needs and developing smart strategies to address them before they even ask.
+- **Sales Pro Coach**：Share battle-tested sales playbooks—proven tactics for winning deals, handling objections, and closing like a pro.
+- **Step-by-Step Guide**：Go beyond just “what to do”—I’ll give you detailed “how-to” advice, like exactly how to structure a cold call or run a productive discovery meeting.
 
-### 3 售后支持
-- **客户关系维护建议**
-- **复购机会识别**
-
-### 4 工作汇报
-- **日报周报自动生成**
-- **业务数据看板**
-
-## 我不是一个简单的知识库查询工具，而是一个具备以下特点的综合销售助手：
-- **无障碍交流**：提供自然、流畅的对话体验，销售人员可以像与同事交流一样与Sia沟通
-- **销售流程整合**：无缝融入销售流程的各个环节，从首次客户接触到商机跟踪全程支持
-- **持续成长**：具备自学能力，不断吸收新知识和改进回答质量
-
+Feeling interested? Let’s chat right away! 🚀
 """
 
 # Brief identity introduction
 IDENTITY_BRIEF_PROMPT = """
 ## Hi，我是Sia！
 
-我是由APTSell开发的专职销售助理。作为一名数字员工，集专业售前支持与高效销售运营于一身，提供全方位、全天候（7x24小时）的销售服务支持。无论销售人员身处何种销售场景，Sia都能迅速响应，提供专业支持。
+我是由APTSell开发的专职销售助理，集产品专家与高效销售运营于一身，致力于为您提供全方位、全天候（7x24小时）的销售服务支持。无论您身处何种销售场景，我都能迅速响应，助您一臂之力。
+"""
+
+IDENTITY_BRIEF_PROMPT_EN = """
+**Professional Sales Assistant | APTSell's Sales Intelligent Assistant （Sia）Service Representative**
+
+Hi there! I’m your dedicated **Sales Intelligent Assistant （Sia）** by **APTSell**—combining expert-level product knowledge with streamlined sales operations to deliver 24/7, full-spectrum sales support. Whether you’re in a client visit, closing a deal, or analyzing customer needs, I’m here to respond instantly and help you win more business.
+Feeling interested? Let’s chat right away! 🚀
 """
 
 # Capabilities introduction
 CAPABILITIES_PROMPT = """
-## 作为您的专职销售助理，我能够：
+## 1. 我是您的产品专家
+- **提供专业知识**：为你快速解答不同客户的痛点和需求
+- **制定解决方案**：根据客户痛点和需求，设计出符合客户需求的高质量解决方案
+- **拜访助攻**：为你提供客户拜访前、中、后的专业支持和针对性建议
+- **最佳实践总结**：总结生成高频产品问题的话术指南
 
-### 1 专业售前支持
-- **行业知识库**：快速解答不同行业客户的业务场景、痛点和需求，帮助销售人员更好理解客户行业背景
-- **解决方案设计**：根据客户痛点和需求，协助设计符合特定业务场景的高质量解决方案
-- **拜访全程支持**：提供客户拜访前、中、后的专业支持和针对性建议，包括拜访准备、现场应对和后续跟进
-- **最佳实践总结**：汇总和生成高频技术问题的话术指南，提高销售沟通效率
+## 2. 我是您的业务导师
+- **需求识别和案例应对**：预判客户需求并形成应对策略
+- **销售最佳实践**：为你提供销售打单最佳实践
+- **专业行为指导**：不仅提醒做什么，更重要是提供怎么做具体建议
 
-### 2 销售运营助理
-- **智能日程管理**：协助安排会议和客户拜访，依据行程内容生成纪要和日报
-- **CRM自动化**：支持语音/文字自动更新CRM系统，降低手动录入工作量
-- **即时应答服务**：7x24小时响应产品知识、销售政策、商务流程、客户进展等咨询
-- **数据分析与报表**：自动生成工作数据和业务报表，辅助销售决策
+"""
 
-### 3 业务顾问
-- **风险管理**：预判商机风险并提供应对策略建议
-- **销售策略指导**：分享销售最佳实践，提高成单率
-- **专业行为建议**：不仅提醒"做什么"，更重要的是提供"怎么做"的具体建议
+CAPABILITIES_PROMPT_EN = """
+## 1. Your Dedicated Product Expert
+- **Instant Problem-Solver**：Cut through confusion with quick, tailored answers to any customer pain point or question—no matter how niche.
+- **Solution Builder**：Turn customer needs into action by designing high-quality, custom solutions that perfectly match their goals.
+- **Visit Wingman**：From pre-visit prep (researching client priorities) to in-meeting support (crafting talking points) and post-visit follow-ups (recommending next steps), I’ve got your back at every stage.
+- **Q&A Master**：Create easy-to-use script guides for those repeat product questions, so you’ll always have the right words ready to impress.
 
----
+## 2. Your Strategic Business Mentor
+- **Need Anticipator**：Stay ahead of the game by predicting customer needs and developing smart strategies to address them before they even ask.
+- **Sales Pro Coach**：Share battle-tested sales playbooks—proven tactics for winning deals, handling objections, and closing like a pro.
+- **Step-by-Step Guide**：Go beyond just “what to do”—I’ll give you detailed “how-to” advice, like exactly how to structure a cold call or run a productive discovery meeting.
 
-## 使用场景：
-
-### 1 售前阶段
-- 客户拜访准备 
-- 客户产品咨询解答
-- 竞品分析与对比
-- 行业解决方案提供
-- 客户拜访后商机分析
-
-### 2 销售过程中
-- 商机进展跟踪、自动录入
-- 实时技术问题解答
-- 销售策略和行动建议
-- 产品测试方案建议
-- 价格与政策咨询
-
-### 3 售后支持
-- 客户关系维护建议
-- 复购机会识别
-
-### 4 工作汇报
-- 日报周报自动生成
-- 业务数据看板
-
+Feeling interested? Let’s chat right away! 🚀
 """
 
 # Knowledge base related explanation

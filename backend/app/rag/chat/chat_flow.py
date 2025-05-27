@@ -59,11 +59,22 @@ _EMBEDDING_CACHE:Dict[str, Dict[str, Any]] = {}
 _EMBEDDING_LOCK = threading.Lock()
 
 PROMPT_TYPE_MAPPING = {
-    "identity_full": default_prompt.IDENTITY_FULL_PROMPT,
-    "identity_brief": default_prompt.IDENTITY_BRIEF_PROMPT,
-    "capabilities": default_prompt.CAPABILITIES_PROMPT,
-    "knowledge_base": default_prompt.KNOWLEDGE_BASE_PROMPT,
-    "greeting": default_prompt.IDENTITY_BRIEF_PROMPT,
+    "identity_full": {
+        "en": default_prompt.IDENTITY_FULL_PROMPT_EN,
+        "zh": default_prompt.IDENTITY_FULL_PROMPT,
+    },
+    "identity_brief": {
+        "en": default_prompt.IDENTITY_BRIEF_PROMPT_EN,
+        "zh": default_prompt.IDENTITY_BRIEF_PROMPT,
+    },
+    "capabilities": {
+        "en": default_prompt.CAPABILITIES_PROMPT_EN,
+        "zh": default_prompt.CAPABILITIES_PROMPT,
+    },
+    "greeting": {
+        "en": default_prompt.IDENTITY_BRIEF_PROMPT_EN,
+        "zh": default_prompt.IDENTITY_BRIEF_PROMPT,
+    },
 }
 
 class ChatFlow:
@@ -301,10 +312,17 @@ class ChatFlow:
                 ),
             )
             logger.info(f"Detected identity question of type: {identity_type}")
-            identity_response = PROMPT_TYPE_MAPPING.get(identity_type)
+            
+            # Detect language and get appropriate response
+            language = self._detect_language(self.user_question)
+            identity_response = PROMPT_TYPE_MAPPING.get(identity_type, {}).get(language)
+            
+            if not identity_response:
+                # Fallback to English if language not supported
+                identity_response = PROMPT_TYPE_MAPPING.get(identity_type, {}).get("en")
             
             with self._trace_manager.span(name="identity_response") as span:
-                span.end(output={"identity_type": identity_type, "response_length": len(identity_response)})
+                span.end(output={"identity_type": identity_type, "language": language, "response_length": len(identity_response)})
                         
             yield from self._chat_finish(
                 db_assistant_message=db_assistant_message,
@@ -1139,7 +1157,7 @@ class ChatFlow:
         and return the specific type if so
         
         Returns:
-            str: "identity_full", "identity_brief", "capabilities", "knowledge_base", "greeting" or None
+            str: "identity_full", "identity_brief", "capabilities", "greeting" or None
         """
         # 1. Use embedding search to check for similar identity questions
         try:
@@ -1197,18 +1215,18 @@ class ChatFlow:
                 "你能提供什么服务": "capabilities",
                 "你的职责是什么": "capabilities",
                     
-                # Knowledge base questions
-                "Are you just a knowledge base?": "knowledge_base",
-                "你只是一个知识库吗": "knowledge_base",
-                "你是个知识库吗": "knowledge_base",
-                "你是知识库吗": "knowledge_base",
-                "你只是知识库吗": "knowledge_base",
-                "你是搜索工具吗": "knowledge_base",
-                "你跟知识库有什么区别": "knowledge_base",
-                "你跟知识库有什么不同": "knowledge_base",
-                "你跟知识库有什么不一样": "knowledge_base",
-                "difference between you and knowledge base": "knowledge_base",
-                "your difference with knowledge base": "knowledge_base",
+                # # Knowledge base questions
+                # "Are you just a knowledge base?": "knowledge_base",
+                # "你只是一个知识库吗": "knowledge_base",
+                # "你是个知识库吗": "knowledge_base",
+                # "你是知识库吗": "knowledge_base",
+                # "你只是知识库吗": "knowledge_base",
+                # "你是搜索工具吗": "knowledge_base",
+                # "你跟知识库有什么区别": "knowledge_base",
+                # "你跟知识库有什么不同": "knowledge_base",
+                # "你跟知识库有什么不一样": "knowledge_base",
+                # "difference between you and knowledge base": "knowledge_base",
+                # "your difference with knowledge base": "knowledge_base",
 
                 # Greeting questions
                 "你好": "greeting",
@@ -1390,3 +1408,15 @@ class ChatFlow:
             )
             
         return data, error_message
+
+    def _detect_language(self, text: str) -> str:
+        """
+        Detect the language of the input text
+        Returns:
+            str: "en" for English, "zh" for Chinese
+        """
+        # Simple language detection based on character ranges
+        chinese_chars = sum(1 for char in text if '\u4e00' <= char <= '\u9fff')
+        if chinese_chars / len(text) > 0.5:  # If more than 50% of characters are Chinese
+            return "zh"
+        return "en"
