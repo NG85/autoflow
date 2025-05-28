@@ -1356,7 +1356,7 @@ class ChatFlow:
             "content": self.user_question,
             "tenant_id": settings.ALDEBARAN_TENANT_ID,
         }
-        response = requests.post(aldebaran_cvgg_url, json=payload, timeout=300, headers={"cookie": self.incoming_cookie})
+        response = requests.post(aldebaran_cvgg_url, json=payload, timeout=300, headers={"cookie": self.incoming_cookie, "user_id": self.user.id})
         data = None
         error_message = None
         try:
