@@ -128,7 +128,7 @@ Knowledge Graph Context:
 ---------------------
 
 Data Access Status:
-Note: The knowledge graph data provided has been filtered based on permissions. Some information may be incomplete due to access restrictions.
+Note: The provided information has been filtered based on permissions.
 
 ---------------------
 
@@ -219,18 +219,18 @@ DEFAULT_TEXT_QA_PROMPT = """\
 Current Date: {{current_date}}
 ---------------------
 
-Knowledge Graph Information:
+[Knowledge Graph Information]
 {{graph_knowledges}}
 
 ---------------------
 
-Context Information:
+[Context Information]
 {{context_str}}
 
 ---------------------
 
 Data Access Status:
-Note: The provided information has been filtered based on permissions. Some information may be incomplete due to access restrictions.
+Note: The provided information has been filtered based on permissions.
 
 ---------------------
 
@@ -243,6 +243,8 @@ Core Guidelines:
    - Thoroughly analyze all provided context without assumptions
    - Identify key entities, relationships, and their relevance
    - Cross-reference information between knowledge graph and context
+   - When using knowledge graph information:
+     • State it directly without footnote references
    - Verify information completeness and accuracy
 
 2. Answer Construction:
@@ -255,6 +257,21 @@ Core Guidelines:
 3. Format Requirements:
    - Use markdown footnote syntax ([^1]) for sources
    - Each footnote must correspond to a unique source
+   - Only cite information from the [Context Information] section
+   - Do not cite information from the [Knowledge Graph Information] section
+   - When using knowledge graph information in the answer:
+     • Do not use footnote references (e.g., [^1])
+     • Simply state the information directly
+   - Each footnote must include:
+     • Document text as source title
+     • Relevance score
+     • Document URL in the format of file:///ID
+   - Language-specific formatting:
+     • Determine the response language from the question
+     • Translate all footnote labels to match the response language
+     • Use appropriate punctuation marks for that language
+     • Maintain consistent formatting style throughout the response
+     • Do not mix languages within the same response
    - Avoid duplicating sources across footnotes
    - Use tables when appropriate for comparisons
    - Maintain natural language readability
@@ -370,9 +387,12 @@ Example Response Structure:
 - Potential challenges
 - Success factors
 
-[Sources]
-[^1]: [Source Title | Source](URL)
-[^2]: [Source Title | Source](URL)
+
+# For Chinese response:
+[^1]: ["相关文档内容片段" ｜ 相关度0.92](file:///30001)
+
+# For English response:
+[^1]: [Relevant snippet from document chunk ｜ Relevance score 0.92](file:///30001)
 
 ---------------------
 
