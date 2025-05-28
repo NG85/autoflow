@@ -677,7 +677,7 @@ class ChatFlow:
             name="generate_answer", input=user_question
         ) as span:
             # Use LLM to generate a fallback response if no relevant chunks are found.
-            if not relevant_chunks or len(relevant_chunks) == 0:
+            if not relevant_chunks:
                 fallback_prompt = RichPromptTemplate(default_prompt.FALLBACK_PROMPT)
                 no_content_message = self._fast_llm.predict(
                     fallback_prompt,
@@ -694,8 +694,42 @@ class ChatFlow:
                     },
                 )
                 return no_content_message, []
+
+            # Build the context with detailed source information
+            detailed_context = []
+            for chunk in relevant_chunks:
+                # Get document information from the database
+                document_id = chunk.metadata.get("document_id")
+                if document_id:
+                    logger.info(f"documentId: {document_id}")
+                    source_info = {
+                        "reference": {
+                            "id": document_id,
+                            "content": chunk.text,
+                            "relevance_score": chunk.score,
+                            "url": f"file:///{document_id}",
+                        },
+                        "metadata": chunk.metadata
+                    }
+                    logger.info(f"source_info: {source_info}")
+                    detailed_context.append(source_info)
                 
-            # Initialize response synthesizer.
+            # Format the context information
+            formatted_context = []
+            for info in detailed_context:
+                formatted_context.append(f"""Document Information:
+    - ID: {info['reference']['id']}
+    - Content: {info['reference']['content']}
+    - Relevance Score: {info['reference']['relevance_score']:.2f}
+    - URL: {info['reference']['url']}
+    
+    Metadata:
+    {json.dumps(info['metadata'], indent=2, ensure_ascii=False)}
+    """)
+            
+            context_str = "\n\n".join(formatted_context)
+            
+            # Initialize response synthesizer
             text_qa_template = RichPromptTemplate(
                 template_str=self.engine_config.llm.text_qa_prompt
             )
@@ -703,9 +737,12 @@ class ChatFlow:
                 current_date=datetime.now().strftime("%Y-%m-%d"),
                 graph_knowledges=knowledge_graph_context,
                 original_question=self.user_question,
+                context=context_str
             )
             response_synthesizer = get_response_synthesizer(
-                llm=self._llm, text_qa_template=text_qa_template, streaming=True
+                llm=self._llm, 
+                text_qa_template=text_qa_template, 
+                streaming=True
             )
 
             # Initialize response.
@@ -1363,7 +1400,7 @@ class ChatFlow:
             "content": self.user_question,
             "tenant_id": settings.ALDEBARAN_TENANT_ID,
         }
-        response = requests.post(aldebaran_cvgg_url, json=payload, timeout=300, headers={"cookie": self.incoming_cookie})
+        response = requests.post(aldebaran_cvgg_url, json=payload, timeout=300, headers={"cookie": self.incoming_cookie, "user_id": str(self.user.id)})
         data = None
         error_message = None
         try:
