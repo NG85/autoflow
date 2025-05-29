@@ -11,6 +11,7 @@ from app.models.crm_opportunities import CRMOpportunity
 from app.models.crm_orders import CRMOrder
 from app.models.crm_payment_plans import CRMPaymentPlan
 from app.models.crm_opportunity_updates import CRMOpportunityUpdates
+from app.models.crm_sales_activities import CRMSalesActivities
 from sqlalchemy import text
 from app.core.db import get_db_session
 from app.types import MimeTypes
@@ -200,9 +201,13 @@ class CRMDataSource(BaseDataSource):
             orders_query = select(CRMOrder).filter(CRMOrder.opportunity_id==opportunity_id)
             orders = db_session.exec(orders_query).all()
             
-            # Get related opportunity updates (opportunity vs updates is 1:N relationship)
-            updates_query = select(CRMOpportunityUpdates).filter(CRMOpportunityUpdates.opportunity_id==opportunity_id)
-            opportunity_updates = db_session.exec(updates_query).all()
+            # # Get related opportunity updates (opportunity vs updates is 1:N relationship)
+            # updates_query = select(CRMOpportunityUpdates).filter(CRMOpportunityUpdates.opportunity_id==opportunity_id)
+            # opportunity_updates = db_session.exec(updates_query).all()
+            
+            # Get related sales activities for each opportunity (opportunity vs sales activities is 1:N relationship)
+            sales_activities_query = select(CRMSalesActivities).filter(CRMSalesActivities.opportunity_id==opportunity_id)
+            sales_activities = db_session.exec(sales_activities_query).all()
             
             # Get related payment plans for each order (order vs paymentplan is 1:N relationship)
             orders_with_payment_plans = []
@@ -223,11 +228,12 @@ class CRMDataSource(BaseDataSource):
                 })
                 total_payment_plans += len(order_payment_plans)
             
-            logger.info(f"Found opportunity {opportunity_id} with {len(orders)} orders, {total_payment_plans} payment plans, and {len(opportunity_updates)} updates")
+            logger.info(f"Found opportunity {opportunity_id} with {len(orders)} orders, {total_payment_plans} payment plans, and {len(sales_activities)} sales activities")
             
             return {
                 "orders_with_payment_plans": orders_with_payment_plans,
-                "opportunity_updates": opportunity_updates
+                # "opportunity_updates": opportunity_updates,
+                "sales_activities": sales_activities
             }
            
         def create_document(opportunity, related_data):
