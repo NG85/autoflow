@@ -694,7 +694,18 @@ class ChatFlow:
                     },
                 )
                 return no_content_message, []
-                
+
+            for chunk in relevant_chunks:
+                # Get document information from the database
+                document_id = chunk.metadata.get("document_id")
+                if document_id:
+                    from app.repositories import document_repo
+                    document = document_repo.must_get(self.db_session, document_id)
+                    if document and document.source_uri:
+                        document_url = document.source_uri if document.source_uri.startswith("http") else f"file:///{document_id}.{document.source_uri.split('.')[-1]}"
+                        chunk.metadata["document_url"] = document_url
+                        logger.debug(f"documentId: {document_id}, url: {document_url}")
+
             # Initialize response synthesizer.
             text_qa_template = RichPromptTemplate(
                 template_str=self.engine_config.llm.text_qa_prompt

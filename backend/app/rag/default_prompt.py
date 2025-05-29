@@ -255,9 +255,22 @@ Core Guidelines:
 3. Format Requirements:
    - Use markdown footnote syntax ([^1]) for sources
    - Each footnote must correspond to a unique source
-   - Avoid duplicating sources across footnotes
-   - Use tables when appropriate for comparisons
-   - Maintain natural language readability
+   - Only cite information from the [Context Information] section
+   - Do not cite information from the [Knowledge Graph Information] section
+   - When using knowledge graph information in the answer:
+     • Do not use footnote references (e.g., [^1])
+     • Simply state the information directly
+   - Each footnote must include:
+     • Document text as source title (enclosed in quotes)
+     • Relevance score (with 2 decimal places)
+     • Document URL as source url (use the actual document URL if available)
+   - Language-specific formatting:
+     • Determine the response language from the question
+     • Translate all footnote labels to match the response language
+     • Use appropriate punctuation marks for that language
+     • Maintain consistent formatting style throughout the response
+     • Do not mix languages within the same response
+   - Minimize the use of fenced code blocks (triple backticks) in responses
 
 4. Language Handling:
    - Follow the language hint from the refined question
@@ -370,9 +383,14 @@ Example Response Structure:
 - Potential challenges
 - Success factors
 
-[Sources]
-[^1]: [Source Title | Source](URL)
-[^2]: [Source Title | Source](URL)
+
+# For Chinese response:
+[^1]: ["相关文档内容片段" ｜ 相关度0.92](file:///30001.pdf)
+[^2]: ["相关文档内容片段" ｜ 相关度0.89](file:///30002.pptx)
+
+# For English response:
+[^1]: [Relevant snippet from document chunk ｜ Relevance score 0.92](file:///30001.pdf)
+[^2]: [Relevant snippet from document chunk ｜ Relevance score 0.89](file:///30002.pptx)
 
 ---------------------
 
