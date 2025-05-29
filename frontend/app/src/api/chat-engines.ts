@@ -13,6 +13,7 @@ export interface ChatEngine {
   fast_llm_id: number | null;
   reranker_id: number | null;
   is_default: boolean;
+  is_public: boolean;
 }
 
 export interface CreateChatEngineParams {
@@ -134,6 +135,7 @@ const chatEngineSchema = z.object({
   fast_llm_id: z.number().nullable(),
   reranker_id: z.number().nullable(),
   is_default: z.boolean(),
+  is_public: z.boolean(),
 }) satisfies ZodType<ChatEngine, any, any>;
 
 export async function getDefaultChatEngineOptions (): Promise<ChatEngineOptions> {
@@ -189,4 +191,18 @@ export async function deleteChatEngine (id: number): Promise<void> {
     },
   })
     .then(handleErrors);
+}
+
+export async function listPublicChatEngines ({ page = 1, size = 10 }: PageParams = {}): Promise<Page<ChatEngine>> {
+  return await fetch(requestUrl('/api/v1/chat-engines', { page, size }), {
+    headers: await authenticationHeaders(),
+  })
+    .then(handleResponse(zodPage(chatEngineSchema)));
+}
+
+export async function getPublicChatEngine (id: number): Promise<ChatEngine> {
+  return await fetch(requestUrl(`/api/v1/chat-engines/${id}`), {
+    headers: await authenticationHeaders(),
+  })
+    .then(handleResponse(chatEngineSchema));
 }
