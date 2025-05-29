@@ -731,7 +731,7 @@ def format_sales_activities(sales_activities, opportunity_name: str) -> List[str
             return value.strftime("%Y-%m-%d")
             
         # 处理JSON字段
-        if field_name in ["internal_participants", "external_participants", "key_stakeholders"] and value is not None:
+        if field_name in ["internal_participants", "external_participants"] and value is not None:
             try:
                 if isinstance(value, str):
                     json_data = json.loads(value)
