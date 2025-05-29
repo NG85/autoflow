@@ -74,6 +74,11 @@ export function UpdateChatEngineForm ({ chatEngine, defaultChatEngineOptions }: 
               <FormSwitch />
             </field.Contained>
           </GeneralSettingsField>
+          <GeneralSettingsField accessor={isPublicAccessor} schema={isPublicSchema}>
+            <field.Contained unimportant name="value" label="Is Public" fallbackValue={chatEngine.is_public}>
+              <FormSwitch />
+            </field.Contained>
+          </GeneralSettingsField>
           <SubSection title="Models">
             <GeneralSettingsField accessor={llmIdAccessor} schema={idSchema}>
               <field.Basic name="value" label="LLM">
@@ -222,7 +227,7 @@ export function UpdateChatEngineForm ({ chatEngine, defaultChatEngineOptions }: 
   );
 }
 
-const updatableFields = ['name', 'llm_id', 'fast_llm_id', 'reranker_id', 'engine_options', 'is_default'] as const;
+const updatableFields = ['name', 'llm_id', 'fast_llm_id', 'reranker_id', 'engine_options', 'is_default', 'is_public'] as const;
 
 function optionAccessor<K extends keyof ChatEngineOptions> (key: K): GeneralSettingsFieldAccessor<ChatEngine, ChatEngineOptions[K]> {
   return {
@@ -310,6 +315,9 @@ const clarifyAccessorSchema = z.boolean().nullable().optional();
 
 const isDefaultAccessor = fieldAccessor<ChatEngine, 'is_default'>('is_default');
 const isDefaultSchema = z.boolean();
+
+const isPublicAccessor = fieldAccessor<ChatEngine, 'is_public'>('is_public');
+const isPublicSchema = z.boolean();
 
 const getIdAccessor = (id: KeyOfType<ChatEngine, number | null>) => fieldAccessor<ChatEngine, KeyOfType<ChatEngine, number | null>>(id);
 const idSchema = z.number().nullable();

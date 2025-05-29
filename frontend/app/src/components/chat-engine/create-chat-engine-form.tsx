@@ -23,6 +23,7 @@ import { z } from 'zod';
 
 const schema = z.object({
   name: z.string().min(1),
+  is_public: z.boolean().optional(),
   llm_id: z.number().optional(),
   fast_llm_id: z.number().optional(),
   reranker_id: z.number().optional(),
@@ -53,6 +54,9 @@ export function CreateChatEngineForm ({ defaultChatEngineOptions }: { defaultCha
 
   const form = useForm({
     onSubmit: onSubmitHelper(schema, async data => {
+      if (data.is_public == null) {
+        data.is_public = true;
+      }
       const ce = await createChatEngine(data);
       startTransition(() => {
         router.push(`/chat-engines/${ce.id}`);
@@ -85,6 +89,9 @@ export function CreateChatEngineForm ({ defaultChatEngineOptions }: { defaultCha
               <field.Basic required name="name" label="Name" defaultValue="" validators={{ onSubmit: nameSchema, onBlur: nameSchema }}>
                 <FormInput placeholder="Enter chat engine name" />
               </field.Basic>
+              <field.Contained name='is_public' label="Is Public" defaultValue={true}>
+                <FormSwitch />
+              </field.Contained>
               <SubSection title="Models">
                 <field.Basic name="llm_id" label="LLM">
                   <LLMSelect />
@@ -279,4 +286,4 @@ const llmPromptDescriptions: { [P in typeof llmPromptFields[number]]: string } =
   'clarifying_question_prompt': 'Prompt template for generating clarifying questions when the user\'s input needs more context or specificity',
   'generate_goal_prompt': 'Prompt template for generating conversation goals and objectives based on user input',
   'further_questions_prompt': 'Prompt template for generating follow-up questions to continue the conversation',
-}; 
+};
