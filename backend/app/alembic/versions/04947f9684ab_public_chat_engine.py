@@ -1,7 +1,7 @@
 """public_chat_engine
 
 Revision ID: 04947f9684ab
-Revises: 211f3c5aa125
+Revises: b5cc0f034947
 Create Date: 2025-05-28 15:13:22.058160
 
 """
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = "04947f9684ab"
-down_revision = "211f3c5aa125"
+down_revision = "b5cc0f034947"
 branch_labels = None
 depends_on = None
 
