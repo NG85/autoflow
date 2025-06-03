@@ -10,6 +10,9 @@ COPY supervisord.conf /usr/etc/supervisord.conf
 COPY uv.lock /app/uv.lock
 COPY pyproject.toml /app/pyproject.toml
 
+# Script to index user documents
+COPY index_user_documents.py /app/index_user_documents.py
+
 RUN PYTHONDONTWRITEBYTECODE=1 uv sync --frozen
 ENV PATH="/app/.venv/bin:$PATH"
 
