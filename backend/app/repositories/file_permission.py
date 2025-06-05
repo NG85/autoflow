@@ -1,4 +1,3 @@
-from functools import lru_cache
 from typing import Optional
 from uuid import UUID
 from app.repositories.base_repo import BaseRepo
@@ -8,6 +7,7 @@ from app.models.upload import Upload
 from datetime import datetime, UTC
 from app.models.document import DocumentCategory
 import logging
+from cachetools import TTLCache, cached
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ class FilePermissionRepo(BaseRepo):
         else:
             raise ValueError(f"Unsupported operator: {operator}")
     
-    @lru_cache(maxsize=50)
+    @cached(cache=TTLCache(maxsize=50, ttl=60 * 60 * 3), key=lambda session, user_id, category, operator: (str(user_id), category.value if category else None, operator))
     def get_user_accessible_file_ids(self, session: Session, user_id: UUID, category: Optional[DocumentCategory] = None, operator: Optional[str] = None) -> list[int]:
         """获取用户有权限访问的所有文件ID
         
@@ -94,7 +94,6 @@ class FilePermissionRepo(BaseRepo):
             logger.error(f"Error getting user accessible file IDs: {e}")
             return []
     
-    @lru_cache(maxsize=1000)
     def check_user_has_permission(self, session: Session, user_id: UUID, file_id: int) -> bool:
         """检查用户是否有权限访问特定文件
         

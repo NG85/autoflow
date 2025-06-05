@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from pydantic import BaseModel
 from app.core.config import settings
 from app.rag.types import CrmDataType
+from cachetools import TTLCache, cached
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +79,7 @@ class CRMAuthority(BaseModel):
         """Check if there is any authorized data"""
         return len(self.authorized_items) == 0 or all(len(ids) == 0 for ids in self.authorized_items.values())
 
-
+@cached(cache=TTLCache(maxsize=30, ttl=60 * 60 * 3), key=lambda user_id: str(user_id) if user_id else None)
 def get_user_crm_authority(user_id: Optional[UUID]) -> Tuple[CRMAuthority, Optional[str]]:
     """Get the CRM data access permission of the user"""
     if not user_id:
