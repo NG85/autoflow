@@ -71,7 +71,7 @@ def format_account_info(account) -> List[str]:
     # 特殊处理的字段组（根据实际需要调整分组显示）
     contact_fields = {"phone", "website", "email"}
     date_fields = {"last_follow_up", "last_deal_time", "allocation_time", "creation_time", 
-                  "last_modification_time", "earliest_deal_date", "latest_deal_date"}
+                  "last_modified_time", "earliest_deal_date", "latest_deal_date"}
     status_fields = {"allocation_status", "deal_status", "life_status"}
     
     # 需要排除的字段

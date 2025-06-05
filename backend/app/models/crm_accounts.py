@@ -36,7 +36,7 @@ class CRMAccount(SQLModel, table=True):
     creator: Optional[str] = Field(nullable=True, max_length=255, description="创建人")
     creation_time: Optional[datetime] = Field(nullable=True, description="创建时间")
     last_modifier: Optional[str] = Field(nullable=True, max_length=255, description="最后修改人")
-    last_modification_time: Optional[datetime] = Field(nullable=True, description="最后修改时间")
+    last_modified_time: Optional[datetime] = Field(nullable=True, description="最后修改时间")
     customer_identifier: Optional[str] = Field(nullable=True, max_length=255, description="客户标识")
     # customer_number: Optional[str] = Field(nullable=True, max_length=255, description="客户编号标示")
     # customer_category: Optional[str] = Field(nullable=True, max_length=255, description="客户分类")
