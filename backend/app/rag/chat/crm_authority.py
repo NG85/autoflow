@@ -79,8 +79,8 @@ class CRMAuthority(BaseModel):
         """Check if there is any authorized data"""
         return len(self.authorized_items) == 0 or all(len(ids) == 0 for ids in self.authorized_items.values())
 
-@cached(cache=TTLCache(maxsize=30, ttl=60 * 60 * 3), key=lambda user_id: str(user_id) if user_id else None)
-def get_user_crm_authority(user_id: Optional[UUID]) -> Tuple[CRMAuthority, Optional[str]]:
+@cached(cache=TTLCache(maxsize=30, ttl=60 * 60 * 3), key=lambda user_id, crm_type=None: (user_id, crm_type))
+def get_user_crm_authority(user_id: UUID, crm_type: Optional[CrmDataType] = None) -> Tuple[CRMAuthority, str]:
     """Get the CRM data access permission of the user"""
     if not user_id:
         logger.info("Anonymous user has no CRM data access")
@@ -99,7 +99,7 @@ def get_user_crm_authority(user_id: Optional[UUID]) -> Tuple[CRMAuthority, Optio
         payload = {
             "dataId": "",
             "highSeasAccounts": False,
-            "type": "crm_opportunity",
+            "type": crm_type.value if crm_type else None,
             "userId": str(user_id)
         }
         

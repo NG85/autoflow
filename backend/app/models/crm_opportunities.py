@@ -223,7 +223,7 @@ class CRMOpportunity(SQLModel, table=True):
     
     account: Optional["CRMAccount"] = Relationship(
         sa_relationship_kwargs={
-            "primaryjoin": "and_(CRMOpportunity.customer_id==cast(CRMAccount.unique_id, String))",
+            "primaryjoin": "and_(CRMOpportunity.customer_id==CRMAccount.unique_id)",
             "foreign_keys": "[CRMOpportunity.customer_id]",
             "viewonly": True
         }
