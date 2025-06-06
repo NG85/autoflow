@@ -77,7 +77,7 @@ class CRMPaymentPlan(SQLModel, table=True):
     
     order: Optional["CRMOrder"] = Relationship(
         sa_relationship_kwargs={
-            "primaryjoin": "and_(CRMPaymentPlan.order_id==cast(CRMOrder.unique_id, String))",
+            "primaryjoin": "and_(CRMPaymentPlan.order_id==CRMOrder.unique_id)",
             "foreign_keys": "[CRMPaymentPlan.order_id]",
             "viewonly": True
         }

@@ -59,7 +59,7 @@ class CRMSalesActivities(SQLModel, table=True):
     
     opportunity: Optional["CRMOpportunity"] = Relationship(
         sa_relationship_kwargs={
-            "primaryjoin": "and_(CRMSalesActivities.opportunity_id==cast(CRMOpportunity.unique_id, String))",
+            "primaryjoin": "and_(CRMSalesActivities.opportunity_id==CRMOpportunity.unique_id)",
             "foreign_keys": "[CRMSalesActivities.opportunity_id]",
             "viewonly": True
         }
