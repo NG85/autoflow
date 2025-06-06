@@ -189,7 +189,7 @@ class CRMOpportunity(SQLModel, table=True):
     opportunity_stage: Optional[str] = Field(nullable=True, max_length=255, description="商机阶段（必填）")
     stage_status: Optional[str] = Field(nullable=True, max_length=255, description="阶段状态")
     stage_change_time: Optional[str] = Field(nullable=True, max_length=255, description="阶段变更时间")
-    last_modified_time: Optional[str] = Field(nullable=True, max_length=255, description="最后修改时间")
+    last_modified_time: Optional[datetime] = Field(nullable=True, description="最后修改时间")
     business_type: Optional[str] = Field(nullable=True, max_length=255, description="业务类型（必填）")
     last_followup_time: Optional[str] = Field(nullable=True, max_length=255, description="最后跟进时间")
     owner_main_department: Optional[str] = Field(nullable=True, max_length=255, description="负责人主属部门")
@@ -223,7 +223,7 @@ class CRMOpportunity(SQLModel, table=True):
     
     account: Optional["CRMAccount"] = Relationship(
         sa_relationship_kwargs={
-            "primaryjoin": "and_(CRMOpportunity.customer_id==cast(CRMAccount.unique_id, String))",
+            "primaryjoin": "and_(CRMOpportunity.customer_id==CRMAccount.unique_id)",
             "foreign_keys": "[CRMOpportunity.customer_id]",
             "viewonly": True
         }

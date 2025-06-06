@@ -91,10 +91,10 @@ class CRMOrder(SQLModel, table=True):
 
     __tablename__ = "crm_orders"
     
-    account: Optional["CRMAccount"] = Relationship(
+    opportunity: Optional["CRMOpportunity"] = Relationship(
         sa_relationship_kwargs={
-            "primaryjoin": "and_(CRMOrder.customer_id==cast(CRMAccount.unique_id, String))",
-            "foreign_keys": "[CRMOrder.customer_id]",
+            "primaryjoin": "and_(CRMOrder.opportunity_id==CRMOpportunity.unique_id)",
+            "foreign_keys": "[CRMOrder.opportunity_id]",
             "viewonly": True
         }
     )

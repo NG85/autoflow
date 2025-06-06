@@ -10,41 +10,65 @@ import { DatasourceCell } from '@/components/cells/reference';
 import { DataTableRemote } from '@/components/data-table-remote';
 import { DocumentPreviewDialog } from '@/components/document-viewer';
 import { DocumentsTableFilters } from '@/components/documents/documents-table-filters';
-import { NextLink } from '@/components/nextjs/NextLink';
 import { getErrorMessage } from '@/lib/errors';
-import type { ColumnDef } from '@tanstack/react-table';
+import type { CellContext, ColumnDef } from '@tanstack/react-table';
 import { createColumnHelper } from '@tanstack/table-core';
-import { TrashIcon, UploadIcon, BlocksIcon, WrenchIcon, DownloadIcon } from 'lucide-react';
+import { TrashIcon, UploadIcon, BlocksIcon, WrenchIcon, DownloadIcon, FileDownIcon } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
+import { parseHref } from '@/components/chat/utils';
 
 const helper = createColumnHelper<Document>();
 
+const truncateUrl = (url: string, maxLength: number = 30): string => {
+  if (!url || url.length <= maxLength) return url;
+  const start = url.substring(0, maxLength / 2);
+  const end = url.substring(url.length - maxLength / 2);
+  return `${start}...${end}`;
+};
+
+const href = (cell: CellContext<Document, string>) => {
+  const url = cell.getValue();
+  if (/^https?:\/\//.test(url)) {
+    return <a className="underline" href={url} target="_blank">{url}</a>;
+  } else if (url.startsWith('uploads/')) {
+    return (
+      <a className="underline" {...parseHref(cell.row.original)}>
+        <FileDownIcon className="inline-flex size-4 mr-1 stroke-1" />
+        {truncateUrl(url)}
+      </a>
+    );
+  } else {
+    return <span title={url}>{truncateUrl(url)}</span>;
+  }
+};
 
 
 const getColumns = (kbId: number) => [
-  helper.accessor('id', { header: "#", cell: mono }),
+  helper.accessor('id', { header: "ID", cell: mono }),
   helper.display({
-    id: 'name', header: 'Name', cell: ({ row }) =>
+    id: 'name', 
+    header: 'NAME',
+    cell: ({ row }) =>
       <DocumentPreviewDialog
-        title={row.original.source_uri}
+        title={row.original.name}
         name={row.original.name}
         mime={row.original.mime_type}
         content={row.original.content}
       />,
   }),
   helper.accessor('source_uri', {
-    header: "Source URI",
-    cell: link({
-      icon: <DownloadIcon className="size-3" />,
-      truncate: true,
-    }),
+    header: "SOURCE URI",
+    cell: href,
   }),
-  helper.accessor('data_source', { header: "Data source", cell: ctx => <DatasourceCell {...ctx.getValue()} /> }),
-  helper.accessor('updated_at', { header: "Last updated", cell: datetime }),
-  helper.accessor('index_status', { header: "Index status", cell: mono }),
+  helper.accessor('data_source', { header: "DATA SOURCE", cell: ctx => <DatasourceCell {...ctx.getValue()} /> }),
+  helper.accessor('updated_at', { header: "LAST UPDATED", cell: datetime }),
+  helper.accessor('index_status', { header: "INDEX STATUS", cell: mono }),
   helper.display({
     id: 'op',
+    header: 'ACTIONS',
     cell: actions(row => [
       {
         type: 'label',
@@ -120,15 +144,12 @@ export function DocumentsTable ({ knowledgeBaseId }: { knowledgeBaseId: number }
   return (
     <DataTableRemote
       toolbar={((table) => (
-        <div className="space-y-2">
-          <NextLink
-            href={`/knowledge-bases/${knowledgeBaseId}/data-sources/new?type=file`}
-            variant="secondary"
-          >
-            <UploadIcon />
-            Upload documents
-          </NextLink>
-          <DocumentsTableFilters table={table} onFilterChange={setFilters} />
+          <div className="py-1">
+            <DocumentsTableFilters
+              knowledgeBaseId={knowledgeBaseId}
+              table={table}
+              onFilterChange={setFilters}
+            />
         </div>
       ))}
       columns={columns}

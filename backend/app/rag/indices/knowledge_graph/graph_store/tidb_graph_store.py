@@ -2,11 +2,11 @@ import dspy
 import logging
 import numpy as np
 import tidb_vector
-from dspy.functional import TypedPredictor
 from deepdiff import DeepDiff
 from typing import List, Optional, Tuple, Dict, Set, Type, Any
 from collections import defaultdict
 
+from dspy import Predict
 from llama_index.core.embeddings.utils import EmbedType, resolve_embed_model
 from llama_index.embeddings.openai import OpenAIEmbedding, OpenAIEmbeddingModelType
 import sqlalchemy
@@ -40,10 +40,8 @@ from app.rag.retrievers.knowledge_graph.schema import (
     RetrievedKnowledgeGraph,
 )
 from app.models import (
-    Entity as DBEntity,
-    Relationship as DBRelationship,
-    Chunk as DBChunk,
     KnowledgeBase,
+    EntityType,
 )
 from app.models import EntityType
 from app.models.enums import GraphType
@@ -76,7 +74,7 @@ class MergeEntities(dspy.Signature):
 
 class MergeEntitiesProgram(dspy.Module):
     def __init__(self):
-        self.prog = TypedPredictor(MergeEntities)
+        self.prog = Predict(MergeEntities)
 
     def forward(self, entities: List[Entity]):
         if len(entities) != 2:
@@ -91,12 +89,12 @@ class TiDBGraphStore(KnowledgeGraphStore):
         self,
         knowledge_base: KnowledgeBase,
         dspy_lm: dspy.LM,
+        entity_db_model: Type[SQLModel],
+        relationship_db_model: Type[SQLModel],
+        chunk_db_model: Type[SQLModel],
         session: Optional[Session] = None,
         embed_model: Optional[EmbedType] = None,
         description_similarity_threshold=0.9,
-        entity_db_model: Type[SQLModel] = DBEntity,
-        relationship_db_model: Type[SQLModel] = DBRelationship,
-        chunk_db_model: Type[SQLModel] = DBChunk,
         graph_type: GraphType = GraphType.general,
     ):
         self.knowledge_base = knowledge_base
@@ -498,6 +496,7 @@ class TiDBGraphStore(KnowledgeGraphStore):
         # experimental feature to filter relationships based on meta, can be removed in the future
         relationship_meta_filters: dict = {},
         session: Optional[Session] = None,
+        filter_doc_ids: Optional[List[int]] = None,
     ) -> Tuple[List[RetrievedEntity], List[RetrievedRelationship]]:
         if not embedding:
             assert query, "Either query or embedding must be provided"
@@ -510,6 +509,7 @@ class TiDBGraphStore(KnowledgeGraphStore):
             with_degree=with_degree,
             relationship_meta_filters=relationship_meta_filters,
             session=session,
+            filter_doc_ids=filter_doc_ids
         )
 
         all_relationships = set(relationships)
@@ -549,6 +549,7 @@ class TiDBGraphStore(KnowledgeGraphStore):
                     with_degree=with_degree,
                     relationship_meta_filters=relationship_meta_filters,
                     session=session,
+                    filter_doc_ids=filter_doc_ids
                 )
 
                 all_relationships.update(new_relationships)
@@ -658,6 +659,7 @@ class TiDBGraphStore(KnowledgeGraphStore):
         with_degree: bool = False,
         relationship_meta_filters: Dict = {},
         session: Optional[Session] = None,
+        filter_doc_ids: Optional[List[int]] = None,
     ) -> Tuple[List[SQLModel], List[SQLModel]]:
         # select the relationships to rank
         subquery = (
@@ -668,7 +670,13 @@ class TiDBGraphStore(KnowledgeGraphStore):
                 ).label("embedding_distance"),
             )
             .options(defer(self._relationship_model.description_vec)))
-        
+        if filter_doc_ids and len(filter_doc_ids) > 0:
+            logger.debug(f"Add document_id filter to knowledge graph query: {len(filter_doc_ids)}")
+            subquery = subquery.where(self._relationship_model.document_id.in_(filter_doc_ids))
+        else:
+            # No document_id filter, query all relationships
+            logger.debug("No document_id filter, query all relationships from knowledge graph")
+
         # Apply meta filters to the base query before limiting
         if relationship_meta_filters:
             logger.debug(f"Applying relationship meta filters: {relationship_meta_filters}")
@@ -699,9 +707,7 @@ class TiDBGraphStore(KnowledgeGraphStore):
         )
 
         if visited_relationships:
-            query = query.where(
-                relationships_alias.id.notin_(visited_relationships)
-            )
+            query = query.where(subquery.c.id.notin_(visited_relationships))
 
         if distance_range != (0.0, 1.0):
             # embedding_distance between the range
@@ -712,9 +718,7 @@ class TiDBGraphStore(KnowledgeGraphStore):
             ).params(min_distance=distance_range[0], max_distance=distance_range[1])
 
         if visited_entities:
-            query = query.where(
-                relationships_alias.source_entity_id.in_(visited_entities)
-            )
+            query = query.where(subquery.c.source_entity_id.in_(visited_entities))
 
         query = query.order_by(asc("embedding_distance")).limit(limit)
 

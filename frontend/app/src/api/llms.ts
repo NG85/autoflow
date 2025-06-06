@@ -31,6 +31,12 @@ export interface CreateLLM {
   credentials: string | object;
 }
 
+export interface UpdateLLM {
+  name?: string;
+  config?: any;
+  credentials?: string | object;
+}
+
 export const llmSummarySchema = z.object({
   id: z.number(),
   name: z.string(),
@@ -51,7 +57,7 @@ const llmOptionSchema = providerOptionSchema.and(z.object({
 })) satisfies ZodType<LlmOption, any, any>;
 
 export async function listLlmOptions () {
-  return await fetch(requestUrl(`/api/v1/admin/llms/options`), {
+  return await fetch(requestUrl(`/api/v1/admin/llms/providers/options`), {
     headers: {
       ...await authenticationHeaders(),
     },
@@ -76,6 +82,17 @@ export async function createLlm (create: CreateLLM) {
   return await fetch(requestUrl(`/api/v1/admin/llms`), {
     method: 'POST',
     body: JSON.stringify(create),
+    headers: {
+      'Content-Type': 'application/json',
+      ...await authenticationHeaders(),
+    },
+  }).then(handleResponse(llmSchema));
+}
+
+export async function updateLlm (id: number, update: UpdateLLM) {
+  return await fetch(requestUrl(`/api/v1/admin/llms/${id}`), {
+    method: 'PUT',
+    body: JSON.stringify(update),
     headers: {
       'Content-Type': 'application/json',
       ...await authenticationHeaders(),

@@ -38,7 +38,7 @@ if settings.ENVIRONMENT == Environment.LOCAL:
         handler.setLevel(logging.DEBUG)
 
 
-@celery_app.task
+# @celery_app.task
 def add_evaluation_task(evaluation_task_id: int):
     logger.info(
         f"[add_evaluation_task] Enter with evaluation task #{evaluation_task_id}"
@@ -64,7 +64,7 @@ def add_evaluation_task(evaluation_task_id: int):
             add_evaluation_task_item.delay(eval_item.id)
 
 
-@celery_app.task
+# @celery_app.task
 def add_evaluation_task_item(evaluation_task_item_id: int):
     logger.info(
         f"Enter add_evaluation_task_item with evaluation item #{evaluation_task_item_id}"

@@ -30,8 +30,8 @@ def build_playbook_index_for_document(self, knowledge_base_id: int, document_id:
             logger.error(f"Document #{document_id} is not found")
             return
 
-        if db_document.get_metadata().category != DocumentCategory.PLAYBOOK:
-            logger.error(f"Document #{document_id} is not playbook category")
+        if db_document.get_metadata().category != DocumentCategory.PLAYBOOK and db_document.get_metadata().category != DocumentCategory.CRM:
+            logger.error(f"Document #{document_id} is not playbook or crm category")
             return
         
     

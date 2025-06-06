@@ -73,6 +73,17 @@ class ChatRepo(BaseRepo):
             raise ChatNotFound(chat_id)
         return chat
 
+    def update_title(
+        self,
+        session: Session,
+        chat: Chat,
+        title: str,
+    ) -> Chat:
+        chat.title = title
+        session.commit()
+        session.refresh(chat)
+        return chat
+    
     def update(
         self,
         session: Session,
@@ -243,36 +254,27 @@ class ChatRepo(BaseRepo):
         cutoff = datetime.now(UTC) - timedelta(days=15)
 
         # First, get all best answers from assistant (using the is_best_answer index)
-        best_answer_chat_ids = (
-            select(ChatMessage.chat_id)
-            .where(
-                ChatMessage.is_best_answer == 1,  # Using the index for efficiency
-                ChatMessage.role == "assistant",
-                ChatMessage.ordinal == 2,
-                ChatMessage.created_at >= cutoff
-            )
+        best_answer_chat_ids = select(ChatMessage.chat_id).where(
+            ChatMessage.is_best_answer == 1,  # Using the index for efficiency
+            ChatMessage.role == "assistant",
+            ChatMessage.ordinal == 2,
+            ChatMessage.created_at >= cutoff,
         )
 
         # Then, find user questions that match our target question and belong to chats with best answers
-        matching_chat_ids = (
-            select(ChatMessage.chat_id)
-            .where(
-                ChatMessage.chat_id.in_(best_answer_chat_ids),
-                ChatMessage.role == "user",
-                ChatMessage.ordinal == 1,
-                ChatMessage.content == user_question.strip()
-            )
+        matching_chat_ids = select(ChatMessage.chat_id).where(
+            ChatMessage.chat_id.in_(best_answer_chat_ids),
+            ChatMessage.role == "user",
+            ChatMessage.ordinal == 1,
+            ChatMessage.content == user_question.strip(),
         )
 
         # Finally, get the best answers that correspond to the matching user questions
-        query = (
-            select(ChatMessage)
-            .where(
-                ChatMessage.is_best_answer == 1,
-                ChatMessage.role == "assistant",
-                ChatMessage.ordinal == 2,
-                ChatMessage.chat_id.in_(matching_chat_ids)
-            )
+        query = select(ChatMessage).where(
+            ChatMessage.is_best_answer == 1,
+            ChatMessage.role == "assistant",
+            ChatMessage.ordinal == 2,
+            ChatMessage.chat_id.in_(matching_chat_ids),
         )
 
         query = query.order_by(desc(ChatMessage.created_at))

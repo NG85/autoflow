@@ -8,21 +8,15 @@ Knowledge sub-queries:
 Sub-query: {{ sub_query }}
 
   - Entities:
-
 {% for entity in data['entities'] %}
-
     - Name: {{ entity.name }}
-    - Description: {{ entity.description }}
-
+      Description: {{ entity.description }}
 {% endfor %}
 
   - Relationships:
-
 {% for relationship in data['relationships'] %}
-
     - Description: {{ relationship.rag_description }}
-    - Weight: {{ relationship.weight }}
-
+      Weight: {{ relationship.weight }}
 {% endfor %}
 
 {% endfor %}
@@ -35,10 +29,8 @@ Given a list of relationships of a knowledge graph as follows. When there is a c
 Entities:
 
 {% for entity in entities %}
-
 - Name: {{ entity.name }}
-- Description: {{ entity.description }}
-
+  Description: {{ entity.description }}
 {% endfor %}
 
 ---------------------
@@ -66,7 +58,10 @@ The prerequisite questions and their relevant knowledge for the user's main ques
 ---------------------
 
 Task:
-Given the conversation between the user and ASSISTANT, along with the follow-up message from the user, and the provided prerequisite questions and relevant knowledge, determine if the user's question is clear and specific enough for a confident response. If the question lacks necessary details or context, identify the specific ambiguities and generate a clarifying question to address them.
+Given the conversation between the user and ASSISTANT, along with the follow-up message from the user, and the provided prerequisite questions and relevant knowledge, determine if the user's question is clear and specific enough for a confident response. 
+
+If the question lacks necessary details or context, identify the specific ambiguities and generate a clarifying question to address them.
+If the question is clear and answerable, return exact "False" as the response.
 
 Instructions:
 1. Assess Information Sufficiency:
@@ -131,7 +126,7 @@ Knowledge Graph Context:
 ---------------------
 
 Data Access Status:
-Note: The knowledge graph data provided has already been filtered based on permissions. The response may be incomplete due to limited available information.
+Note: The knowledge graph data provided has been filtered based on permissions. Some information may be incomplete due to access restrictions.
 
 ---------------------
 
@@ -233,20 +228,21 @@ Followup question:
 Refined Question (include answer language hint):
 """
 
-
 DEFAULT_TEXT_QA_PROMPT = """\
-You are a helpful AI assistant. Your task is to provide accurate and helpful answers to user questions based on the provided knowledge.
-
 Current Date: {{current_date}}
 
 知识图谱信息：
 {{graph_knowledges}}
 
-Context Documents:
-<<context_str>>
+---------------------
+
+Context Information:
+{{context_str}}
+
+---------------------
 
 Data Access Status:
-Note: The knowledge graph and context data provided has already been filtered based on permissions. The response may be incomplete due to limited available information.
+Note: The provided information has been filtered based on permissions. Some information may be incomplete due to access restrictions.
 
 ---------------------
 上下文信息：
@@ -372,46 +368,11 @@ Note: The knowledge graph and context data provided has already been filtered ba
 The Original questions is:
 {{original_question}}
 
-Refined Question used to search:
-<<query_str>>
+Refined Question:
+
+{{query_str}}
 
 Answer:
-"""
-
-DEFAULT_REFINE_PROMPT = """\
-The Original questions is:
-
-{{original_question}}
-
-Refined Question used to search:
-<<query_str>>
-
----------------------
-We have provided an existing answer:
----------------------
-
-<<existing_answer>>
-
----------------------
-We have the opportunity to refine the existing answer (only if needed) with some more knowledge graph and context information below.
-
----------------------
-Knowledge graph information is below
----------------------
-
-{{graph_knowledges}}
-
----------------------
-Context information is below.
----------------------
-
-<<context_msg>>
-
----------------------
-Given the new context, refine the original answer to better answer the query. If the context isn't useful, return the original answer.
-And the answer should use the same language with the question. If the answer has different language with the original question, please translate it to the same language with the question.
-
-Refined Answer:
 """
 
 DEFAULT_FURTHER_QUESTIONS_PROMPT = """\
@@ -433,6 +394,7 @@ Instructions:
 5. Use the same language with the chat message content.
 6. Each question should end with a question mark.
 7. Each question should be in a new line, DO NOT add any indexes or blank lines, just output the questions.
+8. If the original question is about Sia's capabilities or introduction, limit the follow-up questions to this topic without excessive guidance.
 
 Now, generate 2-3 follow-up questions below:
 """
@@ -749,4 +711,18 @@ For different types of identity questions, use the corresponding section of info
 4. For knowledge base questions: Explain that you're more than just a knowledge base - you're an interactive legal assistant that can provide personalized labor law consultation and support throughout the entire process.
 
 The response should be natural and conversational while maintaining accuracy to your defined identity.
+"""
+
+FALLBACK_PROMPT = """
+User's Original Question: {{original_question}}
+
+No relevant content found. Please respond in the same language as the user's question.
+
+Acknowledge that you couldn't find relevant information for this question without using any greeting phrases like "Hello" or "Dear customer". Briefly mention possible reasons:
+- The information may not be in the knowledge base yet
+- The question may need more specific details
+
+Assurance that you're continuously learning and the knowledge base is being updated to better support them in the future
+
+Keep your response concise and professional while being honest about the current knowledge limitations. Start your response directly with the acknowledgment without any greeting.
 """

@@ -1,3 +1,4 @@
+import logging
 from typing import List, Optional, Dict, Tuple
 from llama_index.core.vector_stores import(
     FilterCondition,
@@ -9,7 +10,6 @@ from llama_index.core import QueryBundle
 from llama_index.core.callbacks import CallbackManager
 from llama_index.core.llms import LLM
 from llama_index.core.schema import NodeWithScore
-from llama_index.core.tools import ToolMetadata
 from sqlmodel import Session
 from app.rag.retrievers.chunk.simple_retriever import (
     ChunkSimpleRetriever,
@@ -19,14 +19,14 @@ from app.rag.retrievers.chunk.schema import (
     VectorSearchRetrieverConfig,
     ChunksRetrievalResult,
     ChunkRetriever,
-    MetadataFilterConfig,
 )
 from app.rag.retrievers.chunk.helpers import map_nodes_to_chunks
 from app.rag.retrievers.multiple_knowledge_base import MultiKBFusionRetriever
-from app.rag.knowledge_base.selector import KBSelectMode
 from app.repositories import knowledge_base_repo, document_repo
 from app.rag.chat.crm_authority import CRMAuthority
+from app.rag.types import CrmDataType
 
+logger = logging.getLogger(__name__)
 
 class ChunkFusionRetriever(MultiKBFusionRetriever, ChunkRetriever):
     def __init__(
@@ -35,27 +35,20 @@ class ChunkFusionRetriever(MultiKBFusionRetriever, ChunkRetriever):
         knowledge_base_ids: List[int],
         llm: LLM,
         use_query_decompose: bool = False,
-        kb_select_mode: KBSelectMode = KBSelectMode.ALL,
-        use_async: bool = True,
         config: VectorSearchRetrieverConfig = VectorSearchRetrieverConfig(),
         callback_manager: Optional[CallbackManager] = CallbackManager([]),
         crm_authority: Optional[CRMAuthority] = None,
+        granted_files: Optional[List[int]] = None,
         **kwargs,
     ):
         # Prepare vector search retrievers for knowledge bases.
         retrievers = []
-        retriever_choices = []
         knowledge_bases = knowledge_base_repo.get_by_ids(db_session, knowledge_base_ids)
         self.crm_authority = crm_authority
         self.config = config
-
+        
+        query_metadata_filters = None
         if crm_authority and not crm_authority.is_empty():
-            # 确保metadata_filter存在并启用
-            if not self.config.metadata_filter:
-                self.config.metadata_filter = MetadataFilterConfig()
-            
-            self.config.metadata_filter.enabled = True
-            
             # 将CRM权限信息写入filters
             crm_type_filters = []
             unique_id_filters = []
@@ -63,15 +56,28 @@ class ChunkFusionRetriever(MultiKBFusionRetriever, ChunkRetriever):
                 crm_type_filters.append(crm_type.value)
                 unique_id_filters.extend(authorized_ids)
             
-            # 使用复合条件：category != 'crm' OR (crm_data_type in crm_type_filters AND unique_id in unique_id_filters)
-            if not self.config.metadata_filter.filters:
-                self.config.metadata_filter.filters = MetadataFilters(
-                    filters=[
-                        MetadataFilter(key="category", value="crm", operator=FilterOperator.NE),
-                        MetadataFilter(key="unique_id", value=unique_id_filters, operator=FilterOperator.IN)
-                    ],
-                    condition=FilterCondition.OR
-                )
+            # 使用复合条件：category != 'crm' - 非crm类型无需鉴权
+            # OR (crm_data_type in [crm_internal_owner, crm_sales_record, crm_stage]) - 这几类crm实体无需鉴权
+            # OR (crm_data_type in crm_type_filters AND unique_id in unique_id_filters) - 其他crm实体需要鉴权
+            # if not self.config.metadata_filter.filters:
+            query_metadata_filters = MetadataFilters(
+                filters=[
+                    MetadataFilter(key="category", value="crm", operator=FilterOperator.NE),
+                    MetadataFilter(key="crm_data_type", value=[CrmDataType.INTERNAL_OWNER.value, CrmDataType.SALES_RECORD.value, CrmDataType.STAGE.value], operator=FilterOperator.IN),
+                    MetadataFilters(
+                        filters=[
+                            MetadataFilter(key="crm_data_type", value=crm_type_filters, operator=FilterOperator.IN),
+                            MetadataFilter(key="unique_id", value=unique_id_filters, operator=FilterOperator.IN)
+                        ],
+                        condition=FilterCondition.AND
+                    )
+                ],
+                condition=FilterCondition.OR
+            )
+        
+        filter_doc_ids = document_repo.fetch_ids_by_file_ids(db_session, granted_files)
+        logger.debug(f"Will filter chunks by granted document ids: {len(filter_doc_ids)}")
+        
         for kb in knowledge_bases:
             retrievers.append(
                 ChunkSimpleRetriever(
@@ -79,23 +85,16 @@ class ChunkFusionRetriever(MultiKBFusionRetriever, ChunkRetriever):
                     config=self.config,
                     callback_manager=callback_manager,
                     db_session=db_session,
-                )
-            )
-            retriever_choices.append(
-                ToolMetadata(
-                    name=kb.name,
-                    description=kb.description,
+                    filter_doc_ids=filter_doc_ids,
+                    query_metadata_filters=query_metadata_filters
                 )
             )
 
         super().__init__(
             db_session=db_session,
             retrievers=retrievers,
-            retriever_choices=retriever_choices,
             llm=llm,
             use_query_decompose=use_query_decompose,
-            kb_select_mode=kb_select_mode,
-            use_async=use_async,
             callback_manager=callback_manager,
             **kwargs,
         )

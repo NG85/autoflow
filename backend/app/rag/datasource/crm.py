@@ -23,6 +23,7 @@ from app.rag.datasource.crm_format import(
     format_opportunity_updates,
     get_column_comments_and_names
 )
+from app.rag.datasource.crm_to_file import save_crm_to_file
 from app.models.document import DocumentCategory
 from app.rag.types import CrmDataType
 
@@ -31,18 +32,18 @@ logger = logging.getLogger(__name__)
 
 class CRMDataSourceConfig(BaseModel):
     """Config for CRM data source"""
-    include_accounts: bool = True
-    include_contacts: bool = True
-    include_updates: Optional[bool] = True
-    include_opportunities: bool = True
-    include_orders: Optional[bool] = True
-    include_payment_plans: Optional[bool] = True
-    account_filter: Optional[str] = None
-    contact_filter: Optional[str] = None
+    # include_accounts: Optional[bool] = False
+    # include_contacts: Optional[bool] = True
+    # include_updates: Optional[bool] = True
+    # include_opportunities: Optional[bool] = True
+    # include_orders: Optional[bool] = True
+    # include_payment_plans: Optional[bool] = True
+    # account_filter: Optional[str] = None
+    # contact_filter: Optional[str] = None
     opportunity_filter: Optional[str] = None
-    opportunity_updates_filter: Optional[str] = None
-    order_filter: Optional[str] = None
-    payment_plan_filter: Optional[str] = None
+    # opportunity_updates_filter: Optional[str] = None
+    # order_filter: Optional[str] = None
+    # payment_plan_filter: Optional[str] = None
     max_count: Optional[int] = None
     batch_size: int = 100
 
@@ -65,28 +66,28 @@ class CRMDataSource(BaseDataSource):
             
         try:
             # Load opportunity documents
-            if self.config_obj.include_opportunities:
-                yield from self._load_opportunity_documents(db_session)
+            # if self.config_obj.include_opportunities:
+            yield from self._load_opportunity_documents(db_session)
                     
-            # Load account documents
-            if self.config_obj.include_accounts:
-                yield from self._load_account_documents(db_session)
+            # # Load account documents
+            # if self.config_obj.include_accounts:
+            #     yield from self._load_account_documents(db_session)
                     
-            # Load contact documents
-            if self.config_obj.include_contacts:
-                yield from self._load_contact_documents(db_session)
+            # # Load contact documents
+            # if self.config_obj.include_contacts:
+            #     yield from self._load_contact_documents(db_session)
 
-            # Load order documents
-            if self.config_obj.include_orders:
-                yield from self._load_order_documents(db_session)
+            # # Load order documents
+            # if self.config_obj.include_orders:
+            #     yield from self._load_order_documents(db_session)
                     
-            # Load payment plan documents
-            if self.config_obj.include_payment_plans:
-                yield from self._load_payment_plan_documents(db_session)
+            # # Load payment plan documents
+            # if self.config_obj.include_payment_plans:
+            #     yield from self._load_payment_plan_documents(db_session)
                     
-            # Load sales record documents
-            if self.config_obj.include_updates:
-                yield from self._load_opportunity_updates_documents(db_session)
+            # # Load sales record documents
+            # if self.config_obj.include_updates:
+            #     yield from self._load_opportunity_updates_documents(db_session)
                 
         finally:
             # Close the session we created ourselves
@@ -129,12 +130,11 @@ class CRMDataSource(BaseDataSource):
             
             entities = db_session.exec(query).all()
             
-            # Get related data as needed
-            related_data = get_related_data_func(db_session, entities)
-            
             # Create a Document for each entity
             for entity in entities:
                 try:
+                    # Get related data as needed
+                    related_data = get_related_data_func(db_session, entity.unique_id)
                     # Create a Document using the provided function
                     document = create_document_func(entity, related_data)
                     yield document
@@ -195,13 +195,44 @@ class CRMDataSource(BaseDataSource):
     def _load_opportunity_documents(self, db_session: Session) -> Generator[Document, None, None]:
         """Load opportunity documents from database."""
         
-        def get_related_data(session, opportunities):
-            # No related data for opportunity
-            return {}
+        def get_related_data(session, opportunity_id):
+            # Get related orders (opportunity vs order is 1:1 relationship)
+            orders_query = select(CRMOrder).filter(CRMOrder.opportunity_id==opportunity_id)
+            orders = db_session.exec(orders_query).all()
+            
+            # Get related opportunity updates (opportunity vs updates is 1:N relationship)
+            updates_query = select(CRMOpportunityUpdates).filter(CRMOpportunityUpdates.opportunity_id==opportunity_id)
+            opportunity_updates = db_session.exec(updates_query).all()
+            
+            # Get related payment plans for each order (order vs paymentplan is 1:N relationship)
+            orders_with_payment_plans = []
+            total_payment_plans = 0
+            
+            for order in orders:
+                # Get related payment plans for each order (order vs paymentplan is 1:N relationship)
+                payment_plans_query = select(CRMPaymentPlan).filter(
+                    CRMPaymentPlan.order_id==order.unique_id,
+                    (CRMPaymentPlan.is_deleted.is_(False) | CRMPaymentPlan.is_deleted.is_(None))
+                )
+                order_payment_plans = db_session.exec(payment_plans_query).all()
+                
+                # Store the order and its related payment plans together
+                orders_with_payment_plans.append({
+                    "order": order,
+                    "payment_plans": order_payment_plans
+                })
+                total_payment_plans += len(order_payment_plans)
+            
+            logger.info(f"Found opportunity {opportunity_id} with {len(orders)} orders, {total_payment_plans} payment plans, and {len(opportunity_updates)} updates")
+            
+            return {
+                "orders_with_payment_plans": orders_with_payment_plans,
+                "opportunity_updates": opportunity_updates
+            }
            
         def create_document(opportunity, related_data):
             # Create and return the document
-            return self._create_opportunity_document(opportunity)
+            return self._create_opportunity_document(opportunity, related_data)
         
         return self._load_entity_documents(
             db_session=db_session,
@@ -326,27 +357,30 @@ class CRMDataSource(BaseDataSource):
             create_document_func=create_document
         )
      
-    def _create_opportunity_document(self, opportunity) -> Document:
+    def _create_opportunity_document(self, opportunity, related_data) -> Document:
         """Create a Document object for a single opportunity."""
         # Create document content
         content = []
-        content.extend(format_opportunity_info(opportunity))        
+        content.extend(format_opportunity_info(opportunity, related_data))        
         content_str = "\n".join(content)
         
         # Create metadata
         metadata = self._create_metadata(opportunity, CrmDataType.OPPORTUNITY)
         
         doc_datetime = datetime.now()
+        upload = save_crm_to_file(opportunity, content_str, doc_datetime, metadata)
+        logger.info(f"Created opportunity document {upload.id} with metadata {metadata}")
         # Create Document object
         return Document(
-            name=f"{opportunity.opportunity_name or '未命名商机'}",
+            name=upload.name if upload else f"{getattr(opportunity, 'opportunity_name', '未具名商机')}_{getattr(opportunity, 'unique_id')}.md",
             hash=hash(content_str),
             content=content_str,
             mime_type=MimeTypes.MARKDOWN,
             knowledge_base_id=self.knowledge_base_id,
             data_source_id=self.data_source_id,
             user_id=self.user_id,
-            source_uri="crm_database/opportunities",
+            file_id=upload.id,
+            source_uri=upload.path if upload else f"crm/{getattr(opportunity, 'unique_id')}.md",
             created_at=doc_datetime,
             updated_at=doc_datetime,
             last_modified_at=doc_datetime,
@@ -501,18 +535,21 @@ class CRMDataSource(BaseDataSource):
         
         if entity:
             # Define the key fields to retain
-            key_fields = {"unique_id", "account_id", "account_name", "customer_id", "customer_name", "customer_level", "industry",
-                          "opportunity_id", "opportunity_name", "forecast_type", "opportunity_stage", "stage_status", "expected_closing_date",
-                          "sales_order_number", "order_id", "name", "plan_payment_status",
-                          "person_in_charge", "department", "owner", "owner_department", "owner_main_department",
-                          "responsible_person", "responsible_department"}
+            # key_fields = {"unique_id", "account_id", "account_name", "customer_id", "customer_name", "customer_level", "industry",
+            #               "opportunity_id", "opportunity_name", "forecast_type", "opportunity_stage", "stage_status", "expected_closing_date",
+            #               "sales_order_number", "order_id", "name", "plan_payment_status",
+            #               "person_in_charge", "department", "owner", "owner_department", "owner_main_department",
+            #               "responsible_person", "responsible_department"}
             
-            for field_name in key_fields:
-                if hasattr(entity, field_name):
-                    value = getattr(entity, field_name, None)
-                    if value is None:
-                        continue
+            # for field_name in key_fields:
+            #     if hasattr(entity, field_name):
+            #         value = getattr(entity, field_name, None)
+            #         if value is None:
+            #             continue
                     
-                    metadata[field_name] = value if isinstance(value, str) else str(value) if value else ""
+            #         metadata[field_name] = value if isinstance(value, str) else str(value) if value else ""
+
+            value = getattr(entity, "unique_id", None)
+            metadata["unique_id"] = value if isinstance(value, str) else str(value) if value else ""
         
         return metadata

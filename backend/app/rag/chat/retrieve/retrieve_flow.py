@@ -5,6 +5,7 @@ from typing import Generator, List, Optional, Tuple
 from llama_index.core.instrumentation import get_dispatcher
 from llama_index.core.llms import LLM
 from llama_index.core.schema import NodeWithScore, QueryBundle
+from llama_index.core.prompts.rich import RichPromptTemplate
 from pydantic import BaseModel
 from sqlmodel import Session
 
@@ -12,7 +13,6 @@ from app.models import (
     Document as DBDocument,
     KnowledgeBase,
 )
-from app.utils.jinja2 import get_prompt_by_jinja2_template
 from app.rag.chat.config import ChatEngineConfig
 from app.rag.retrievers.knowledge_graph.fusion_retriever import (
     KnowledgeGraphFusionRetriever,
@@ -84,7 +84,7 @@ class RetrieveFlow:
         return self.get_documents_from_nodes(nodes)
 
     def search_knowledge_graph(
-        self, user_question: str, crm_authority: Optional[CRMAuthority] = None
+        self, user_question: str, crm_authority: Optional[CRMAuthority] = None, granted_files: Optional[List[int]] = None
     ) -> Generator[Tuple[ChatMessageSate, str], None, Tuple[KnowledgeGraphRetrievalResult, str]]:
         kg_config = self.engine_config.knowledge_graph
         knowledge_graph = KnowledgeGraphRetrievalResult()
@@ -95,11 +95,11 @@ class RetrieveFlow:
                 knowledge_base_ids=[kb.id for kb in self.knowledge_bases],
                 llm=self._llm,
                 use_query_decompose=kg_config.using_intent_search,
-                use_async=True,
                 config=KnowledgeGraphRetrieverConfig.model_validate(
                     kg_config.model_dump(exclude={"enabled", "using_intent_search"})
                 ),
-                crm_authority=crm_authority
+                crm_authority=crm_authority,
+                granted_files=granted_files
             )
             try:
                 kg_gen = kg_retriever.retrieve_knowledge_graph(user_question)
@@ -134,41 +134,44 @@ class RetrieveFlow:
         self, knowledge_graph: KnowledgeGraphRetrievalResult
     ) -> str:
         if self.engine_config.knowledge_graph.using_intent_search:
-            kg_context_template = get_prompt_by_jinja2_template(
-                self.engine_config.llm.intent_graph_knowledge,
-                # For forward compatibility considerations.
+            kg_context_template = RichPromptTemplate(
+                self.engine_config.llm.intent_graph_knowledge
+            )
+            return kg_context_template.format(
                 sub_queries=knowledge_graph.to_subqueries_dict(),
             )
-            return kg_context_template.template
         else:
-            kg_context_template = get_prompt_by_jinja2_template(
-                self.engine_config.llm.normal_graph_knowledge,
+            kg_context_template = RichPromptTemplate(
+                self.engine_config.llm.normal_graph_knowledge
+            )
+            return kg_context_template.format(
                 entities=knowledge_graph.entities,
                 relationships=knowledge_graph.relationships,
             )
-            return kg_context_template.template
 
     def _refine_user_question(
         self, user_question: str, knowledge_graph_context: str
     ) -> str:
-        return self._fast_llm.predict(
-            get_prompt_by_jinja2_template(
-                self.engine_config.llm.condense_question_prompt,
-                graph_knowledges=knowledge_graph_context,
-                question=user_question,
-                current_date=datetime.now().strftime("%Y-%m-%d"),
-            ),
+        prompt_template = RichPromptTemplate(
+            self.engine_config.llm.condense_question_prompt
         )
+        refined_question = self._fast_llm.predict(
+            prompt_template,
+            graph_knowledges=knowledge_graph_context,
+            question=user_question,
+            current_date=datetime.now().strftime("%Y-%m-%d"),
+        )
+        return refined_question.strip().strip(".\"'!")
 
-    def search_relevant_chunks(self, user_question: str, crm_authority: Optional[CRMAuthority] = None) -> List[NodeWithScore]:
+    def search_relevant_chunks(self, user_question: str, crm_authority: Optional[CRMAuthority] = None, granted_files: Optional[List[int]] = None) -> List[NodeWithScore]:
         retriever = ChunkFusionRetriever(
             db_session=self.db_session,
             knowledge_base_ids=self.knowledge_base_ids,
             llm=self._llm,
             config=self.engine_config.vector_search,
             use_query_decompose=False,
-            use_async=True,
-            crm_authority=crm_authority
+            crm_authority=crm_authority,
+            granted_files=granted_files
         )
         nodes = retriever.retrieve(QueryBundle(user_question))
 

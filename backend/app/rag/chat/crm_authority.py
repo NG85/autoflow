@@ -1,10 +1,11 @@
 import logging
 from uuid import UUID
 import requests
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 from pydantic import BaseModel
 from app.core.config import settings
 from app.rag.types import CrmDataType
+from cachetools import TTLCache, cached
 
 logger = logging.getLogger(__name__)
 
@@ -78,12 +79,12 @@ class CRMAuthority(BaseModel):
         """Check if there is any authorized data"""
         return len(self.authorized_items) == 0 or all(len(ids) == 0 for ids in self.authorized_items.values())
 
-
-def get_user_crm_authority(user_id: Optional[UUID]) -> CRMAuthority:
+@cached(cache=TTLCache(maxsize=30, ttl=60 * 60 * 3), key=lambda user_id, crm_type=None: (user_id, crm_type))
+def get_user_crm_authority(user_id: UUID, crm_type: Optional[CrmDataType] = None) -> Tuple[CRMAuthority, str]:
     """Get the CRM data access permission of the user"""
     if not user_id:
         logger.info("Anonymous user has no CRM data access")
-        return CRMAuthority()
+        return CRMAuthority(), None
     
     authority = CRMAuthority()
             
@@ -91,14 +92,14 @@ def get_user_crm_authority(user_id: Optional[UUID]) -> CRMAuthority:
     auth_api_url = settings.CRM_AUTHORITY_API_URL
     if not auth_api_url:
         logger.error("CRM_AUTHORITY_API_URL is not configured")
-        return authority
+        return authority, None
     
     try:
         # Build request body
         payload = {
             "dataId": "",
-            "highSeasAccounts": True,
-            "type": "",
+            "highSeasAccounts": False,
+            "type": crm_type.value if crm_type else None,
             "userId": str(user_id)
         }
         
@@ -108,36 +109,41 @@ def get_user_crm_authority(user_id: Optional[UUID]) -> CRMAuthority:
         # Check HTTP response status
         if response.status_code != 200:
             logger.error(f"CRM authority API HTTP error: {response.status_code}")
-            return authority
+            return authority, None
             
         # Parse response JSON
         try:
             data = response.json()
         except ValueError:
             logger.error("CRM authority API returned invalid JSON")
-            return authority
+            return authority, None
             
         # Verify response format
         if not isinstance(data, dict) or "code" not in data or "result" not in data:
             logger.error(f"CRM authority API returned unexpected format: {data}")
-            return authority
+            return authority, None
             
         # Check response status code
         if data["code"] != 0:
             logger.error(f"CRM authority API error: {data.get('message', 'Unknown error')}")
-            return authority
+            return authority, None
             
         # Process authority data
         result = data.get("result", {})
         if not isinstance(result, dict):
             logger.error(f"CRM authority API returned invalid result format: {result}")
-            return authority
+            return authority, None
                
+        # Handle role
+        role = result.get("role", None)
+        if role and role == "admin":
+            return authority, role
+        
         # Handle authList
         auth_list = result.get("authList", [])
         if not isinstance(auth_list, list):
             logger.error(f"CRM authority API returned invalid authList format: {auth_list}")
-            return authority
+            return authority, role
                  
         for item in auth_list:
             if not isinstance(item, dict) or "dataId" not in item or "type" not in item:
@@ -152,29 +158,25 @@ def get_user_crm_authority(user_id: Optional[UUID]) -> CRMAuthority:
             # Map the API returned type to the CrmDataType enum
             try:
                 crm_type = CrmDataType(data_type)
-                if crm_type not in authority.authorized_items:
-                    authority.authorized_items[crm_type] = set()
-                authority.authorized_items[crm_type].add(data_id)
+                authority.authorized_items.setdefault(crm_type, set()).add(data_id)
             except ValueError:
                 logger.warning(f"Unknown CRM data type from API: {data_type}")
           
         # Handle highSeasAccounts
         high_seas_accounts = result.get("highSeasAccounts", [])
         if isinstance(high_seas_accounts, list):
-            if CrmDataType.ACCOUNT not in authority.authorized_items:
-                authority.authorized_items[CrmDataType.ACCOUNT] = set()
-            authority.authorized_items[CrmDataType.ACCOUNT].update(high_seas_accounts)
+            authority.authorized_items.setdefault(CrmDataType.ACCOUNT, set()).update(high_seas_accounts)
              
         # Record authority statistics
         stats = {data_type: len(ids) for data_type, ids in authority.authorized_items.items()}
         logger.info(f"User {user_id} CRM authority fetched: {stats}")
         
-        return authority
+        return authority, role
         
     except Exception as e:
         logger.error(f"Failed to get CRM authority for user {user_id}: {e}", exc_info=True)
         # Return empty authority when error, ensuring security
-        return authority
+        return authority, None
 
 def identify_crm_data_type(data_object, meta_or_metadata: str = "meta") -> tuple[Optional[str], Optional[str]]:
     """

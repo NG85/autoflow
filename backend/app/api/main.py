@@ -2,6 +2,7 @@ from fastapi import APIRouter
 from app.api.routes import (
     index,
     chat,
+    chat_engine,
     user,
     api_key,
     feedback,
@@ -59,6 +60,7 @@ from app.auth.users import auth_backend, fastapi_users
 api_router = APIRouter()
 api_router.include_router(index.router, tags=["index"])
 api_router.include_router(chat.router, tags=["chat"])
+api_router.include_router(chat_engine.router, tags=["chat_engine"])
 api_router.include_router(feedback.router, tags=["chat"])
 api_router.include_router(user.router, tags=["user"])
 api_router.include_router(api_key.router, tags=["auth"])

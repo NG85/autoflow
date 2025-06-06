@@ -84,6 +84,7 @@ class FileDataSource(BaseDataSource):
                 knowledge_base_id=self.knowledge_base_id,
                 data_source_id=self.data_source_id,
                 user_id=self.user_id,
+                file_id=upload.id,
                 source_uri=upload.path,
                 last_modified_at=upload.created_at,
                 meta=meta,

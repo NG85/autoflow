@@ -53,6 +53,13 @@ class Document(UpdatableBaseModel, table=True):
     name: str = Field(max_length=256)
     content: str = Field(sa_column=Column(MEDIUMTEXT))
     mime_type: MimeTypes = Field(sa_column=Column(String(128), nullable=False))
+    file_id: int = Field(foreign_key="uploads.id", nullable=True)
+    file: "Upload" = SQLRelationship(  # noqa:F821
+        sa_relationship_kwargs={
+            "lazy": "joined",
+            "primaryjoin": "Document.file_id == Upload.id",
+        },
+    )
     source_uri: str = Field(max_length=512)
     meta: dict | list = Field(default={}, sa_column=Column(JSON))
     # the last time the document was modified in the source system

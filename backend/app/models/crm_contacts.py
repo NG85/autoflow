@@ -95,7 +95,7 @@ class CRMContact(SQLModel, table=True):
     
     account: Optional["CRMAccount"] = Relationship(
         sa_relationship_kwargs={
-            "primaryjoin": "and_(CRMContact.customer_id==cast(CRMAccount.unique_id, String))",
+            "primaryjoin": "and_(CRMContact.customer_id==CRMAccount.unique_id)",
             "foreign_keys": "[CRMContact.customer_id]",
             "viewonly": True
         }
@@ -104,7 +104,7 @@ class CRMContact(SQLModel, table=True):
     # 添加直属上级关系
     superior: Optional["CRMContact"] = Relationship(
         sa_relationship_kwargs={
-            "primaryjoin": "and_(CRMContact.direct_superior_id==cast(CRMContact.unique_id, String))",
+            "primaryjoin": "and_(CRMContact.direct_superior_id==CRMContact.unique_id)",
             "foreign_keys": "[CRMContact.direct_superior_id]",
             "viewonly": True,
             "remote_side": "[CRMContact.unique_id]"
@@ -114,7 +114,7 @@ class CRMContact(SQLModel, table=True):
     # 添加下属关系(反向关系)
     subordinates: List["CRMContact"] = Relationship(
         sa_relationship_kwargs={
-            "primaryjoin": "and_(remote(cast(CRMContact.unique_id, String))==foreign(CRMContact.direct_superior_id))",
+            "primaryjoin": "and_(remote(CRMContact.unique_id)==foreign(CRMContact.direct_superior_id))",
             "viewonly": True,
             "overlaps": "superior"
         }

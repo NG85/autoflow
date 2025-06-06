@@ -1,7 +1,6 @@
 from typing import Type
 
-from sqlalchemy import delete
-from sqlmodel import select, Session, col
+from sqlmodel import select, Session, or_, delete
 from fastapi_pagination import Params, Page
 from fastapi_pagination.ext.sqlmodel import paginate
 
@@ -24,26 +23,33 @@ class DocumentRepo(BaseRepo):
         stmt = select(Document)
         if filters.knowledge_base_id:
             stmt = stmt.where(Document.knowledge_base_id == filters.knowledge_base_id)
-        if filters.source_uri:
-            stmt = stmt.where(col(Document.source_uri).contains(filters.source_uri))
+        if filters.search:
+            stmt = stmt.where(
+                or_(
+                    Document.name.contains(filters.search),
+                    Document.source_uri.contains(filters.search),
+                )
+            )
         if filters.data_source_id:
             stmt = stmt.where(Document.data_source_id == filters.data_source_id)
-        if filters.created_at_start:
-            stmt = stmt.where(Document.created_at >= filters.created_at_start)
-        if filters.created_at_end:
-            stmt = stmt.where(Document.created_at <= filters.created_at_end)
-        if filters.updated_at_start:
-            stmt = stmt.where(Document.updated_at >= filters.updated_at_start)
-        if filters.updated_at_end:
-            stmt = stmt.where(Document.updated_at <= filters.updated_at_end)
-        if filters.last_modified_at_start:
-            stmt = stmt.where(
-                Document.last_modified_at >= filters.last_modified_at_start
-            )
-        if filters.last_modified_at_end:
-            stmt = stmt.where(Document.last_modified_at <= filters.last_modified_at_end)
-        if filters.name:
-            stmt = stmt.where(col(Document.name).contains(filters.name))
+        if filters.created_at:
+            start_time, end_time = filters.created_at
+            if start_time:
+                stmt = stmt.where(Document.created_at >= start_time)
+            if end_time:
+                stmt = stmt.where(Document.created_at <= end_time)
+        if filters.updated_at:
+            start_time, end_time = filters.updated_at
+            if start_time:
+                stmt = stmt.where(Document.updated_at >= start_time)
+            if end_time:
+                stmt = stmt.where(Document.updated_at <= end_time)
+        if filters.last_modified_at:
+            start_time, end_time = filters.last_modified_at
+            if start_time:
+                stmt = stmt.where(Document.last_modified_at >= start_time)
+            if end_time:
+                stmt = stmt.where(Document.last_modified_at <= end_time)
         if filters.mime_type:
             stmt = stmt.where(Document.mime_type == filters.mime_type)
         if filters.index_status:
@@ -51,6 +57,7 @@ class DocumentRepo(BaseRepo):
 
         # Make sure the newer edited record is always on top
         stmt = stmt.order_by(Document.updated_at.desc())
+
         return paginate(session, stmt, params)
 
     def must_get(self, session: Session, doc_id: int) -> Type[Document]:
@@ -67,5 +74,18 @@ class DocumentRepo(BaseRepo):
         stmt = select(Document).where(Document.id.in_(document_ids))
         return session.exec(stmt).all()
 
+    def fetch_ids_by_file_ids(self, session: Session, file_ids: list[int]) -> list[int]:
+        if not file_ids:
+            # 如果 file_ids 为空列表，返回空列表表示所有文档
+            return []
+            
+        # 当 file_ids 不为空时，使用 in_ 操作符
+        stmt = select(Document.id).where(
+            or_(
+                Document.file_id.in_(file_ids),
+                Document.file_id.is_(None)
+            )
+        )
+        return session.exec(stmt).all()
 
 document_repo = DocumentRepo()

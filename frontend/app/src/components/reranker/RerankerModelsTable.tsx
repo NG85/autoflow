@@ -1,13 +1,14 @@
 'use client';
 
 import { setDefault } from '@/api/commons';
-import { listRerankers, type Reranker } from '@/api/rerankers';
+import { deleteReranker, listRerankers, type Reranker } from '@/api/rerankers';
 import { actions } from '@/components/cells/actions';
 import { DataTableRemote } from '@/components/data-table-remote';
 import { Badge } from '@/components/ui/badge';
 import { getErrorMessage } from '@/lib/errors';
 import type { ColumnDef } from '@tanstack/react-table';
 import { createColumnHelper } from '@tanstack/table-core';
+import { TrashIcon } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 
@@ -23,8 +24,12 @@ export default function RerankerModelsTable () {
 }
 const helper = createColumnHelper<Reranker>();
 const columns: ColumnDef<Reranker, any>[] = [
+  helper.accessor('id', {
+    header: 'ID',
+    cell: ({ row }) => row.original.id,
+  }),
   helper.accessor('name', {
-    header: 'Name',
+    header: 'NAME',
     cell: ({ row }) => {
       const { id, name, is_default } = row.original;
       return (
@@ -36,22 +41,22 @@ const columns: ColumnDef<Reranker, any>[] = [
     },
   }),
   helper.display({
-    header: 'Provider / Model',
+    header: 'PROVIDER / MODEL',
     cell: ({ row }) => {
       const { model, provider } = row.original;
       return (
         <>
-          <strong>{provider}</strong>:<span>{model}</span>
+          <strong>{provider}</strong>/<span>{model}</span>
         </>
       );
     },
   }),
   helper.accessor('top_n', {
-    header: 'Top N',
+    header: 'TOP N',
   }),
   helper.display({
     id: 'Operations',
-    header: 'Operations',
+    header: 'ACTIONS',
     cell: actions(row => ([
       {
         key: 'set-default',
@@ -73,6 +78,17 @@ const columns: ColumnDef<Reranker, any>[] = [
             throw e;
           }
         },
+      },
+      {
+        key: 'delete',
+        action: async ({ table, setDropdownOpen }) => {
+          await deleteReranker(row.id);
+          table.reload?.();
+          setDropdownOpen(false);
+        },
+        title: 'Delete',
+        icon: <TrashIcon className="size-3" />,
+        dangerous: {},
       },
     ])),
   }),

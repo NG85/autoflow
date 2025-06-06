@@ -11,7 +11,7 @@ from llama_index.core.llms.llm import LLM
 from app.rag.postprocessors.metadata_post_filter import MetadataPostFilter
 from app.rag.retrievers.chunk.schema import VectorSearchRetrieverConfig
 from app.rag.retrievers.knowledge_graph.schema import KnowledgeGraphRetrieverConfig
-from app.utils.dspy import get_dspy_lm_by_llama_llm
+from app.rag.llms.dspy import get_dspy_lm_by_llama_llm
 from app.rag.llms.resolver import get_default_llm, resolve_llm
 from app.rag.rerankers.resolver import get_default_reranker_model, resolve_reranker
 
@@ -27,7 +27,6 @@ from app.rag.default_prompt import (
     DEFAULT_NORMAL_GRAPH_KNOWLEDGE,
     DEFAULT_CONDENSE_QUESTION_PROMPT,
     DEFAULT_TEXT_QA_PROMPT,
-    DEFAULT_REFINE_PROMPT,
     DEFAULT_FURTHER_QUESTIONS_PROMPT,
     DEFAULT_GENERATE_GOAL_PROMPT,
     DEFAULT_CLARIFYING_QUESTION_PROMPT,
@@ -44,7 +43,6 @@ class LLMOption(BaseModel):
     condense_question_prompt: str = DEFAULT_CONDENSE_QUESTION_PROMPT
     clarifying_question_prompt: str = DEFAULT_CLARIFYING_QUESTION_PROMPT
     text_qa_prompt: str = DEFAULT_TEXT_QA_PROMPT
-    refine_prompt: str = DEFAULT_REFINE_PROMPT
     further_questions_prompt: str = DEFAULT_FURTHER_QUESTIONS_PROMPT
     generate_goal_prompt: str = DEFAULT_GENERATE_GOAL_PROMPT
     analyze_competitor_related_prompt: str = DEFAULT_ANALYZE_COMPETITOR_RELATED_PROMPT
@@ -84,6 +82,7 @@ class ChatEngineConfig(BaseModel):
 
     refine_question_with_kg: bool = True
     clarify_question: bool = False
+    further_questions: bool = False
 
     post_verification_url: Optional[str] = None
     post_verification_token: Optional[str] = None
@@ -159,7 +158,7 @@ class ChatEngineConfig(BaseModel):
         llama_llm = self.get_fast_llama_llm(session)
         return get_dspy_lm_by_llama_llm(llama_llm)
 
-    # FIXME: Reranker top_n should be config in the retrival config.
+    # FIXME: Reranker top_n should be config in the retrieval config.
     def get_reranker(
         self, session: Session, top_n: int = None
     ) -> Optional[BaseNodePostprocessor]:

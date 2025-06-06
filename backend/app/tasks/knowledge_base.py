@@ -1,5 +1,5 @@
 from celery.utils.log import get_task_logger
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlmodel import Session
 
 from app.celery import app as celery_app
@@ -9,6 +9,7 @@ from app.models import (
     Document,
     KnowledgeBaseDataSource,
     DataSource,
+    Upload,
 )
 from app.rag.datasource import get_data_source_loader
 from app.repositories import knowledge_base_repo, document_repo
@@ -140,11 +141,26 @@ def purge_knowledge_base_related_resources(kb_id: int):
         logger.info(
             f"Dropped tidb vector store of knowledge base #{kb_id} successfully."
         )
-
+        
+        # Get document file IDs before deleting documents
+        documents_with_files = session.exec(
+            select(Document.file_id).where(
+                Document.knowledge_base_id == kb_id,
+                Document.file_id.is_not(None)
+            )
+        ).all()
+        file_ids = [file_id[0] for file_id in documents_with_files if file_id[0]]
+        
         # Delete documents.
         stmt = delete(Document).where(Document.knowledge_base_id == kb_id)
         session.exec(stmt)
         logger.info(f"Deleted documents of knowledge base #{kb_id} successfully.")
+        
+        # Delete associated upload records
+        if file_ids:
+            stmt = delete(Upload).where(Upload.id.in_(file_ids))
+            session.exec(stmt)
+            logger.info(f"Deleted {len(file_ids)} upload records associated with knowledge base #{kb_id} successfully.")
 
         # Delete data sources and links.
         if len(data_source_ids) > 0:
@@ -200,10 +216,28 @@ def purge_kb_datasource_related_resources(kb_id: int, datasource_id: int):
         chunk_repo.delete_by_datasource(session, datasource_id)
         logger.info(f"Deleted chunks from data source #{datasource_id} successfully.")
 
+        # Get document IDs with file_id before deleting them
+        documents_with_files = session.exec(
+            select(Document.file_id).where(
+                Document.data_source_id == datasource_id,
+                Document.file_id.is_not(None)
+            )
+        ).all()
+        
+        # Delete documents first
         document_repo.delete_by_datasource(session, datasource_id)
         logger.info(
             f"Deleted documents from data source #{datasource_id} successfully."
         )
+        
+        # Delete associated uploads
+        if documents_with_files:
+            file_ids = [file_id[0] for file_id in documents_with_files if file_id[0]]
+            if file_ids:
+                session.exec(delete(Upload).where(Upload.id.in_(file_ids)))
+                logger.info(
+                    f"Deleted {len(file_ids)} uploads associated with data source #{datasource_id} successfully."
+                )
 
         session.delete(datasource)
         logger.info(f"Deleted data source #{datasource_id} successfully.")
