@@ -38,7 +38,7 @@ class FilePermissionRepo(BaseRepo):
         else:
             raise ValueError(f"Unsupported operator: {operator}")
     
-    @cached(cache=TTLCache(maxsize=50, ttl=60 * 60 * 3), key=lambda session, user_id, category, operator: (str(user_id), category.value if category else None, operator))
+    @cached(cache=TTLCache(maxsize=50, ttl=60 * 60 * 3), key=lambda session, user_id, category=None, operator=None: (str(user_id), None, None))
     def get_user_accessible_file_ids(self, session: Session, user_id: UUID, category: Optional[DocumentCategory] = None, operator: Optional[str] = None) -> list[int]:
         """获取用户有权限访问的所有文件ID
         
