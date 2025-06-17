@@ -3,7 +3,6 @@ from app.api.routes import (
     chat_engine,
     index,
     chat,
-    chat_engine,
     user,
     api_key,
     feedback,
@@ -69,7 +68,7 @@ api_router.include_router(document.router, tags=["documents"])
 api_router.include_router(crm_routes.router, tags=["crm"])
 api_router.include_router(chat_engine.router, tags=["chat-engines"])
 api_router.include_router(retrieve_routes.router, tags=["retrieve"])
-api_router.include_router(sts.router, tags=["storage"])
+api_router.include_router(sts.router, tags=["sts"])
 api_router.include_router(admin_user_router)
 api_router.include_router(admin_chat_engine.router, tags=["admin/chat-engines"])
 api_router.include_router(admin_document_router, tags=["admin/documents"])
