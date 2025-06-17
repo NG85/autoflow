@@ -41,6 +41,7 @@ class ChatRequest(BaseModel):
     chat_type: ChatType = ChatType.DEFAULT
     messages: List[ChatMessage]
     chat_engine: str = "default"
+    dr_enabled: bool = False
     chat_id: Optional[UUID] = None
     stream: bool = True
     chat_mode: ChatMode = ChatMode.DEFAULT
@@ -105,6 +106,7 @@ def chats(
             chat_type=chat_request.chat_type,
             chat_mode=chat_request.chat_mode,
             incoming_cookie=incoming_cookie,
+            dr_enabled=chat_request.dr_enabled,
         )
 
         if chat_request.stream:

@@ -82,6 +82,7 @@ class ChatFlow:
         chat_type: ChatType = ChatType.DEFAULT,
         chat_mode: ChatMode = ChatMode.DEFAULT,
         incoming_cookie: Optional[str] = None,
+        dr_enabled: bool = False,
     ) -> None:
         self.chat_id = chat_id
         self.db_session = db_session
@@ -93,6 +94,7 @@ class ChatFlow:
         self.chat_messages = chat_messages
         self.chat_mode = chat_mode
         self.incoming_cookie = incoming_cookie
+        self.dr_enabled = dr_enabled
         # Load chat engine and chat session.
         self.user_question, self.user_question_args, self.chat_history = parse_chat_messages(chat_messages)
         
@@ -238,6 +240,7 @@ class ChatFlow:
                     "is_external_engine": self.engine_config.is_external_engine,
                     "chat_engine_config": self.engine_config.screenshot(),
                     "chat_type": self.chat_type,
+                    "dr_enabled": self.dr_enabled,
                 },
                 tags=[f"chat_engine:{self.engine_name}"],
                 release=settings.ENVIRONMENT,
@@ -467,7 +470,7 @@ class ChatFlow:
             name="search_knowledge_graph", input=user_question
         ) as span:
             if not annotation_silent:
-                if kg_config.using_intent_search:
+                if kg_config.using_intent_search or self.dr_enabled:
                     yield ChatEvent(
                         event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
                         payload=ChatStreamMessagePayload(

@@ -428,22 +428,24 @@ Core Guidelines:
    - Feature:
      • Product/Service Features
        - Core functionality and specifications
-       - Technical implementation details
+       - Technical implementation details in layman's terms
    - Advantage:
      • Comparative Advantages
-       - Performance, cost, and technical advantages
-       - Innovation points
+       - Relative advantages over other solutions/products
+       - Innovation points and unique selling points
    - Benefit:
      • Business Impact
-       - Efficiency improvements and cost savings
-       - User experience and strategic value
+       - Business benefits and impacts relevant to customer's operations
+       - User experience improvements
+       - Strategic value alignment
    - Evidence:
      • Success Cases
        - Customer information and project details
        - Implementation approach and results
+       - Business outcomes and effectiveness
      • Data/Certification Proof
        - Performance data and certifications
-       - Industry recognition
+       - Industry recognition and validation
 
    SPIN Framework:
    - Situation: Current state and context
