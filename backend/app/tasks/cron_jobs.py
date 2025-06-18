@@ -28,7 +28,7 @@ def create_crm_daily_datasource(self):
         datasource_name = f"CRM_{yesterday_str}_{execution_time}"
         
         # 构建过滤条件，只包含昨天的数据
-        opportunity_filter = f"last_modified_at >= '{yesterday_str}' AND last_modified_at < '{today_str}'"
+        opportunity_filter = f"last_modified_time >= '{yesterday_str}' AND last_modified_time < '{today_str}'"
         
         logger.info(f"开始创建CRM数据源，时间范围: {yesterday_str} 00:00:00 到 {today_str} 00:00:00")
         
