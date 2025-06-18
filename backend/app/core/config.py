@@ -129,6 +129,10 @@ class Settings(BaseSettings):
     EMBEDDING_THRESHOLD: float = 0.875
 
     CRM_ENABLED: bool = True
+    # CRM daily task configuration
+    CRM_DAILY_KB_ID: int = 2
+    CRM_DAILY_TASK_HOUR: int = 10
+    CRM_DAILY_TASK_MINUTE: int = 0
     
     COMPLIED_INTENT_ANALYSIS_PROGRAM_PATH: str | None = None
     COMPLIED_PREREQUISITE_ANALYSIS_PROGRAM_PATH: str | None = None
