@@ -61,6 +61,16 @@ class ViewRegistry:
                 "unique_id": "商机唯一标识"
             }
         }
+        # 固定字段列表
+        self.fixed_fields = {
+            "owner_main_department",  # 部门
+            "owner",                  # 销售
+            "customer_level",         # 客户级别
+            "expected_closing_quarter", # 预计成交季度
+            "opportunity_stage",      # 销售阶段
+            "forecast_type",         # 预测类型
+            "customer_name"          # 客户名称
+        }
         # 固定枚举类型字段
         self.static_enum_fields = {
             "opportunity_stage": OpportunityStage,
@@ -98,7 +108,8 @@ class ViewRegistry:
                 display_name=display_name,
                 type="string",
                 description=display_name,
-                source="account"  # 标记字段来源
+                source="account",  # 标记字段来源
+                fixed=field in self.fixed_fields  # 只有指定的字段是固定的
             ))
         
         # 注册商机表字段
@@ -110,7 +121,8 @@ class ViewRegistry:
                 display_name=display_name,
                 type=field_type,
                 description=display_name,
-                source="opportunity"  # 标记字段来源
+                source="opportunity",  # 标记字段来源
+                fixed=field in self.fixed_fields  # 只有指定的字段是固定的
             ))
         
         # 注册标准视图
@@ -305,9 +317,21 @@ class CrmViewEngine:
                 dept_to_owners[dept].add(owner)
                 owner_to_dept[owner] = dept
         
-        options["owner_dept_mapping"] = {
-            dept: sorted(owners) for dept, owners in dept_to_owners.items()
-        }
+        # 构建级联选择器格式的数据
+        options["owner_dept_mapping"] = [
+            {
+                "label": dept,
+                "options": [
+                    {
+                        "label": owner,
+                        "value": {
+                            "owner_main_department": dept,
+                            "owner": owner
+                        }
+                    } for owner in sorted(owners)
+                ]
+            } for dept, owners in sorted(dept_to_owners.items())
+        ]
         
         # 处理所有字段
         all_fields = self.view_registry.get_all_enum_fields() + self.view_registry.searchable_fields

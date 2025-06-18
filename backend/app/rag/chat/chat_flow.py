@@ -83,6 +83,7 @@ class ChatFlow:
         chat_mode: ChatMode = ChatMode.DEFAULT,
         incoming_cookie: Optional[str] = None,
         dr_enabled: bool = False,
+        context: Optional[Dict] = None,
     ) -> None:
         self.chat_id = chat_id
         self.db_session = db_session
@@ -95,6 +96,7 @@ class ChatFlow:
         self.chat_mode = chat_mode
         self.incoming_cookie = incoming_cookie
         self.dr_enabled = dr_enabled
+        self.context = context
         # Load chat engine and chat session.
         self.user_question, self.user_question_args, self.chat_history = parse_chat_messages(chat_messages)
         
@@ -327,6 +329,7 @@ class ChatFlow:
         
         self.granted_files = []
         self.crm_authority = None
+        self.crm_role = None
         # 1. Identity verification and permission check step
         yield ChatEvent(
             event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
@@ -342,10 +345,26 @@ class ChatFlow:
         logger.debug(f"User {user_id} granted files: {len(self.granted_files)}")
 
         if settings.CRM_ENABLED:
-            # 1.2. Initialize CRM authority control
-            self.crm_authority, self.crm_role = get_user_crm_authority(
-                user_id=user_id
-            )
+            if self.context:
+                # If context is provided, use the account and opportunity lists in context to build authority
+                account_ids = self.context.get("account_ids", [])
+                opportunity_ids = self.context.get("opportunity_ids", [])
+                
+                # 只有当至少有一个非空数组时才使用 context 构建 authority
+                if account_ids or opportunity_ids:
+                    self.crm_authority = CRMAuthority(
+                        authorized_items={
+                            k: set(v) for k, v in {
+                                CrmDataType.ACCOUNT: account_ids,
+                                CrmDataType.OPPORTUNITY: opportunity_ids
+                            }.items() if v
+                        },
+                    )
+                    self.crm_role = None
+                else:
+                    self.crm_authority, self.crm_role = get_user_crm_authority(user_id=user_id)
+            else:
+                self.crm_authority, self.crm_role = get_user_crm_authority(user_id=user_id)
             
             def is_empty_role(role: Optional[str]) -> bool:
                 return role is None or not role.strip()
