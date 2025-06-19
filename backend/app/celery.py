@@ -27,7 +27,7 @@ app.autodiscover_tasks(["app"])
 app.autodiscover_tasks(['app.tasks.cron_jobs'])
 
 # 配置定时任务
-if settings.CRM_ENABLED:
+if settings.CRM_DAILY_TASK_ENABLED:
     app.conf.beat_schedule = {
         'create-crm-daily-datasource': {
             'task': 'app.tasks.cron_jobs.create_crm_daily_datasource',
