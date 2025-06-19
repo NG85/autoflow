@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import Query
 from fastapi_pagination import Params
 from fastapi_pagination.ext.sqlmodel import paginate
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, and_
 from sqlmodel import Session, select
 from sqlalchemy.orm import joinedload, load_only, contains_eager
 
@@ -252,6 +252,9 @@ class CrmViewEngine:
         self.model = CRMOpportunity
         self.account_model = CRMAccount
         
+        # 定义需要特殊处理的 JSON 数组字段
+        self.json_array_fields = ["owner", "presales_owner", "person_in_charge"]
+        
         # 定义客户表固定字段
         self.account_fields = [
             self.account_model.unique_id,
@@ -367,7 +370,7 @@ class CrmViewEngine:
                                 if field == "expected_closing_date" and isinstance(v[0], str):
                                     date_value = v[0].split('T')[0]
                                     field_values.append(date_value)
-                                elif field in ["presales_owner", "owner"] and isinstance(v[0], str):
+                                elif field in self.json_array_fields and isinstance(v[0], str):
                                     field_values.append(self._clean_json_array_value(v[0]))
                                 else:
                                     field_values.append(v[0])
@@ -425,7 +428,7 @@ class CrmViewEngine:
                     authority_conditions.append(self.account_model.unique_id.in_(authorized_account_ids))
                 
                 if authority_conditions:
-                    query = query.where(or_(*authority_conditions))
+                    query = query.where(and_(*authority_conditions))
         
         if request.filters:
             for filter_condition in request.filters:
@@ -436,12 +439,14 @@ class CrmViewEngine:
                 else:
                     query = self._apply_filter(query, self.model, filter_condition)
                     logger.info(f"after opportunity filter: {query}")
-            
-            if request.advanced_filters:
-                if request.filters and all(f in self.account_field_names for f in request.filters):
-                    query = self._apply_advanced_filters(query, self.account_model, request.advanced_filters)
-                else:
-                    query = self._apply_advanced_filters(query, self.model, request.advanced_filters)
+        
+        # 处理 advanced_filters，独立于 filters
+        if request.advanced_filters:
+            logger.info(f"advanced_filters: {request.advanced_filters}")
+            # advanced_filters 自己判断应该应用在哪个模型上
+            # 通过分析 advanced_filters 中的字段来决定
+            query = self._apply_advanced_filters_smart(query, request.advanced_filters)
+            logger.info(f"after advanced filter: {query}")
         
         if request.group_by:
             query, is_grouped = self._apply_grouping(query, self.model, request.group_by)
@@ -513,33 +518,10 @@ class CrmViewEngine:
             else:
                 return query
         
-        if op == FilterOperator.EQ:
-            return query.where(column == value)
-        elif op == FilterOperator.NEQ:
-            return query.where(column != value)
-        elif op == FilterOperator.GT:
-            return query.where(column > value)
-        elif op == FilterOperator.GTE:
-            return query.where(column >= value)
-        elif op == FilterOperator.LT:
-            return query.where(column < value)
-        elif op == FilterOperator.LTE:
-            return query.where(column <= value)
-        elif op == FilterOperator.IN:
-            return query.where(column.in_(value))
-        elif op == FilterOperator.NOT_IN:
-            return query.where(~column.in_(value))
-        elif op == FilterOperator.LIKE:
-            return query.where(column.like(f"%{value}%"))
-        elif op == FilterOperator.ILIKE:
-            return query.where(column.ilike(f"%{value}%"))
-        elif op == FilterOperator.IS_NULL:
-            return query.where(column.is_(None))
-        elif op == FilterOperator.NOT_NULL:
-            return query.where(column.isnot(None))
-        elif op == FilterOperator.BETWEEN:
-            if isinstance(value, list) and len(value) == 2:
-                return query.where(column.between(value[0], value[1]))
+        # 使用 _build_filter_condition 来构建条件，确保一致性
+        filter_condition_result = self._build_filter_condition(column, filter_condition)
+        if filter_condition_result is not None:
+            return query.where(filter_condition_result)
         
         return query
 
@@ -547,6 +529,8 @@ class CrmViewEngine:
         """递归应用高级过滤条件"""
         if not advanced_filters:
             return query
+            
+        logger.info(f"Applying advanced filters on model {model.__name__}: {advanced_filters}")
             
         # 处理NOT条件
         if "NOT" in advanced_filters:
@@ -559,9 +543,11 @@ class CrmViewEngine:
                 else:
                     # 处理基本过滤条件
                     filter_condition = FilterCondition(**condition)
-                    if hasattr(model, filter_condition.field):
-                        column = getattr(model, filter_condition.field)
-                        return query.where(~self._build_filter_condition(column, filter_condition))
+                    column = self._get_column_for_field(model, filter_condition.field)
+                    if column:
+                        filter_condition_result = self._build_filter_condition(column, filter_condition)
+                        if filter_condition_result is not None:
+                            return query.where(~filter_condition_result)
             
         # 处理AND条件
         if "AND" in advanced_filters:
@@ -571,16 +557,26 @@ class CrmViewEngine:
                     if "AND" in condition or "OR" in condition or "NOT" in condition:
                         # 递归处理嵌套的AND/OR/NOT条件
                         sub_query = self._apply_advanced_filters(query, model, condition)
-                        conditions.append(sub_query.whereclause)
+                        if sub_query.whereclause is not None:
+                            conditions.append(sub_query.whereclause)
                     else:
                         # 处理基本过滤条件
                         filter_condition = FilterCondition(**condition)
-                        if hasattr(model, filter_condition.field):
-                            column = getattr(model, filter_condition.field)
-                            conditions.append(self._build_filter_condition(column, filter_condition))
+                        column = self._get_column_for_field(model, filter_condition.field)
+                        logger.info(f"Processing filter: {filter_condition.field}, column: {column}, model: {model.__name__}")
+                        if column:
+                            filter_condition_result = self._build_filter_condition(column, filter_condition)
+                            if filter_condition_result is not None:
+                                conditions.append(filter_condition_result)
+                                logger.info(f"Added condition for {filter_condition.field}")
+                            else:
+                                logger.warning(f"Filter condition result is None for {filter_condition.field}")
+                        else:
+                            logger.warning(f"Column not found for field {filter_condition.field} in model {model.__name__}")
             
             if conditions:
-                return query.where(sa.and_(*conditions))
+                logger.info(f"Applying {len(conditions)} AND conditions")
+                return query.where(and_(*conditions))
                 
         # 处理OR条件
         elif "OR" in advanced_filters:
@@ -590,18 +586,48 @@ class CrmViewEngine:
                     if "AND" in condition or "OR" in condition or "NOT" in condition:
                         # 递归处理嵌套的AND/OR/NOT条件
                         sub_query = self._apply_advanced_filters(query, model, condition)
-                        conditions.append(sub_query.whereclause)
+                        if sub_query.whereclause is not None:
+                            conditions.append(sub_query.whereclause)
                     else:
                         # 处理基本过滤条件
                         filter_condition = FilterCondition(**condition)
-                        if hasattr(model, filter_condition.field):
-                            column = getattr(model, filter_condition.field)
-                            conditions.append(self._build_filter_condition(column, filter_condition))
+                        column = self._get_column_for_field(model, filter_condition.field)
+                        logger.info(f"Processing filter: {filter_condition.field}, column: {column}, model: {model.__name__}")
+                        if column:
+                            filter_condition_result = self._build_filter_condition(column, filter_condition)
+                            if filter_condition_result is not None:
+                                conditions.append(filter_condition_result)
+                                logger.info(f"Added condition for {filter_condition.field}")
+                            else:
+                                logger.warning(f"Filter condition result is None for {filter_condition.field}")
+                        else:
+                            logger.warning(f"Column not found for field {filter_condition.field} in model {model.__name__}")
             
             if conditions:
-                return query.where(sa.or_(*conditions))
+                logger.info(f"Applying {len(conditions)} OR conditions")
+                return query.where(or_(*conditions))
         
         return query
+
+    def _get_column_for_field(self, model, field_name):
+        """获取字段对应的列，支持 account 字段"""
+        if field_name in self.account_field_names:
+            logger.info(f"account field: {field_name}, model type: {type(model)}")
+            if model == self.account_model:
+                # 如果当前模型是 account 模型，直接获取字段
+                if hasattr(model, field_name):
+                    return getattr(model, field_name)
+            else:
+                # 如果当前模型是 opportunity 模型，通过关联获取 account 字段
+                # 使用 CRMAccount 模型直接获取字段
+                if hasattr(self.account_model, field_name):
+                    return getattr(self.account_model, field_name)
+        else:
+            # 普通字段，直接从当前模型获取
+            if hasattr(model, field_name):
+                return getattr(model, field_name)
+        
+        return None
 
     def _build_filter_condition(self, column, filter_condition: FilterCondition):
         """构建过滤条件"""
@@ -614,6 +640,10 @@ class CrmViewEngine:
             
         # 获取列的类型信息
         column_type = column.type
+        
+        # 特殊处理 JSON 数组字段
+        if column.name in self.json_array_fields:
+            return self._build_json_array_filter_condition(column, op, value)
         
         try:
             # 根据操作符构建条件
@@ -663,17 +693,57 @@ class CrmViewEngine:
             
         return None
 
+    def _build_json_array_filter_condition(self, column, op, value):
+        """构建 JSON 数组字段的过滤条件"""
+        if op == FilterOperator.EQ:
+            # 对于 JSON 数组字段，使用字符串匹配，因为 owner 字段可能存储为 ["孙琦"] 格式
+            json_value = f'["{value}"]'
+            return column == json_value
+        elif op == FilterOperator.NEQ:
+            json_value = f'["{value}"]'
+            return column != json_value
+        elif op == FilterOperator.IN:
+            if not isinstance(value, list):
+                value = [value]
+            # 对于 IN 操作，检查是否包含任何一个值
+            conditions = []
+            for v in value:
+                json_value = f'["{v}"]'
+                conditions.append(column == json_value)
+            return or_(*conditions)
+        elif op == FilterOperator.NOT_IN:
+            if not isinstance(value, list):
+                value = [value]
+            # 对于 NOT_IN 操作，检查不包含任何一个值
+            conditions = []
+            for v in value:
+                json_value = f'["{v}"]'
+                conditions.append(column != json_value)
+            return and_(*conditions)
+        elif op == FilterOperator.LIKE:
+            # 对于 LIKE 操作，使用字符串匹配
+            return column.like(f"%{value}%")
+        elif op == FilterOperator.ILIKE:
+            return column.ilike(f"%{value}%")
+        elif op == FilterOperator.IS_NULL:
+            return column.is_(None)
+        elif op == FilterOperator.NOT_NULL:
+            return column.isnot(None)
+        else:
+            # 对于其他操作符，使用默认处理
+            return column == value
+
     def _convert_value(self, value, column_type):
         """转换值的类型以匹配列类型"""
         if value is None:
             return None
             
         try:
-            # 处理常见的SQLAlchemy类型
+            # 安全地处理 SQLAlchemy 类型
             if hasattr(column_type, 'python_type'):
                 return column_type.python_type(value)
             return value
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, NotImplementedError):
             # 如果转换失败，返回原始值
             return value
 
@@ -769,7 +839,7 @@ class CrmViewEngine:
                 for field in fields:
                     if hasattr(result, field):
                         value = getattr(result, field)
-                        if field in ["owner", "presales_owner"] and isinstance(value, str):
+                        if field in self.json_array_fields and isinstance(value, str):
                             value = self._clean_json_array_value(value)
                         elif field == "expected_closing_date" and isinstance(value, str):
                             value = value.split('T')[0]  # 只保留日期部分
@@ -789,3 +859,68 @@ class CrmViewEngine:
         except Exception:
             pass
         return value
+
+    def _apply_advanced_filters_smart(self, query, advanced_filters):
+        """智能应用高级过滤条件，根据字段类型自动选择模型"""
+        if not advanced_filters:
+            return query
+        
+        # 分析 advanced_filters 中的字段类型
+        fields_info = self._analyze_advanced_filters_fields(advanced_filters)
+        
+        # 如果只包含 account 字段，应用在 account_model 上
+        if fields_info['has_account_fields'] and not fields_info['has_opportunity_fields']:
+            logger.info("Advanced filters contain only account fields, applying on account model")
+            return self._apply_advanced_filters(query, self.account_model, advanced_filters)
+        
+        # 如果只包含 opportunity 字段，应用在 opportunity model 上
+        elif fields_info['has_opportunity_fields'] and not fields_info['has_account_fields']:
+            logger.info("Advanced filters contain only opportunity fields, applying on opportunity model")
+            return self._apply_advanced_filters(query, self.model, advanced_filters)
+        
+        # 如果包含混合字段，需要分别处理
+        elif fields_info['has_account_fields'] and fields_info['has_opportunity_fields']:
+            logger.info("Advanced filters contain mixed fields, applying on opportunity model with account joins")
+            # 对于混合字段，应用在 opportunity model 上，account 字段通过 _get_column_for_field 方法处理
+            return self._apply_advanced_filters(query, self.model, advanced_filters)
+        
+        # 如果没有识别出字段类型，默认应用在 opportunity model 上
+        else:
+            logger.info("No recognized fields in advanced filters, applying on opportunity model")
+            return self._apply_advanced_filters(query, self.model, advanced_filters)
+
+    def _analyze_advanced_filters_fields(self, advanced_filters):
+        """分析高级过滤条件中的字段类型"""
+        fields_info = {
+            'has_account_fields': False,
+            'has_opportunity_fields': False,
+            'account_fields': set(),
+            'opportunity_fields': set()
+        }
+        
+        def extract_fields_from_condition(condition):
+            """递归提取条件中的字段"""
+            if isinstance(condition, dict):
+                # 基本过滤条件
+                if 'field' in condition:
+                    field_name = condition['field']
+                    if field_name in self.account_field_names:
+                        fields_info['has_account_fields'] = True
+                        fields_info['account_fields'].add(field_name)
+                    else:
+                        fields_info['has_opportunity_fields'] = True
+                        fields_info['opportunity_fields'].add(field_name)
+                
+                # 复合条件
+                for key in ['AND', 'OR', 'NOT']:
+                    if key in condition:
+                        if key == 'NOT':
+                            extract_fields_from_condition(condition[key])
+                        else:
+                            for sub_condition in condition[key]:
+                                extract_fields_from_condition(sub_condition)
+        
+        extract_fields_from_condition(advanced_filters)
+        
+        logger.info(f"Field analysis: account_fields={fields_info['account_fields']}, opportunity_fields={fields_info['opportunity_fields']}")
+        return fields_info
