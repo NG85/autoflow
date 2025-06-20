@@ -35,8 +35,8 @@ export function NodeDetails ({
     return Array.from(network.nodeNeighborhoods(entity.id) ?? []).map(id => network.node(id)!);
   }, [network, entity.id]);
 
-  const latestData = useRemote(entity, loadEntity, knowledgeBaseId, Number(entity.id));
-  const dirtyEntity = useDirtyEntity(knowledgeBaseId, entity.id);
+  const latestData = useRemote(entity, loadEntity, knowledgeBaseId, Number(entity.node_id));
+  const dirtyEntity = useDirtyEntity(knowledgeBaseId, entity.node_id);
 
   // dirty set
   entity = latestData.data;
