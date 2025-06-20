@@ -41,9 +41,11 @@ class ChatRequest(BaseModel):
     chat_type: ChatType = ChatType.DEFAULT
     messages: List[ChatMessage]
     chat_engine: str = "default"
+    dr_enabled: bool = False
     chat_id: Optional[UUID] = None
     stream: bool = True
     chat_mode: ChatMode = ChatMode.DEFAULT
+    context: Optional[Dict] = None
     
     @field_validator("messages")
     @classmethod
@@ -79,6 +81,23 @@ class ChatRequest(BaseModel):
                     raise ValueError("messages must contain alternating user and assistant messages")
         return self
 
+    @field_validator("context")
+    @classmethod
+    def validate_context(cls, context: Optional[Dict]) -> Optional[Dict]:
+        if context is None:
+            return context
+
+        allowed_keys = {"account_ids", "opportunity_ids"}
+        invalid_keys = set(context.keys()) - allowed_keys
+        if invalid_keys:
+            raise ValueError(f"context can only contain 'account_ids' or 'opportunity_ids', got invalid keys: {invalid_keys}")
+
+        for key in context:
+            if not isinstance(context[key], list):
+                raise ValueError(f"{key} must be a list")
+                
+        return context
+
 @router.post("/chats")
 def chats(
     request: Request,
@@ -105,6 +124,8 @@ def chats(
             chat_type=chat_request.chat_type,
             chat_mode=chat_request.chat_mode,
             incoming_cookie=incoming_cookie,
+            dr_enabled=chat_request.dr_enabled,
+            context=chat_request.context,
         )
 
         if chat_request.stream:

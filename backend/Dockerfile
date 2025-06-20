@@ -16,9 +16,6 @@ COPY index_user_documents.py /app/index_user_documents.py
 RUN PYTHONDONTWRITEBYTECODE=1 uv sync --frozen
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Pre-download playwright dependencies.
-RUN playwright install --with-deps chromium
-
 # Pre-download nltk data.
 RUN python -c 'import nltk; \
 download_dir = "/usr/local/lib/python3.11/site-packages/llama_index/core/_static/nltk_cache";\

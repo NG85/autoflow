@@ -3,12 +3,11 @@ from app.api.routes import (
     chat_engine,
     index,
     chat,
-    chat_engine,
     user,
     api_key,
     feedback,
     document,
-    tos,
+    sts,
 )
 from app.api.admin_routes.knowledge_base.routes import (
     router as admin_knowledge_base_router,
@@ -55,6 +54,7 @@ from app.api.admin_routes.evaluation import (
 from app.api.routes.retrieve import (
     routes as retrieve_routes,
 )
+from app.api.routes.crm import routes as crm_routes
 
 from app.auth.users import auth_backend, fastapi_users
 
@@ -65,9 +65,10 @@ api_router.include_router(feedback.router, tags=["chat"])
 api_router.include_router(user.router, tags=["user"])
 api_router.include_router(api_key.router, tags=["auth"])
 api_router.include_router(document.router, tags=["documents"])
+api_router.include_router(crm_routes.router, tags=["crm"])
 api_router.include_router(chat_engine.router, tags=["chat-engines"])
 api_router.include_router(retrieve_routes.router, tags=["retrieve"])
-api_router.include_router(tos.router, tags=["tos"])
+api_router.include_router(sts.router, tags=["sts"])
 api_router.include_router(admin_user_router)
 api_router.include_router(admin_chat_engine.router, tags=["admin/chat-engines"])
 api_router.include_router(admin_document_router, tags=["admin/documents"])

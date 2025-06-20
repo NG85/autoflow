@@ -63,7 +63,7 @@ class KnowledgeGraphFusionRetriever(MultiKBFusionRetriever, KnowledgeGraphRetrie
             crm_type_filters = []
             unique_id_filters = []
             for crm_type, authorized_ids in crm_authority.authorized_items.items():
-                crm_type_filters.append(crm_type.value)
+                crm_type_filters.append(crm_type)
                 unique_id_filters.extend(authorized_ids)
             
             # 使用复合条件：category != 'crm' - 非crm类型无需鉴权

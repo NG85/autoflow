@@ -30,6 +30,11 @@ class Environment(str, enum.Enum):
     PRODUCTION = "production"
 
 
+class StorageType(str, enum.Enum):
+    TOS = "tos"
+    MINIO = "minio"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env", env_ignore_empty=True, extra="ignore"
@@ -94,6 +99,9 @@ class Settings(BaseSettings):
     TIDB_AI_CHAT_ENDPOINT: str = "https://af.aptsell.ai/api/v1/chats"
     TIDB_AI_API_KEY: SecretStr | None = None
  
+    # Storage configuration
+    STORAGE_TYPE: StorageType = StorageType.MINIO
+    
     # TOS STS
     TOS_API_KEY: str = ""
     TOS_API_SECRET: str = ""
@@ -102,6 +110,14 @@ class Settings(BaseSettings):
     TOS_ENDPOINT: str = f"tos-{TOS_REGION}.volces.com"
     TOS_BUCKET: str = "aptsell-dev"
     TOS_PATH_PREFIX: str = "data/customer-uploads/"
+    
+    # MinIO configuration
+    MINIO_ENDPOINT: str = "localhost:9000"
+    MINIO_ACCESS_KEY: str = "minioadmin"
+    MINIO_SECRET_KEY: str = "minioadmin"
+    MINIO_SECURE: bool = False
+    MINIO_BUCKET: str = "autoflow"
+    MINIO_PATH_PREFIX: str = "data/customer-uploads/"
     
     # CRM authority API
     CRM_AUTHORITY_API_URL: str = "http://auth:8018/crm/authority/user"
@@ -112,7 +128,12 @@ class Settings(BaseSettings):
     
     EMBEDDING_THRESHOLD: float = 0.875
 
-    CRM_ENABLED: bool = True
+    CRM_ENABLED: bool = False
+    # CRM daily task configuration
+    CRM_DAILY_TASK_ENABLED: bool = False
+    CRM_DAILY_KB_ID: int = 2
+    CRM_DAILY_TASK_HOUR: int = 10
+    CRM_DAILY_TASK_MINUTE: int = 0
     
     COMPLIED_INTENT_ANALYSIS_PROGRAM_PATH: str | None = None
     COMPLIED_PREREQUISITE_ANALYSIS_PROGRAM_PATH: str | None = None

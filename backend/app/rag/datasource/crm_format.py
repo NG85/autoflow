@@ -1,6 +1,7 @@
 from datetime import date, datetime
 from typing import Any, List
 import logging
+import json
 
 logger = logging.getLogger(__name__)
     
@@ -584,9 +585,13 @@ def format_opportunity_info(opportunity, related_data) -> List[str]:
                 for payment_plan in order_with_payment_plans["payment_plans"]:
                     content.extend(format_payment_plan_info(payment_plan))
     
-    # 处理商机更新记录
-    if related_data and "opportunity_updates" in related_data:
-        content.extend(format_opportunity_updates(related_data["opportunity_updates"], opportunity.opportunity_name))
+    # # 处理商机更新记录
+    # if related_data and "opportunity_updates" in related_data:
+    #     content.extend(format_opportunity_updates(related_data["opportunity_updates"], opportunity.opportunity_name))
+    
+    # 处理销售活动记录
+    if related_data and "sales_activities" in related_data:
+        content.extend(format_sales_activities(related_data["sales_activities"], opportunity.opportunity_name))
     
     return content
 
@@ -677,6 +682,108 @@ def format_opportunity_updates(updates, opportunity_name: str) -> List[str]:
                 
             display_name = column_comments.get(field_name, field_name.replace('_', ' ').title())
             content.append(f"\n**{display_name}**: {value}")
+    
+    return content
+
+def format_sales_activities(sales_activities, opportunity_name: str) -> List[str]:
+    """动态处理销售活动记录，仅使用CRMSalesActivities模型中定义的字段"""
+    if not sales_activities:
+        return []
+        
+    content = []
+    content.append(f"\n## 销售活动记录：{opportunity_name}\n")
+    
+    # 获取销售活动记录模型的列注释和字段名
+    column_comments, valid_columns = get_column_comments_and_names(type(sales_activities[0]))
+    
+    # 定义字段组
+    field_groups = {
+        "basic": {
+            "title": "基本信息",
+            "fields": ["record_date", "category", "communication_medium", "location", "summary", "creator", "customer_sentiment", "deal_probability_change"]
+        },
+        "participants": {
+            "title": "参与者信息",
+            "fields": ["internal_participants", "external_participants", "key_stakeholders"]
+        },
+        "details": {
+            "title": "详细信息",
+            "fields": ["detailed_notes", "next_steps", "blockers"]
+        },
+        "system": {
+            "title": "系统信息",
+            "fields": ["data_source", "create_time", "last_modifier", "last_modified_time"]
+        }
+    }
+    
+    # 需要排除的字段
+    exclude_fields = {
+        "id", "unique_id", "opportunity_id", "opportunity_name",
+        "account_id", "account_name", "linked_account_ids", "linked_opportunity_ids",
+        "creator_id", "correlation_id", "core_biz_info"
+    }
+    # 辅助函数：处理字段值的格式化
+    def format_field_value(field_name, value):
+        # 处理日期时间
+        if isinstance(value, datetime):
+            return value.strftime("%Y-%m-%d %H:%M")
+        elif isinstance(value, date):
+            return value.strftime("%Y-%m-%d")
+            
+        # 处理JSON字段
+        if field_name in ["internal_participants", "external_participants"] and value is not None:
+            try:
+                if isinstance(value, str):
+                    json_data = json.loads(value)
+                elif isinstance(value, list):
+                    json_data = value
+                else:
+                    return str(value)
+                
+                if isinstance(json_data, list):
+                    # 处理对象列表格式：[{"id": "SALES002", "name": "刘销售", "role": "销售"}]
+                    formatted_items = []
+                    for item in json_data:
+                        if isinstance(item, dict):
+                            name = item.get('name', '')
+                            role = item.get('role', '')
+                            if name and role:
+                                formatted_items.append(f"{name}({role})")
+                            elif name:
+                                formatted_items.append(name)
+                            else:
+                                formatted_items.append(str(item))
+                        else:
+                            formatted_items.append(str(item))
+                    return ', '.join(formatted_items)
+                return str(value)
+            except Exception:
+                pass
+                        
+        # 默认返回原值
+        return value
+
+    # 处理每条销售活动记录
+    for idx, activity in enumerate(sales_activities, 1):
+        content.append(f"\n### 活动记录 {idx}\n")
+        
+        # 处理每个字段组
+        for group_name, group_info in field_groups.items():
+            group_fields = []
+            for field_name in group_info["fields"]:
+                if field_name in valid_columns and field_name not in exclude_fields:
+                    value = getattr(activity, field_name)
+                    if value is not None:
+                        formatted_value = format_field_value(field_name, value)
+                        if formatted_value:
+                            comment = column_comments.get(field_name, field_name)
+                            group_fields.append(f"- {comment}：{formatted_value}")
+            
+            if group_fields:
+                content.append(f"\n#### {group_info['title']}\n")
+                content.extend(group_fields)
+        
+        content.append("\n---\n")
     
     return content
 

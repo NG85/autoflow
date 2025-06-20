@@ -162,7 +162,7 @@ def batch_files(file_paths: List[str], batch_size: int):
     while batch := list(islice(iterator, batch_size)):
         yield batch
 
-def upload_files(base_url: str, cookie: str = None, authorization: str = None, file_paths: List[str] = None) -> List[Upload]:
+def upload_files(base_url: str, cookie: str = None, authorization: str = None, file_paths: List[str] = None, meta: str = None) -> List[Upload]:
     """
     上传一批文件
     """
@@ -186,8 +186,11 @@ def upload_files(base_url: str, cookie: str = None, authorization: str = None, f
     if authorization:
         headers['Authorization'] = f'Bearer {authorization}'
     
+    # 使用传入的meta或默认值
+    default_meta = {"category": "playbook"}
+    meta_data = json.loads(meta) if meta else default_meta
     data = {
-        'meta': json.dumps({"category": "playbook"})
+        'meta': json.dumps(meta_data)
     }
     
     try:
@@ -279,7 +282,7 @@ def create_datasource(base_url: str, cookie: str = None, authorization: str = No
         logger.error(error_msg)
         raise Exception(error_msg)
 
-def process_directory(base_url: str, cookie: str = None, authorization: str = None, directory: str = None, kb_id: int = None, base_name: str = None, batch_size: int = 5):
+def process_directory(base_url: str, cookie: str = None, authorization: str = None, directory: str = None, kb_id: int = None, base_name: str = None, batch_size: int = 5, meta: str = None):
     """
     处理目录下的所有文件，分批上传并创建数据源
     """
@@ -298,7 +301,7 @@ def process_directory(base_url: str, cookie: str = None, authorization: str = No
             logger.info(f"上传 {len(current_batch)} 个文件...")
             
             # 上传文件
-            uploads = upload_files(base_url, cookie, authorization, current_batch)
+            uploads = upload_files(base_url, cookie, authorization, current_batch, meta)
             logger.info(f"成功上传 {len(uploads)} 个文件")
             
             # 创建数据源
@@ -350,6 +353,7 @@ def main():
     parser.add_argument('--kb-id', required=True, type=int, help='知识库ID')
     parser.add_argument('--name', help='数据源基础名称，默认使用目录名')
     parser.add_argument('--batch-size', type=int, default=5, help='每批处理的文件数量，默认为5')
+    parser.add_argument('--meta', help='自定义meta信息，JSON格式字符串，例如：\'{"category": "custom"}\'')
     
     # 解析命令行参数
     args = parser.parse_args()
@@ -369,7 +373,8 @@ def main():
             directory=directory,
             kb_id=args.kb_id,
             base_name=base_name,
-            batch_size=args.batch_size
+            batch_size=args.batch_size,
+            meta=args.meta
         )
     except Exception as e:
         logger.error(f"程序执行出错: {str(e)}")
@@ -405,11 +410,18 @@ if __name__ == "__main__":
 # 4. 使用 Bearer Token 认证
 # python index_user_documents.py \
 #     --base-url "http://localhost:8000/api/v1" \
-#     --authorization "ta-TUWp9fhAdGAJ48LEvzSnHIaUmj5jspbABkpv4jRgfXq7Ss4yf5" \
+#     --authorization "ta-fAgSH9BFz25KGbWPLv2rX6i7gQbC60VKmsYpSj3EaaylwxebBr" \
+#     --directory "/minio/文件资料/行业分析报告" \
+#     --kb-id 1 \
+#     --batch-size 5
+#
+# 5. 使用自定义 meta 信息
+# python index_user_documents.py \
+#     --base-url "http://localhost:8000/api/v1" \
+#     --cookie "bid=01971b27-9f4c-7c4d-b492-9cbc8ecca543; session=J56plm9_Zr64Cka9nUiG2kNKAuxK7ApfMHeYepB14Gc" \
 #     --directory "./test-files" \
 #     --kb-id 240001 \
-#     --name "Token认证示例" \
-#     --batch-size 5
+#     --meta '{"category": "custom", "tags": ["重要", "内部"]}'
 #
 # 支持的文件类型：
 # - .txt (纯文本)

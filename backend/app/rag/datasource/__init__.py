@@ -5,8 +5,6 @@ from uuid import UUID
 from app.models import DataSourceType
 from .base import BaseDataSource
 from .file import FileDataSource
-from .web_sitemap import WebSitemapDataSource
-from .web_single_page import WebSinglePageDataSource
 from .crm import CRMDataSource
 
 def get_data_source_loader(
@@ -22,10 +20,6 @@ def get_data_source_loader(
     match data_source_type:
         case DataSourceType.FILE:
             data_source_cls = FileDataSource
-        case DataSourceType.WEB_SITEMAP:
-            data_source_cls = WebSitemapDataSource
-        case DataSourceType.WEB_SINGLE_PAGE:
-            data_source_cls = WebSinglePageDataSource
         case DataSourceType.CRM:
             data_source_cls = CRMDataSource
         case _:
