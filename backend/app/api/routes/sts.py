@@ -117,26 +117,27 @@ def notify_upload(
         session.add_all(uploads)
         session.commit()
         
-        # Get the upload IDs after commit
-        file_configs = [{"file_id": upload.id, "file_name": upload.name} for upload in uploads]
+        # # Get the upload IDs after commit
+        # file_configs = [{"file_id": upload.id, "file_name": upload.name} for upload in uploads]
 
-        # Create data source
-        data_source = DataSource(
-            name=notify.name,
-            description="",
-            user_id=user.id,
-            data_source_type=notify.data_source_type,
-            config=file_configs
-        )
+        # # Create data source
+        # data_source = DataSource(
+        #     name=notify.name,
+        #     description="",
+        #     user_id=user.id,
+        #     data_source_type=notify.data_source_type,
+        #     config=file_configs
+        # )
         
-        session.add(data_source)
-        session.commit()
-        session.refresh(data_source)
+        # session.add(data_source)
+        # session.commit()
+        # session.refresh(data_source)
         
-        logger.info(f"Created data source #{data_source.id} for {settings.STORAGE_TYPE} uploads")
+        # logger.info(f"Created data source #{data_source.id} for {settings.STORAGE_TYPE} uploads")
         
-        # Return data source id
-        return {"data_source_id": data_source.id}
+        # # Return data source id
+        # return {"data_source_id": data_source.id}
+        return {"file_ids": [upload.id for upload in uploads]}
         
     except Exception as e:
         logger.error(f"Failed to process {settings.STORAGE_TYPE} upload notification: {e}")
