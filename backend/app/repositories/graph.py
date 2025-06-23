@@ -29,16 +29,25 @@ class GraphRepo:
     def delete_orphaned_entities(self, session: Session):
         orphaned_entity_ids = (
             select(self.entity_model.id)
-            .outerjoin(
-                self.relationship_model,
-                (self.relationship_model.target_entity_id == self.entity_model.id)
-                | (self.relationship_model.source_entity_id == self.entity_model.id),
+            .where(
+                ~(
+                    select(1)
+                    .where(
+                        (self.relationship_model.source_entity_id == self.entity_model.id) |
+                        (self.relationship_model.target_entity_id == self.entity_model.id)
+                    )
+                    .exists()
+                )
             )
-            .where(self.relationship_model.id.is_(None))
-            .scalar_subquery()
         )
+        
+        orphaned_ids = session.exec(orphaned_entity_ids).all()
+        
+        if not orphaned_ids:
+            return
+
         stmt = delete(self.entity_model).where(
-            self.entity_model.id.in_(orphaned_entity_ids)
+            self.entity_model.id.in_(orphaned_ids)
         )
         session.exec(stmt)
 
