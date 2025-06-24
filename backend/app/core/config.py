@@ -65,6 +65,7 @@ class Settings(BaseSettings):
     BACKEND_CORS_ORIGINS: Annotated[
         list[AnyUrl] | str, BeforeValidator(parse_cors)
     ] = []
+    BACKEND_CORS_ORIGIN_REGEXP: str | None = None
 
     PROJECT_NAME: str = "APTSELL.AI"
     SENTRY_DSN: HttpUrl | None = None
