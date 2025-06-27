@@ -125,11 +125,10 @@ def parse_field_value(val, field_name=None):
             return f"{name}<{email}>" if name or email else ''
         return ''
     if field_name == '附件':
-        # 取所有附件的 name 和 url
+        # 只取所有附件的 name
         if isinstance(val, list):
             names = [v.get('name', '') for v in val if isinstance(v, dict)]
-            urls = [v.get('url', '') for v in val if isinstance(v, dict)]
-            return ','.join(names) + '|' + ','.join(urls) if names or urls else ''
+            return ','.join(names) if names else ''
         return ''
     if field_name == '父记录':
         # 只存 link_record_ids 的字符串
