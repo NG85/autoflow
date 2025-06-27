@@ -118,11 +118,10 @@ def fetch_bitable_records(token, app_token, table_id, view_id, start_time=None, 
 def parse_field_value(val, field_name=None):
     # 记录人、附件、父记录等特殊处理
     if field_name == '记录人':
-        # 取第一个记录人的 name 和 email
+        # 只取第一个记录人的 name
         if isinstance(val, list) and val and isinstance(val[0], dict):
             name = val[0].get('name', '')
-            email = val[0].get('email', '')
-            return f"{name}<{email}>" if name or email else ''
+            return name if name else ''
         return ''
     if field_name == '附件':
         # 只取所有附件的 name
