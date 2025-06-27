@@ -48,9 +48,9 @@ url_type, url_token, table_id, view_id = parse_feishu_url(FEISHU_URL)
 
 # 字段映射关系（Feishu字段名 -> DB字段名）
 FIELD_MAP = {
-    '拜访客户|伙伴名称': 'account_name',
+    '拜访客户/伙伴名称': 'account_name',
     '客户CRM ID': 'account_id',
-    '客户|线索来源': 'customer_lead_source',
+    '客户/线索来源': 'customer_lead_source',
     '拜访对象类别': 'visit_object_category',
     '客户职位': 'contact_position',
     '客户名字': 'contact_name',
@@ -61,7 +61,7 @@ FIELD_MAP = {
     '对方所在地': 'counterpart_location',
     '拜访及沟通方式': 'visit_communication_method',
     '沟通时长': 'communication_duration',
-    '是|否达成预期': 'expectation_achieved',
+    '是/否达成预期': 'expectation_achieved',
     '跟进记录': 'followup_record',
     '附件': 'attachment',
     '父记录': 'parent_record',
