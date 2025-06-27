@@ -115,7 +115,30 @@ def fetch_bitable_records(token, app_token, table_id, view_id, start_time=None, 
     return records
 
 # 解析Feishu字段为DB字段
-def parse_field_value(val):
+def parse_field_value(val, field_name=None):
+    # 记录人、附件、父记录等特殊处理
+    if field_name == '记录人':
+        # 取第一个记录人的 name 和 email
+        if isinstance(val, list) and val and isinstance(val[0], dict):
+            name = val[0].get('name', '')
+            email = val[0].get('email', '')
+            return f"{name}<{email}>" if name or email else ''
+        return ''
+    if field_name == '附件':
+        # 取所有附件的 name 和 url
+        if isinstance(val, list):
+            names = [v.get('name', '') for v in val if isinstance(v, dict)]
+            urls = [v.get('url', '') for v in val if isinstance(v, dict)]
+            return ','.join(names) + '|' + ','.join(urls) if names or urls else ''
+        return ''
+    if field_name == '父记录':
+        # 只存 link_record_ids 的字符串
+        if isinstance(val, dict):
+            link_ids = val.get('link_record_ids')
+            if isinstance(link_ids, list):
+                return ','.join(str(i) for i in link_ids if i)
+            return str(link_ids) if link_ids else ''
+        return ''
     if isinstance(val, list):
         # 处理富文本/人员/多选等
         if val and isinstance(val[0], dict) and 'text' in val[0]:
@@ -125,6 +148,9 @@ def parse_field_value(val):
     if isinstance(val, int) and len(str(val)) == 13:
         # 13位时间戳转日期
         return datetime.fromtimestamp(val // 1000).strftime('%Y-%m-%d')
+    if isinstance(val, dict):
+        # 兜底：dict 不能直接入库
+        return str(val)
     return val
 
 def get_local_max_mtime(session):
@@ -208,7 +234,7 @@ def map_fields(item, batch_time=None):
     fields = item.get('fields', {})
     mapped = {}
     for feishu_key, db_key in FIELD_MAP.items():
-        mapped[db_key] = parse_field_value(fields.get(feishu_key, None))
+        mapped[db_key] = parse_field_value(fields.get(feishu_key, None), field_name=feishu_key)
     modified_time = item.get('last_modified_time')
     if modified_time:
         mapped['last_modified_time'] = datetime.fromtimestamp(modified_time // 1000)
