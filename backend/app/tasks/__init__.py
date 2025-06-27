@@ -18,6 +18,7 @@ from .build_crm_index import (
 )
 # from .evaluate import add_evaluation_task
 from .cron_jobs import create_crm_daily_datasource
+from .bitable_import import sync_bitable_visit_records
 
 
 __all__ = [
@@ -33,4 +34,5 @@ __all__ = [
     "build_vector_index_for_relationship",
     "build_crm_graph_index_for_document",
     "create_crm_daily_datasource",
+    "sync_bitable_visit_records",
 ]

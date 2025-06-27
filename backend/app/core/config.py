@@ -135,6 +135,13 @@ class Settings(BaseSettings):
     CRM_DAILY_TASK_HOUR: int = 10
     CRM_DAILY_TASK_MINUTE: int = 0
     
+    # Feishu Btable sync configuration
+    ENABLE_FEISHU_BTABLE_SYNC: bool = False
+    FEISHU_BTABLE_SYNC_CRON: str = '5 0 * * *'
+    FEISHU_BTABLE_URL: str = 'https://pingcap-cn.feishu.cn/wiki/VWfHwGabtiHStUk1GvkcQQcFnjf?table=tblUoj9PFg92NYS8&view=vewsyBbD7L'
+    FEISHU_APP_ID: str = 'cli_a74bce3ec73d901c'
+    FEISHU_APP_SECRET: str = '1xC7zUP6PQpUoOMJte8tddgPm5zaqfoW'
+    
     COMPLIED_INTENT_ANALYSIS_PROGRAM_PATH: str | None = None
     COMPLIED_PREREQUISITE_ANALYSIS_PROGRAM_PATH: str | None = None
 

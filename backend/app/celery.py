@@ -37,3 +37,23 @@ if settings.CRM_DAILY_TASK_ENABLED:
             ),
         },
     }
+
+if not hasattr(app.conf, 'beat_schedule') or app.conf.beat_schedule is None:
+    app.conf.beat_schedule = {}
+
+# 只在开关打开时添加新任务
+if settings.ENABLE_FEISHU_BTABLE_SYNC:
+    from celery.schedules import crontab
+    cron_expr = settings.FEISHU_BTABLE_SYNC_CRON
+    # 解析crontab表达式
+    cron_fields = cron_expr.strip().split()
+    if len(cron_fields) == 5:
+        minute, hour, day_of_month, month_of_year, day_of_week = cron_fields
+        schedule = crontab(minute=minute, hour=hour, day_of_month=day_of_month, month_of_year=month_of_year, day_of_week=day_of_week)
+    else:
+        schedule = crontab(hour=0, minute=5)
+    app.conf.beat_schedule = getattr(app.conf, 'beat_schedule', {})
+    app.conf.beat_schedule['sync_bitable_visit_records'] = {
+        'task': 'app.tasks.bitable_import.sync_bitable_visit_records',
+        'schedule': schedule,
+    }
