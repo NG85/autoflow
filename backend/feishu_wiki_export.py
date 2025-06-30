@@ -1,17 +1,20 @@
+from datetime import datetime
 import os
 import re
 import requests
 import csv
+import argparse
 
 # 配置区
-# test app_id: cli_a7483c457f39100e
-# test app_secret: iGoBstZ0mSXakL6eJO3b1etKWuAytKI6
-# prod app_id: cli_a74bce3ec73d901c
-# prod app_secret: 1xC7zUP6PQpUoOMJte8tddgPm5zaqfoW
+# test
+# APP_ID = os.getenv('FEISHU_APP_ID', 'cli_a7483c457f39100e')
+# APP_SECRET = os.getenv('FEISHU_APP_SECRET', 'iGoBstZ0mSXakL6eJO3b1etKWuAytKI6')
+# EXPORT_DIR = '/Users/gaona/data/feishu_wiki_export'
+
+# prod
 APP_ID = os.getenv('FEISHU_APP_ID', 'cli_a74bce3ec73d901c')
 APP_SECRET = os.getenv('FEISHU_APP_SECRET', '1xC7zUP6PQpUoOMJte8tddgPm5zaqfoW')
-# EXPORT_DIR = '/Users/gaona/data/feishu_wiki_export'
-EXPORT_DIR = '/shared/data/feishu_wiki_export'
+EXPORT_DIR = f'/shared/data/feishu_wiki_export'
 
 
 # 工具函数
@@ -44,6 +47,9 @@ def get_space_list(token):
         if page_token:
             params["page_token"] = page_token
         resp = requests.get(url, headers=headers, params=params)
+        if resp.status_code != 200:
+            print(f"获取知识空间列表失败 {resp.text}")
+            return []
         resp.raise_for_status()
         data = resp.json()["data"]
         spaces.extend(data["items"])
@@ -187,7 +193,24 @@ def save_csv_to_file(headers, rows, path):
         writer.writerow(headers)
         writer.writerows(rows)
 
-def export_node(token, node, parent_path, exported_obj_tokens, link_visited=None, main_doc_title=None):
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--since', type=str, default=None, help='只导出大于此日期的节点，格式20240601或时间戳')
+    args = parser.parse_args()
+    since_ts = 0
+    since_str = "00000000"
+    if args.since:
+        if len(args.since) == 8 and args.since.isdigit():
+            since_ts = int(datetime.strptime(args.since, "%Y%m%d").timestamp())
+            since_str = args.since
+        elif args.since.isdigit():
+            since_ts = int(args.since)
+            since_str = datetime.fromtimestamp(since_ts).strftime("%Y%m%d")
+    else:
+        since_str = "00000000"
+    return since_ts, since_str
+
+def export_node(token, node, parent_path, exported_obj_tokens, link_visited=None, main_doc_title=None, since_ts=0):
     if link_visited is None:
         link_visited = set()
     # 1. 生成当前节点的本地路径
@@ -197,6 +220,13 @@ def export_node(token, node, parent_path, exported_obj_tokens, link_visited=None
     obj_token = node['obj_token']
     if main_doc_title is None:
         main_doc_title = title
+    # 判断是否新建/更新
+    ts_fields = [node.get("obj_edit_time"), node.get("node_create_time"), node.get("obj_create_time")]
+    ts_fields = [int(t) for t in ts_fields if t and str(t).isdigit()]
+    latest_ts = max(ts_fields) if ts_fields else 0
+    if latest_ts <= since_ts:
+        print(f"跳过未更新节点: {node['title']} ({obj_token})")
+        return
     if obj_type in ['docx', 'sheet', 'bitable', 'slides']:
         if obj_token in exported_obj_tokens:
             print(f"跳过已导出: {title} ({obj_token}), {obj_type}")
@@ -314,7 +344,7 @@ def export_node(token, node, parent_path, exported_obj_tokens, link_visited=None
     if node.get('has_child'):
         child_nodes = get_space_nodes(token, node['space_id'], node['node_token'])
         for child in child_nodes:
-            export_node(token, child, current_path, exported_obj_tokens, link_visited, main_doc_title=main_doc_title)
+            export_node(token, child, current_path, exported_obj_tokens, link_visited, main_doc_title=main_doc_title, since_ts=since_ts)
             
 def export_all_sheets(token, spreadsheet_token, base_path, title_prefix=""):
     sheets = get_sheet_list(token, spreadsheet_token)
@@ -548,6 +578,11 @@ def save_markdown_to_file(content, path):
 
 # 7. 主流程
 def main():
+    since_ts, since_str = parse_args()
+    end_str = datetime.now().strftime("%Y%m%d")
+    global EXPORT_DIR
+    EXPORT_DIR = f'{EXPORT_DIR}_{since_str}_{end_str}'
+    print(f"导出目录: {EXPORT_DIR}")
     print("获取tenant_access_token...")
     token = get_tenant_access_token(APP_ID, APP_SECRET)
     print("获取知识空间列表...")
@@ -563,7 +598,7 @@ def main():
         link_visited = set()
         for node in nodes:
             if not node['parent_node_token']:  # 只处理根节点
-                export_node(token, node, EXPORT_DIR, exported_obj_tokens, link_visited)
+                export_node(token, node, EXPORT_DIR, exported_obj_tokens, link_visited, since_ts=since_ts)
 
 
 if __name__ == "__main__":

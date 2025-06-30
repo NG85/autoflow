@@ -1,13 +1,17 @@
 import logging
 from datetime import datetime
 import requests
-from sqlalchemy import text, func, Table, MetaData
+from sqlalchemy import text, Table, MetaData
+from app.utils.feishu_open import (
+    get_tenant_access_token,
+    parse_feishu_bitable_url,
+    resolve_bitable_app_token,
+)
 from sqlmodel import Session
 from app.core.db import engine
 from app.core.config import settings
 from app.celery import app
 from sqlalchemy.dialects.mysql import insert as mysql_insert
-from urllib.parse import urlparse, parse_qs
 
 logger = logging.getLogger(__name__)
 
@@ -20,30 +24,9 @@ CRM_TABLE = 'crm_intermediate_import_visit_records'
 metadata = MetaData()
 crm_table = Table(CRM_TABLE, metadata, autoload_with=engine)
 
-def parse_feishu_url(url):
-    """
-    解析飞书多维表格/知识空间URL，返回(url_type, token, table_id, view_id)
-    url_type: 'base' or 'wiki'
-    """
-    if not url:
-        return None, None, None, None
-    parsed = urlparse(url)
-    path_parts = parsed.path.strip('/').split('/')
-    url_type = None
-    token = None
-    for i, part in enumerate(path_parts):
-        if part in ('base', 'wiki') and i + 1 < len(path_parts):
-            url_type = part
-            token = path_parts[i + 1]
-            break
-    qs = parse_qs(parsed.query)
-    table_id = qs.get('table', [None])[0]
-    view_id = qs.get('view', [None])[0]
-    return url_type, token, table_id, view_id
-
 # 配置区
 FEISHU_URL = getattr(settings, 'FEISHU_BTABLE_URL', None)
-url_type, url_token, table_id, view_id = parse_feishu_url(FEISHU_URL)
+url_type, url_token, table_id, view_id = parse_feishu_bitable_url(FEISHU_URL)
 
 
 # 字段映射关系（Feishu字段名 -> DB字段名）
@@ -68,16 +51,6 @@ FIELD_MAP = {
 }
 
 CRM_FIELDS = list(FIELD_MAP.values()) + ['last_modified_time', 'record_id']
-
-# 获取tenant_access_token
-def get_tenant_access_token(app_id, app_secret):
-    url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal/"
-    resp = requests.post(url, json={
-        "app_id": app_id,
-        "app_secret": app_secret
-    })
-    resp.raise_for_status()
-    return resp.json()["tenant_access_token"]
 
 # 拉取bitable全量记录，包含系统自动生成字段，比如last_modified_time，record_id
 def fetch_bitable_records(token, app_token, table_id, view_id, start_time=None, end_time=None):
@@ -156,30 +129,6 @@ def get_local_max_mtime(session):
     result = session.execute(text(sql)).scalar()
     return int(result) if result is not None else 0
 
-def resolve_bitable_app_token(token, url_type, url_token):
-    """
-    根据url类型自动获取app_token：
-    - base/xxx 直接用xxx
-    - wiki/xxx 需GET https://open.feishu.cn/open-apis/wiki/v2/spaces/get_node?obj_type=wiki&token=xxx 拿obj_token
-    """
-    if not url_token:
-        return None
-    if url_type == 'wiki':
-        node_token = url_token
-        url = f"https://open.feishu.cn/open-apis/wiki/v2/spaces/get_node?obj_type=wiki&token={node_token}"
-        headers = {"Authorization": f"Bearer {token}"}
-        resp = requests.get(url, headers=headers)
-        if resp.status_code != 200:
-            logger.error(resp.text)
-            return None
-        resp.raise_for_status()
-        data = resp.json().get("data", {})
-        obj_token = data.get("node", {}).get("obj_token")
-        if not obj_token:
-            raise ValueError(f"未能通过wiki node获取到obj_token: {resp.text}")
-        return obj_token
-    # base/直接用
-    return url_token
 
 @app.task(bind=True, max_retries=3)
 def sync_bitable_visit_records(self):
