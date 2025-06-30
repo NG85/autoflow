@@ -20,10 +20,6 @@ APP_SECRET = settings.FEISHU_APP_SECRET
 
 CRM_TABLE = 'crm_intermediate_import_visit_records'
 
-# 在模块级别初始化Table对象
-metadata = MetaData()
-crm_table = Table(CRM_TABLE, metadata, autoload_with=engine)
-
 # 配置区
 FEISHU_URL = getattr(settings, 'FEISHU_BTABLE_URL', None)
 url_type, url_token, table_id, view_id = parse_feishu_bitable_url(FEISHU_URL)
@@ -165,6 +161,8 @@ def sync_bitable_visit_records(self):
 # 插入或更新记录
 def upsert_visit_records(records):
     batch_time = datetime.now()
+    metadata = MetaData()
+    crm_table = Table(CRM_TABLE, metadata, autoload_with=engine)
     with Session(engine) as session:
         for rec in records:
             mapped = map_fields(rec, batch_time=batch_time)
