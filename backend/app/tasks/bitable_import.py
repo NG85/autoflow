@@ -2,7 +2,7 @@ import logging
 from datetime import datetime
 import requests
 from sqlalchemy import text, Table, MetaData
-from app.utils.feishu_open import (
+from app.feishu.common_open import (
     get_tenant_access_token,
     parse_feishu_bitable_url,
     resolve_bitable_app_token,

@@ -126,7 +126,7 @@ class Settings(BaseSettings):
     ALDEBARAN_CVGG_URL: str = "http://aldebaran:8001/api/v1/previsit/create_v3"
     ALDEBARAN_TENANT_ID: str = "PINGCAP"
     
-    EMBEDDING_THRESHOLD: float = 0.875
+    EMBEDDING_THRESHOLD: float = 0.92
 
     CRM_ENABLED: bool = False
     # CRM daily task configuration
@@ -141,6 +141,9 @@ class Settings(BaseSettings):
     FEISHU_BTABLE_URL: str = 'https://pingcap-cn.feishu.cn/wiki/VWfHwGabtiHStUk1GvkcQQcFnjf?table=tblUoj9PFg92NYS8&view=vewsyBbD7L'
     FEISHU_APP_ID: str = 'cli_a74bce3ec73d901c'
     FEISHU_APP_SECRET: str = '1xC7zUP6PQpUoOMJte8tddgPm5zaqfoW'
+    
+    # Feishu send message configuration
+    REVIEW_REPORT_HOST: str = "https://aptsell.pingcap.net"
     
     COMPLIED_INTENT_ANALYSIS_PROGRAM_PATH: str | None = None
     COMPLIED_PREREQUISITE_ANALYSIS_PROGRAM_PATH: str | None = None

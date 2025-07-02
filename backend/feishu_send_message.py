@@ -18,7 +18,7 @@ admins = [
     {
         "name": "余梦杰",
         "email": "jason.yu@pingcap.cn", 
-        "open_id": ""
+        "open_id": "ou_f750a3628dc15388a198c643ce786910"
     },
     {
         "name": "龙恒",

@@ -1,20 +1,87 @@
+from typing import Optional
 from urllib.parse import parse_qs, urlparse
 import logging
-import sqlalchemy
 import requests
 import json
 import re
-from sqlmodel import Session
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+HOST = settings.REVIEW_REPORT_HOST
+INTERNAL_APP_ID = 'cli_a74a312d91b9d00d'
+INTERNAL_APP_SECRET = 'kkiilUjGS79NPL1vVUZywc7cKojThgjE'
+
+
+DEFAULT_INTERNAL_ADMINS = [
+    {
+        "name": "赵雷",
+        "email": "",
+        "open_id": "ou_8c2d79f2db258064d98061b22d4cf9db"
+    },
+    {
+        "name": "朱振博",
+        "email": "zhuzhenbo@hotmail.com",
+        "open_id": "ou_258c1cca41c019c2057e0af499143b5e"
+    },
+    {
+        "name": "高娜",
+        "email": "",
+        "open_id": "ou_113e2a9993f3fc64e3861087756ee279",
+        "accounts": []
+    },
+]
+
+DEFAULT_INTERNAL_SALES = [
+    {
+        "name": "高娜",
+        "email": "",
+        "open_id": "ou_113e2a9993f3fc64e3861087756ee279",
+        "accounts": []
+    },
+    {
+        "name": "任小寅",
+        "email": "",
+        "open_id": "ou_dbb3026d140675ee000412329cd1638a",
+        "accounts": []
+    },
+]
+
+DEFAULT_INTERNAL_USERS = [
+    {
+        "name": "朱振博",
+        "email": "zhuzhenbo@hotmail.com",
+        "open_id": "ou_258c1cca41c019c2057e0af499143b5e"
+    },
+    {
+        "name": "高娜",
+        "email": "",
+        "open_id": "ou_113e2a9993f3fc64e3861087756ee279"
+    },
+    {
+        "name": "任小寅",
+        "email": "tigeren@live.com",
+        "open_id": "ou_43a1eaed720903a383fd9415759f895b"
+    },
+]
+
+DEFAULT_INTERNAL_GROUP_CHATS = [
+    # {
+    #     "name": "产品需求开发讨论群",
+    #     "chat_id": "oc_b6cf36c6c6dad851e53a01b5fa3554be"
+    # },
+    {
+        "name": "Release",
+        "chat_id": "oc_0b983a12f112ba3a8ae98cd3fd141d0e"
+    }
+]
 
 # 获取tenant_access_token
-def get_tenant_access_token(app_id, app_secret):
+def get_tenant_access_token(app_id: Optional[str] = None, app_secret: Optional[str] = None, external=False):
     url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal/"
     resp = requests.post(url, json={
-        "app_id": app_id,
-        "app_secret": app_secret
+        "app_id": app_id or settings.FEISHU_APP_ID if external else INTERNAL_APP_ID,
+        "app_secret": app_secret or settings.FEISHU_APP_SECRET if external else INTERNAL_APP_SECRET
     })
     resp.raise_for_status()
     return resp.json()["tenant_access_token"]
@@ -147,8 +214,8 @@ def get_node_detail(token, node_token, obj_type=None):
         params["obj_type"] = obj_type
     resp = requests.get(url, headers=headers, params=params)
     if resp.status_code != 200:
-        print(f"访问节点详细信息失败 {node_token}")
-        print(resp.json())
+        logger.error(f"访问节点详细信息失败 {node_token}")
+        logger.error(resp.text)
         return None
     resp.raise_for_status()
     return resp.json()["data"]
@@ -159,8 +226,8 @@ def get_doc_content(token, doc_token):
     headers = {"Authorization": f"Bearer {token}"}
     resp = requests.get(url, headers=headers)
     if resp.status_code != 200:
-        print(f"访问文档失败 {doc_token}")
-        print(resp.json())
+        logger.error(f"访问文档失败 {doc_token}")
+        logger.error(resp.text)
         return None
     resp.raise_for_status()
     return resp.json()["data"]["content"]
@@ -219,8 +286,8 @@ def get_doc_markdown(token, doc_token):
     }
     resp = requests.get(url, headers=headers, params=params)
     if resp.status_code != 200:
-        print(f"访问文档Markdown失败 {doc_token}")
-        print(resp.text)
+        logger.error(f"访问文档Markdown失败 {doc_token}")
+        logger.error(resp.text)
         return None
     resp.raise_for_status()
     return resp.json()["data"]["content"]
@@ -232,8 +299,8 @@ def get_sheet_list(token, spreadsheet_token):
     headers = {"Authorization": f"Bearer {token}"}
     resp = requests.get(url, headers=headers)
     if resp.status_code != 200:
-        print(f"访问电子表格列表失败 {spreadsheet_token}")
-        print(resp.json())
+        logger.error(f"访问电子表格列表失败 {spreadsheet_token}")
+        logger.error(resp.json())
         return None
     resp.raise_for_status()
     return resp.json()["data"]["sheets"]
@@ -244,25 +311,25 @@ def get_single_sheet_content(token, spreadsheet_token, sheet_id):
     headers = {"Authorization": f"Bearer {token}"}
     resp = requests.get(url, headers=headers)
     if resp.status_code != 200:
-        print(f"访问电子表格内容失败 {spreadsheet_token}")
-        print(resp.text)
+        logger.error(f"访问电子表格内容失败 {spreadsheet_token}")
+        logger.error(resp.text)
         return None
     resp.raise_for_status()
     return resp.json()["data"]["valueRange"]["values"]
 
 
 # 发送飞书消息
-def send_feishu_message(receive_id, token, text, receive_id_type="open_id"):
+def send_feishu_message(receive_id, token, text, receive_id_type="open_id", msg_type="text"):
     api_url = "https://open.feishu.cn/open-apis/im/v1/messages"
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json; charset=utf-8"
     }
-    content = {"text": text}
+    content = {"text": text} if msg_type == "text" else text
     payload = {
         "receive_id": receive_id,
-        "msg_type": "text",
-        "content": json.dumps(content)
+        "msg_type": msg_type,
+        "content": json.dumps(content, ensure_ascii=False)
     }
     params = {"receive_id_type": receive_id_type}
     resp = requests.post(api_url, params=params, headers=headers, data=json.dumps(payload))

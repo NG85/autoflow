@@ -57,6 +57,7 @@ from app.api.routes.retrieve import (
 from app.api.routes.crm import routes as crm_routes
 
 from app.auth.users import auth_backend, fastapi_users
+from app.api.routes import feishu
 
 api_router = APIRouter()
 api_router.include_router(index.router, tags=["index"])
@@ -69,6 +70,7 @@ api_router.include_router(crm_routes.router, tags=["crm"])
 api_router.include_router(chat_engine.router, tags=["chat-engines"])
 api_router.include_router(retrieve_routes.router, tags=["retrieve"])
 api_router.include_router(sts.router, tags=["sts"])
+api_router.include_router(feishu.router, tags=["feishu"])
 api_router.include_router(admin_user_router)
 api_router.include_router(admin_chat_engine.router, tags=["admin/chat-engines"])
 api_router.include_router(admin_document_router, tags=["admin/documents"])
