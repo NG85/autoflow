@@ -88,6 +88,7 @@ class CRMOrder(SQLModel, table=True):
     remark: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="备注")
     last_modified_by: Optional[Dict[str, Any]] = Field(sa_column=Column(JSON, nullable=True), description="最后修改人")
     delivery_time: Optional[datetime] = Field(nullable=True, description="发货时间")
+    sales_organization: Optional[str] = Field(nullable=True, max_length=255, description="销售组织")
 
     __tablename__ = "crm_orders"
     

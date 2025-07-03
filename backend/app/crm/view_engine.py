@@ -14,12 +14,7 @@ from app.models.crm_opportunities import CRMOpportunity
 from app.models.crm_accounts import CRMAccount
 from app.rag.chat.crm_authority import get_user_crm_authority, CrmDataType
 from app.api.routes.crm.models import (
-    SL_PULL_IN,
     ViewType,
-    CustomerLevel,
-    OpportunityStage,
-    ForecastType,
-    OpportunityType,
     FilterOperator,
     FilterCondition,
     GroupCondition,
@@ -73,11 +68,11 @@ class ViewRegistry:
         }
         # 固定枚举类型字段
         self.static_enum_fields = {
-            "opportunity_stage": OpportunityStage,
-            "forecast_type": ForecastType,
-            "opportunity_type": OpportunityType,
-            "customer_level": CustomerLevel,
-            "sl_pull_in": SL_PULL_IN
+            # "opportunity_stage": OpportunityStage,
+            # "forecast_type": ForecastType,
+            # "opportunity_type": OpportunityType,
+            # "customer_level": CustomerLevel,
+            # "sl_pull_in": SL_PULL_IN
         }
         # 搜索类型字段
         self.searchable_fields = [
@@ -94,6 +89,12 @@ class ViewRegistry:
             "sales_order_archive_status",
             "general_agent",
             "presales_owner",
+            # 原为固定枚举类型字段，现在改为动态枚举类型字段，适配不同公司不同枚举类型
+            "opportunity_stage",
+            "forecast_type",
+            "opportunity_type",
+            "customer_level",
+            "sl_pull_in"
         ]
         
         self.register_standard_view_fields()

@@ -219,6 +219,9 @@ class CRMOpportunity(SQLModel, table=True):
     kd_competitor_strategy: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="KD-友商策略和动态")
     kd_breakthrough_basis: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="KD-突破单依据")
 
+    # New next_stage field
+    next_stage: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="下一阶段解决策略及资源需求")
+
     __tablename__ = "crm_opportunities"
     
     account: Optional["CRMAccount"] = Relationship(

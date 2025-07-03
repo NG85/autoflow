@@ -78,7 +78,7 @@ def format_account_info(account) -> List[str]:
     exclude_fields = {"id", "unique_id", "customer_name"}
     
     # 优先显示的核心字段
-    priority_fields = {"customer_level", "industry", "customer_source", "business_type", "customer_attribute"}
+    priority_fields = {"customer_level", "industry", "customer_source", "business_type", "customer_attribute", "account_type"}
     
     # 我方负责人信息
     responsible_fields = {"person_in_charge", "department"}
@@ -401,7 +401,7 @@ def format_opportunity_info(opportunity, related_data) -> List[str]:
             "fields": [# "weekly_update",
                 "sl_pull_in", "quotation_order_status", 
                 "sales_order_archive_status", #"latest_followup_date_new",
-                "last_followup_time"]
+                "last_followup_time", "next_stage"]
         },
         "owner": {
             "title": "## 负责人信息",
@@ -803,7 +803,7 @@ def format_order_info(order) -> List[str]:
         "basic": {
             "title": "",  # 基本信息不需要标题
             "fields": ["customer_name", "opportunity_name", "opportunity_number", "project_name", "contract_name", "quote_id", "sales_type", "product_type", 
-                      "sales_order_number", "signing_date", "life_status", "order_type", "owner", "owner_department"]
+                      "sales_order_number", "signing_date", "life_status", "order_type", "owner", "owner_department", "sales_organization"]
         },
         "financial": {
             "title": "### 财务信息",
