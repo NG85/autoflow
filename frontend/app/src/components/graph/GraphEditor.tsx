@@ -1,7 +1,7 @@
 'use client';
 
 import { getChatMessageSubgraph } from '@/api/chats';
-import { getEntitySubgraph, type KnowledgeGraph, search } from '@/api/graph';
+import { getEntitySubgraph, getEntireKnowledgeGraph, type KnowledgeGraph, search } from '@/api/graph';
 import { LinkDetails } from '@/components/graph/components/LinkDetails';
 import { NetworkViewer, type NetworkViewerDetailsProps } from '@/components/graph/components/NetworkViewer';
 import { NodeDetails } from '@/components/graph/components/NodeDetails';
@@ -21,6 +21,7 @@ import useSWR from 'swr';
 
 export function GraphEditor ({ knowledgeBaseId }: { knowledgeBaseId: number }) {
   const [query, setQuery] = useSearchParam('query', 'sample-question:What is TiDB?');
+  const [graphStyle, setGraphStyle] = useState<'new' | 'legacy'>('new');
 
   const [key, fetcher] = getFetchInfo(knowledgeBaseId, query);
 
@@ -33,6 +34,7 @@ export function GraphEditor ({ knowledgeBaseId }: { knowledgeBaseId: number }) {
   return (
     <div className="p-4 space-y-4">
       <SubgraphSelector knowledgeBaseId={knowledgeBaseId} query={query} onQueryChange={setQuery} />
+      <GraphStyleSelector style={graphStyle} onStyleChange={setGraphStyle} />
       {(error != null) && <Alert variant="destructive">
         <AlertTitle>Failed to fetch subgraph</AlertTitle>
         <AlertDescription>{getErrorMessage(error)}</AlertDescription>
@@ -40,11 +42,12 @@ export function GraphEditor ({ knowledgeBaseId }: { knowledgeBaseId: number }) {
       <div className="w-full flex gap-4">
         <div className="flex-1">
           <NetworkViewer
-            key={query}
+            key={`${query}-${graphStyle}`}
             className="border rounded h-auto aspect-square"
             loading={isLoading}
             loadingTitle={'Loading knowledge graph...'}
             network={network}
+            useCanvasRenderer={graphStyle === 'new'}
             Details={(props) => (
               ref.current && createPortal(
                 <Editor
@@ -90,6 +93,9 @@ function SubgraphSelector ({ knowledgeBaseId, query, onQueryChange }: { knowledg
       <Select value={type} onValueChange={type => {
         setType(type);
         setInput('');
+        if (type === 'entire-knowledge-graph') {
+          onQueryChange(`${type}:`);
+        }
       }}>
         <SelectTrigger className="w-max">
           <SelectValue />
@@ -100,23 +106,44 @@ function SubgraphSelector ({ knowledgeBaseId, query, onQueryChange }: { knowledg
           <SelectItem value="message-subgraph">Message Subgraph</SelectItem>
           <SelectItem value="trace" disabled>Langfuse Trace ID (UUID)</SelectItem>
           <SelectItem value="document" disabled>Document URI</SelectItem>
+          <SelectItem value="entire-knowledge-graph">Entire Knowledge Graph</SelectItem>
         </SelectContent>
       </Select>
-      <Input
-        className="flex-1"
-        value={input}
-        onChange={event => setInput(event.target.value)}
-        onKeyDown={event => {
-          if (isHotkey('Enter', event)) {
-            onQueryChange(`${type}:${input}`);
-          }
-        }}
-      />
+      {type !== 'entire-knowledge-graph' && (
+        <>
+          <Input
+            className="flex-1"
+            value={input}
+            onChange={event => setInput(event.target.value)}
+            onKeyDown={event => {
+              if (isHotkey('Enter', event)) {
+                onQueryChange(`${type}:${input}`);
+              }
+            }}
+          />
+        </>
+      )}
       <Link className={buttonVariants({})} href={`/knowledge-bases/${knowledgeBaseId}/knowledge-graph-explorer/create-synopsis-entity`}>
         Create Synopsis Entity
       </Link>
     </div>
   );
+}
+
+function GraphStyleSelector ({ style, onStyleChange }: { style: 'new' | 'legacy', onStyleChange: (style: 'new' | 'legacy') => void }) {
+  return (
+    <div>
+      <Select value={style} onValueChange={(value) => onStyleChange(value as 'new' | 'legacy')}>
+        <SelectTrigger className="w-max">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="legacy">Legacy (SVG)</SelectItem>
+          <SelectItem value="new">New (Canvas)</SelectItem>
+        </SelectContent>
+      </Select>
+    </div>
+  )
 }
 
 function Editor ({ knowledgeBaseId, network, target, onTargetChange, onEnterSubgraph }: NetworkViewerDetailsProps & { knowledgeBaseId: number, onEnterSubgraph: (type: string, entityId: IdType) => void }) {
@@ -145,6 +172,18 @@ function getFetchInfo (kbId: number, query: string | null): [string | false, () 
 
   const param = parsedQuery[1];
 
+  const entireKnowledgeGraphParams = {
+    query: "",
+    llm_id: 1,
+    retrieval_config: {
+      knowledge_graph: {
+        depth: 20,
+        include_meta: true,
+        with_degree: true
+      }
+    }
+  }
+
   switch (parsedQuery[0]) {
     // case 'trace':
     //   return ['get', `/api/v1/traces/${parsedQuery[1]}/knowledge-graph-retrieval`];
@@ -156,6 +195,8 @@ function getFetchInfo (kbId: number, query: string | null): [string | false, () 
       return [`api.knowledge-bases.${kbId}.graph.search?query=${param}`, () => search(kbId, { query: param })];
     case 'message-subgraph':
       return [`api.chats.get-message-subgraph?id=${param}`, () => getChatMessageSubgraph(parseInt(param))];
+    case 'entire-knowledge-graph':
+      return [`api.knowledge-bases.${kbId}.graph.entire-knowledge-graph`, () => getEntireKnowledgeGraph(kbId, entireKnowledgeGraphParams)];
   }
 
   return [false, () => Promise.reject()];
