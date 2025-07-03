@@ -1,13 +1,12 @@
 import logging
 from app.api.deps import CurrentUserDep, SessionDep
 from app.exceptions import InternalServerError
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from app.crm.view_engine import CrmViewRequest, ViewType, CrmViewEngine, ViewRegistry
-from typing import List, Dict, Any, Optional
-from pydantic import BaseModel
-from fastapi_pagination import Page, Params
+from fastapi_pagination import Page
 
-from app.api.routes.crm.models import Account
+from app.api.routes.crm.models import Account, VisitRecordCreate
+from app.crm.save_engine import save_visit_record_to_crm_table
 
 logger = logging.getLogger(__name__)
 
@@ -76,3 +75,15 @@ async def get_filter_options(
     except Exception as e:
         logger.exception(e)
         raise InternalServerError()
+
+
+@router.post("/crm/visit_record")
+def create_visit_record(
+    user: CurrentUserDep,
+    record: VisitRecordCreate
+):
+    try:
+        save_visit_record_to_crm_table(record)
+        return {"code": 0, "message": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

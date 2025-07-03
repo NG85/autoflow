@@ -91,6 +91,9 @@ def parse_field_value(val, field_name=None):
         if isinstance(val, list) and val and isinstance(val[0], dict):
             name = val[0].get('name', '')
             return name if name else ''
+        # 如果直接是字符串，直接返回
+        if isinstance(val, str):
+            return val
         return ''
     if field_name == '附件':
         # 只取所有附件的 name
@@ -121,7 +124,7 @@ def parse_field_value(val, field_name=None):
     return val
 
 def get_local_max_mtime(session):
-    sql = f"SELECT MAX(UNIX_TIMESTAMP(last_modified_time) * 1000) FROM {CRM_TABLE}"
+    sql = f"SELECT MAX(UNIX_TIMESTAMP(last_modified_time) * 1000) FROM {CRM_TABLE} WHERE record_id LIKE 'rec%'"
     result = session.execute(text(sql)).scalar()
     return int(result) if result is not None else 0
 
@@ -179,7 +182,11 @@ def map_fields(item, batch_time=None):
     fields = item.get('fields', {})
     mapped = {}
     for feishu_key, db_key in FIELD_MAP.items():
-        mapped[db_key] = parse_field_value(fields.get(feishu_key, None), field_name=feishu_key)
+        val = fields.get(feishu_key, None)
+        if val in ("", None):
+            mapped[db_key] = None
+        else:
+            mapped[db_key] = parse_field_value(val, field_name=feishu_key)
     modified_time = item.get('last_modified_time')
     if modified_time:
         mapped['last_modified_time'] = datetime.fromtimestamp(modified_time // 1000)
