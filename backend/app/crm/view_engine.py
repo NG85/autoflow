@@ -425,15 +425,15 @@ class CrmViewEngine:
                     return select(self.model).where(False)
                 
                 authorized_opportunity_ids = crm_authority.authorized_items.get(CrmDataType.OPPORTUNITY, set())
-                authorized_account_ids = crm_authority.authorized_items.get(CrmDataType.ACCOUNT, set())
+                # authorized_account_ids = crm_authority.authorized_items.get(CrmDataType.ACCOUNT, set())
                 
                 authority_conditions = []
                 
                 if authorized_opportunity_ids:
                     authority_conditions.append(self.model.unique_id.in_(authorized_opportunity_ids))
                 
-                if authorized_account_ids:
-                    authority_conditions.append(self.account_model.unique_id.in_(authorized_account_ids))
+                # if authorized_account_ids:
+                #     authority_conditions.append(self.account_model.unique_id.in_(authorized_account_ids))
                 
                 if authority_conditions:
                     query = query.where(and_(*authority_conditions))
