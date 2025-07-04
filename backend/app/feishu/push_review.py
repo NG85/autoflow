@@ -54,33 +54,67 @@ def push_account_review(items, review_date, leaders, sales, external=False):
         sales = DEFAULT_EXTERNAL_SALES if external else DEFAULT_INTERNAL_SALES
     
     # 1. 发送account review表给sales
-    for user in sales:
-        # 根据items中的owner字段分配account
-        user_accounts = [item for item in items if item.get("owner") == user.get("name")]
-        if not user_accounts:
-            continue
-        receive_id = user.get("open_id")
-        receive_id_type = "open_id"
-        if not receive_id:
-            if user.get("email"):
-                receive_id = user["email"]
-                receive_id_type = "email"
-            else:
-                logger.warning(f"用户 {user['name']} 没有可用的open_id/email，无法发送")
+    if not external:
+        # 平均分配items给sales
+        num_sales = len(sales)
+        num_items = len(items)
+        if num_sales == 0 or num_items == 0:
+            return
+        import math
+        chunk_size = math.ceil(num_items / num_sales)
+        for idx, user in enumerate(sales):
+            start = idx * chunk_size
+            end = min(start + chunk_size, num_items)
+            user_accounts = items[start:end]
+            if not user_accounts:
                 continue
-        # 组装每个account的review链接，格式为 [客户名称](url)
-        account_lines = [
-            f"- [{acc['account_name']}]({HOST}/review/detail/{acc['execution_id']}?accountId={acc['account_id']})"
-            for acc in user_accounts
-        ]
-        accounts_text = "\n".join(account_lines)
-        text = (
-            f"Sia帮您生成了【account review（{review_date}）】，请查收：\n"
-            f"{accounts_text}"
-        )
-        resp = send_feishu_message(receive_id, token, text, receive_id_type)
-        logger.info(f"发送给 {user['name']}的account review表 结果: {resp}") 
-        
+            receive_id = user.get("open_id")
+            receive_id_type = "open_id"
+            if not receive_id:
+                if user.get("email"):
+                    receive_id = user["email"]
+                    receive_id_type = "email"
+                else:
+                    logger.warning(f"用户 {user['name']} 没有可用的open_id/email，无法发送")
+                    continue
+            # 组装每个account的review链接，格式为 [客户名称](url)
+            account_lines = [
+                f"- [{acc['account_name']}]({HOST}/review/detail/{acc['execution_id']}?accountId={acc['account_id']})"
+                for acc in user_accounts
+            ]
+            accounts_text = "\n".join(account_lines)
+            text = (
+                f"Sia帮您生成了【account review（{review_date}）】，请查收：\n"
+                f"{accounts_text}"
+            )
+            resp = send_feishu_message(receive_id, token, text, receive_id_type)
+            logger.info(f"发送给 {user['name']}的account review表 结果: {resp}")
+    else:
+        for user in sales:
+            # 根据items中的owner字段分配account
+            user_accounts = [item for item in items if item.get("owner") == user.get("name")]
+            if not user_accounts:
+                continue
+            receive_id = user.get("open_id")
+            receive_id_type = "open_id"
+            if not receive_id:
+                if user.get("email"):
+                    receive_id = user["email"]
+                    receive_id_type = "email"
+                else:
+                    logger.warning(f"用户 {user['name']} 没有可用的open_id/email，无法发送")
+                    continue
+            account_lines = [
+                f"- [{acc['account_name']}]({HOST}/review/detail/{acc['execution_id']}?accountId={acc['account_id']})"
+                for acc in user_accounts
+            ]
+            accounts_text = "\n".join(account_lines)
+            text = (
+                f"Sia帮您生成了【account review（{review_date}）】，请查收：\n"
+                f"{accounts_text}"
+            )
+            resp = send_feishu_message(receive_id, token, text, receive_id_type)
+            logger.info(f"发送给 {user['name']}的account review表 结果: {resp}")
 
     # 2. 汇总所有items的account review给leader
     leader_report_lines = []

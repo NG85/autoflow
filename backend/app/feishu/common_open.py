@@ -9,25 +9,33 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 HOST = settings.REVIEW_REPORT_HOST
+# Sia 销售助理
+# INTERNAL_APP_ID = 'cli_a735685d1c39100e'
+# INTERNAL_APP_SECRET = 'EUIECISu75Ctk30VW3aFlqJGUInBQGzb'
+
+# Sia
 INTERNAL_APP_ID = 'cli_a74a312d91b9d00d'
 INTERNAL_APP_SECRET = 'kkiilUjGS79NPL1vVUZywc7cKojThgjE'
 
 
 DEFAULT_INTERNAL_ADMINS = [
-    {
-        "name": "赵雷",
-        "email": "",
-        "open_id": "ou_8c2d79f2db258064d98061b22d4cf9db"
-    },
+    # {
+    #     "name": "赵雷",
+    #     "email": "",
+    #     # "open_id": "ou_8c2d79f2db258064d98061b22d4cf9db", # Sia
+    #     "open_id": "ou_63f923976c979e12cdaa9f43ff7dc5d6", # Sia 销售助理
+    # },
     {
         "name": "朱振博",
         "email": "zhuzhenbo@hotmail.com",
-        "open_id": "ou_258c1cca41c019c2057e0af499143b5e"
+        # "open_id": "ou_258c1cca41c019c2057e0af499143b5e", # Sia
+        "open_id": "ou_c26952dca84b0a02036d3b6c299642e7", # Sia 销售助理
     },
     {
         "name": "高娜",
         "email": "",
-        "open_id": "ou_113e2a9993f3fc64e3861087756ee279",
+        # "open_id": "ou_113e2a9993f3fc64e3861087756ee279", # Sia
+        "open_id": "ou_7c7c1676c8e3e08a31ebd18864d5334f", # Sia 销售助理
         "accounts": []
     },
 ]
@@ -36,13 +44,15 @@ DEFAULT_INTERNAL_SALES = [
     {
         "name": "高娜",
         "email": "",
-        "open_id": "ou_113e2a9993f3fc64e3861087756ee279",
+        # "open_id": "ou_113e2a9993f3fc64e3861087756ee279", # Sia
+        "open_id": "ou_7c7c1676c8e3e08a31ebd18864d5334f", # Sia 销售助理
         "accounts": []
     },
     {
         "name": "任小寅",
         "email": "",
-        "open_id": "ou_dbb3026d140675ee000412329cd1638a",
+        # "open_id": "ou_43a1eaed720903a383fd9415759f895b", # Sia
+        "open_id": "ou_d8febb66020e50b28e489ca47bd65b0e", # Sia 销售助理
         "accounts": []
     },
 ]
@@ -51,17 +61,20 @@ DEFAULT_INTERNAL_USERS = [
     {
         "name": "朱振博",
         "email": "zhuzhenbo@hotmail.com",
-        "open_id": "ou_258c1cca41c019c2057e0af499143b5e"
+        # "open_id": "ou_258c1cca41c019c2057e0af499143b5e", # Sia
+        "open_id": "ou_c26952dca84b0a02036d3b6c299642e7", # Sia 销售助理
     },
     {
         "name": "高娜",
         "email": "",
-        "open_id": "ou_113e2a9993f3fc64e3861087756ee279"
+        # "open_id": "ou_113e2a9993f3fc64e3861087756ee279", # Sia
+        "open_id": "ou_7c7c1676c8e3e08a31ebd18864d5334f", # Sia 销售助理
     },
     {
         "name": "任小寅",
         "email": "tigeren@live.com",
-        "open_id": "ou_43a1eaed720903a383fd9415759f895b"
+        # "open_id": "ou_43a1eaed720903a383fd9415759f895b", # Sia
+        "open_id": "ou_d8febb66020e50b28e489ca47bd65b0e", # Sia 销售助理
     },
 ]
 
