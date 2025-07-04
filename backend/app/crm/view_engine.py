@@ -382,12 +382,11 @@ class CrmViewEngine:
                                     field_values.append(self._clean_json_array_value(v[0]))
                                 else:
                                     field_values.append(v[0])
-                    if field_values:
-                        options["enum_fields"][field] = {
-                            "values": sorted(field_values),
-                            "display_name": field_metadata.display_name,
-                            "fixed": field_metadata.fixed
-                        }
+                    options["enum_fields"][field] = {
+                        "values": sorted(field_values),
+                        "display_name": field_metadata.display_name,
+                        "fixed": field_metadata.fixed
+                    }
         
         return options
 
