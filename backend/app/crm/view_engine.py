@@ -362,10 +362,17 @@ class CrmViewEngine:
                     })
                 # 处理动态枚举类型字段
                 elif self.view_registry.is_dynamic_enum_field(field):
-                    if hasattr(self.model, field):
+                    field_source = self.view_registry.get_field_source(field)
+                    field_values = []
+                    if field_source == "account" and hasattr(self.account_model, field):
+                        column = getattr(self.account_model, field)
+                        values = db_session.query(column).distinct().all()
+                        for v in values:
+                            if v[0] is not None:
+                                field_values.append(v[0])
+                    elif hasattr(self.model, field):
                         column = getattr(self.model, field)
                         values = query.distinct(column).values(column)
-                        field_values = []
                         for v in values:
                             if v[0] is not None:
                                 if field == "expected_closing_date" and isinstance(v[0], str):
@@ -375,6 +382,7 @@ class CrmViewEngine:
                                     field_values.append(self._clean_json_array_value(v[0]))
                                 else:
                                     field_values.append(v[0])
+                    if field_values:
                         options["enum_fields"][field] = {
                             "values": sorted(field_values),
                             "display_name": field_metadata.display_name,
