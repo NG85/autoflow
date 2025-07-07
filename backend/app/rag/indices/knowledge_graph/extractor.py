@@ -20,35 +20,33 @@ logger = logging.getLogger(__name__)
 
 
 class ExtractGraphTriplet(dspy.Signature):
-    """Carefully analyze the provided text to thoroughly identify all relevant entities and their relationships, including both general concepts and specific details.
+    """Carefully analyze the provided labor law-related text (including laws and regulations, legal Q&A, case interpretations, court judgments, etc.) to thoroughly identify all important entities and their relationships, covering both general concepts and specific details.
 
-    Follow these Step-by-Step Analysis:
+    Follow these step-by-step instructions:
 
-    1. Extract Meaningful Entities:
-      - Identify all significant nouns, proper nouns, and terminologies that represent key concepts, objects, components, features, processes, steps, use cases, or any substantial entities.
-      - Ensure that you capture entities across different levels of detail, from high-level overviews to specific details, to create a comprehensive representation of the subject matter.
-      - Choose names for entities that are specific enough to indicate their meaning without additional context, avoiding overly generic terms.
-      - Consolidate similar entities to avoid redundancy, ensuring each represents a distinct concept at appropriate granularity levels.
+    1. Extract meaningful entities:
+      - Identify all important nouns, proper nouns, and terms related to labor law, including but not limited to: legal provisions, regulation names, parties (such as employers, employees), actions (such as signing or terminating contracts), rights, obligations, responsibilities, processes, scenarios, cases, judgment results, etc.
+      - Ensure entities are captured at different levels of detail, from high-level legal rules to specific case details, to form a comprehensive representation of labor law knowledge.
+      - Entity names should be specific and clear, avoiding overly generic terms, and should be understandable even without additional context.
+      - Consolidate similar entities to avoid redundancy, ensuring each entity represents a distinct and meaningful labor law concept or object.
 
-    2. Extract Metadata to claim the entities:
-      - Carefully review the provided text, focusing on identifying detailed covariates associated with each entity.
-      - Extract and link the covariates (which is a comprehensive json TREE, the first field is always: "topic") to their respective entities.
-      - Ensure all extracted covariates is clearly connected to the correct entity for accuracy and comprehensive understanding.
-      - Ensure that all extracted covariates are factual and verifiable within the text itself, without relying on external knowledge or assumptions.
-      - Collectively, the covariates should provide a thorough and precise summary of the entity's characteristics as described in the source material.
+    2. Extract entity metadata (attributes):
+      - Carefully review the text to identify detailed attributes related to each entity (such as article numbers, applicable conditions, relevant dates, amounts, subject qualifications, case background, judgment basis, etc.).
+      - Extract and associate these attributes with the corresponding entity in a structured JSON tree (the first field should always be "topic").
+      - Ensure all attributes are verifiable within the original text, without introducing external knowledge or assumptions.
+      - Each attribute should be accurately linked to its entity, fully reflecting the characteristics and descriptions of the entity in the text.
 
-    3. Establish Relationships:
-      - Carefully examine the text to identify all relationships between clearly-related entities, ensuring each relationship is correctly captured with accurate details about the interactions.
-      - Analyze the context and interactions between the identified entities to determine how they are interconnected, focusing on actions, associations, dependencies, or similarities.
-      - Clearly define the relationships, ensuring accurate directionality that reflects the logical or functional dependencies among entities. \
-         This means identifying which entity is the source, which is the target, and what the nature of their relationship is (e.g., $source_entity depends on $target_entity for $relationship).
+    3. Establish relationships between entities:
+      - Carefully analyze the text to identify various relationships between entities, including but not limited to: rights and obligations, causality, applicability, constraints, judgment relationships in cases, etc.
+      - Analyze the context and interactions between entities, clarify the directionality of relationships, and accurately describe the logical or legal dependencies (e.g., "the employer is obliged to pay wages to the employee", "a certain law applies to a certain employment scenario").
+      - Relationship descriptions should be specific and reflect the practical application and logic of labor law.
 
     Some key points to consider:
-      - Please endeavor to extract all meaningful entities and relationships from the text, avoid subsequent additional gleanings.
+      - Strive to extract all meaningful labor law-related entities and relationships as comprehensively as possible, avoiding omissions.
 
-    Objective: Produce a detailed and comprehensive knowledge graph that captures the full spectrum of entities mentioned in the text, along with their interrelations, reflecting both broad concepts and intricate details of the subject matter.
+    Objective: Generate a detailed and structured labor law knowledge graph covering all entities and their relationships mentioned in the text, providing a solid foundation for subsequent knowledge-graph-based Q&A (such as enterprise compliance employment consulting).
 
-    Please only response in JSON format.
+    Please only respond in JSON format.
     """
 
     text = dspy.InputField(
@@ -60,13 +58,16 @@ class ExtractGraphTriplet(dspy.Signature):
 
 
 class ExtractCovariate(dspy.Signature):
-    """Please carefully review the provided text and entities list which are already identified in the text. Focusing on identifying detailed covariates associated with each entities provided.
-    Extract and link the covariates (which is a comprehensive json TREE, the first field is always: "topic") to their respective entities.
-    Ensure all extracted covariates is clearly connected to the correct entity for accuracy and comprehensive understanding.
-    Ensure that all extracted covariates are factual and verifiable within the text itself, without relying on external knowledge or assumptions.
-    Collectively, the covariates should provide a thorough and precise summary of the entity's characteristics as described in the source material.
+    """Carefully review the provided labor law-related text and the list of identified entities, focusing on extracting detailed covariates (attributes) associated with each entity.
 
-    Please only response in JSON format.
+    - For each entity, extract and associate detailed attributes (such as article numbers, applicable conditions, relevant dates, amounts, subject qualifications, case background, judgment basis, etc.).
+    - Covariates should be organized as a structured JSON tree, with the first field always being "topic", and other fields extracted according to the text. Ensure all attributes are verifiable within the original text, without introducing external knowledge or assumptions.
+    - Each covariate should be accurately linked to its entity, ensuring the correspondence between attributes and entities is clear, accurate, and comprehensive.
+    - All covariates should be factual and verifiable, fully reflecting the characteristics and descriptions of the entity in the text.
+
+    Objective: Generate detailed and structured attribute information for each labor law-related entity, providing a solid foundation for subsequent knowledge graph and Q&A applications.
+
+    Please only respond in JSON format.
     """
 
     text = dspy.InputField(

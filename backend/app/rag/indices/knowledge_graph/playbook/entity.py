@@ -3,133 +3,180 @@ from pydantic import Field
 
 from app.rag.indices.knowledge_graph.schema import Entity
 
-class Persona(Entity):
-    """Represents a persona entity in the knowledge graph with detailed business characteristics."""
-    
-    metadata: Mapping[str, Any] = Field(
-        description=(
-            "The covariates to claim the persona entity including:\n"
-            "- topic: Always 'persona'\n"
-            "- industry: (Optional) Target industry of the organization\n"
-            "- persona_type: (Optional) Type of organization or department (e.g., 'Enterprise Company', 'IT Department', 'Security Team')\n"
-            "- role: (Optional) Object containing role information:\n"
-            "  - title: (Optional) Job position or title (use 'Unspecified Role' if not explicitly mentioned)\n"
-            "  - level: (Optional) One of ['c_level', 'middle_management', 'operational_staff']"
-        ),
-        json_schema_extra={
-            "required": ["topic"],
-            "properties": {
-                "topic": {"type": "string", "const": "persona"},
-                "industry": {"type": "string"},
-                "persona_type": {"type": "string"},
-                "role": {
-                    "type": "object",
-                    "properties": {
-                        "title": {"type": "string"},
-                        "level": {
-                            "type": "string",
-                            "enum": ["c_level", "middle_management", "operational_staff"]
-                        }
-                    }
-                }
-            }
-        }
-    )
-
-   
-class PainPoint(Entity):
-    """Represents a pain point entity with comprehensive business impact analysis."""
-    
-    metadata: Mapping[str, Any] = Field(
-        description=(
-            "The covariates to claim the pain point entity including:\n"
-            "- topic: Always 'pain_point'\n"
-            "- scenario: (Optional) Specific context or situation\n"
-            "- impact: (Optional) Business or operational impact\n"
-            "- severity: (Optional) Level of severity"
-        ),
-        json_schema_extra={
-            "required": ["topic"],
-            "properties": {
-                "topic": {"type": "string"},
-                "scenario": {"type": "string"},
-                "impact": {"type": "string"},
-                "severity": {"type": "string"}
-            }
-        }
-    )
-
-
-class Feature(Entity):
-    """Represents a product/service feature with detailed technical and business benefits."""
-
-    metadata: Mapping[str, Any] = Field(
-        description=(
-            "The covariates to claim the feature entity including:\n"
-            "- topic: Always 'feature'\n"
-            "- source: (Optional) Product source ('own' or competitor product name), defaults to 'own' for backward compatibility\n"
-            "- benefits: (Optional) List of specific business benefits\n"
-            "- technical_details: (Optional) Technical specifications and requirements"
-        ),
-        json_schema_extra={
-            "required": ["topic"],
-            "properties": {
-                "topic": {"type": "string"},
-                "source": {"type": "string", "default": "own"},
-                "benefits": {"type": "array", "items": {"type": "string"}},
-                "technical_details": {
-                    "type": "object",
-                    "additionalProperties": {"type": "string"}
-                }
-            }
-        }
-    )
-
-class Cases(Entity):
-    """Represents a case entity"""
+class Case(Entity):
+    """Represents a legal case entity."""
     
     metadata: Mapping[str, Any] = Field(
         description=(
             "The covariates to claim the case entity including:\n"
             "- topic: Always 'case'\n"
-            "- domain: (Optional) domain of the case (industry + business scenario, e.g. 'financial risk control')\n"
-            "- features: (Optional) list of related features/products\n"
-            "- outcomes: (Optional) implementation results (must include quantifiable metrics)\n"
-            "- references: (Optional) reference customer/implementation period information"
+            "- title: Case title\n"
+            "- dateFiled: Filing date\n"
+            "- dateJudged: Judgment date"
         ),
         json_schema_extra={
             "required": ["topic"],
             "properties": {
                 "topic": {"type": "string", "const": "case"},
-                "domain": {"type": "string"},
-                "features": {
-                    "type": "array",
-                    "items": {"type": "string"}
-                },
-                "outcomes": {"type": "string"},
-                "references": {"type": "string"}
+                "title": {"type": "string"},
+                "dateFiled": {"type": "string", "format": "date"},
+                "dateJudged": {"type": "string", "format": "date"}
             }
         }
     )
 
-class Competitor(Entity):
-    """Represents a competitor product entity."""
+class Court(Entity):
+    """Represents a court entity."""
     
     metadata: Mapping[str, Any] = Field(
         description=(
-            "The covariates to claim the competitor product entity including:\n"
-            "- topic: Always 'competitor'\n"
-            "- name: (Optional) Product name (e.g., 'MongoDB Atlas', 'Oracle Database')\n"
-            "- company: (Optional) Company that owns the product\n"
-            "- category: (Optional) Product category (e.g., 'Database', 'Data Migration Tool')\n"
+            "The covariates to claim the court entity including:\n"
+            "- topic: Always 'court'\n"
+            "- name: Full name of the court\n"
+            "- level: Court level (e.g., 'basic', 'intermediate', 'high')"
         ),
         json_schema_extra={
             "required": ["topic"],
             "properties": {
-                "topic": {"type": "string", "const": "competitor"},
+                "topic": {"type": "string", "const": "court"},
                 "name": {"type": "string"},
-                "company": {"type": "string"},
-                "category": {"type": "string"}
+                "level": {"type": "string"}
+            }
+        }
+    )
+
+class Region(Entity):
+    """Represents a region entity."""
+    
+    metadata: Mapping[str, Any] = Field(
+        description=(
+            "The covariates to claim the region entity including:\n"
+            "- topic: Always 'region'\n"
+            "- name: Region name (province/autonomous region/municipality, city, county/district)"
+        ),
+        json_schema_extra={
+            "required": ["topic"],
+            "properties": {
+                "topic": {"type": "string", "const": "region"},
+                "name": {"type": "string"}
+            }
+        }
+    )
+
+class Party(Entity):
+    """Represents a party entity in a legal case."""
+    
+    metadata: Mapping[str, Any] = Field(
+        description=(
+            "The covariates to claim the party entity including:\n"
+            "- topic: Always 'party'\n"
+            "- name: Party name\n"
+            "- role: Party role (plaintiff/defendant/third party)\n"
+            "- type: Party type (worker/employer/other)"
+        ),
+        json_schema_extra={
+            "required": ["topic"],
+            "properties": {
+                "topic": {"type": "string", "const": "party"},
+                "name": {"type": "string"},
+                "role": {"type": "string"},
+                "type": {"type": "string"}
+            }
+        }
+    )
+
+class Claim(Entity):
+    """Represents a claim entity in a legal case."""
+    
+    metadata: Mapping[str, Any] = Field(
+        description=(
+            "The covariates to claim the claim entity including:\n"
+            "- topic: Always 'claim'\n"
+            "- description: Claim content (subject matter, compensation amount, etc.)"
+        ),
+        json_schema_extra={
+            "required": ["topic"],
+            "properties": {
+                "topic": {"type": "string", "const": "claim"},
+                "description": {"type": "string"}
+            }
+        }
+    )
+
+class Fact(Entity):
+    """Represents a fact entity in a legal case."""
+    
+    metadata: Mapping[str, Any] = Field(
+        description=(
+            "The covariates to claim the fact entity including:\n"
+            "- topic: Always 'fact'\n"
+            "- description: Fact description\n"
+            "- dateOccurred: Date when the fact occurred"
+        ),
+        json_schema_extra={
+            "required": ["topic"],
+            "properties": {
+                "topic": {"type": "string", "const": "fact"},
+                "description": {"type": "string"},
+                "dateOccurred": {"type": "string", "format": "date"}
+            }
+        }
+    )
+
+class Issue(Entity):
+    """Represents an issue entity in a legal case."""
+    
+    metadata: Mapping[str, Any] = Field(
+        description=(
+            "The covariates to claim the issue entity including:\n"
+            "- topic: Always 'issue'\n"
+            "- description: Issue description (whether facts are established, whether law is applicable)"
+        ),
+        json_schema_extra={
+            "required": ["topic"],
+            "properties": {
+                "topic": {"type": "string", "const": "issue"},
+                "description": {"type": "string"}
+            }
+        }
+    )
+
+class Viewpoint(Entity):
+    """Represents a viewpoint entity in a legal case."""
+    
+    metadata: Mapping[str, Any] = Field(
+        description=(
+            "The covariates to claim the viewpoint entity including:\n"
+            "- topic: Always 'viewpoint'\n"
+            "- side: Party side (plaintiff/defendant)\n"
+            "- content: Key points of the viewpoint\n"
+            "- judgment: Judgment result (win/lose)"
+        ),
+        json_schema_extra={
+            "required": ["topic"],
+            "properties": {
+                "topic": {"type": "string", "const": "viewpoint"},
+                "side": {"type": "string"},
+                "content": {"type": "string"},
+                "judgment": {"type": "string"}
+            }
+        }
+    )
+
+class JudgmentOpinion(Entity):
+    """Represents a judgment opinion entity in a legal case."""
+    
+    metadata: Mapping[str, Any] = Field(
+        description=(
+            "The covariates to claim the judgment opinion entity including:\n"
+            "- topic: Always 'judgment_opinion'\n"
+            "- content: Key points of the court's reasoning"
+        ),
+        json_schema_extra={
+            "required": ["topic"],
+            "properties": {
+                "topic": {"type": "string", "const": "judgment_opinion"},
+                "content": {"type": "string"}
             }
         }
     )

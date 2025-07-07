@@ -12,90 +12,142 @@ from app.models.enums import GraphType
 logger = logging.getLogger(__name__)
 
 class ExtractPlaybookTriplet(dspy.Signature):
-    """Carefully analyze the provided text to identify sales related entities and their relationships.
+    """Carefully analyze the provided legal case text to identify legal entities and their relationships.
     
     Follow these Step-by-Step Analysis:
 
     1. Extract Key Entities:
       First, identify significant entities from the text:
-        * Personas (who): Organizations or departments that are potential customers
+        * Case: Legal case information
           Examples:
-          - "Enterprise IT Department in Healthcare"
-          - "Bank's Security Operations Team"
-          - "Manufacturing Company's R&D Division"
-          - "Marketing Manager in Financial Services"
-        * Pain Points (what): Business challenges, problems, needs
-        * Features (how): Solutions, capabilities, functionalities
-        * Cases (proof): Customer success cases and implementation scenarios
+          - "张三诉李四劳动合同纠纷案"
+          - "王五与某公司劳动争议案"
+        * Court: Court information
+          Examples:
+          - "北京市海淀区人民法院"
+          - "上海市第一中级人民法院"
+        * Region: Geographic location
+          Examples:
+          - "北京市海淀区"
+          - "上海市"
+        * Party: Litigants and related parties
+          Examples:
+          - "张三（原告）"
+          - "某公司（被告）"
+        * Claim: Claims made by parties
+          Examples:
+          - "要求支付工资差额"
+          - "要求解除劳动合同"
+        * Fact: Key facts of the case
+          Examples:
+          - "2023年1月1日签订劳动合同"
+          - "2023年6月1日被解除劳动合同"
+        * Issue: Legal issues in dispute
+          Examples:
+          - "是否存在违法解除劳动合同"
+          - "是否应当支付经济补偿金"
+        * Viewpoint: Parties' arguments
+          Examples:
+          - "原告主张公司违法解除劳动合同"
+          - "被告主张解除劳动合同合法"
+        * JudgmentOpinion: Court's reasoning
+          Examples:
+          - "法院认为公司解除劳动合同违法"
+          - "法院支持原告的诉讼请求"
 
       Important Classification Rules:
-        - Technical terms (e.g., "TiDB", "TiKV") should never be classified as personas
-        - Terms containing "system", "service", "tool", "platform" should be classified as features
-        - Terms containing "Department", "Team", "Manager", "Director" should be classified as personas
-        - Terms containing "case", "customer success", "implementation scenario" should be classified as cases
-        - Case entities must contain measurable results and implementation details
-        - Generic terms without clear classification should be excluded
+        - Case entities must contain title, filing date, and judgment date
+        - Court entities must contain full name and level
+        - Region entities must contain name
+        - Party entities must contain name, role, and type
+        - Claim entities must contain description
+        - Fact entities must contain description and occurrence date
+        - Issue entities must contain description
+        - Viewpoint entities must contain side, content, and judgment
+        - JudgmentOpinion entities must contain content
         - Only extract entities that are explicitly mentioned in the text
         - Do not infer or make assumptions about missing information
         - Each entity must have clear evidence in the source text
             
     2. Establish Relationships:
       Valid Relationship Patterns:
-        1. Persona experiences Pain Point
-        2. Pain Point is addressed by Feature
-        3. Feature is demonstrated by Case
+        1. Case is heard by Court
+        2. Court is located in Region
+        3. Case involves Party
+        4. Party makes Claim
+        5. Case contains Fact
+        6. Fact relates to Issue
+        7. Issue has Viewpoint
+        8. JudgmentOpinion decides Issue
       
       Required Elements for Each Relationship Type:
-      A. "Persona experiences Pain Point":
-        Must include these core elements in description:
-        - Problem identification
-        - Impact on business operations (with metrics if possible)
-        - Frequency or pattern of occurrence
-        Example: "Enterprise IT Directors face system integration challenges weekly, resulting in 20% productivity loss."
+      A. "Case is heard by Court":
+        Must include:
+        - Court's role in the case
+        - Case handling process
+        Example: "该案由北京市海淀区人民法院立案审理并作出判决"
       
-      B. "Pain Point is addressed by Feature":
-        Must include these core elements in description:
-        - Solution mechanism
-        - Effectiveness (with metrics if possible)
-        - Time to value
-        Example: "The integration challenges are resolved through automated integration, reducing integration time by 90% with immediate productivity gains after 2-day setup."
-
-      C. "Feature is demonstrated by Case":
-        Must include these core elements in description:
-        - Industry and business scenario (domain)
-        - Quantifiable implementation results (outcomes)
-        - At least 1 related feature/product (features)
-        Example: "HTAP capability is demonstrated in a financial risk control case, reducing query latency by 80% for Bank X"
+      B. "Court is located in Region":
+        Must include:
+        - Geographic jurisdiction
+        - Administrative level
+        Example: "北京市海淀区人民法院位于北京市海淀区，属于基层人民法院"
+      
+      C. "Case involves Party":
+        Must include:
+        - Party's role in the case
+        - Party's relationship to the case
+        Example: "张三作为原告向法院提起诉讼，某公司作为被告应诉"
+      
+      D. "Party makes Claim":
+        Must include:
+        - Specific claim content
+        - Legal basis
+        Example: "原告主张被告支付工资差额，依据《劳动合同法》第38条"
+      
+      E. "Case contains Fact":
+        Must include:
+        - Fact's relevance to the case
+        - Temporal sequence
+        Example: "2023年1月1日，双方签订劳动合同，约定月工资5000元"
+      
+      F. "Fact relates to Issue":
+        Must include:
+        - Fact's connection to the issue
+        - Legal significance
+        Example: "劳动合同的签订时间与工资约定是判断是否存在违法解除的重要事实"
+      
+      G. "Issue has Viewpoint":
+        Must include:
+        - Party's position
+        - Supporting arguments
+        Example: "原告认为公司未提前通知即解除劳动合同构成违法解除"
+      
+      H. "JudgmentOpinion decides Issue":
+        Must include:
+        - Court's determination
+        - Legal reasoning
+        Example: "法院认为公司解除劳动合同未履行法定程序，构成违法解除"
     
-
       Critical Rules for Relationships:
-        - Must follow exact sequence: Persona -> Pain Point -> Feature -> Case
-        - Each relationship must be part of a complete chain
-        - No direct Persona-to-Feature relationships
-        - No direct Persona-to-Case relationships
-        - No direct Pain Point-to-Case relationships
-        - No reverse relationships
-        - No relationships between same entity types
+        - Each relationship must be explicitly stated in the text
         - Both source and target entities must exist and be valid
         - Must use exact entity names in relationships
-        - Only extract relationships that are explicitly mentioned in the text
         - Do not infer or make assumptions about relationships
+        - Relationships must follow the defined patterns
+        - No reverse relationships
+        - No relationships between same entity types
           
     3. Quality Guidelines:
       Basic Entity Information:
         - Each entity MUST have:
           * name: Clear, specific identifier (must be from source text)
           * description: Detailed description in complete sentences (must be based on source text)
-          * metadata.topic: Must be exactly one of: "persona", "pain_point", "feature", or "case"
+          * metadata.topic: Must be exactly one of: "case", "court", "region", "party", "claim", "fact", "issue", "viewpoint", or "judgment_opinion"
        
       Relationship Rules:
-        - Follow strict sequence: Persona -> Pain Point -> Feature -> Case
-        - Each relationship must form part of a complete chain
-        - Never create direct Persona-to-Feature relationships
-        - Never create direct Persona-to-Case relationships
-        - Never create direct Pain Point-to-Case relationships
-        - Never create reverse relationships
-        - Never skip steps in the sequence
+        - Follow defined relationship patterns
+        - Each relationship must be explicitly stated
         - Both source and target entities must be valid
         - Relationship descriptions must be specific and verifiable
         - Must use exact entity names in relationships
@@ -108,7 +160,7 @@ class ExtractPlaybookTriplet(dspy.Signature):
                 "name": "entity name (specific and meaningful)",
                 "description": "detailed description in complete sentences",
                 "metadata": {
-                    "topic": "persona|pain_point|feature"
+                    "topic": "case|court|region|party|claim|fact|issue|viewpoint|judgment_opinion"
                 }
             }
         ],
@@ -130,46 +182,72 @@ class ExtractPlaybookCovariate(dspy.Signature):
     
     Required metadata structure by entity type:
 
-    1. Persona entities:
-        {
-            "topic": "persona",  # Must be first field and keep unchanged from input
-            "industry": "specific industry name",  # Optional
-            "persona_type": "organization or department type",  # Optional
-            "role": {  # Optional object
-                "title": "specific job title",  # Optional
-                "level": "c_level|middle_management|operational_staff"  # Optional
-            }
-        }
-
-    2. Pain Point entities:
-        {
-            "topic": "pain_point",  # Must be first field and keep unchanged from input
-            "scenario": "specific context",  # Optional
-            "impact": "quantifiable business impact",  # Optional
-            "severity": "Critical|High|Medium|Low"  # Optional
-        }
-        
-    3. Feature entities:
-        {
-            "topic": "feature",  # Must be first field and keep unchanged from input
-            "benefits": ["specific business benefit 1", "benefit 2"],  # Optional, must be array if present
-            "technical_details": {  # Optional
-                "key1": "value1",
-                "key2": "value2"
-            }
-        }
-    4. Case entities:
+    1. Case entities:
         {
             "topic": "case",  # Must be first field and keep unchanged from input
-            "domain": "specific industry name",  # Optional
-            "features": ["product/feature name 1", "product/feature name 2"],  # Optional, array format if present
-            "outcomes": "quantifiable implementation results",  # Optional
-            "references": "reference customer/implementation period information",  # Optional
+            "title": "case title",  # Required
+            "dateFiled": "filing date",  # Required, format: YYYY-MM-DD
+            "dateJudged": "judgment date"  # Required, format: YYYY-MM-DD
+        }
+
+    2. Court entities:
+        {
+            "topic": "court",  # Must be first field and keep unchanged from input
+            "name": "full court name",  # Required
+            "level": "court level"  # Required, one of: "basic", "intermediate", "high"
+        }
+        
+    3. Region entities:
+        {
+            "topic": "region",  # Must be first field and keep unchanged from input
+            "name": "region name"  # Required
+        }
+
+    4. Party entities:
+        {
+            "topic": "party",  # Must be first field and keep unchanged from input
+            "name": "party name",  # Required
+            "role": "party role",  # Required, one of: "plaintiff", "defendant", "third_party"
+            "type": "party type"  # Required, one of: "worker", "employer", "other"
+        }
+
+    5. Claim entities:
+        {
+            "topic": "claim",  # Must be first field and keep unchanged from input
+            "description": "claim content"  # Required
+        }
+
+    6. Fact entities:
+        {
+            "topic": "fact",  # Must be first field and keep unchanged from input
+            "description": "fact description",  # Required
+            "dateOccurred": "fact occurrence date"  # Required, format: YYYY-MM-DD
+        }
+
+    7. Issue entities:
+        {
+            "topic": "issue",  # Must be first field and keep unchanged from input
+            "description": "issue description"  # Required
+        }
+
+    8. Viewpoint entities:
+        {
+            "topic": "viewpoint",  # Must be first field and keep unchanged from input
+            "side": "party side",  # Required, one of: "plaintiff", "defendant"
+            "content": "viewpoint content",  # Required
+            "judgment": "judgment result"  # Required, one of: "win", "lose"
+        }
+
+    9. JudgmentOpinion entities:
+        {
+            "topic": "judgment_opinion",  # Must be first field and keep unchanged from input
+            "content": "court's reasoning"  # Required
         }
 
     Requirements:
     1. Field Requirements:
        - Topic field must be first and keep the value from input entity unchanged
+       - All required fields must be present and non-empty
        - Only extract fields that are explicitly mentioned in the source text
        - Do not infer or make assumptions about missing information
        - Empty or null values are not allowed for any field
@@ -177,15 +255,15 @@ class ExtractPlaybookCovariate(dspy.Signature):
     2. Data Quality:
        - All values must be specific and verifiable in the source text
        - Use consistent terminology across all metadata
-       - Make values quantifiable where possible
-       - Avoid generic or vague descriptions
+       - Dates must be in YYYY-MM-DD format
+       - Enumerated values must match exactly with the allowed options
     
     3. Format Rules:
        - String values must be properly formatted and meaningful
-       - Arrays must be properly formatted as lists
-       - Objects must be properly formatted as key-value pairs
        - Field names must exactly match the schema definition
        - Maintain consistent data types as specified
+       - All required fields must be present
+       - No additional fields beyond those specified
     
     Please only response in JSON format.
     """
