@@ -42,6 +42,7 @@ from app.rag.retrievers.knowledge_graph.schema import (
 from app.models import (
     KnowledgeBase,
     EntityType,
+    Document,
 )
 from app.models import EntityType
 from app.models.enums import GraphType
@@ -322,7 +323,7 @@ class TiDBGraphStore(KnowledgeGraphStore):
             self._session.flush()
 
     def get_subgraph_by_relationship_ids(
-            self, ids: list[int], **kwargs
+        self, ids: list[int], **kwargs
     ) -> RetrievedKnowledgeGraph:
         stmt = (
             select(self._relationship_model)
@@ -1112,39 +1113,57 @@ class TiDBGraphStore(KnowledgeGraphStore):
         }
 
         if not chunk_ids:
-            return []
+            # Query chunks
+            chunks = session.exec(
+                select(self._chunk_model).where(self._chunk_model.id.in_(chunk_ids))
+            ).all()
 
-        # Query chunks
-        chunks = session.exec(
-            select(self._chunk_model).where(self._chunk_model.id.in_(chunk_ids))
+            return [
+                {
+                    "id": chunk.id,
+                    "text": chunk.text,
+                    "document_id": chunk.document_id,
+                    "meta": {
+                        "language": chunk.meta.get("language"),
+                        "product": chunk.meta.get("product"),
+                        "resource": chunk.meta.get("resource"),
+                        "source_uri": chunk.meta.get("source_uri"),
+                        "tidb_version": chunk.meta.get("tidb_version"),
+                    },
+                }
+                for chunk in chunks
+            ]
+
+        document_ids = {
+            rel.meta.get("document_id")
+            for rel in relationships
+            if rel.meta.get("document_id") is not None
+        }
+
+        documents = session.exec(
+            select(Document).where(Document.id.in_(document_ids))
         ).all()
 
         return [
             {
-                "id": chunk.id,
-                "text": chunk.text,
-                "document_id": chunk.document_id,
-                "meta": {
-                    "language": chunk.meta.get("language"),
-                    "product": chunk.meta.get("product"),
-                    "resource": chunk.meta.get("resource"),
-                    "source_uri": chunk.meta.get("source_uri"),
-                    "tidb_version": chunk.meta.get("tidb_version"),
-                },
+                "id": doc.id,
+                "text": doc.content,
+                "document_id": doc.id,
+                "meta": doc.meta,
             }
-            for chunk in chunks
+            for doc in documents
         ]
-    
+
     def get_entire_knowledge_graph(self) -> RetrievedKnowledgeGraph:
         """Retrieve all entities and relationships from the knowledge graph store.
-        
+
         Returns:
             RetrievedKnowledgeGraph containing all entities and relationships
         """
         # Query all entities
         entity_query = select(self._entity_model).order_by(self._entity_model.id)
         db_entities = self._session.exec(entity_query).all()
-        
+
         # Query all relationships with their related entities
         relationship_query = (
             select(self._relationship_model)
@@ -1155,7 +1174,7 @@ class TiDBGraphStore(KnowledgeGraphStore):
             .order_by(self._relationship_model.id)
         )
         db_relationships = self._session.exec(relationship_query).all()
-        
+
         # Convert entities to RetrievedEntity objects
         entities = []
         for entity in db_entities:
@@ -1169,7 +1188,7 @@ class TiDBGraphStore(KnowledgeGraphStore):
                     entity_type=entity.entity_type,
                 )
             )
-        
+
         # Convert relationships to RetrievedRelationship objects
         relationships = []
         for rel in db_relationships:
