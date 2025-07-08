@@ -145,6 +145,11 @@ class Settings(BaseSettings):
     # Feishu send message configuration
     REVIEW_REPORT_HOST: str = "https://aptsell.pingcap.net"
     
+    # Ark LLM API
+    ARK_API_KEY: str = "b1529268-82ea-407a-bd79-d01514a2ed60"
+    ARK_MODEL: str = "ep-20250708154518-7jpwm"
+    ARK_API_URL: str = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
+    
     COMPLIED_INTENT_ANALYSIS_PROGRAM_PATH: str | None = None
     COMPLIED_PREREQUISITE_ANALYSIS_PROGRAM_PATH: str | None = None
 

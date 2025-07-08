@@ -148,3 +148,4 @@ class VisitRecordCreate(BaseModel):
     followup_record: str # 跟进记录
     attachment: Optional[str] = None # 附件
     parent_record: Optional[str] = None # 父记录
+    next_steps: Optional[str] = None # 下一步计划

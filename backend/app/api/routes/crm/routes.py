@@ -6,7 +6,7 @@ from app.crm.view_engine import CrmViewRequest, ViewType, CrmViewEngine, ViewReg
 from fastapi_pagination import Page
 
 from app.api.routes.crm.models import Account, VisitRecordCreate
-from app.crm.save_engine import save_visit_record_to_crm_table
+from app.crm.save_engine import save_visit_record_to_crm_table, check_record_qualified
 
 logger = logging.getLogger(__name__)
 
@@ -79,11 +79,17 @@ async def get_filter_options(
 
 @router.post("/crm/visit_record")
 def create_visit_record(
+    db_session: SessionDep,
     user: CurrentUserDep,
     record: VisitRecordCreate
 ):
     try:
+        is_valid, msg = check_record_qualified(db_session, record.followup_record, record.next_steps)
+        if not is_valid:
+            raise HTTPException(status_code=400, detail=msg)
         save_visit_record_to_crm_table(record)
         return {"code": 0, "message": "success"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

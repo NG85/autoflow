@@ -44,6 +44,7 @@ FIELD_MAP = {
     '跟进记录': 'followup_record',
     '附件': 'attachment',
     '父记录': 'parent_record',
+    '下一步计划': 'next_steps',
 }
 
 CRM_FIELDS = list(FIELD_MAP.values()) + ['last_modified_time', 'record_id']
@@ -194,6 +195,3 @@ def map_fields(item, batch_time=None):
         mapped['last_modified_time'] = batch_time or datetime.now()
     mapped['record_id'] = item.get('record_id')
     return mapped
-
-
- 
