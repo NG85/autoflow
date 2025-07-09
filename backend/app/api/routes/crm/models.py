@@ -141,7 +141,7 @@ class VisitRecordCreate(BaseModel):
     recorder: str # 记录人
     counterpart_location: str # 对方所在地
     visit_communication_method: str # 拜访及沟通方式
-    visit_communication_location: str # 拜访及沟通地点
+    visit_communication_location: Optional[str] = None # 拜访及沟通地点
     communication_duration: str # 沟通时长
     expectation_achieved: str # 是否达成预期
     collaborative_participants: Optional[str] = None # 协调参与人
