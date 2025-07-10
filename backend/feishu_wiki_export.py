@@ -4,6 +4,9 @@ import re
 import requests
 import csv
 import argparse
+import json
+from collections import deque
+import pandas as pd
 
 # 配置区
 # test
@@ -11,10 +14,16 @@ import argparse
 # APP_SECRET = os.getenv('FEISHU_APP_SECRET', 'iGoBstZ0mSXakL6eJO3b1etKWuAytKI6')
 # EXPORT_DIR = '/Users/gaona/data/feishu_wiki_export'
 
-# prod
-APP_ID = os.getenv('FEISHU_APP_ID', 'cli_a74bce3ec73d901c')
-APP_SECRET = os.getenv('FEISHU_APP_SECRET', '1xC7zUP6PQpUoOMJte8tddgPm5zaqfoW')
-EXPORT_DIR = f'/shared/data/feishu_wiki_export'
+# # pingcap prod
+# APP_ID = os.getenv('FEISHU_APP_ID', 'cli_a74bce3ec73d901c')
+# APP_SECRET = os.getenv('FEISHU_APP_SECRET', '1xC7zUP6PQpUoOMJte8tddgPm5zaqfoW')
+# EXPORT_DIR = f'/shared/data/feishu_wiki_export'
+
+# 鞍羽
+APP_ID = os.getenv('FEISHU_APP_ID', 'cli_a8ec9a7bddf81013')
+APP_SECRET = os.getenv('FEISHU_APP_SECRET', 'giRHNJtHHwMKEe31MrRefMNj0zTR0mbt')
+# EXPORT_DIR = f'/shared/data/feishu_wiki_export'
+EXPORT_DIR = f'/Users/gaona/data/feishu_wiki_export'
 
 
 # 工具函数
@@ -58,7 +67,7 @@ def get_space_list(token):
         page_token = data.get("page_token")
     return spaces
 
-# 3. 获取知识空间节点（递归）
+# 3. 获取知识空间节点（单层，支持分页，不递归）
 def get_space_nodes(token, space_id, parent_node_token=None):
     url = f"https://open.feishu.cn/open-apis/wiki/v2/spaces/{space_id}/nodes"
     headers = {"Authorization": f"Bearer {token}"}
@@ -77,14 +86,7 @@ def get_space_nodes(token, space_id, parent_node_token=None):
         if not data.get("has_more"):
             break
         page_token = data.get("page_token")
-    # 递归获取子节点
-    all_nodes = []
-    for node in nodes:
-        all_nodes.append(node)
-        if node.get("has_child"):
-            child_nodes = get_space_nodes(token, space_id, node["node_token"])
-            all_nodes.extend(child_nodes)
-    return all_nodes
+    return nodes
 
 # 4. 获取节点详细信息
 def get_node_detail(token, node_token, obj_type=None):
@@ -134,7 +136,15 @@ def get_single_sheet_content(token, spreadsheet_token, sheet_id):
         print(resp.text)
         return None
     resp.raise_for_status()
-    return resp.json()["data"]["valueRange"]["values"]
+    data = resp.json().get("data", {})
+    # 兼容不同返回结构
+    if "valueRange" in data and "values" in data["valueRange"]:
+        return data["valueRange"]["values"]
+    elif "values" in data:
+        return data["values"]
+    else:
+        print("API返回结构异常:", data, resp.json())
+        return None
 
 # 5.2 获取多维表格内容（bitable）
 def get_bitable_content(token, bitable_token):
@@ -196,6 +206,7 @@ def save_csv_to_file(headers, rows, path):
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--since', type=str, default=None, help='只导出大于此日期的节点，格式20240601或时间戳')
+    parser.add_argument('--retry-failed', type=str, default=None, help='重试指定space_id的失败节点')
     args = parser.parse_args()
     since_ts = 0
     since_str = "00000000"
@@ -208,9 +219,9 @@ def parse_args():
             since_str = datetime.fromtimestamp(since_ts).strftime("%Y%m%d")
     else:
         since_str = "00000000"
-    return since_ts, since_str
+    return since_ts, since_str, args.retry_failed
 
-def export_node(token, node, parent_path, exported_obj_tokens, link_visited=None, main_doc_title=None, since_ts=0):
+def export_node(token, node, parent_path, exported_obj_tokens, link_visited=None, main_doc_title=None, since_ts=0, force_export=False):
     if link_visited is None:
         link_visited = set()
     # 1. 生成当前节点的本地路径
@@ -224,7 +235,7 @@ def export_node(token, node, parent_path, exported_obj_tokens, link_visited=None
     ts_fields = [node.get("obj_edit_time"), node.get("node_create_time"), node.get("obj_create_time")]
     ts_fields = [int(t) for t in ts_fields if t and str(t).isdigit()]
     latest_ts = max(ts_fields) if ts_fields else 0
-    if latest_ts <= since_ts:
+    if not force_export and latest_ts <= since_ts:
         print(f"跳过未更新节点: {node['title']} ({obj_token})")
         return
     if obj_type in ['docx', 'sheet', 'bitable', 'slides']:
@@ -344,9 +355,30 @@ def export_node(token, node, parent_path, exported_obj_tokens, link_visited=None
     if node.get('has_child'):
         child_nodes = get_space_nodes(token, node['space_id'], node['node_token'])
         for child in child_nodes:
-            export_node(token, child, current_path, exported_obj_tokens, link_visited, main_doc_title=main_doc_title, since_ts=since_ts)
+            export_node(token, child, current_path, exported_obj_tokens, link_visited, main_doc_title=main_doc_title, since_ts=since_ts, force_export=force_export)
             
+# 新增：多sheet合并导出为xlsx
+def export_spreadsheet_to_xlsx(token, spreadsheet_token, base_path, file_name_prefix=""):
+    sheets = get_sheet_list(token, spreadsheet_token)
+    if sheets is None:
+        return
+    file_path = os.path.join(base_path, f"{file_name_prefix or spreadsheet_token}.xlsx")
+    with pd.ExcelWriter(file_path, engine='openpyxl') as writer:
+        for sheet in sheets:
+            sheet_id = sheet["sheet_id"]
+            sheet_title = sheet.get("title", sheet_id)
+            values = get_single_sheet_content(token, spreadsheet_token, sheet_id)
+            if values:
+                df = pd.DataFrame(values)
+                # Excel sheet名最长31字符
+                df.to_excel(writer, sheet_name=sheet_title[:31], index=False, header=False)
+    print(f"已保存为多sheet Excel: {file_path}")
+
+# 修改：原有export_all_sheets调用处，优先用xlsx导出
 def export_all_sheets(token, spreadsheet_token, base_path, title_prefix=""):
+    # 先合并导出为xlsx
+    export_spreadsheet_to_xlsx(token, spreadsheet_token, base_path, title_prefix)
+    # 如需保留每个sheet的csv，也可保留如下逻辑：
     sheets = get_sheet_list(token, spreadsheet_token)
     if sheets is None:
         return
@@ -356,7 +388,6 @@ def export_all_sheets(token, spreadsheet_token, base_path, title_prefix=""):
         print(f"电子表格: sheet_id={sheet_id}, sheet_title={sheet_title}")
         values = get_single_sheet_content(token, spreadsheet_token, sheet_id)
         if values:
-            # values 是二维数组，通常第一行为表头
             headers = values[0] if len(values) > 0 else []
             rows = values[1:] if len(values) > 1 else []
             file_path = os.path.join(base_path, f"{title_prefix}_{safe_filename(sheet_title)}.csv")
@@ -512,9 +543,6 @@ def fetch_linked_docs(token, url, visited=None, base_path=None):
                             table_title = safe_filename(table["name"])
                             file_path = os.path.join(base_path, f"{save_name}_{table_title}.csv")
                             save_csv_to_file(table["fields"], table["records"], file_path)
-    elif doc_type == "doc":
-        # 旧版文档内容获取（如有需要可补充）
-        pass
     elif doc_type == "sheet":
         # 电子表格内容获取
         sheets = get_sheet_list(token, doc_token)
@@ -553,7 +581,9 @@ def fetch_linked_docs(token, url, visited=None, base_path=None):
         elif obj_type == "wiki_node":
             # 理论上不会出现，但可递归处理
             fetch_linked_docs(token, f"https://xx.feishu.cn/wiki/{obj_token}", visited, base_path)
-
+    else:
+        print(f"暂不支持的文档类型: {doc_type}, url: {url}")
+        pass
 def get_doc_markdown(token, doc_token):
     url = f"https://open.feishu.cn/open-apis/docs/v1/content"
     headers = {"Authorization": f"Bearer {token}"}
@@ -576,30 +606,140 @@ def save_markdown_to_file(content, path):
         f.write(content)
         print(f"保存Markdown内容到文件: {path}")
 
+# --- BFS遍历+断点续传 ---
+def bfs_export_space_nodes(token, space_id, export_dir, since_ts=0):
+    checkpoint_file = os.path.join(export_dir, f"checkpoint_{space_id}.json")
+    failed_nodes = []
+    failed_nodes_file = os.path.join(export_dir, f"failed_nodes_{space_id}.json")
+    # 尝试恢复断点
+    if os.path.exists(checkpoint_file):
+        with open(checkpoint_file, "r", encoding="utf-8") as f:
+            checkpoint = json.load(f)
+        # 恢复队列时，每个元素是 (node, parent_path)
+        queue = deque([(node, parent_path) for node, parent_path in checkpoint["queue"]])
+        exported_obj_tokens = set(checkpoint["exported_obj_tokens"])
+        link_visited = set(tuple(x) for x in checkpoint.get("link_visited", []))
+        print(f"恢复断点: {len(queue)}个待处理节点, {len(exported_obj_tokens)}个已导出对象")
+    else:
+        # 初始化队列，根节点入队，每个元素是 (node, parent_path)
+        nodes = get_space_nodes(token, space_id)
+        queue = deque([(node, export_dir) for node in nodes if not node.get('parent_node_token')])
+        exported_obj_tokens = set()
+        link_visited = set()
+    while queue:
+        node, parent_path = queue.popleft()
+        try:
+            export_node(token, node, parent_path, exported_obj_tokens, link_visited, since_ts=since_ts)
+        except Exception as e:
+            print(f"节点导出异常: {node.get('title')} {node.get('obj_token')}: {e}")
+            failed_nodes.append({
+                "title": node.get("title"),
+                "obj_token": node.get("obj_token"),
+                "obj_type": node.get("obj_type"),
+                "parent_path": parent_path,
+                "error": str(e)
+            })
+            # 立即写入，防止崩溃丢失
+            with open(failed_nodes_file, "w", encoding="utf-8") as f:
+                json.dump(failed_nodes, f, ensure_ascii=False, indent=2)
+        # 子节点入队
+        if node.get('has_child'):
+            try:
+                child_nodes = get_space_nodes(token, space_id, node['node_token'])
+                # 子节点的parent_path为当前节点的本地路径
+                current_path = os.path.join(parent_path, safe_filename(node['title']))
+                for child in child_nodes:
+                    queue.append((child, current_path))
+            except Exception as e:
+                print(f"子节点获取异常: {node.get('title')} {node.get('obj_token')}: {e}")
+                failed_nodes.append({
+                    "title": node.get("title"),
+                    "obj_token": node.get("obj_token"),
+                    "obj_type": node.get("obj_type"),
+                    "parent_path": parent_path,
+                    "error": f"子节点获取异常: {str(e)}"
+                })
+                with open(failed_nodes_file, "w", encoding="utf-8") as f:
+                    json.dump(failed_nodes, f, ensure_ascii=False, indent=2)
+        # 每处理完一个节点就保存断点
+        # queue中每个元素是(node, parent_path)，node为dict，parent_path为str
+        checkpoint = {
+            "queue": [(n, p) for n, p in queue],
+            "exported_obj_tokens": list(exported_obj_tokens),
+            "link_visited": [list(x) for x in link_visited],
+        }
+        with open(checkpoint_file, "w", encoding="utf-8") as f:
+            json.dump(checkpoint, f, ensure_ascii=False, indent=2)
+    # 全部完成后删除断点文件
+    if os.path.exists(checkpoint_file):
+        os.remove(checkpoint_file)
+    # 结束后再写一次失败节点
+    if failed_nodes:
+        with open(failed_nodes_file, "w", encoding="utf-8") as f:
+            json.dump(failed_nodes, f, ensure_ascii=False, indent=2)
+        print(f"空间{space_id}导出完成，失败节点数: {len(failed_nodes)}，详见: {failed_nodes_file}")
+    else:
+        print(f"空间{space_id}导出完成，无失败节点")
+
+def retry_failed_nodes(token, space_id, export_dir, since_ts=0):
+    failed_nodes_file = os.path.join(export_dir, f"failed_nodes_{space_id}.json")
+    if not os.path.exists(failed_nodes_file):
+        print(f"未找到失败节点文件: {failed_nodes_file}")
+        return
+    with open(failed_nodes_file, "r", encoding="utf-8") as f:
+        failed_nodes = json.load(f)
+    if not failed_nodes:
+        print("没有需要重试的失败节点。")
+        return
+
+    print(f"开始重试 {len(failed_nodes)} 个失败节点...")
+    exported_obj_tokens = set()
+    link_visited = set()
+    still_failed = []
+    for node_info in failed_nodes:
+        try:
+            node = {
+                "title": node_info["title"],
+                "obj_token": node_info["obj_token"],
+                "obj_type": node_info["obj_type"],
+                "space_id": space_id,
+            }
+            parent_path = node_info["parent_path"]
+            export_node(token, node, parent_path, exported_obj_tokens, link_visited, since_ts=since_ts, force_export=True)
+            print(f"重试成功: {node['title']} ({node['obj_token']})")
+        except Exception as e:
+            print(f"重试失败: {node_info['title']} ({node_info['obj_token']}): {e}")
+            node_info["error"] = str(e)
+            still_failed.append(node_info)
+    with open(failed_nodes_file, "w", encoding="utf-8") as f:
+        json.dump(still_failed, f, ensure_ascii=False, indent=2)
+    print(f"重试完成，剩余失败节点数: {len(still_failed)}，详见: {failed_nodes_file}")
+
 # 7. 主流程
 def main():
-    since_ts, since_str = parse_args()
-    end_str = datetime.now().strftime("%Y%m%d")
+    since_ts, since_str, retry_failed_space_id = parse_args()
+    # end_str = datetime.now().strftime("%Y%m%d")
+    end_str = "20250709"
     global EXPORT_DIR
     EXPORT_DIR = f'{EXPORT_DIR}_{since_str}_{end_str}'
     print(f"导出目录: {EXPORT_DIR}")
     print("获取tenant_access_token...")
     token = get_tenant_access_token(APP_ID, APP_SECRET)
-    print("获取知识空间列表...")
-    spaces = get_space_list(token)
-    print(f"共{len(spaces)}个知识空间")
-    for space in spaces:
-        space_id = space["space_id"]
-        space_name = safe_filename(space.get("name", space_id))
-        print(f"处理知识空间: {space_name} ({space_id})")
-        nodes = get_space_nodes(token, space_id)
-        print(f"  共{len(nodes)}个节点")
-        exported_obj_tokens = set()
-        link_visited = set()
-        for node in nodes:
-            if not node['parent_node_token']:  # 只处理根节点
-                export_node(token, node, EXPORT_DIR, exported_obj_tokens, link_visited, since_ts=since_ts)
-
+    print(token)
+    if retry_failed_space_id:
+        ensure_dir(EXPORT_DIR)
+        retry_failed_nodes(token, retry_failed_space_id, EXPORT_DIR, since_ts=since_ts)
+        return
+    # print("获取知识空间列表...")
+    # spaces = get_space_list(token)
+    # print(f"共{len(spaces)}个知识空间")
+    # for space in spaces:
+    #     space_id = space["space_id"]
+    #     space_name = safe_filename(space.get("name", space_id))
+    #     print(f"处理知识空间: {space_name} ({space_id})")
+    #     ensure_dir(EXPORT_DIR)
+    #     bfs_export_space_nodes(token, space_id, EXPORT_DIR, since_ts=since_ts)
+    get_bitable_content(token, "LSQubTkQjajVNbscAlhcCUJjngb")
 
 if __name__ == "__main__":
     main() 
