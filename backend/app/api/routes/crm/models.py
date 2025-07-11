@@ -131,21 +131,24 @@ class FieldMetadata(BaseModel):
 
 # 拜访记录创建请求
 class VisitRecordCreate(BaseModel):
-    account_name: str # 客户名称
+    account_name: Optional[str] = None # 客户名称
     account_id: Optional[str] = None # 客户ID
-    customer_lead_source: str # 客户/线索来源
-    visit_communication_date: str # 拜访及沟通日期
-    visit_object_category: str # 拜访对象类别
-    contact_position: str # 客户职位
-    contact_name: str # 客户名字
-    recorder: str # 记录人
-    counterpart_location: str # 对方所在地
-    visit_communication_method: str # 拜访及沟通方式
+    opportunity_name: Optional[str] = None # 商机名称
+    opportunity_id: Optional[str] = None # 商机ID
+    partner_name: Optional[str] = None # 合作伙伴名称
+    customer_lead_source: Optional[str] = None # 客户/线索来源
+    visit_communication_date: Optional[str] = None # 拜访及沟通日期
+    visit_object_category: Optional[str] = None # 拜访对象类别
+    contact_position: Optional[str] = None # 客户职位
+    contact_name: Optional[str] = None # 客户名字
+    recorder: Optional[str] = None # 记录人
+    counterpart_location: Optional[str] = None # 对方所在地
+    visit_communication_method: Optional[str] = None # 拜访及沟通方式
     visit_communication_location: Optional[str] = None # 拜访及沟通地点
-    communication_duration: str # 沟通时长
-    expectation_achieved: str # 是否达成预期
+    communication_duration: Optional[str] = None # 沟通时长
+    expectation_achieved: Optional[str] = None # 是否达成预期
     collaborative_participants: Optional[str] = None # 协调参与人
-    followup_record: str # 跟进记录
+    followup_record: Optional[str] = None # 跟进记录
     attachment: Optional[str] = None # 附件
     parent_record: Optional[str] = None # 父记录
     next_steps: Optional[str] = None # 下一步计划

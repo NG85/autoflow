@@ -6,7 +6,7 @@ from app.crm.view_engine import CrmViewRequest, ViewType, CrmViewEngine, ViewReg
 from fastapi_pagination import Page
 
 from app.api.routes.crm.models import Account, VisitRecordCreate
-from app.crm.save_engine import save_visit_record_to_crm_table, check_record_qualified
+from app.crm.save_engine import save_visit_record_to_crm_table, check_followup_quality, check_next_steps_quality
 
 logger = logging.getLogger(__name__)
 
@@ -79,17 +79,23 @@ async def get_filter_options(
 
 @router.post("/crm/visit_record")
 def create_visit_record(
-    db_session: SessionDep,
     user: CurrentUserDep,
     record: VisitRecordCreate
 ):
     try:
-        is_valid, msg = check_record_qualified(db_session, record.followup_record, record.next_steps)
-        if not is_valid:
-            raise HTTPException(status_code=400, detail=msg)
+        followup_level, followup_reason = check_followup_quality(record.followup_record)
+        next_steps_level, next_steps_reason = check_next_steps_quality(record.next_steps)
+        data = {
+            "followup": {"level": followup_level, "reason": followup_reason},
+            "next_steps": {"level": next_steps_level, "reason": next_steps_reason}
+        }
+        # 只要有一项不合格就阻止保存
+        if followup_level == "不合格" or next_steps_level == "不合格":
+            return {"code": 400, "message": "failed", "data": data}
         save_visit_record_to_crm_table(record)
-        return {"code": 0, "message": "success"}
+        return {"code": 0, "message": "success", "data": data}
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(e)
+        raise InternalServerError()
