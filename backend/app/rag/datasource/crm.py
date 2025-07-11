@@ -39,7 +39,7 @@ class CRMDataSourceConfig(BaseModel):
     # include_opportunities: Optional[bool] = True
     # include_orders: Optional[bool] = True
     # include_payment_plans: Optional[bool] = True
-    # account_filter: Optional[str] = None
+    account_filter: Optional[str] = None
     # contact_filter: Optional[str] = None
     opportunity_filter: Optional[str] = None
     # opportunity_updates_filter: Optional[str] = None
@@ -47,6 +47,7 @@ class CRMDataSourceConfig(BaseModel):
     # payment_plan_filter: Optional[str] = None
     max_count: Optional[int] = None
     batch_size: int = 100
+    increment_filter: Optional[str] = None
 
 class CRMDataSource(BaseDataSource):
     def validate_config(self):
@@ -193,46 +194,53 @@ class CRMDataSource(BaseDataSource):
                     logger.error(f"Error processing {entity_name} {opportunity_id}: {str(e)}")
                     continue
                 
+    def _get_incremental_opportunity_ids(self, db_session: Session, increment_filter: Optional[str], opportunity_filter: Optional[str]):
+        """Get all opportunity_ids that have changed in the primary table and sales activities table, the primary table uses increment_filter AND opportunity_filter, the extended table only uses increment_filter"""
+        main_ids = set()
+        sales_ids = set()
+        if increment_filter:
+            # Primary table: incremental + primary table filter
+            main_query = select(CRMOpportunity.unique_id).where(text(increment_filter))
+            if opportunity_filter:
+                main_query = main_query.where(text(opportunity_filter))
+            main_ids = set(db_session.exec(main_query).all())
+            # Extended table: only use incremental filter
+            sales_ids = set(
+                db_session.exec(
+                    select(CRMSalesActivities.opportunity_id).where(text(increment_filter))
+                ).all()
+            )
+        all_ids = main_ids | sales_ids
+        return list(all_ids)
+
     def _load_opportunity_documents(self, db_session: Session) -> Generator[Document, None, None]:
-        """Load opportunity documents from database."""
-        
+        """Load opportunity documents from database, support incremental synchronization."""
+        increment_filter = getattr(self.config_obj, "increment_filter", None)
+        opportunity_filter = getattr(self.config_obj, "opportunity_filter", None)
         def get_related_data(session, opportunity_id):
             # Get related orders (opportunity vs order is 1:1 relationship)
             orders_query = select(CRMOrder).filter(CRMOrder.opportunity_id==opportunity_id)
             orders = db_session.exec(orders_query).all()
-            
-            # # Get related opportunity updates (opportunity vs updates is 1:N relationship)
-            # updates_query = select(CRMOpportunityUpdates).filter(CRMOpportunityUpdates.opportunity_id==opportunity_id)
-            # opportunity_updates = db_session.exec(updates_query).all()
-            
             # Get related sales activities for each opportunity (opportunity vs sales activities is 1:N relationship)
             sales_activities_query = select(CRMSalesActivities).filter(CRMSalesActivities.opportunity_id==opportunity_id)
             sales_activities = db_session.exec(sales_activities_query).all()
-            
             # Get related payment plans for each order (order vs paymentplan is 1:N relationship)
             orders_with_payment_plans = []
             total_payment_plans = 0
-            
             for order in orders:
-                # Get related payment plans for each order (order vs paymentplan is 1:N relationship)
                 payment_plans_query = select(CRMPaymentPlan).filter(
                     CRMPaymentPlan.order_id==order.unique_id,
                     (CRMPaymentPlan.is_deleted.is_(False) | CRMPaymentPlan.is_deleted.is_(None))
                 )
                 order_payment_plans = db_session.exec(payment_plans_query).all()
-                
-                # Store the order and its related payment plans together
                 orders_with_payment_plans.append({
                     "order": order,
                     "payment_plans": order_payment_plans
                 })
                 total_payment_plans += len(order_payment_plans)
-            
             logger.info(f"Found opportunity {opportunity_id} with {len(orders)} orders, {total_payment_plans} payment plans, and {len(sales_activities)} sales activities")
-            
             return {
                 "orders_with_payment_plans": orders_with_payment_plans,
-                # "opportunity_updates": opportunity_updates,
                 "sales_activities": sales_activities
             }
            
@@ -240,15 +248,30 @@ class CRMDataSource(BaseDataSource):
             # Create and return the document
             return self._create_opportunity_document(opportunity, related_data)
         
-        return self._load_entity_documents(
-            db_session=db_session,
-            entity_model=CRMOpportunity,
-            filter_condition=self.config_obj.opportunity_filter,
-            max_count=self.config_obj.max_count,
-            entity_name="opportunity",
-            get_related_data_func=get_related_data,
-            create_document_func=create_document
-        )
+        if increment_filter:
+            # Incremental mode: primary table uses increment_filter AND opportunity_filter, extended table only uses increment_filter
+            opportunity_ids = self._get_incremental_opportunity_ids(db_session, increment_filter, opportunity_filter)
+            logger.info(f"Incremental synchronization, involving {len(opportunity_ids)} opportunities")
+            for opportunity_id in opportunity_ids:
+                opportunity = db_session.exec(
+                    select(CRMOpportunity).where(CRMOpportunity.unique_id == opportunity_id)
+                ).first()
+                if not opportunity:
+                    continue
+                related_data = get_related_data(db_session, opportunity_id)
+                document = self._create_opportunity_document(opportunity, related_data)
+                yield document
+        else:
+            # Full mode: only use opportunity_filter on primary table
+            yield from self._load_entity_documents(
+                db_session=db_session,
+                entity_model=CRMOpportunity,
+                filter_condition=opportunity_filter,
+                max_count=self.config_obj.max_count,
+                entity_name="opportunity",
+                get_related_data_func=get_related_data,
+                create_document_func=create_document
+            )
  
     def _load_opportunity_updates_documents(self, db_session: Session) -> Generator[Document, None, None]:
         """Load opportunity updates documents from database."""

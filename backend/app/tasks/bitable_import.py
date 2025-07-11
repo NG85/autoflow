@@ -45,6 +45,13 @@ FIELD_MAP = {
     '附件': 'attachment',
     '父记录': 'parent_record',
     '下一步计划': 'next_steps',
+    '商机名称': 'opportunity_name',
+    '商机CRM ID': 'opportunity_id',
+    '合作伙伴名称': 'partner_name',
+    '跟进记录等级': 'followup_quality_level',
+    '跟进记录评判依据': 'followup_quality_reason',
+    '下一步计划等级': 'next_steps_quality_level',
+    '下一步计划评判依据': 'next_steps_quality_reason',
 }
 
 CRM_FIELDS = list(FIELD_MAP.values()) + ['last_modified_time', 'record_id']
