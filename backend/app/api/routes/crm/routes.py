@@ -92,7 +92,13 @@ def create_visit_record(
         # 只要有一项不合格就阻止保存
         if followup_level == "不合格" or next_steps_level == "不合格":
             return {"code": 400, "message": "failed", "data": data}
-        save_visit_record_to_crm_table(record)
+        save_visit_record_to_crm_table(
+            record,
+            followup_level=followup_level,
+            followup_reason=followup_reason,
+            next_steps_level=next_steps_level,
+            next_steps_reason=next_steps_reason
+        )
         return {"code": 0, "message": "success", "data": data}
     except HTTPException:
         raise

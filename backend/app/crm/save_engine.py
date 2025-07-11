@@ -10,11 +10,19 @@ def _generate_form_record_id(now):
     return f"form_{dt}_{rand}"
 
 # 保存表单拜访记录到 crm_intermediate_import_visit_records
-def save_visit_record_to_crm_table(record_schema):
+def save_visit_record_to_crm_table(record_schema, followup_level=None, followup_reason=None, next_steps_level=None, next_steps_reason=None):
     now = datetime.now()
-    
     # 英文转中文
     fields = record_schema.dict(exclude_none=True)
+    # 增加评判结果
+    if followup_level is not None:
+        fields['followup_quality_level'] = followup_level
+    if followup_reason is not None:
+        fields['followup_quality_reason'] = followup_reason
+    if next_steps_level is not None:
+        fields['next_steps_quality_level'] = next_steps_level
+    if next_steps_reason is not None:
+        fields['next_steps_quality_reason'] = next_steps_reason
     feishu_fields = {
         feishu_key: fields[db_key]
         for feishu_key, db_key in FIELD_MAP.items()
