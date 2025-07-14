@@ -11,6 +11,13 @@ from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_EXTERNAL_GROUP_CHATS = [
+    {
+        "name": "集结号（通用）",
+        "chat_id": "oc_f9c65db7f9e9b9e93b2ab1ae4d94fddd"
+    }
+]
+
 DEFAULT_EXTERNAL_LEADERS = [
     {
         "name": "韩启微",
@@ -20,10 +27,16 @@ DEFAULT_EXTERNAL_LEADERS = [
 ]
 
 DEFAULT_EXTERNAL_SALES = [
+    # {
+    #     "name": "钟艳珍",
+    #     "email": "yanzhen.zhong@pingcap.cn",
+    #     "open_id": "ou_0b26ba63639e89dde8d40d154c2b44b8",
+    #     "accounts": []
+    # },
     {
-        "name": "钟艳珍",
-        "email": "yanzhen.zhong@pingcap.cn",
-        "open_id": "ou_0b26ba63639e89dde8d40d154c2b44b8",
+        "name": "肖章博",
+        "email": "zhangbo.xiao@pingcap.cn",
+        "open_id": "ou_8cc1d496c513d8202997c8218cc3446c",
         "accounts": []
     },
     {

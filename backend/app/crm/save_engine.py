@@ -1,8 +1,13 @@
+import logging
 from datetime import datetime
 from app.tasks.bitable_import import FIELD_MAP, upsert_visit_records
 from app.utils.uuid6 import uuid6
 from app.core.config import settings
 import requests
+from app.feishu.common_open import DEFAULT_INTERNAL_GROUP_CHATS, send_feishu_message, get_tenant_access_token
+from app.feishu.push_review import DEFAULT_EXTERNAL_GROUP_CHATS, DEFAULT_EXTERNAL_SALES
+
+logger = logging.getLogger(__name__)
 
 def _generate_form_record_id(now):
     dt = now.strftime("%Y%m%d")
@@ -125,3 +130,52 @@ def check_next_steps_quality(next_steps):
 """
     next_steps_result = call_ark_llm(next_steps_prompt.format(next_steps=next_steps))
     return parse_llm_result(next_steps_result)
+
+
+def fill_sales_visit_record_fields(sales_visit_record):
+    # 处理客户名称和合作伙伴
+    account_name = sales_visit_record.get("account_name")
+    partner_name = sales_visit_record.get("partner_name")
+    if not account_name:
+        if partner_name:
+            sales_visit_record["account_name"] = partner_name
+        else:
+            sales_visit_record["account_name"] = "--"
+    if not partner_name:
+        sales_visit_record["partner_name"] = "--"
+    # 协同参与人
+    if sales_visit_record.get("collaborative_participants") is None:
+        sales_visit_record["collaborative_participants"] = "--"
+    # 其他字段
+    for k, v in sales_visit_record.items():
+        if v is None:
+            sales_visit_record[k] = "--"
+    return sales_visit_record
+
+
+def push_visit_record_feishu_message(external, sales_visit_record, receive_id=None, receive_id_type="chat_id"):
+    sales_visit_record = fill_sales_visit_record_fields(sales_visit_record)
+    if not external:
+        logger.info(f"push visit record feishu message to internal group")
+        receive_id = DEFAULT_INTERNAL_GROUP_CHATS[0]["chat_id"]
+    elif sales_visit_record.get("recorder") in [user.get("name") for user in DEFAULT_EXTERNAL_SALES]:
+        logger.info(f"push visit record feishu message to hanqiwei's external group")
+        receive_id = DEFAULT_EXTERNAL_GROUP_CHATS[0]["chat_id"]
+    else:
+        logger.info(f"skip push visit record feishu message for {sales_visit_record.get('recorder')}")
+        return
+    template_id = "AAqII006k7Mt7" # 拜访记录卡片模板ID
+    template_vars = {
+        "visit_date": sales_visit_record["visit_communication_date"],
+        "sales_visit_records": [sales_visit_record]
+    }
+    
+    token = get_tenant_access_token(external=external)
+    card_content = {
+        "type": "template",
+        "data": {
+            "template_id": template_id,
+            "template_variable": template_vars
+        }
+    }
+    send_feishu_message(receive_id, token, card_content, receive_id_type=receive_id_type, msg_type="interactive")

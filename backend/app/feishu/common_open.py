@@ -49,6 +49,12 @@ DEFAULT_INTERNAL_SALES = [
         "accounts": []
     },
     {
+        "name": "肖章博", #任小寅
+        "email": "",
+        # "open_id": "ou_43a1eaed720903a383fd9415759f895b", # Sia
+        "open_id": "ou_d8febb66020e50b28e489ca47bd65b0e", # Sia 销售助理
+    },
+    {
         "name": "姚亮", #任小寅
         "email": "",
         # "open_id": "ou_43a1eaed720903a383fd9415759f895b", # Sia
@@ -79,14 +85,14 @@ DEFAULT_INTERNAL_USERS = [
 ]
 
 DEFAULT_INTERNAL_GROUP_CHATS = [
-    # {
-    #     "name": "产品需求开发讨论群",
-    #     "chat_id": "oc_b6cf36c6c6dad851e53a01b5fa3554be"
-    # },
     {
-        "name": "Release",
-        "chat_id": "oc_0b983a12f112ba3a8ae98cd3fd141d0e"
-    }
+        "name": "Sia内部试用群",
+        "chat_id": "oc_9b167146c8e0d78121898641fd91d61b"
+    },
+    # {
+    #     "name": "Release",
+    #     "chat_id": "oc_0b983a12f112ba3a8ae98cd3fd141d0e"
+    # }
 ]
 
 # 获取tenant_access_token
@@ -346,5 +352,7 @@ def send_feishu_message(receive_id, token, text, receive_id_type="open_id", msg_
     }
     params = {"receive_id_type": receive_id_type}
     resp = requests.post(api_url, params=params, headers=headers, data=json.dumps(payload))
-    resp.raise_for_status()
+    if resp.status_code != 200:
+        logger.error(f"发送飞书消息失败 {resp.text}, content: {content}")
+    # resp.raise_for_status()
     return resp.json()

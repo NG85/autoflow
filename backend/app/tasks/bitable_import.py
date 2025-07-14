@@ -27,8 +27,11 @@ url_type, url_token, table_id, view_id = parse_feishu_bitable_url(FEISHU_URL)
 
 # 字段映射关系（Feishu字段名 -> DB字段名）
 FIELD_MAP = {
-    '拜访客户/伙伴名称': 'account_name',
+    '客户名称': 'account_name',
     '客户CRM ID': 'account_id',
+    '合作伙伴': 'partner_name',
+    '商机名称': 'opportunity_name',
+    '商机CRM ID': 'opportunity_id',
     '客户/线索来源': 'customer_lead_source',
     '拜访对象类别': 'visit_object_category',
     '客户职位': 'contact_position',
@@ -36,22 +39,18 @@ FIELD_MAP = {
     '记录人': 'recorder',
     '协同参与人': 'collaborative_participants',
     '拜访及沟通日期': 'visit_communication_date',
-    '拜访或沟通地点': 'visit_communication_location',
-    '对方所在地': 'counterpart_location',
     '拜访及沟通方式': 'visit_communication_method',
+    '拜访地点': 'counterpart_location',
     '沟通时长': 'communication_duration',
     '是/否达成预期': 'expectation_achieved',
     '跟进记录': 'followup_record',
-    '附件': 'attachment',
-    '父记录': 'parent_record',
-    '下一步计划': 'next_steps',
-    '商机名称': 'opportunity_name',
-    '商机CRM ID': 'opportunity_id',
-    '合作伙伴名称': 'partner_name',
+    '下一步': 'next_steps',
     '跟进记录等级': 'followup_quality_level',
     '跟进记录评判依据': 'followup_quality_reason',
     '下一步计划等级': 'next_steps_quality_level',
     '下一步计划评判依据': 'next_steps_quality_reason',
+    '附件': 'attachment',
+    '父记录': 'parent_record',
 }
 
 CRM_FIELDS = list(FIELD_MAP.values()) + ['last_modified_time', 'record_id']

@@ -38,10 +38,15 @@ DEFAULT_EXTERNAL_ADMINS = [
         "email": "qiwei.han@pingcap.cn",
         "open_id": "ou_1c90c4689c5b482d478fb9193d6dcaff"
     },
+    # {
+    #     "name": "钟艳珍",
+    #     "email": "yanzhen.zhong@pingcap.cn",
+    #     "open_id": "ou_0b26ba63639e89dde8d40d154c2b44b8",
+    # },
     {
-        "name": "钟艳珍",
-        "email": "yanzhen.zhong@pingcap.cn",
-        "open_id": "ou_0b26ba63639e89dde8d40d154c2b44b8",
+        "name": "肖章博",
+        "email": "zhangbo.xiao@pingcap.cn",
+        "open_id": "ou_8cc1d496c513d8202997c8218cc3446c",
     },
     {
         "name": "金豫玮",

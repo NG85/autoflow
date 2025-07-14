@@ -142,12 +142,12 @@ class VisitRecordCreate(BaseModel):
     contact_position: Optional[str] = None # 客户职位
     contact_name: Optional[str] = None # 客户名字
     recorder: Optional[str] = None # 记录人
-    counterpart_location: Optional[str] = None # 对方所在地
+    counterpart_location: Optional[str] = None # 拜访地点
     visit_communication_method: Optional[str] = None # 拜访及沟通方式
-    visit_communication_location: Optional[str] = None # 拜访及沟通地点
+    # visit_communication_location: Optional[str] = None # 拜访及沟通地点
     communication_duration: Optional[str] = None # 沟通时长
     expectation_achieved: Optional[str] = None # 是否达成预期
-    collaborative_participants: Optional[str] = None # 协调参与人
+    collaborative_participants: Optional[str] = None # 协同参与人
     followup_record: Optional[str] = None # 跟进记录
     attachment: Optional[str] = None # 附件
     parent_record: Optional[str] = None # 父记录

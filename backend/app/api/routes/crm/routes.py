@@ -1,12 +1,18 @@
 import logging
 from app.api.deps import CurrentUserDep, SessionDep
 from app.exceptions import InternalServerError
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Body, HTTPException
 from app.crm.view_engine import CrmViewRequest, ViewType, CrmViewEngine, ViewRegistry
 from fastapi_pagination import Page
 
 from app.api.routes.crm.models import Account, VisitRecordCreate
-from app.crm.save_engine import save_visit_record_to_crm_table, check_followup_quality, check_next_steps_quality
+from app.crm.save_engine import (
+    save_visit_record_to_crm_table, 
+    check_followup_quality, 
+    check_next_steps_quality, 
+    push_visit_record_feishu_message
+)
+
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +86,8 @@ async def get_filter_options(
 @router.post("/crm/visit_record")
 def create_visit_record(
     user: CurrentUserDep,
-    record: VisitRecordCreate
+    record: VisitRecordCreate,
+    external: bool = Body(False, example=False),
 ):
     try:
         followup_level, followup_reason = check_followup_quality(record.followup_record)
@@ -98,6 +105,18 @@ def create_visit_record(
             followup_reason=followup_reason,
             next_steps_level=next_steps_level,
             next_steps_reason=next_steps_reason
+        )
+        
+        # 推送飞书消息
+        push_visit_record_feishu_message(
+            external=external,
+            sales_visit_record={
+                **record.model_dump(),
+                "followup_quality_level": followup_level,
+                "followup_quality_reason": followup_reason,
+                "next_steps_quality_level": next_steps_level,
+                "next_steps_quality_reason": next_steps_reason
+            }
         )
         return {"code": 0, "message": "success", "data": data}
     except HTTPException:
