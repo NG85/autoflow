@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import requests
 from sqlalchemy import text, Table, MetaData
 from app.feishu.common_open import (
@@ -123,8 +124,9 @@ def parse_field_value(val, field_name=None):
         else:
             return ','.join([str(v) for v in val])
     if isinstance(val, int) and len(str(val)) == 13:
-        # 13位时间戳转日期
-        return datetime.fromtimestamp(val // 1000).strftime('%Y-%m-%d')
+        # 13位时间戳转日期，强制用北京时间
+        dt = datetime.fromtimestamp(val // 1000, ZoneInfo("Asia/Shanghai"))
+        return dt.strftime('%Y-%m-%d')
     if isinstance(val, dict):
         # 兜底：dict 不能直接入库
         return str(val)
