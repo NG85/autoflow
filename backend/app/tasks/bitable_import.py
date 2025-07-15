@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 APP_ID = settings.FEISHU_APP_ID
 APP_SECRET = settings.FEISHU_APP_SECRET
 
-CRM_TABLE = 'crm_intermediate_import_visit_records'
+CRM_TABLE = 'crm_sales_visit_records'
 
 # 配置区
 FEISHU_URL = getattr(settings, 'FEISHU_BTABLE_URL', None)
@@ -29,10 +29,10 @@ url_type, url_token, table_id, view_id = parse_feishu_bitable_url(FEISHU_URL)
 # 字段映射关系（Feishu字段名 -> DB字段名）
 FIELD_MAP = {
     '客户名称': 'account_name',
-    '客户CRM ID': 'account_id',
+    '客户ID': 'account_id',
     '合作伙伴': 'partner_name',
     '商机名称': 'opportunity_name',
-    '商机CRM ID': 'opportunity_id',
+    '商机ID': 'opportunity_id',
     '客户/线索来源': 'customer_lead_source',
     '拜访对象类别': 'visit_object_category',
     '客户职位': 'contact_position',
@@ -45,11 +45,11 @@ FIELD_MAP = {
     '沟通时长': 'communication_duration',
     '是/否达成预期': 'expectation_achieved',
     '跟进记录': 'followup_record',
+    'AI判断结论-跟进记录': 'followup_quality_level',
+    'AI判断说明-跟进记录': 'followup_quality_reason',
     '下一步': 'next_steps',
-    '跟进记录等级': 'followup_quality_level',
-    '跟进记录评判依据': 'followup_quality_reason',
-    '下一步计划等级': 'next_steps_quality_level',
-    '下一步计划评判依据': 'next_steps_quality_reason',
+    'AI判断结论-下一步': 'next_steps_quality_level',
+    'AI判断说明-下一步': 'next_steps_quality_reason',
     '附件': 'attachment',
     '父记录': 'parent_record',
 }
