@@ -32,3 +32,4 @@ from .recommend_question import RecommendQuestion
 from .evaluation_task import EvaluationTask, EvaluationTaskItem, EvaluationStatus
 from .evaluation_dataset import EvaluationDataset, EvaluationDatasetItem
 from .file_permission import FilePermission
+from .crm_sales_visit_records import CRMSalesVisitRecord
