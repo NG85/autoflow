@@ -37,7 +37,7 @@ class CRMAuthority(BaseModel):
         Returns:
             Whether there is access permission
         """
-        if data_type == CrmDataType.INTERNAL_OWNER or data_type == CrmDataType.OPPORTUNITY_UPDATES:
+        if data_type == CrmDataType.INTERNAL_OWNER:
             return True
         if data_type not in self.authorized_items:
             return False
@@ -54,10 +54,6 @@ class CRMAuthority(BaseModel):
     def is_authorized_contact(self, contact_id: str) -> bool:
         """Check if the contact ID has access permission"""
         return self.is_authorized(CrmDataType.CONTACT, contact_id)
-    
-    def is_authorized_opportunity_updates(self, opportunity_id: str) -> bool:
-        """Check if the opportunity updates ID has access permission"""
-        return self.is_authorized(CrmDataType.OPPORTUNITY_UPDATES, opportunity_id)
     
     def is_authorized_order(self, order_id: str) -> bool:
         """Check if the order ID has access permission"""
@@ -205,7 +201,6 @@ def identify_crm_data_type(data_object, meta_or_metadata: str = "meta") -> tuple
         CrmDataType.CONTACT: ["contact_id", "unique_id"],
         CrmDataType.INTERNAL_OWNER: ["internal_owner", "unique_id"],
         CrmDataType.OPPORTUNITY: ["opportunity_id", "unique_id"],
-        CrmDataType.OPPORTUNITY_UPDATES: ["opportunity_id", "updates_group_id", "unique_id"],
         CrmDataType.ORDER: ["sales_order_number", "unique_id"],
         CrmDataType.PAYMENTPLAN: ["name", "unique_id"],
         CrmDataType.STAGE: ["stage_id", "unique_id"],

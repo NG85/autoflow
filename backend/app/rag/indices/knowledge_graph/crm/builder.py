@@ -5,7 +5,6 @@ from app.rag.indices.knowledge_graph.crm.entity import (
     ContactEntity,
     InternalOwnerEntity,
     OpportunityEntity,
-    OpportunityUpdatesEntity,
     OrderEntity,
     PaymentPlanEntity
 )
@@ -115,22 +114,6 @@ class CRMKnowledgeGraphBuilder:
             name=opportunity_name,
             description=f"关于商机{opportunity_name}的明细数据，包括商机类型、商机阶段、服务类型、商机金额等",
             metadata=opportunity_data
-        )
-        
-    def create_opportunity_updates_entity(self, opportunity_updates_data: Dict) -> OpportunityUpdatesEntity:
-        """Create opportunity updates entity."""
-        opportunity_name = opportunity_updates_data.get("opportunity_name")
-        
-        metadata = {}
-        metadata["opportunity_name"] = opportunity_name
-        if "opportunity_id" in opportunity_updates_data:
-            metadata["opportunity_id"] = opportunity_updates_data["opportunity_id"]
-
-        return OpportunityUpdatesEntity(
-            id=None,
-            name=f"商机{opportunity_name}的活动更新记录",
-            description=f"关于商机{opportunity_name}的销售活动更新记录，包括活动更新类型及时间、下一步行动计划、关键干系人、成单概率等",
-            metadata=metadata
         )
 
     def create_order_entity(self, order_data: Dict) -> OrderEntity:
@@ -630,40 +613,5 @@ class CRMKnowledgeGraphBuilder:
                                 "unique_id": payment_plan_detail_entity.metadata.get("unique_id") or payment_plan_detail_entity.metadata.get("name")
                             }
                         })
-        elif crm_data_type == CrmDataType.OPPORTUNITY_UPDATES:            
-            # 创建商机-商机更新记录关系
-            if secondary_data:
-                opportunity_entity = self.create_opportunity_entity(secondary_data)
-                opportunity_updates_detail_entity = self.create_opportunity_updates_entity(primary_data)
-                entities_data.extend([
-                    {
-                        "name": opportunity_entity.name,
-                        "description": opportunity_entity.description,
-                        "meta": opportunity_entity.metadata,
-                        "graph_type": GraphType.crm
-                    },
-                    {
-                        "name": opportunity_updates_detail_entity.name,
-                        "description": opportunity_updates_detail_entity.description,
-                        "meta": opportunity_updates_detail_entity.metadata,
-                        "graph_type": GraphType.crm
-                    }
-                ])
-                relationships_data.append({
-                    "source_entity": opportunity_entity.name,
-                    "target_entity": opportunity_updates_detail_entity.name,
-                    "source_entity_description": opportunity_entity.description,
-                    "target_entity_description": opportunity_updates_detail_entity.description,
-                    "relationship_desc": f"商机{opportunity_entity.name}包含很多详细的销售活动记录",
-                    "meta": {
-                        **meta,
-                        "document_id": document_id,
-                        "chunk_id": chunk_id,
-                        "relation_type": "HAS_DETAIL",
-                        "crm_data_type": crm_data_type,
-                        "source_type": CrmDataType.OPPORTUNITY,
-                        "target_type": CrmDataType.OPPORTUNITY_UPDATES,
-                        "unique_id": opportunity_entity.metadata.get("unique_id" or opportunity_entity.metadata.get("opportunity_id"))
-                    }
-                })      
+    
         return entities_data, relationships_data
