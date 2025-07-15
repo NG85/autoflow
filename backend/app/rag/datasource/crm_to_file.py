@@ -6,16 +6,16 @@ from sqlmodel import Session
 from app.core.db import engine
 from app.file_storage import default_file_storage
 from app.models import Upload
-from app.models.document import DocumentCategory, DocumentMetadata
+from app.models.document import DocumentMetadata
 from app.utils.uuid6 import uuid7
 from app.types import MimeTypes
 
 logger = logging.getLogger(__name__)
 
-def save_crm_to_file(opportunity, doc_content, doc_datetime, doc_metadata):
+def save_crm_to_file(crm_data_type, data, doc_content, doc_datetime, doc_metadata):
     try:
-        file_name = f"{getattr(opportunity, 'opportunity_name','未具名商机')}_{getattr(opportunity, 'unique_id')}.md"
-        file_path = f"crm/opportunity/{int(time.time())}-{uuid7().hex}.md"
+        file_name = f"{getattr(data, f'{crm_data_type}_name','未具名')}_{getattr(data, 'unique_id')}.md"
+        file_path = f"crm/{crm_data_type}/{int(time.time())}-{uuid7().hex}.md"
         
         default_file_storage.save(file_path, doc_content)
         with Session(engine) as session:

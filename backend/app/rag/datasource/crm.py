@@ -10,7 +10,6 @@ from app.models.crm_contacts import CRMContact
 from app.models.crm_opportunities import CRMOpportunity
 from app.models.crm_orders import CRMOrder
 from app.models.crm_payment_plans import CRMPaymentPlan
-from app.models.crm_opportunity_updates import CRMOpportunityUpdates
 from app.models.crm_sales_activities import CRMSalesActivities
 from sqlalchemy import text
 from app.core.db import get_db_session
@@ -20,9 +19,7 @@ from app.rag.datasource.crm_format import(
     format_contact_info,
     format_opportunity_info,
     format_order_info,
-    format_payment_plan_info,
-    format_opportunity_updates,
-    get_column_comments_and_names
+    format_payment_plan_info
 )
 from app.rag.datasource.crm_to_file import save_crm_to_file
 from app.models.document import DocumentCategory
@@ -35,14 +32,12 @@ class CRMDataSourceConfig(BaseModel):
     """Config for CRM data source"""
     # include_accounts: Optional[bool] = False
     # include_contacts: Optional[bool] = True
-    # include_updates: Optional[bool] = True
     # include_opportunities: Optional[bool] = True
     # include_orders: Optional[bool] = True
     # include_payment_plans: Optional[bool] = True
     account_filter: Optional[str] = None
     # contact_filter: Optional[str] = None
     opportunity_filter: Optional[str] = None
-    # opportunity_updates_filter: Optional[str] = None
     # order_filter: Optional[str] = None
     # payment_plan_filter: Optional[str] = None
     max_count: Optional[int] = None
@@ -73,7 +68,7 @@ class CRMDataSource(BaseDataSource):
                     
             # # Load account documents
             # if self.config_obj.include_accounts:
-            #     yield from self._load_account_documents(db_session)
+            yield from self._load_account_documents(db_session)
                     
             # # Load contact documents
             # if self.config_obj.include_contacts:
@@ -86,10 +81,6 @@ class CRMDataSource(BaseDataSource):
             # # Load payment plan documents
             # if self.config_obj.include_payment_plans:
             #     yield from self._load_payment_plan_documents(db_session)
-                    
-            # # Load sales record documents
-            # if self.config_obj.include_updates:
-            #     yield from self._load_opportunity_updates_documents(db_session)
                 
         finally:
             # Close the session we created ourselves
@@ -194,22 +185,17 @@ class CRMDataSource(BaseDataSource):
                     logger.error(f"Error processing {entity_name} {opportunity_id}: {str(e)}")
                     continue
                 
-    def _get_incremental_opportunity_ids(self, db_session: Session, increment_filter: Optional[str], opportunity_filter: Optional[str]):
-        """Get all opportunity_ids that have changed in the primary table and sales activities table, the primary table uses increment_filter AND opportunity_filter, the extended table only uses increment_filter"""
+    def _get_incremental_opportunity_ids(self, db_session: Session, increment_filter: str, opportunity_filter: Optional[str]):
+        """Get all opportunity_ids that have changed in the primary table and sales activities table."""
         main_ids = set()
         sales_ids = set()
-        if increment_filter:
-            # Primary table: incremental + primary table filter
-            main_query = select(CRMOpportunity.unique_id).where(text(increment_filter))
-            if opportunity_filter:
-                main_query = main_query.where(text(opportunity_filter))
-            main_ids = set(db_session.exec(main_query).all())
-            # Extended table: only use incremental filter
-            sales_ids = set(
-                db_session.exec(
-                    select(CRMSalesActivities.opportunity_id).where(text(increment_filter))
-                ).all()
-            )
+        main_query = select(CRMOpportunity.unique_id).where(text(increment_filter))
+        if opportunity_filter:
+            main_query = main_query.where(text(opportunity_filter))
+        main_ids = set(row[0] for row in db_session.exec(main_query).all() if row and row[0])
+        # Extended table: only use incremental filter
+        sales_query = select(CRMSalesActivities.opportunity_id).where(text(increment_filter))
+        sales_ids = set(row[0] for row in db_session.exec(sales_query).all() if row and row[0])
         all_ids = main_ids | sales_ids
         return list(all_ids)
 
@@ -252,15 +238,21 @@ class CRMDataSource(BaseDataSource):
             # Incremental mode: primary table uses increment_filter AND opportunity_filter, extended table only uses increment_filter
             opportunity_ids = self._get_incremental_opportunity_ids(db_session, increment_filter, opportunity_filter)
             logger.info(f"Incremental synchronization, involving {len(opportunity_ids)} opportunities")
-            for opportunity_id in opportunity_ids:
-                opportunity = db_session.exec(
-                    select(CRMOpportunity).where(CRMOpportunity.unique_id == opportunity_id)
-                ).first()
-                if not opportunity:
-                    continue
-                related_data = get_related_data(db_session, opportunity_id)
-                document = self._create_opportunity_document(opportunity, related_data)
-                yield document
+            # max_count 限制
+            if self.config_obj.max_count:
+                opportunity_ids = opportunity_ids[:self.config_obj.max_count]
+            batch_size = self.config_obj.batch_size or 100
+            for offset in range(0, len(opportunity_ids), batch_size):
+                batch_ids = opportunity_ids[offset:offset+batch_size]
+                for opportunity_id in batch_ids:
+                    opportunity = db_session.exec(
+                        select(CRMOpportunity).where(CRMOpportunity.unique_id == opportunity_id)
+                    ).first()
+                    if not opportunity:
+                        continue
+                    related_data = get_related_data(db_session, opportunity_id)
+                    document = self._create_opportunity_document(opportunity, related_data)
+                    yield document
         else:
             # Full mode: only use opportunity_filter on primary table
             yield from self._load_entity_documents(
@@ -272,57 +264,79 @@ class CRMDataSource(BaseDataSource):
                 get_related_data_func=get_related_data,
                 create_document_func=create_document
             )
- 
-    def _load_opportunity_updates_documents(self, db_session: Session) -> Generator[Document, None, None]:
-        """Load opportunity updates documents from database."""
-        
-        def get_related_data(session, opportunity_id, filter_condition):
-            # 获取与 opportunity_id 相关的所有更新记录
-            data_query = select(CRMOpportunityUpdates).filter(CRMOpportunityUpdates.opportunity_id==opportunity_id).order_by(CRMOpportunityUpdates.record_date.desc())
-            if filter_condition:
-                data_query = data_query.where(text(filter_condition))
-            
-            updates = db_session.exec(data_query).all()
-            logger.info(f"Found {len(updates)} updates for opportunity {opportunity_id} with filter {filter_condition}")
-            return updates
-           
-        def create_document(opportunity_id, related_data):
-            # 使用商机名称和更新记录创建文档
-            if related_data and len(related_data) > 0:
-                opportunity_name = related_data[0].opportunity_name or '未命名商机'
-                return self._create_opportunity_updates_document(related_data, opportunity_id, opportunity_name)
-        
-        return self._load_grouped_entity_documents(
-            db_session=db_session,
-            entity_model=CRMOpportunityUpdates,
-            filter_condition=self.config_obj.opportunity_updates_filter,
-            max_count=self.config_obj.max_count,
-            entity_name="opportunity_updates",
-            get_related_data_func=get_related_data,
-            create_document_func=create_document
+
+    def _get_incremental_account_ids(self, db_session: Session, increment_filter: str, account_filter: Optional[str]):
+        """Get all account_ids that have changed in the primary table and sales activities table."""
+        main_ids = set()
+        sales_ids = set()
+        main_query = select(CRMAccount.unique_id).where(text(increment_filter))
+        if account_filter:
+            main_query = main_query.where(text(account_filter))
+        main_ids = set(row[0] for row in db_session.exec(main_query).all() if row and row[0])
+        # Only activities not linked to any opportunity
+        sales_query = select(CRMSalesActivities.account_id).where(
+            text(increment_filter),
+            (CRMSalesActivities.opportunity_id == None) | (CRMSalesActivities.opportunity_id == ""),
+            (CRMSalesActivities.opportunity_name == None) | (CRMSalesActivities.opportunity_name == "")
         )
-        
+        sales_ids = set(row[0] for row in db_session.exec(sales_query).all() if row and row[0])
+        all_ids = main_ids | sales_ids
+        return list(all_ids)
+
     def _load_account_documents(self, db_session: Session) -> Generator[Document, None, None]:
-        """Load account documents from database."""
-        
-        def get_related_data(session, accounts):
-            # No related data for account
-            return {}
-        
+        """Load account documents from database, only associate contacts and sales activities. 支持增量同步。"""
+        increment_filter = getattr(self.config_obj, "increment_filter", None)
+        account_filter = getattr(self.config_obj, "account_filter", None)
+
+        def get_related_data(session, account_id):
+            # 1. Get all contacts under the account
+            contacts_query = select(CRMContact).filter(CRMContact.customer_id == account_id)
+            contacts = db_session.exec(contacts_query).all()
+            # 2. Get all sales activities under the account, only those not linked to any opportunity
+            sales_activities_query = select(CRMSalesActivities).filter(
+                CRMSalesActivities.account_id == account_id,
+                (CRMSalesActivities.opportunity_id == None) | (CRMSalesActivities.opportunity_id == ""),
+                (CRMSalesActivities.opportunity_name == None) | (CRMSalesActivities.opportunity_name == "")
+            )
+            sales_activities = db_session.exec(sales_activities_query).all()
+            return {
+                "contacts": contacts,
+                "sales_activities": sales_activities
+            }
+
         def create_document(account, related_data):
-            # Create and return the document
-            return self._create_account_document(account)
-        
-        return self._load_entity_documents(
-            db_session=db_session,
-            entity_model=CRMAccount,
-            filter_condition=self.config_obj.account_filter,
-            max_count=self.config_obj.max_count,
-            entity_name="account",
-            get_related_data_func=get_related_data,
-            create_document_func=create_document
-        )
- 
+            return self._create_account_document(account, related_data)
+
+        if increment_filter:
+            account_ids = self._get_incremental_account_ids(db_session, increment_filter, account_filter)
+            logger.info(f"Incremental synchronization, involving {len(account_ids)} accounts")
+            # max_count 限制
+            if self.config_obj.max_count:
+                account_ids = account_ids[:self.config_obj.max_count]
+            batch_size = self.config_obj.batch_size or 100
+            for offset in range(0, len(account_ids), batch_size):
+                batch_ids = account_ids[offset:offset+batch_size]
+                for account_id in batch_ids:
+                    account = db_session.exec(
+                        select(CRMAccount).where(CRMAccount.unique_id == account_id)
+                    ).first()
+                    if not account:
+                        continue
+                    related_data = get_related_data(db_session, account_id)
+                    document = self._create_account_document(account, related_data)
+                    yield document
+        else:
+            # Full mode: only use account_filter
+            yield from self._load_entity_documents(
+                db_session=db_session,
+                entity_model=CRMAccount,
+                filter_condition=account_filter,
+                max_count=self.config_obj.max_count,
+                entity_name="account",
+                get_related_data_func=get_related_data,
+                create_document_func=create_document
+            )
+
     def _load_contact_documents(self, db_session: Session) -> Generator[Document, None, None]:
         """Load contact documents from database."""
         
@@ -397,7 +411,7 @@ class CRMDataSource(BaseDataSource):
         metadata = self._create_metadata(opportunity, CrmDataType.OPPORTUNITY)
         
         doc_datetime = datetime.now()
-        upload = save_crm_to_file(opportunity, content_str, doc_datetime, metadata)
+        upload = save_crm_to_file("opportunity", opportunity, content_str, doc_datetime, metadata)
         logger.info(f"Created opportunity document {upload.id} with metadata {metadata}")
         # Create Document object
         return Document(
@@ -415,67 +429,36 @@ class CRMDataSource(BaseDataSource):
             last_modified_at=doc_datetime,
             meta=metadata,
         )
-
-    def _create_opportunity_updates_document(self, opportunity_updates, opportunity_id, opportunity_name) -> Document:
-        """Create a Document object for a single opportunity updates."""
+        
+    def _create_account_document(self, account, related_data=None) -> Document:
+        """Create a Document object for a single account, with related data (contacts, sales activities only)."""
         # Create document content
         content = []
-        content.extend(format_opportunity_updates(opportunity_updates, opportunity_name))
-        content_str = "\n".join(content)
-        
-        # Create metadata
-        # metadata = self._create_metadata(opportunity_updates, CrmDataType.OPPORTUNITY_UPDATES)
-        metadata = {
-            "category": DocumentCategory.CRM,
-            "crm_data_type": CrmDataType.OPPORTUNITY_UPDATES,
-            "opportunity_id": opportunity_id,
-            "opportunity_name": opportunity_name,
-            "unique_id": opportunity_id,
-        }
-        
-        doc_datetime = datetime.now()
-        # Create Document object
-        return Document(
-            name=f"商机活动更新记录：{opportunity_name or '未命名商机'}",
-            hash=hash(content_str),
-            content=content_str,
-            mime_type=MimeTypes.MARKDOWN,
-            knowledge_base_id=self.knowledge_base_id,
-            data_source_id=self.data_source_id,
-            user_id=self.user_id,
-            source_uri="crm_database/opportunity_updates",
-            created_at=doc_datetime,
-            updated_at=doc_datetime,
-            last_modified_at=doc_datetime,
-            meta=metadata,
-        )
-        
-    def _create_account_document(self, account) -> Document:
-        """Create a Document object for a single account."""
-        # Create document content
-        content = []
-        content.extend(format_account_info(account))
+        content.extend(format_account_info(account, related_data))
         content_str = "\n".join(content)
         
         # Create metadata
         metadata = self._create_metadata(account, CrmDataType.ACCOUNT)
         
         doc_datetime = datetime.now()
+        upload = save_crm_to_file("customer", account, content_str, doc_datetime, metadata)
+        logger.info(f"Created account document {upload.id} with metadata {metadata}")
         # Create Document object
         return Document(
-            name=f"{account.customer_name or account.unique_id or '未命名客户'}",
+            name=upload.name if upload else f"{getattr(account, 'customer_name', '未具名客户')}_{getattr(account, 'unique_id')}.md",
             hash=hash(content_str),
             content=content_str,
             mime_type=MimeTypes.MARKDOWN,
             knowledge_base_id=self.knowledge_base_id,
             data_source_id=self.data_source_id,
             user_id=self.user_id,
-            source_uri="crm_database/accounts",
+            file_id=upload.id,
+            source_uri=upload.path if upload else f"crm/{getattr(account, 'unique_id')}.md",
             created_at=doc_datetime,
             updated_at=doc_datetime,
             last_modified_at=doc_datetime,
             meta=metadata,
-        )       
+        )
 
     def _create_contact_document(self, contact) -> Document:
         """Create a Document object for a single contact."""

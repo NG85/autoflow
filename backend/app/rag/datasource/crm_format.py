@@ -56,7 +56,7 @@ def get_column_comments_and_names(model_class, filter_text: bool = False, filter
 
 
 # 客户信息处理函数
-def format_account_info(account) -> List[str]:
+def format_account_info(account, related_data=None) -> List[str]:
     """动态处理客户信息，仅使用模型中定义的字段"""
     if not account:
         return []
@@ -67,7 +67,14 @@ def format_account_info(account) -> List[str]:
         
     # 获取客户模型的列注释和字段名
     column_comments, valid_columns = get_column_comments_and_names(type(account))
-    
+
+    # 基础信息字段
+    base_info_fields = ["partner", "belonging_pool", "legal_representative"]
+    # 地域信息字段
+    region_fields = ["country", "province", "city", "district"]
+    # 其他信息字段
+    other_info_fields = ["address", "customer_scale_new", "first_deal_date"]
+
     # 特殊处理的字段组（根据实际需要调整分组显示）
     contact_fields = {"phone", "website", "email"}
     date_fields = {"last_follow_up", "last_deal_time", "allocation_time", "creation_time", 
@@ -87,23 +94,62 @@ def format_account_info(account) -> List[str]:
     for field_name in priority_fields:
         if field_name not in valid_columns:
             continue
-            
         value = getattr(account, field_name)
         if value is None:
             continue
-        
         display_name = column_comments.get(field_name, field_name.replace('_', ' ').title())
         content.append(f"**{display_name}**: {value}")
-    
+
+    # 新增字段-基础信息
+    base_info_content = []
+    for field_name in base_info_fields:
+        if field_name not in valid_columns:
+            continue
+        value = getattr(account, field_name)
+        if value is None:
+            continue
+        display_name = column_comments.get(field_name, field_name.replace('_', ' ').title())
+        base_info_content.append(f"**{display_name}**: {value}")
+    if base_info_content:
+        content.append("\n## 基础信息")
+        content.extend(base_info_content)
+
+    # 新增字段-地域信息
+    region_content = []
+    for field_name in region_fields:
+        if field_name not in valid_columns:
+            continue
+        value = getattr(account, field_name)
+        if value is None:
+            continue
+        display_name = column_comments.get(field_name, field_name.replace('_', ' ').title())
+        region_content.append(f"**{display_name}**: {value}")
+    if region_content:
+        content.append("\n## 地域信息")
+        content.extend(region_content)
+
+    # 新增字段-其他信息
+    other_info_content = []
+    for field_name in other_info_fields:
+        if field_name not in valid_columns:
+            continue
+        value = getattr(account, field_name)
+        if value is None:
+            continue
+        display_name = column_comments.get(field_name, field_name.replace('_', ' ').title())
+        other_info_content.append(f"**{display_name}**: {value}")
+    if other_info_content:
+        content.append("\n## 其他信息")
+        content.extend(other_info_content)
+
     # 处理联系人信息
     contact_info = []
     for field_name in contact_fields:
         if field_name not in valid_columns:
             continue
-            
         value = getattr(account, field_name)
         if value is None or value == "":
-            continue
+            value = "暂无"
             
         display_name = column_comments.get(field_name, field_name.replace('_', ' ').title())
         contact_info.append(f"**{display_name}**: {value}")
@@ -142,7 +188,7 @@ def format_account_info(account) -> List[str]:
             
         value = getattr(account, field_name)
         if value is None:
-            continue
+            value = "暂无"
             
         display_name = column_comments.get(field_name, field_name.replace('_', ' ').title())
         status_info.append(f"**{display_name}**: {value}")
@@ -161,16 +207,15 @@ def format_account_info(account) -> List[str]:
     special_fields = contact_fields.union(date_fields).union(status_fields)
     special_fields.add("remarks")
     special_fields = special_fields.union(priority_fields).union(responsible_fields)
-    
+    special_fields = special_fields.union(base_info_fields).union(region_fields).union(other_info_fields)
     for field_name in valid_columns:
         # 跳过已排除字段和特殊处理字段
         if field_name in exclude_fields or field_name in special_fields:
             continue
             
         value = getattr(account, field_name)
-        # 跳过空值
         if value is None:
-            continue
+            value = "暂无"
         
         # 使用列注释作为显示名称
         display_name = column_comments.get(field_name, field_name.replace('_', ' ').title())
@@ -185,9 +230,21 @@ def format_account_info(account) -> List[str]:
         responsible_info.append(f"**主属部门**: {getattr(account, 'department')}")
     
     if responsible_info:
-        content.append("\n# 我方对接人信息")
+        content.append("\n## 我方对接人信息")
         content.extend(responsible_info)
         content.append("**说明**：以上“对接人”为我方（公司内部）人员，非客户方。")
+
+    # 处理关联联系人和销售活动（如有）
+    if related_data:
+        contacts = related_data.get("contacts")
+        if contacts:
+            content.append("\n# 关联联系人")
+            for contact in contacts:
+                content.extend(["\n---"] + format_contact_info(contact))
+        sales_activities = related_data.get("sales_activities")
+        if sales_activities:
+            content.append("\n# 关联销售活动")
+            content.extend(format_sales_activities(sales_activities, getattr(account, "customer_name", "")))
 
     return content
 
@@ -310,7 +367,7 @@ def format_contact_info(contact) -> List[str]:
             
         value = getattr(contact, field_name)
         if value is None:
-            continue
+            value = "暂无"
             
         display_name = column_comments.get(field_name, field_name.replace('_', ' ').title())
         content.append(f"**{display_name}**: {value}")
@@ -326,7 +383,7 @@ def format_contact_info(contact) -> List[str]:
             
         value = getattr(contact, field_name)
         if value is None:
-            continue
+            value = "暂无"
             
         display_name = column_comments.get(field_name, field_name.replace('_', ' ').title())
         content.append(f"**{display_name}**: {value}")
@@ -584,104 +641,10 @@ def format_opportunity_info(opportunity, related_data) -> List[str]:
             if order_with_payment_plans["payment_plans"]:
                 for payment_plan in order_with_payment_plans["payment_plans"]:
                     content.extend(format_payment_plan_info(payment_plan))
-    
-    # # 处理商机更新记录
-    # if related_data and "opportunity_updates" in related_data:
-    #     content.extend(format_opportunity_updates(related_data["opportunity_updates"], opportunity.opportunity_name))
-    
+
     # 处理销售活动记录
     if related_data and "sales_activities" in related_data:
         content.extend(format_sales_activities(related_data["sales_activities"], opportunity.opportunity_name))
-    
-    return content
-
-def format_opportunity_updates(updates, opportunity_name: str) -> List[str]:
-    """动态处理商机更新记录，仅使用CRMOpportunityUpdates模型中定义的字段"""
-    if not updates:
-        return []
-        
-    content = []
-    
-    for update in updates:
-        # 获取模型的列注释和字段名
-        column_comments, valid_columns = get_column_comments_and_names(type(update))
-        
-        # 获取记录的日期和类型，作为小节标题
-        record_date = getattr(update, 'record_date', None)
-        update_type = getattr(update, 'update_type', '未知分类')
-        
-        date_str = record_date.strftime("%Y-%m-%d") if isinstance(record_date, date) else "未知日期"
-        content.append(f"\n## {date_str} {update_type}类的销售活动")
-        
-        # 处理摘要信息 - 优先显示
-        if 'summary' in valid_columns and getattr(update, 'summary'):
-            summary_label = column_comments.get('summary', '更新摘要')
-            content.append(f"**{summary_label}**: {getattr(update, 'summary')}\n")
-        
-        # 处理创建者信息
-        if 'creator' in valid_columns and getattr(update, 'creator'):
-            creator_label = column_comments.get('creator', '创建人')
-            content.append(f"**{creator_label}**: {getattr(update, 'creator')}\n")
-        
-        # 处理客户态度和成单概率变化
-        sentiment_fields = {'customer_sentiment', 'deal_probability_change'}
-        for field_name in sentiment_fields:
-            if field_name in valid_columns and getattr(update, field_name):
-                display_name = column_comments.get(field_name, field_name.replace('_', ' ').title())
-                content.append(f"**{display_name}**: {getattr(update, field_name)}\n")
-        
-        # 处理详细描述
-        if 'detailed_notes' in valid_columns and getattr(update, 'detailed_notes'):
-            notes_label = column_comments.get('detailed_notes', '详细描述和进展')
-            content.append(f"\n### {notes_label}:")
-            content.append(f"{getattr(update, 'detailed_notes')}")
-        
-        # 处理下一步计划
-        if 'next_steps' in valid_columns and getattr(update, 'next_steps'):
-            steps_label = column_comments.get('next_steps', '下一步行动计划')
-            content.append(f"\n**{steps_label}**:\n")
-            content.append(f"{getattr(update, 'next_steps')}")
-        
-        # 处理关键干系人
-        if 'key_stakeholders' in valid_columns and getattr(update, 'key_stakeholders'):
-            stakeholders_label = column_comments.get('key_stakeholders', '相关关键干系人')
-            content.append(f"\n**{stakeholders_label}**:\n")
-            content.append(f"{getattr(update, 'key_stakeholders')}")
-        
-        # 处理障碍/挑战
-        if 'blockers' in valid_columns and getattr(update, 'blockers'):
-            blockers_label = column_comments.get('blockers', '当前障碍或挑战')
-            content.append(f"\n**{blockers_label}**:\n")
-            content.append(f"{getattr(update, 'blockers')}")
-        
-        # 已处理的字段集合
-        processed_fields = {
-            # 系统字段 - 需要排除
-            'id', 'opportunity_id', 'creator_id',
-            
-            # 已处理的业务字段
-            'opportunity_name', 'update_type', 'record_date', 
-            'creator', 'summary', 'detailed_notes', 'next_steps',
-            'key_stakeholders', 'customer_sentiment', 'deal_probability_change', 
-            'blockers'
-        }
-        
-        # 处理剩余字段（如果有模型更新增加了新字段）
-        for field_name in valid_columns:
-            # 跳过已处理字段
-            if field_name in processed_fields:
-                continue
-                
-            value = getattr(update, field_name)
-            if value is None:
-                value = "暂无"
-            
-            # 格式化日期和时间
-            if isinstance(value, (datetime, date)):
-                value = value.strftime("%Y-%m-%d %H:%M") if isinstance(value, datetime) else value.strftime("%Y-%m-%d")
-                
-            display_name = column_comments.get(field_name, field_name.replace('_', ' ').title())
-            content.append(f"\n**{display_name}**: {value}")
     
     return content
 

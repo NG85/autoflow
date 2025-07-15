@@ -92,7 +92,6 @@ def build_crm_graph_index_for_document(
         contact_data = {}
         order_data = {}
         payment_plan_data = {}
-        opportunity_updates_data = {}
          
         # 根据不同的实体类型处理
         if crm_data_type == CrmDataType.OPPORTUNITY:

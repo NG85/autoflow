@@ -58,7 +58,6 @@ class CrmDataType(str, enum.Enum):
     CONTACT = "crm_contact"
     INTERNAL_OWNER = "crm_internal_owner"
     OPPORTUNITY = "crm_opportunity"
-    OPPORTUNITY_UPDATES = "crm_opportunity_updates"
     ORDER = "crm_order"
     PAYMENTPLAN = "crm_payment_plan"
     STAGE = "crm_stage"

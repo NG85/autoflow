@@ -38,6 +38,3 @@ class PaymentPlanEntity(CRMEntityBase):
     """Entity representing a CRM payment plan"""
     CRM_DATA_TYPE = CrmDataType.PAYMENTPLAN
     
-class OpportunityUpdatesEntity(CRMEntityBase):
-    """Entity representing a CRM opportunity updates"""
-    CRM_DATA_TYPE = CrmDataType.OPPORTUNITY_UPDATES
