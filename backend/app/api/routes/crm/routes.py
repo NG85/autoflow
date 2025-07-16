@@ -88,34 +88,41 @@ def create_visit_record(
     user: CurrentUserDep,
     record: VisitRecordCreate,
     external: bool = Body(False, example=False),
+    force: bool = Body(False, example=False)
 ):
     try:
-        followup_level, followup_reason = check_followup_quality(record.followup_record)
-        next_steps_level, next_steps_reason = check_next_steps_quality(record.next_steps)
+        if force:
+            # 直接保存，不做AI判断
+            save_visit_record_to_crm_table(record)
+            push_visit_record_feishu_message(
+                external=external,
+                sales_visit_record={
+                    **record.model_dump()
+                }
+            )
+            return {"code": 0, "message": "success", "data": {}}
+        
+        # 评估跟进质量
+        followup_quality_level, followup_quality_reason = check_followup_quality(record.followup_record)
+        next_steps_quality_level, next_steps_quality_reason = check_next_steps_quality(record.next_steps)
         data = {
-            "followup": {"level": followup_level, "reason": followup_reason},
-            "next_steps": {"level": next_steps_level, "reason": next_steps_reason}
+            "followup": {"level": followup_quality_level, "reason": followup_quality_reason},
+            "next_steps": {"level": next_steps_quality_level, "reason": next_steps_quality_reason}
         }
         # 只要有一项不合格就阻止保存
-        if followup_level == "不合格" or next_steps_level == "不合格":
+        if followup_quality_level == "不合格" or next_steps_quality_level == "不合格":
             return {"code": 400, "message": "failed", "data": data}
-        save_visit_record_to_crm_table(
-            record,
-            followup_level=followup_level,
-            followup_reason=followup_reason,
-            next_steps_level=next_steps_level,
-            next_steps_reason=next_steps_reason
-        )
-        
+
+        record.followup_quality_level = followup_quality_level
+        record.followup_quality_reason = followup_quality_reason
+        record.next_steps_quality_level = next_steps_quality_level
+        record.next_steps_quality_reason = next_steps_quality_reason
+        save_visit_record_to_crm_table(record)
         # 推送飞书消息
         push_visit_record_feishu_message(
             external=external,
             sales_visit_record={
-                **record.model_dump(),
-                "followup_quality_level": followup_level,
-                "followup_quality_reason": followup_reason,
-                "next_steps_quality_level": next_steps_level,
-                "next_steps_quality_reason": next_steps_reason
+                **record.model_dump()
             }
         )
         return {"code": 0, "message": "success", "data": data}
