@@ -236,11 +236,11 @@ def format_account_info(account, related_data=None) -> List[str]:
 
     # 处理关联联系人和销售活动（如有）
     if related_data:
-        contacts = related_data.get("contacts")
-        if contacts:
-            content.append("\n# 关联联系人")
-            for contact in contacts:
-                content.extend(["\n---"] + format_contact_info(contact))
+        # contacts = related_data.get("contacts")
+        # if contacts:
+        #     content.append("\n# 关联联系人")
+        #     for contact in contacts:
+        #         content.extend(["\n---"] + format_contact_info(contact))
         sales_activities = related_data.get("sales_activities")
         if sales_activities:
             content.append("\n# 关联销售活动")
