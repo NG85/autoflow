@@ -149,10 +149,11 @@ class VisitRecordCreate(BaseModel):
     expectation_achieved: Optional[str] = None # 是否达成预期
     collaborative_participants: Optional[str] = None # 协同参与人
     followup_record: Optional[str] = None # 跟进记录
-    attachment: Optional[str] = None # 附件
-    parent_record: Optional[str] = None # 父记录
     next_steps: Optional[str] = None # 下一步计划
     followup_quality_level: Optional[str] = None # 跟进质量等级
     followup_quality_reason: Optional[str] = None # 跟进质量原因
     next_steps_quality_level: Optional[str] = None # 下一步计划质量等级
     next_steps_quality_reason: Optional[str] = None # 下一步计划质量原因
+    attachment: Optional[str] = None # 附件
+    parent_record: Optional[str] = None # 父记录
+    remarks: Optional[str] = None # 备注

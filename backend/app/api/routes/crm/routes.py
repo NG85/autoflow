@@ -131,3 +131,25 @@ def create_visit_record(
     except Exception as e:
         logger.exception(e)
         raise InternalServerError()
+    
+
+
+@router.post("/crm/visit_record/verify")
+def verify_visit_record(
+    user: CurrentUserDep,
+    followup_record: str = Body(..., example=""),
+    next_steps: str = Body(..., example=""),
+):
+    try:
+        followup_quality_level, followup_quality_reason = check_followup_quality(followup_record)
+        next_steps_quality_level, next_steps_quality_reason = check_next_steps_quality(next_steps)
+        data = {
+            "followup": {"level": followup_quality_level, "reason": followup_quality_reason},
+            "next_steps": {"level": next_steps_quality_level, "reason": next_steps_quality_reason}
+        }        
+        return {"code": 0, "message": "success", "data": data}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(e)
+        raise InternalServerError()
