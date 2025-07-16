@@ -289,9 +289,9 @@ class CRMDataSource(BaseDataSource):
         account_filter = getattr(self.config_obj, "account_filter", None)
 
         def get_related_data(session, account_id):
-            # 1. Get all contacts under the account
-            contacts_query = select(CRMContact).filter(CRMContact.customer_id == account_id)
-            contacts = db_session.exec(contacts_query).all()
+            # # 1. Get all contacts under the account
+            # contacts_query = select(CRMContact).filter(CRMContact.customer_id == account_id)
+            # contacts = db_session.exec(contacts_query).all()
             # 2. Get all sales activities under the account, only those not linked to any opportunity
             sales_activities_query = select(CRMSalesActivities).filter(
                 CRMSalesActivities.account_id == account_id,
@@ -300,7 +300,7 @@ class CRMDataSource(BaseDataSource):
             )
             sales_activities = db_session.exec(sales_activities_query).all()
             return {
-                "contacts": contacts,
+                # "contacts": contacts,
                 "sales_activities": sales_activities
             }
 
