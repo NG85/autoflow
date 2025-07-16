@@ -50,6 +50,7 @@ FIELD_MAP = {
     '下一步': 'next_steps',
     'AI判断结论-下一步': 'next_steps_quality_level',
     'AI判断说明-下一步': 'next_steps_quality_reason',
+    '备注': 'remarks',
     '附件': 'attachment',
     '父记录': 'parent_record',
 }

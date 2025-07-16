@@ -30,6 +30,7 @@ class CRMSalesVisitRecord(SQLModel, table=True):
     next_steps_quality_reason: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="下一步计划评判依据")
     attachment: Optional[str] = Field(nullable=True, max_length=255, description="附件")
     parent_record: Optional[str] = Field(nullable=True, max_length=255, description="父记录")
+    remarks: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="备注")
     last_modified_time: Optional[datetime] = Field(nullable=True, description="最后修改时间")
     record_id: Optional[str] = Field(nullable=True, max_length=100, description="记录id")
 

@@ -47,6 +47,7 @@ def upgrade():
         sa.Column("next_steps_quality_reason", sa.Text(), nullable=True),
         sa.Column("attachment", sqlmodel.sql.sqltypes.AutoString(length=255), nullable=True),
         sa.Column("parent_record", sqlmodel.sql.sqltypes.AutoString(length=255), nullable=True),
+        sa.Column("remarks", sa.Text(), nullable=True),
         sa.Column("last_modified_time", sa.DateTime(timezone=True), nullable=True),
         sa.Column("record_id", sqlmodel.sql.sqltypes.AutoString(length=100), nullable=True),
         sa.PrimaryKeyConstraint("id"),
