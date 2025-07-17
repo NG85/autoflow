@@ -30,8 +30,9 @@ def push_release_notes_api(
 
 @router.post("/push-weekly-reports")
 def push_weekly_reports_api(
+    report_type: Literal["review1", "review1s", "review5"] = Body(..., example="review1"),
     external: bool = Body(False, example=False),
-    legacy: bool = Body(False, example=False),
+    legacy: bool = Body(False, example=False, deprecated=True),
     items: List[dict] = Body(..., example=[
         {"execution_id": "1234567890", "report_name": "业绩及变化统计表-[2025-06-01 - 2025-06-06]"}
     ]),
@@ -44,7 +45,7 @@ def push_weekly_reports_api(
             logger.info("No weekly reports to push")
             return {"code": 200, "message": "ok"} 
 
-        push_weekly_reports(items, receivers, external, legacy)
+        push_weekly_reports(items, receivers, report_type, external)
         return {"code": 200, "message": "ok"} 
 
     except Exception as e:

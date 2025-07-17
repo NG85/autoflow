@@ -33,6 +33,15 @@ DEFAULT_INTERNAL_ADMINS = [
     },
 ]
 
+DEFAULT_MERGED_INTERNAL_ADMINS = DEFAULT_INTERNAL_ADMINS + [
+    {
+        "name": "高娜",
+        "email": "",
+        # "open_id": "ou_113e2a9993f3fc64e3861087756ee279", # Sia
+        "open_id": "ou_7c7c1676c8e3e08a31ebd18864d5334f", # Sia 销售助理
+    },
+]
+
 DEFAULT_INTERNAL_SALES = [
     {
         "name": "韩启微", #朱振博
@@ -137,6 +146,7 @@ def parse_feishu_bitable_url(url):
     """
     if not url:
         return None, None, None, None
+    external = not url.startswith('https://mi5p6bgsnf8.feishu.cn/')
     parsed = urlparse(url)
     path_parts = parsed.path.strip('/').split('/')
     url_type = None
@@ -149,7 +159,7 @@ def parse_feishu_bitable_url(url):
     qs = parse_qs(parsed.query)
     table_id = qs.get('table', [None])[0]
     view_id = qs.get('view', [None])[0]
-    return url_type, token, table_id, view_id
+    return external, url_type, token, table_id, view_id
 
 # 根据多维表格的url类型（base/wiki）自动获取app_token
 def resolve_bitable_app_token(token, url_type, url_token):

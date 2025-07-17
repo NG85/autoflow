@@ -1,6 +1,7 @@
 import logging
 from app.feishu.common_open import (
     DEFAULT_INTERNAL_ADMINS,
+    DEFAULT_MERGED_INTERNAL_ADMINS,
     HOST,
     get_tenant_access_token,
     send_feishu_message
@@ -61,20 +62,40 @@ DEFAULT_EXTERNAL_ADMINS = [
 ]
 
 
-def push_weekly_reports(items, receivers, external=False, legacy=False):
+DEFAULT_MERGED_ADMINS = DEFAULT_LEGACY_ADMINS + [
+    {
+        "name": "韩启微",
+        "email": "qiwei.han@pingcap.cn",
+        "open_id": "ou_1c90c4689c5b482d478fb9193d6dcaff"
+    }
+]
+
+
+def push_weekly_reports(items, receivers, report_type, external=False):
     token = get_tenant_access_token(external=external)
     if not receivers:
-        if legacy:
+        if report_type == "review1":
             receivers = DEFAULT_LEGACY_ADMINS if external else DEFAULT_INTERNAL_ADMINS
-        else:
+        elif report_type == "review1s":
             receivers = DEFAULT_EXTERNAL_ADMINS if external else DEFAULT_INTERNAL_ADMINS
-    
+        elif report_type == "review5":
+            receivers = DEFAULT_MERGED_ADMINS if external else DEFAULT_MERGED_INTERNAL_ADMINS
+    logger.info(receivers)
     # 组装消息
-    lines = [
-        f"Sia帮您生成了[【{item['report_name']}】]({HOST}/review/weeklyDetail/{item['execution_id']})，请点击链接查看详情。"
-        for item in items
-    ]
-    text = '\n'.join(lines)
+    text = ""
+    if report_type == "review1" or report_type == "review1s":
+        lines = [
+            f"Sia帮您生成了[【{item['report_name']}】]({HOST}/review/weeklyDetail/{item['execution_id']})，请点击链接查看详情。"
+            for item in items
+        ]
+        text = '\n'.join(lines)
+    elif report_type == "review5":
+        lines = [
+            f"Sia帮您生成了[【{item['report_name']}】]({HOST}/review/muban5Detail/{item['execution_id']})，请点击链接查看详情。"
+            for item in items
+        ]
+        text = '\n'.join(lines)
+
     
     for receiver in receivers:
         resp = send_feishu_message(receiver["open_id"], token, text)
