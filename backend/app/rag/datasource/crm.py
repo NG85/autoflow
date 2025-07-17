@@ -192,18 +192,19 @@ class CRMDataSource(BaseDataSource):
         main_query = select(CRMOpportunity.unique_id).where(text(increment_filter))
         if opportunity_filter:
             main_query = main_query.where(text(opportunity_filter))
-        main_ids = set(row[0] for row in db_session.exec(main_query).all())
-        logger.info(f"main_ids: length {len(main_ids)}")
+        result = db_session.exec(main_query).all()
+        main_ids = set(result)
+        logger.info(f"crm opportunity main_ids: length {len(main_ids)}")
         # Extended table: only use incremental filter, and opportunity_id must not be None or ''
         sales_query = select(CRMSalesActivities.opportunity_id).where(
             text(increment_filter),
             CRMSalesActivities.opportunity_id.isnot(None),
             CRMSalesActivities.opportunity_id != ""
         )
-        sales_ids = set(row[0] for row in db_session.exec(sales_query).all())
-        logger.info(f"sales_ids: length {len(sales_ids)}")
+        sales_ids = set(db_session.exec(sales_query).all())
+        logger.info(f"crm opportunity sales_ids: length {len(sales_ids)}")
         all_ids = main_ids | sales_ids
-        logger.info(f"all_ids: length {len(all_ids)}")
+        logger.info(f"crm opportunity all_ids: length {len(all_ids)}")
         return list(all_ids)
 
     def _load_opportunity_documents(self, db_session: Session) -> Generator[Document, None, None]:
@@ -279,15 +280,18 @@ class CRMDataSource(BaseDataSource):
         main_query = select(CRMAccount.unique_id).where(text(increment_filter))
         if account_filter:
             main_query = main_query.where(text(account_filter))
-        main_ids = set(row[0] for row in db_session.exec(main_query).all() if row and row[0])
+        main_ids = set(db_session.exec(main_query).all())
+        logger.info(f"crm account main_ids: length {len(main_ids)}")
         # Only activities not linked to any opportunity
         sales_query = select(CRMSalesActivities.account_id).where(
             text(increment_filter),
             (CRMSalesActivities.opportunity_id == None) | (CRMSalesActivities.opportunity_id == ""),
             (CRMSalesActivities.opportunity_name == None) | (CRMSalesActivities.opportunity_name == "")
         )
-        sales_ids = set(row[0] for row in db_session.exec(sales_query).all() if row and row[0])
+        sales_ids = set(db_session.exec(sales_query).all())
+        logger.info(f"crm account sales_ids: length {len(sales_ids)}")
         all_ids = main_ids | sales_ids
+        logger.info(f"crm account all_ids: length {len(all_ids)}")
         return list(all_ids)
 
     def _load_account_documents(self, db_session: Session) -> Generator[Document, None, None]:
