@@ -23,7 +23,7 @@ CRM_TABLE = 'crm_sales_visit_records'
 
 # 配置区
 FEISHU_URL = getattr(settings, 'FEISHU_BTABLE_URL', None)
-url_type, url_token, table_id, view_id = parse_feishu_bitable_url(FEISHU_URL)
+external, url_type, url_token, table_id, view_id = parse_feishu_bitable_url(FEISHU_URL)
 
 
 # 字段映射关系（Feishu字段名 -> DB字段名）
@@ -146,7 +146,7 @@ def sync_bitable_visit_records(self):
     """
     try:
         logger.info("开始同步飞书多维表格拜访记录")
-        token = get_tenant_access_token(APP_ID, APP_SECRET)
+        token = get_tenant_access_token(APP_ID, APP_SECRET, external=external)
         logger.info(f"token: {token}")
         app_token = resolve_bitable_app_token(token, url_type, url_token)
         logger.info(f"app_token: {app_token}")
