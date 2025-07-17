@@ -166,13 +166,14 @@ def resolve_bitable_app_token(token, url_type, url_token):
         headers = {"Authorization": f"Bearer {token}"}
         resp = requests.get(url, headers=headers)
         if resp.status_code != 200:
-            logger.error(resp.text)
+            logger.error(f"通过wiki node获取obj_token失败: {resp.text}")
             return None
         resp.raise_for_status()
         data = resp.json().get("data", {})
         obj_token = data.get("node", {}).get("obj_token")
         if not obj_token:
             raise ValueError(f"未能通过wiki node获取到obj_token: {resp.text}")
+        logger.info(f"通过wiki node获取到obj_token: {obj_token}")
         return obj_token
     # base/直接用
     return url_token

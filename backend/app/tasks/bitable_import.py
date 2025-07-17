@@ -81,7 +81,7 @@ def fetch_bitable_records(token, app_token, table_id, view_id, start_time=None, 
             body["page_token"] = page_token
         resp = requests.post(url, headers=headers, json=body)
         if resp.status_code != 200:
-            logger.error(resp.text)
+            logger.error(f"拉取飞书多维表格拜访记录失败: {resp.text}")
             break
         resp.raise_for_status()
         data = resp.json()["data"]
@@ -147,7 +147,9 @@ def sync_bitable_visit_records(self):
     try:
         logger.info("开始同步飞书多维表格拜访记录")
         token = get_tenant_access_token(APP_ID, APP_SECRET)
+        logger.info(f"token: {token}")
         app_token = resolve_bitable_app_token(token, url_type, url_token)
+        logger.info(f"app_token: {app_token}")
         with Session(engine) as session:
             local_max_mtime = get_local_max_mtime(session)
         logger.info(f"本地最大last_modified_time: {local_max_mtime}")
