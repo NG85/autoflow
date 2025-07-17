@@ -192,11 +192,18 @@ class CRMDataSource(BaseDataSource):
         main_query = select(CRMOpportunity.unique_id).where(text(increment_filter))
         if opportunity_filter:
             main_query = main_query.where(text(opportunity_filter))
-        main_ids = set(row[0] for row in db_session.exec(main_query).all() if row and row[0])
-        # Extended table: only use incremental filter
-        sales_query = select(CRMSalesActivities.opportunity_id).where(text(increment_filter))
-        sales_ids = set(row[0] for row in db_session.exec(sales_query).all() if row and row[0])
+        main_ids = set(row[0] for row in db_session.exec(main_query).all())
+        logger.info(f"main_ids: length {len(main_ids)}")
+        # Extended table: only use incremental filter, and opportunity_id must not be None or ''
+        sales_query = select(CRMSalesActivities.opportunity_id).where(
+            text(increment_filter),
+            CRMSalesActivities.opportunity_id.isnot(None),
+            CRMSalesActivities.opportunity_id != ""
+        )
+        sales_ids = set(row[0] for row in db_session.exec(sales_query).all())
+        logger.info(f"sales_ids: length {len(sales_ids)}")
         all_ids = main_ids | sales_ids
+        logger.info(f"all_ids: length {len(all_ids)}")
         return list(all_ids)
 
     def _load_opportunity_documents(self, db_session: Session) -> Generator[Document, None, None]:
