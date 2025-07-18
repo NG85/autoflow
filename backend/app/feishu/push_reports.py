@@ -62,13 +62,14 @@ DEFAULT_EXTERNAL_ADMINS = [
 ]
 
 
-DEFAULT_MERGED_ADMINS = DEFAULT_LEGACY_ADMINS + [
+DEFAULT_MERGED_ADMINS = [
     {
         "name": "韩启微",
         "email": "qiwei.han@pingcap.cn",
         "open_id": "ou_1c90c4689c5b482d478fb9193d6dcaff"
     }
 ]
+# + DEFAULT_LEGACY_ADMINS
 
 
 def push_weekly_reports(items, receivers, report_type, external=False):
