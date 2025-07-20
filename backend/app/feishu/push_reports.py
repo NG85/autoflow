@@ -67,6 +67,21 @@ DEFAULT_MERGED_ADMINS = [
         "name": "韩启微",
         "email": "qiwei.han@pingcap.cn",
         "open_id": "ou_1c90c4689c5b482d478fb9193d6dcaff"
+    },
+    {
+        "name": "肖章博",
+        "email": "zhangbo.xiao@pingcap.cn",
+        "open_id": "ou_8cc1d496c513d8202997c8218cc3446c"
+    },
+    {
+        "name": "金豫玮",
+        "email": "yuwei.jin@pingcap.cn",
+        "open_id": "ou_c53c2f904af4531eff0dba69a76c44a1"
+    },
+    {
+        "name": "姚亮",
+        "email": "liang.yao@pingcap.cn",
+        "open_id": "ou_47fc28d13dd04718bbe65a3c0b010d29"
     }
 ]
 # + DEFAULT_LEGACY_ADMINS

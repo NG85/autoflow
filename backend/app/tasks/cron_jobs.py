@@ -29,6 +29,11 @@ def create_crm_daily_datasource(self):
         
         # 构建过滤条件，只包含昨天的数据
         increment_filter = f"last_modified_time >= '{yesterday_str}' AND last_modified_time < '{today_str}'"
+        # 构建过滤条件，是否忽略account主表
+        if settings.CRM_ACCOUNT_PRIMARY_EXCLUDE:
+            account_filter = f"unique_id = '1234567890'"
+        else:
+            account_filter = None
         
         logger.info(f"开始创建CRM数据源，时间范围: {yesterday_str} 00:00:00 到 {today_str} 00:00:00")
         
@@ -43,6 +48,7 @@ def create_crm_daily_datasource(self):
                 data_source_type=DataSourceType.CRM,
                 config=[{
                     "increment_filter": increment_filter,
+                    "account_filter": account_filter,
                     "batch_size": 30
                 }]
             )
