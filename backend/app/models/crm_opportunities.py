@@ -222,6 +222,11 @@ class CRMOpportunity(SQLModel, table=True):
     # New next_stage field
     next_stage: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="下一阶段解决策略及资源需求")
 
+    # New fields
+    is_poc: Optional[str] = Field(nullable=True, max_length=255, description="是否进行poc")
+    poc_status: Optional[str] = Field(nullable=True, max_length=255, description="PoC 状态")
+    sales_order_review_status: Optional[str] = Field(nullable=True, max_length=255, description="销售订单审核状态")
+
     __tablename__ = "crm_opportunities"
     
     account: Optional["CRMAccount"] = Relationship(

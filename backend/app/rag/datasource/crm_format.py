@@ -451,14 +451,14 @@ def format_opportunity_info(opportunity, related_data) -> List[str]:
         "process": {
             "title": "## 项目流程信息",
             "fields": ["signing_type", "quotation_status", "is_project_approved", 
-                "project_date", "bidding_time", "budget_approval_status", "lost_reason"]
+                "project_date", "bidding_time", "budget_approval_status", "lost_reason", "is_poc", "poc_status"]
         },
         "status_tracking": {
             "title": "## 商机状态跟踪",
             "fields": [# "weekly_update",
                 "sl_pull_in", "quotation_order_status", 
                 "sales_order_archive_status", #"latest_followup_date_new",
-                "last_followup_time", "next_stage"]
+                "last_followup_time", "next_stage", "sales_order_review_status"]
         },
         "owner": {
             "title": "## 负责人信息",
@@ -474,6 +474,13 @@ def format_opportunity_info(opportunity, related_data) -> List[str]:
     detail_fields = {
         # "call_high_notes": "Call High情况",
         "customer_budget_status": "客户预算情况",
+        # "ops_cd_project_retrospective_schedule": "ops cd 项目进展倒排时间表",
+        # "ops_cd_critical_issues": "ops cd 重大问题卡点",
+        # "ops_cd_business_progress": "ops cd 商务进展",
+        # "kd_closure_milestone": "KD-关单节点",
+        # "kd_decision_chain": "KD-决策链条",
+        # "kd_competitor_strategy": "KD-友商策略和动态",
+        # "kd_breakthrough_basis": "KD-突破单依据",
         # "todo_and_followup": "TODO与跟进事项",
         "remarks": "备注说明"
     }
