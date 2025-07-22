@@ -22,8 +22,7 @@ import pandas as pd
 # 鞍羽
 APP_ID = os.getenv('FEISHU_APP_ID', 'cli_a8ec9a7bddf81013')
 APP_SECRET = os.getenv('FEISHU_APP_SECRET', 'giRHNJtHHwMKEe31MrRefMNj0zTR0mbt')
-# EXPORT_DIR = f'/shared/data/feishu_wiki_export'
-EXPORT_DIR = f'/Users/gaona/data/feishu_wiki_export'
+EXPORT_DIR = f'/shared/data/feishu_wiki_export'
 
 
 # 工具函数
@@ -718,8 +717,8 @@ def retry_failed_nodes(token, space_id, export_dir, since_ts=0):
 # 7. 主流程
 def main():
     since_ts, since_str, retry_failed_space_id = parse_args()
-    # end_str = datetime.now().strftime("%Y%m%d")
-    end_str = "20250709"
+    end_str = datetime.now().strftime("%Y%m%d")
+    # end_str = "20250709"
     global EXPORT_DIR
     EXPORT_DIR = f'{EXPORT_DIR}_{since_str}_{end_str}'
     print(f"导出目录: {EXPORT_DIR}")
@@ -730,16 +729,16 @@ def main():
         ensure_dir(EXPORT_DIR)
         retry_failed_nodes(token, retry_failed_space_id, EXPORT_DIR, since_ts=since_ts)
         return
-    # print("获取知识空间列表...")
-    # spaces = get_space_list(token)
-    # print(f"共{len(spaces)}个知识空间")
-    # for space in spaces:
-    #     space_id = space["space_id"]
-    #     space_name = safe_filename(space.get("name", space_id))
-    #     print(f"处理知识空间: {space_name} ({space_id})")
-    #     ensure_dir(EXPORT_DIR)
-    #     bfs_export_space_nodes(token, space_id, EXPORT_DIR, since_ts=since_ts)
-    get_bitable_content(token, "LSQubTkQjajVNbscAlhcCUJjngb")
+    print("获取知识空间列表...")
+    spaces = get_space_list(token)
+    print(f"共{len(spaces)}个知识空间")
+    for space in spaces:
+        space_id = space["space_id"]
+        space_name = safe_filename(space.get("name", space_id))
+        print(f"处理知识空间: {space_name} ({space_id})")
+        ensure_dir(EXPORT_DIR)
+        bfs_export_space_nodes(token, space_id, EXPORT_DIR, since_ts=since_ts)
+    # get_bitable_content(token, "LSQubTkQjajVNbscAlhcCUJjngb")
 
 if __name__ == "__main__":
     main() 
