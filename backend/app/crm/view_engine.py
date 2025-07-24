@@ -404,17 +404,17 @@ class CrmViewEngine:
             elif field_source == "opportunity" and hasattr(self.model, field):
                 opportunity_fields_to_query.append(getattr(self.model, field))
         
-        query = select(self.model)
-        
-        if opportunity_fields_to_query:
-            query = query.options(load_only(*opportunity_fields_to_query))
-        
-        query = query.outerjoin(self.model.account)
+        query = select(self.account_model, self.model)
+        query = query.outerjoin(
+            self.model, 
+            self.model.customer_id == self.account_model.unique_id
+        )
         
         if account_fields_to_query:
-            query = query.options(
-                contains_eager(self.model.account).load_only(*account_fields_to_query)
-            )
+            query = query.options(load_only(*account_fields_to_query))
+
+        if opportunity_fields_to_query:
+            query = query.options(load_only(*opportunity_fields_to_query))
         
         if user_id:
             crm_authority, role = get_user_crm_authority(user_id)
