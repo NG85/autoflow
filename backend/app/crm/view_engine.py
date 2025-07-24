@@ -800,63 +800,36 @@ class CrmViewEngine:
         """转换查询结果为客户到商机的一对多关系结构"""
         # 使用字典来存储客户信息，key 是客户 ID
         accounts_dict = {}
-        
-        for result in results:
-            # 获取客户信息
-            if isinstance(result, self.account_model):
-                # 如果是从客户表查询的结果
-                account = result
-                account_id = account.unique_id
-                
-                # 如果这个客户还没有被处理过，创建客户记录
-                if account_id not in accounts_dict:
-                    accounts_dict[account_id] = {
-                        "unique_id": account_id,
-                        "customer_name": account.customer_name,
-                        "industry": account.industry,
-                        "customer_level": account.customer_level,
-                        "person_in_charge": self._clean_json_array_value(account.person_in_charge) if account.person_in_charge else None,
-                        "opportunities": []  # 初始化商机列表
-                    }
-            else:
-                # 如果是从商机表查询的结果
-                if not hasattr(result, "account"):
-                    continue
-                    
-                account = result.account
-                if not account:
-                    continue
-                    
-                account_id = account.unique_id
-                
-                # 如果这个客户还没有被处理过，创建客户记录
-                if account_id not in accounts_dict:
-                    accounts_dict[account_id] = {
-                        "unique_id": account_id,
-                        "customer_name": account.customer_name,
-                        "industry": account.industry,
-                        "customer_level": account.customer_level,
-                        "person_in_charge": self._clean_json_array_value(account.person_in_charge) if account.person_in_charge else None,
-                        "opportunities": []  # 初始化商机列表
-                    }
-                
-                # 构建商机信息
-                opportunity = {
-                    "unique_id": result.unique_id  # 添加商机 unique_id
+
+        for account, opportunity in results:
+            account_id = account.unique_id
+
+            # 初始化客户信息
+            if account_id not in accounts_dict:
+                accounts_dict[account_id] = {
+                    "unique_id": account_id,
+                    "customer_name": account.customer_name,
+                    "industry": account.industry,
+                    "customer_level": account.customer_level,
+                    "person_in_charge": self._clean_json_array_value(account.person_in_charge) if account.person_in_charge else None,
+                    "opportunities": []
+                }
+
+            # 处理商机信息
+            if opportunity is not None:
+                opportunity_data = {
+                    "unique_id": opportunity.unique_id
                 }
                 for field in fields:
-                    if hasattr(result, field):
-                        value = getattr(result, field)
+                    if hasattr(opportunity, field):
+                        value = getattr(opportunity, field)
                         if field in self.json_array_fields and isinstance(value, str):
                             value = self._clean_json_array_value(value)
                         elif field == "expected_closing_date" and isinstance(value, str):
-                            value = value.split('T')[0]  # 只保留日期部分
-                        opportunity[field] = value
-                
-                # 将商机添加到对应客户的商机列表中
-                accounts_dict[account_id]["opportunities"].append(opportunity)
-        
-        # 将字典转换为列表
+                            value = value.split('T')[0]
+                        opportunity_data[field] = value
+                accounts_dict[account_id]["opportunities"].append(opportunity_data)
+
         return list(accounts_dict.values())
 
     def _clean_json_array_value(self, value: str) -> str:
