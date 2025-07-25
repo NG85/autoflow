@@ -22,33 +22,41 @@ logger = logging.getLogger(__name__)
 class ExtractGraphTriplet(dspy.Signature):
     """Carefully analyze the provided text to thoroughly identify all relevant entities and their relationships, including both general concepts and specific details.
 
+    IMPORTANT: All extracted entities, relationships, and descriptions must strictly preserve the original language of the input text. Do NOT translate or switch languages under any circumstances. If the input is in Chinese, output must be in Chinese; if in English, output must be in English, etc.
+    This includes preserving all symbols, units, code snippets, or technical notations as-is in the original text.
+
     Follow these Step-by-Step Analysis:
 
     1. Extract Meaningful Entities:
       - Identify all significant nouns, proper nouns, and terminologies that represent key concepts, objects, components, features, processes, steps, use cases, or any substantial entities.
       - Ensure that you capture entities across different levels of detail, from high-level overviews to specific details, to create a comprehensive representation of the subject matter.
+      - Pay special attention to domain-specific terms and unique identifiers (e.g., model names, algorithm types, standard codes, etc.) that are critical for precise semantic linking and retrieval.
       - Choose names for entities that are specific enough to indicate their meaning without additional context, avoiding overly generic terms.
       - Consolidate similar entities to avoid redundancy, ensuring each represents a distinct concept at appropriate granularity levels.
+      - Always preserve the original language of the input text for all extracted content.
 
     2. Extract Metadata to claim the entities:
       - Carefully review the provided text, focusing on identifying detailed covariates associated with each entity.
       - Extract and link the covariates (which is a comprehensive json TREE, the first field is always: "topic") to their respective entities.
-      - Ensure all extracted covariates is clearly connected to the correct entity for accuracy and comprehensive understanding.
+      - Ensure all extracted covariates are clearly connected to the correct entity for accuracy and comprehensive understanding.
       - Ensure that all extracted covariates are factual and verifiable within the text itself, without relying on external knowledge or assumptions.
       - Collectively, the covariates should provide a thorough and precise summary of the entity's characteristics as described in the source material.
+      - Always preserve the original language of the input text for all extracted content.
 
     3. Establish Relationships:
       - Carefully examine the text to identify all relationships between clearly-related entities, ensuring each relationship is correctly captured with accurate details about the interactions.
       - Analyze the context and interactions between the identified entities to determine how they are interconnected, focusing on actions, associations, dependencies, or similarities.
-      - Clearly define the relationships, ensuring accurate directionality that reflects the logical or functional dependencies among entities. \
-         This means identifying which entity is the source, which is the target, and what the nature of their relationship is (e.g., $source_entity depends on $target_entity for $relationship).
+      - Valid relationship types include but are not limited to: "composed_of", "used_for", "depends_on", "related_to", "implemented_by", "includes", etc.
+      - Ensure accurate directionality that reflects logical or functional dependencies among entities.
+      - Always preserve the original language of the input text for all extracted content.
 
     Some key points to consider:
       - Please endeavor to extract all meaningful entities and relationships from the text, avoid subsequent additional gleanings.
+      - If no valid entity or relationship can be confidently extracted from the text, return an empty array: []
 
     Objective: Produce a detailed and comprehensive knowledge graph that captures the full spectrum of entities mentioned in the text, along with their interrelations, reflecting both broad concepts and intricate details of the subject matter.
 
-    Please only response in JSON format.
+    Please only respond in JSON format.
     """
 
     text = dspy.InputField(
@@ -61,12 +69,18 @@ class ExtractGraphTriplet(dspy.Signature):
 
 class ExtractCovariate(dspy.Signature):
     """Please carefully review the provided text and entities list which are already identified in the text. Focusing on identifying detailed covariates associated with each entities provided.
+
+    IMPORTANT: All extracted covariates, entity names, and descriptions must strictly preserve the original language of the input text. Do NOT translate or switch languages under any circumstances. If the input is in Chinese, output must be in Chinese; if in English, output must be in English, etc.
+    This includes preserving all symbols, units, code snippets, or technical notations as-is in the original text.
+
     Extract and link the covariates (which is a comprehensive json TREE, the first field is always: "topic") to their respective entities.
-    Ensure all extracted covariates is clearly connected to the correct entity for accuracy and comprehensive understanding.
+    Ensure all extracted covariates are clearly connected to the correct entity for accuracy and comprehensive understanding.
     Ensure that all extracted covariates are factual and verifiable within the text itself, without relying on external knowledge or assumptions.
     Collectively, the covariates should provide a thorough and precise summary of the entity's characteristics as described in the source material.
 
-    Please only response in JSON format.
+    If no covariate can be confidently extracted, return an empty array: []
+
+    Please only respond in JSON format.
     """
 
     text = dspy.InputField(
