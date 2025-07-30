@@ -397,20 +397,24 @@ class ChatFlow:
 
         # 4. Check if the question provided enough context information or need to clarify.
         if self.engine_config.clarify_question:
-            need_clarify, need_clarify_response = yield from self._clarify_question(
-                user_question=refined_question,
-                chat_history=self.chat_history,
-                knowledge_graph_context=knowledge_graph_context,
-            )
-            if need_clarify:
-                yield from self._chat_finish(
-                    db_assistant_message=db_assistant_message,
-                    db_user_message=db_user_message,
-                    response_text=need_clarify_response,
-                    knowledge_graph=knowledge_graph,
-                    source_documents=[],
+            try:
+                need_clarify, need_clarify_response = yield from self._clarify_question(
+                    user_question=refined_question,
+                    chat_history=self.chat_history,
+                    knowledge_graph_context=knowledge_graph_context,
                 )
-                return None, []
+                if need_clarify:
+                    yield from self._chat_finish(
+                        db_assistant_message=db_assistant_message,
+                        db_user_message=db_user_message,
+                        response_text=need_clarify_response,
+                        knowledge_graph=knowledge_graph,
+                        source_documents=[],
+                    )
+                    return None, []
+            except Exception as e:
+                logger.warning(f"Clarification check failed, continuing with normal flow: {e}")
+                # Continue with normal flow if clarification fails
             
         # # 4. Analyze the user question to determine if it is competitor related.
         # analysis_result = yield from self._analyze_competitor_related(
@@ -635,16 +639,45 @@ class ChatFlow:
                 self.engine_config.llm.clarifying_question_prompt
             )
 
-            prediction = self._fast_llm.predict(
-                prompt_template,
-                graph_knowledges=knowledge_graph_context,
-                chat_history=chat_history,
-                question=user_question,
-            )
-            # TODO: using structured output to get the clarity result.
-            clarity_result = prediction.strip().strip(".\"'!")
-            need_clarify = clarity_result.lower() != "false"
-            need_clarify_response = clarity_result if need_clarify else ""
+            try:
+                prediction = self._fast_llm.predict(
+                    prompt_template,
+                    graph_knowledges=knowledge_graph_context,
+                    chat_history=chat_history,
+                    question=user_question,
+                )
+            except Exception as llm_error:
+                logger.warning(f"LLM prediction failed during clarification check: {llm_error}")
+                # If LLM fails, default to no clarification needed
+                return False, ""
+            
+            # Try structured output first, fallback to legacy format
+            try:
+                import json
+                # Extract JSON from the response
+                prediction_clean = prediction.strip()
+                if prediction_clean.startswith("```json"):
+                    prediction_clean = prediction_clean[7:]
+                if prediction_clean.endswith("```"):
+                    prediction_clean = prediction_clean[:-3]
+                prediction_clean = prediction_clean.strip()
+                
+                result = json.loads(prediction_clean)
+                need_clarify = result.get("needs_clarification", True)
+                need_clarify_response = result.get("clarifying_question", "")
+                
+            except (json.JSONDecodeError, KeyError, ValueError) as e:
+                logger.debug(f"JSON parsing failed, falling back to string parsing: {e}")
+                # Fallback to legacy string parsing
+                try:
+                    clarity_result = prediction.strip().strip(".\"'!")
+                    need_clarify = clarity_result.lower() != "false"
+                    need_clarify_response = clarity_result if need_clarify else ""
+                except Exception as fallback_error:
+                    logger.warning(f"String parsing also failed, defaulting to no clarification needed: {fallback_error}")
+                    # If both parsing methods fail, default to no clarification needed
+                    need_clarify = False
+                    need_clarify_response = ""
 
             if need_clarify:
                 yield ChatEvent(
@@ -935,20 +968,24 @@ class ChatFlow:
 
                 # 2. Check if the goal provided enough context information or need to clarify.
                 if self.engine_config.clarify_question:
-                    (
-                        need_clarify,
-                        need_clarify_response,
-                    ) = yield from self._clarify_question(
-                        user_question=goal, chat_history=self.chat_history
-                    )
-                    if need_clarify:
-                        yield from self._chat_finish(
-                            db_assistant_message=db_assistant_message,
-                            db_user_message=db_user_message,
-                            response_text=need_clarify_response,
-                            annotation_silent=True,
+                    try:
+                        (
+                            need_clarify,
+                            need_clarify_response,
+                        ) = yield from self._clarify_question(
+                            user_question=goal, chat_history=self.chat_history
                         )
-                        return
+                        if need_clarify:
+                            yield from self._chat_finish(
+                                db_assistant_message=db_assistant_message,
+                                db_user_message=db_user_message,
+                                response_text=need_clarify_response,
+                                annotation_silent=True,
+                            )
+                            return
+                    except Exception as clarify_error:
+                        logger.warning(f"Clarification check failed in external chat, continuing with normal flow: {clarify_error}")
+                        # Continue with normal flow if clarification fails
             except Exception as e:
                 goal = self.user_question
                 logger.warning(
