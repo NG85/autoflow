@@ -655,17 +655,20 @@ class ChatFlow:
             try:
                 import json
                 # Extract JSON from the response
-                prediction_clean = prediction.strip()
-                if prediction_clean.startswith("```json"):
-                    prediction_clean = prediction_clean[7:]
-                if prediction_clean.endswith("```"):
-                    prediction_clean = prediction_clean[:-3]
-                prediction_clean = prediction_clean.strip()
+                prediction_clean = self._extract_json_from_markdown(prediction)
                 
                 result = json.loads(prediction_clean)
                 need_clarify = result.get("needs_clarification", True)
                 need_clarify_response = result.get("clarifying_question", "")
                 
+                # Validate the response structure
+                if not isinstance(need_clarify, bool):
+                    logger.warning(f"Invalid needs_clarification type: {type(need_clarify)}, expected bool")
+                    need_clarify = bool(need_clarify)
+                
+                if not isinstance(need_clarify_response, str):
+                    logger.warning(f"Invalid clarifying_question type: {type(need_clarify_response)}, expected str")
+                    need_clarify_response = str(need_clarify_response) if need_clarify_response else ""
             except (json.JSONDecodeError, KeyError, ValueError) as e:
                 logger.debug(f"JSON parsing failed, falling back to string parsing: {e}")
                 # Fallback to legacy string parsing
