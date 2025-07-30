@@ -56,11 +56,11 @@ users = [
         "email": "guoping.zhou@pingcap.cn",
         "open_id": "ou_131721439965012cc0b5d375d1189eba"
     },
-    {
-        "name": "韩启微",
-        "email": "qiwei.han@pingcap.cn",
-        "open_id": "ou_1c90c4689c5b482d478fb9193d6dcaff"
-    },
+    # {
+    #     "name": "韩启微",
+    #     "email": "qiwei.han@pingcap.cn",
+    #     "open_id": "ou_1c90c4689c5b482d478fb9193d6dcaff"
+    # },
     {
         "name": "崔佳宁",
         "email": "cuijianing@pingcap.cn",
