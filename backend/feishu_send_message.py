@@ -33,18 +33,18 @@ admins = [
 ]
 
 leaders = [
-  {
-    "name": "韩启微",
-    "email": "qiwei.han@pingcap.cn",
-    "open_id": "ou_1c90c4689c5b482d478fb9193d6dcaff"
-  }
+#   {
+#     "name": "韩启微",
+#     "email": "qiwei.han@pingcap.cn",
+#     "open_id": "ou_1c90c4689c5b482d478fb9193d6dcaff"
+#   }
 ]
 
 sales = [
     {
-        "name": "钟艳珍",
-        "email": "yanzhen.zhong@pingcap.cn",
-        "open_id": "ou_0b26ba63639e89dde8d40d154c2b44b8",
+        "name": "姚亮",
+        "email": "liang.yao@pingcap.cn",
+        "open_id": "ou_47fc28d13dd04718bbe65a3c0b010d29",
         "accounts": [
             {"execution_id": "bzgrIeUMFzNJhlUvSACMnOs", "account_id": "669e127f8adb9b0001760b54", "account_name": "厦门亿联网络技术股份有限公司"},
             {"execution_id": "RNaQJEnJOKjCxjiioipast", "account_id": "680a0707d515490001988739", "account_name": "四川达威科技股份有限公司"},
@@ -85,22 +85,22 @@ sales = [
             {"execution_id": "tsOmRBmVefZMKNZtGuMaEu", "account_id": "67e15bc47463260001d7f56a", "account_name": "苏州科达科技股份有限公司"},
         ]
     },
-    {
-        "name": "韩启微",
-        "email": "qiwei.han@pingcap.cn",
-        "open_id": "ou_1c90c4689c5b482d478fb9193d6dcaff",
-        "accounts": [
-            {"execution_id": "cvAObZORblVADUXDazaudxh", "account_id": "68351ca249fc06000196d390", "account_name": "金华春光橡塑科技股份有限公司"},
-            {"execution_id": "fQowgcxEcarlnaMXadNCyRJ", "account_id": "6839978b49fc0600012d3345", "account_name": "江苏财经职业技术学院"},
-            {"execution_id": "fxOswSTHCoOPDFjqZboCkWf", "account_id": "6757d4dbb860bb00017cc003", "account_name": "北京治真治合科技有限公司"}
-        ]
+    # {
+    #     "name": "韩启微",
+    #     "email": "qiwei.han@pingcap.cn",
+    #     "open_id": "ou_1c90c4689c5b482d478fb9193d6dcaff",
+    #     "accounts": [
+    #         {"execution_id": "cvAObZORblVADUXDazaudxh", "account_id": "68351ca249fc06000196d390", "account_name": "金华春光橡塑科技股份有限公司"},
+    #         {"execution_id": "fQowgcxEcarlnaMXadNCyRJ", "account_id": "6839978b49fc0600012d3345", "account_name": "江苏财经职业技术学院"},
+    #         {"execution_id": "fxOswSTHCoOPDFjqZboCkWf", "account_id": "6757d4dbb860bb00017cc003", "account_name": "北京治真治合科技有限公司"}
+    #     ]
     # },
     # {
     #     "name": "姚亮",
     #     "email": "liang.yao@pingcap.cn",
     #     "open_id": "ou_47fc28d13dd04718bbe65a3c0b010d29",
     #     "accounts": []
-    }
+    # }
 ]
 
 def get_tenant_access_token(app_id, app_secret):
