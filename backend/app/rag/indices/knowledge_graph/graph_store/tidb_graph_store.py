@@ -704,7 +704,7 @@ class TiDBGraphStore(KnowledgeGraphStore):
                 .defer(self._entity_model.meta_vec)
                 .defer(self._entity_model.description_vec),
             )
-            .where(relationships_alias.weight >= 0)
+            # .where(relationships_alias.weight >= 0)
         )
 
         if visited_relationships:
