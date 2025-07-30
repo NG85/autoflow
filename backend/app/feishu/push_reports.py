@@ -34,11 +34,11 @@ DEFAULT_LEGACY_ADMINS = [
 ]
 
 DEFAULT_EXTERNAL_ADMINS = [
-    {
-        "name": "韩启微",
-        "email": "qiwei.han@pingcap.cn",
-        "open_id": "ou_1c90c4689c5b482d478fb9193d6dcaff"
-    },
+    # {
+    #     "name": "韩启微",
+    #     "email": "qiwei.han@pingcap.cn",
+    #     "open_id": "ou_1c90c4689c5b482d478fb9193d6dcaff"
+    # },
     # {
     #     "name": "钟艳珍",
     #     "email": "yanzhen.zhong@pingcap.cn",
@@ -63,11 +63,11 @@ DEFAULT_EXTERNAL_ADMINS = [
 
 
 DEFAULT_MERGED_ADMINS = [
-    {
-        "name": "韩启微",
-        "email": "qiwei.han@pingcap.cn",
-        "open_id": "ou_1c90c4689c5b482d478fb9193d6dcaff"
-    },
+    # {
+    #     "name": "韩启微",
+    #     "email": "qiwei.han@pingcap.cn",
+    #     "open_id": "ou_1c90c4689c5b482d478fb9193d6dcaff"
+    # },
     {
         "name": "肖章博",
         "email": "zhangbo.xiao@pingcap.cn",
