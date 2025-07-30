@@ -19,11 +19,11 @@ DEFAULT_EXTERNAL_GROUP_CHATS = [
 ]
 
 DEFAULT_EXTERNAL_LEADERS = [
-    {
-        "name": "韩启微",
-        "email": "qiwei.han@pingcap.cn",
-        "open_id": "ou_1c90c4689c5b482d478fb9193d6dcaff"
-    }
+    # {
+    #     "name": "韩启微",
+    #     "email": "qiwei.han@pingcap.cn",
+    #     "open_id": "ou_1c90c4689c5b482d478fb9193d6dcaff"
+    # }
 ]
 
 DEFAULT_EXTERNAL_SALES = [
@@ -51,12 +51,12 @@ DEFAULT_EXTERNAL_SALES = [
         "open_id": "ou_47fc28d13dd04718bbe65a3c0b010d29",
         "accounts": []
     },
-    {
-        "name": "韩启微",
-        "email": "qiwei.han@pingcap.cn",
-        "open_id": "ou_1c90c4689c5b482d478fb9193d6dcaff",
-        "accounts": []
-    }
+    # {
+    #     "name": "韩启微",
+    #     "email": "qiwei.han@pingcap.cn",
+    #     "open_id": "ou_1c90c4689c5b482d478fb9193d6dcaff",
+    #     "accounts": []
+    # }
 ]
 
 def push_account_review(items, review_date, leaders, sales, external=False):
