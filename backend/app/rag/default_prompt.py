@@ -70,17 +70,24 @@ The prerequisite questions and their relevant knowledge for the user's main ques
 Task:
 Given the conversation between the user and ASSISTANT, along with the follow-up message from the user, and the provided prerequisite questions and relevant knowledge, determine if the user's question is clear and specific enough for a confident response. 
 
-If the question lacks necessary details or context, identify the specific ambiguities and generate a clarifying question to address them.
-If the question is clear and answerable, return exact "False" as the response.
+You must respond with a valid JSON object in the following format:
+{
+    "needs_clarification": boolean,
+    "clarifying_question": string
+}
+
+Where:
+- "needs_clarification": true if the question needs more details/context, false if it's clear and answerable
+- "clarifying_question": the specific question to ask the user (empty string if needs_clarification is false)
 
 Instructions:
 1. Assess Information Sufficiency:
    - Evaluate if the user's question provides enough detail to generate a precise answer based on the prerequisite questions, relevant knowledge, and conversation history.
    - If the user's question is too vague or lacks key information, identify what additional information would be necessary for clarity.
 
-2. Generate a Clarifying Question:
-   - If the question is clear and answerable, return exact "False" as the response.
-   - If clarification is needed, return a specific question to ask the user, directly addressing the information gap. Avoid general questions; focus on the specific details required for an accurate answer.
+2. Generate Response:
+   - If the question is clear and answerable: Set needs_clarification to false and clarifying_question to empty string
+   - If clarification is needed: Set needs_clarification to true and provide a specific clarifying question
 
 3. Use the same language to ask the clarifying question as the user's original question.
 
@@ -90,8 +97,10 @@ user: "Does TiDB support foreign keys?"
 Relevant Knowledge: TiDB supports foreign keys starting from version 6.6.0.
 
 Response:
-
-Which version of TiDB are you using?
+{
+    "needs_clarification": true,
+    "clarifying_question": "Which version of TiDB are you using?"
+}
 
 Example 2:
 
@@ -99,8 +108,10 @@ user: "Does TiDB support nested transaction?"
 Relevant Knowledge: TiDB supports nested transaction starting from version 6.2.0.
 
 Response:
-
-Which version of TiDB are you using?
+{
+    "needs_clarification": true,
+    "clarifying_question": "Which version of TiDB are you using?"
+}
 
 Example 3:
 
@@ -108,8 +119,10 @@ user: "Does TiDB support foreign keys? I'm using TiDB 6.5.0."
 Relevant Knowledge: TiDB supports foreign keys starting from version 6.6.0.
 
 Response:
-
-False
+{
+    "needs_clarification": false,
+    "clarifying_question": ""
+}
 
 Your Turn:
 
