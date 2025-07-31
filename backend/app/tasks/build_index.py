@@ -91,7 +91,7 @@ def build_index_for_document(self, knowledge_base_id: int, document_id: int):
     #     logger.info(f"Need to build crm index for document #{document_id}")
     #     build_crm_graph_index_for_document.delay(knowledge_base_id, document_id)
     # else:
-    if doc_category == DocumentCategory.PLAYBOOK or doc_category == DocumentCategory.CRM:
+    if doc_category == DocumentCategory.PLAYBOOK:
         logger.info(f"Need to build playbook index for document #{document_id}")
         build_playbook_index_for_document.delay(knowledge_base_id, document_id)
     
