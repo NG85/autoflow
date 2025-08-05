@@ -1,5 +1,6 @@
 from datetime import date, datetime
 from typing import Optional
+from uuid import UUID
 from sqlmodel import SQLModel, Field, Column, DateTime, Text, Index
 
 class CRMSalesVisitRecord(SQLModel, table=True):
@@ -16,6 +17,7 @@ class CRMSalesVisitRecord(SQLModel, table=True):
     contact_position: Optional[str] = Field(nullable=True, max_length=255, description="客户职位")
     contact_name: Optional[str] = Field(nullable=True, max_length=255, description="客户名字")
     recorder: Optional[str] = Field(nullable=True, max_length=255, description="记录人")
+    recorder_id: Optional[UUID] = Field(nullable=True, description="记录人ID")
     collaborative_participants: Optional[str] = Field(nullable=True, max_length=255, description="协同参与人")
     visit_communication_date: Optional[date] = Field(nullable=True, description="拜访及沟通日期")
     counterpart_location: Optional[str] = Field(nullable=True, max_length=255, description="拜访地点")
@@ -33,9 +35,11 @@ class CRMSalesVisitRecord(SQLModel, table=True):
     remarks: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="备注")
     last_modified_time: Optional[datetime] = Field(nullable=True, description="最后修改时间")
     record_id: Optional[str] = Field(nullable=True, max_length=100, description="记录id")
+    is_first_visit: Optional[bool] = Field(nullable=True, description="是否首次拜访")
 
     __table_args__ = (
         Index("idx_account_name", "account_name"),
         Index("idx_recorder", "recorder"),
         Index("idx_visit_date", "visit_communication_date"),
+        Index("idx_is_first_visit", "is_first_visit"),
     )

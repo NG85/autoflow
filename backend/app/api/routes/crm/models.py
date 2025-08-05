@@ -131,6 +131,7 @@ class FieldMetadata(BaseModel):
 
 # 拜访记录创建请求
 class VisitRecordCreate(BaseModel):
+    is_first_visit: Optional[bool] = None # 是否首次拜访
     account_name: Optional[str] = None # 客户名称
     account_id: Optional[str] = None # 客户ID
     opportunity_name: Optional[str] = None # 商机名称
@@ -142,6 +143,7 @@ class VisitRecordCreate(BaseModel):
     contact_position: Optional[str] = None # 客户职位
     contact_name: Optional[str] = None # 客户名字
     recorder: Optional[str] = None # 记录人
+    recorder_id: Optional[str] = None # 记录人ID
     counterpart_location: Optional[str] = None # 拜访地点
     visit_communication_method: Optional[str] = None # 拜访及沟通方式
     # visit_communication_location: Optional[str] = None # 拜访及沟通地点

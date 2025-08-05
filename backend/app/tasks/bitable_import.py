@@ -37,7 +37,9 @@ FIELD_MAP = {
     '拜访对象类别': 'visit_object_category',
     '客户职位': 'contact_position',
     '客户名字': 'contact_name',
+    '是否首次拜访': 'is_first_visit',
     '记录人': 'recorder',
+    '记录人ID': 'recorder_id',
     '协同参与人': 'collaborative_participants',
     '拜访及沟通日期': 'visit_communication_date',
     '拜访及沟通方式': 'visit_communication_method',
@@ -103,6 +105,11 @@ def parse_field_value(val, field_name=None):
         # 如果直接是字符串，直接返回
         if isinstance(val, str):
             return val
+        return ''
+    if field_name == '记录人ID':
+        # 处理UUID字符串，移除连字符以适配char(32)字段
+        if isinstance(val, str):
+            return val.replace('-', '')[:32]  # 移除连字符并截取前32位
         return ''
     if field_name == '附件':
         # 只取所有附件的 name
