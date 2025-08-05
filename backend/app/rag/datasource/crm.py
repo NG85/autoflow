@@ -285,6 +285,7 @@ class CRMDataSource(BaseDataSource):
         # Only activities not linked to any opportunity
         sales_query = select(CRMSalesActivities.account_id).where(
             text(increment_filter),
+            text(account_filter),
             (CRMSalesActivities.opportunity_id == None) | (CRMSalesActivities.opportunity_id == ""),
             (CRMSalesActivities.opportunity_name == None) | (CRMSalesActivities.opportunity_name == "")
         )
