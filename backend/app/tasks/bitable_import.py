@@ -55,6 +55,8 @@ FIELD_MAP = {
     '备注': 'remarks',
     '附件': 'attachment',
     '父记录': 'parent_record',
+    '拜访类型': 'visit_type',
+    '拜访链接': 'visit_url',
 }
 
 CRM_FIELDS = list(FIELD_MAP.values()) + ['last_modified_time', 'record_id']

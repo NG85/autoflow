@@ -1,4 +1,5 @@
 import logging
+from typing import Optional
 from app.api.deps import CurrentUserDep, SessionDep
 from app.exceptions import InternalServerError
 from fastapi import APIRouter, Body, HTTPException
@@ -12,6 +13,16 @@ from app.crm.save_engine import (
     check_next_steps_quality, 
     push_visit_record_feishu_message
 )
+from app.feishu.oauth_service import FeishuOAuthService
+from app.feishu.common_open import (
+    get_content_from_feishu_source_with_token,
+    UnsupportedDocumentTypeError,
+    parse_feishu_url,
+    check_document_type_support
+)
+from app.feishu.oauth_service import FeishuOAuthService
+from app.models.document_contents import DocumentContent
+from app.core.config import settings
 
 
 logger = logging.getLogger(__name__)
@@ -85,22 +96,188 @@ async def get_filter_options(
 
 @router.post("/crm/visit_record")
 def create_visit_record(
+    db_session: SessionDep,
     user: CurrentUserDep,
     record: VisitRecordCreate,
     external: bool = Body(False, example=False),
-    force: bool = Body(False, example=False)
+    force: bool = Body(False, example=False),
+    feishu_auth_code: Optional[str] = Body(None, description="飞书授权码，用于换取访问令牌")
 ):
     try:
+        if not record.visit_type:
+            record.visit_type = "form"
+
+        # 根据拜访类型处理
+        if record.visit_type == "link":
+            if not record.visit_url:
+                return {"code": 400, "message": "visit_url is required", "data": {}}
+            
+            # 检查是否为飞书链接
+            if 'feishu.cn' in record.visit_url or 'larksuite.com' in record.visit_url:                
+                # 检查文档类型是否支持
+                try:
+                    url_type, doc_token = parse_feishu_url(record.visit_url)
+                    if not url_type or not doc_token:
+                        return {"code": 400, "message": "无法解析飞书URL", "data": {}}
+                    
+                    check_document_type_support(url_type, record.visit_url)
+                except UnsupportedDocumentTypeError as e:
+                    return {"code": 400, "message": str(e), "data": {"unsupported_type": True}}
+                
+                # 辅助函数：生成scope和授权URL
+                def generate_auth_response(message: str, auth_expired: bool = False, auth_error: bool = False):
+                    scope_parts = []
+                    
+                    if url_type in ['doc', 'docx']:
+                        scope_parts.append("docx:document:readonly")
+                        scope_parts.append("docs:document.content:read")
+                    elif url_type == 'minutes':
+                        scope_parts.append("minutes:minutes:readonly")
+                        scope_parts.append("minutes:minutes.transcript:export")
+                    elif url_type == 'wiki_node':
+                        scope_parts.append("wiki:wiki:readonly")
+                        scope_parts.append("wiki:node:read")
+                    
+                    scope = " ".join(scope_parts)
+                    
+                    auth_url = oauth_service.generate_auth_url(
+                        scope=scope,
+                        # redirect_uri='http://localhost:8000/api/v1'
+                    )
+                    
+                    data = {
+                        "auth_required": True,
+                        "auth_url": auth_url,
+                        "channel": "feishu",
+                        "url": record.visit_url,
+                        "document_type": url_type
+                    }
+                    
+                    if auth_expired:
+                        data["auth_expired"] = True
+                    if auth_error:
+                        data["auth_error"] = True
+                    
+                    return {
+                        "code": 401,
+                        "message": message,
+                        "data": data
+                    }
+                
+                # 首先尝试从Redis获取用户的飞书access token
+                oauth_service = FeishuOAuthService()
+                logger.debug(f"app_id: {oauth_service.app_id}, app_secret: {oauth_service.app_secret}")
+                feishu_access_token = oauth_service.get_access_token_from_redis(str(user.id), url_type)
+                
+                # 如果Redis中没有token，且提供了授权码，则换取token
+                if not feishu_access_token and feishu_auth_code:
+                    try:
+                        success, message, access_token = oauth_service.exchange_code_for_token(feishu_auth_code, str(user.id), url_type)
+                        
+                        if not success or not access_token:
+                            # 授权码失败（可能过期），生成新的授权URL
+                            logger.warning(f"Auth code exchange failed: {message}, generating new auth URL")
+                            return generate_auth_response("授权码已过期，需要重新授权", auth_expired=True)
+                        
+                        feishu_access_token = access_token
+                        logger.info(f"Successfully exchanged auth code for token: {access_token}")
+                        
+                    except Exception as e:
+                        logger.error(f"Failed to exchange auth code for token: {e}")
+                        # 异常情况下也生成授权URL
+                        return generate_auth_response("授权处理异常，需要重新授权", auth_error=True)
+                
+                # 如果没有提供飞书access token，生成授权URL
+                if not feishu_access_token:
+                    return generate_auth_response("需要飞书授权才能访问该链接")
+                
+                # 有access token，尝试获取内容
+                try:
+                    original_content, document_type = get_content_from_feishu_source_with_token(record.visit_url, feishu_access_token)
+                    
+                    if not original_content:
+                        return {"code": 400, "message": "未获取到飞书内容，请检查链接或重新授权", "data": {}}
+                    
+                    # 保存拜访记录和文档内容
+                    try:
+                        # 先保存拜访记录以获取 record_id
+                        record_id = save_visit_record_to_crm_table(record, db_session)
+                        
+                        # 创建文档内容存储记录
+                        doc_content = DocumentContent(
+                            user_id=user.id,
+                            visit_record_id=record_id,
+                            document_type=document_type,
+                            source_url=record.visit_url,
+                            raw_content=original_content,
+                            title=None,
+                            file_size=len(original_content.encode('utf-8')) if original_content else 0
+                        )
+                        
+                        # 保存到数据库
+                        db_session.add(doc_content)
+                        db_session.commit()
+                        
+                        # 推送飞书消息
+                        push_visit_record_feishu_message(
+                            external=external,
+                            visit_type=record.visit_type,
+                            sales_visit_record={
+                                **record.model_dump()
+                            }
+                        )
+                        
+                    except Exception as e:
+                        # 如果保存失败，回滚事务
+                        db_session.rollback()
+                        logger.error(f"Failed to save visit record or document content: {e}")
+                        return {"code": 400, "message": "保存拜访记录失败，请重试", "data": {}}
+                        
+                except UnsupportedDocumentTypeError as e:
+                    # 返回不支持的文档类型错误
+                    return {"code": 400, "message": str(e), "data": {"unsupported_type": True}}
+                except Exception as e:
+                    logger.error(f"Failed to get feishu content: {e}")
+                    return {"code": 400, "message": "获取飞书内容失败，请检查授权或重试", "data": {}}
+            else:
+                # 非飞书链接处理（如TOS文件等）
+                logger.info(f"Non-feishu URL detected: {record.visit_url}")
+                # 对于非飞书链接，暂时只保存拜访记录，不获取文档内容
+                try:
+                    save_visit_record_to_crm_table(record, db_session)
+                    db_session.commit()
+                    # 推送飞书消息
+                    push_visit_record_feishu_message(
+                        external=external,
+                        visit_type=record.visit_type,
+                        sales_visit_record={
+                            **record.model_dump()
+                        }
+                    )
+                except Exception as e:
+                    db_session.rollback()
+                    logger.error(f"Failed to save non-feishu visit record: {e}")
+                    return {"code": 400, "message": "保存拜访记录失败，请重试", "data": {}}
+        
+            return {"code": 0, "message": "success", "data": {}}
+        
         if force:
             # 直接保存，不做AI判断
-            save_visit_record_to_crm_table(record)
-            push_visit_record_feishu_message(
-                external=external,
-                sales_visit_record={
-                    **record.model_dump()
-                }
-            )
-            return {"code": 0, "message": "success", "data": {}}
+            try:
+                save_visit_record_to_crm_table(record, db_session)
+                db_session.commit()
+                push_visit_record_feishu_message(
+                    external=external,
+                    visit_type=record.visit_type,
+                    sales_visit_record={
+                        **record.model_dump()
+                    }
+                )
+                return {"code": 0, "message": "success", "data": {}}
+            except Exception as e:
+                db_session.rollback()
+                logger.error(f"Failed to save visit record with force: {e}")
+                return {"code": 400, "message": "保存拜访记录失败，请重试", "data": {}}
         
         # 评估跟进质量
         followup_quality_level, followup_quality_reason = check_followup_quality(record.followup_record)
@@ -117,15 +294,22 @@ def create_visit_record(
         record.followup_quality_reason = followup_quality_reason
         record.next_steps_quality_level = next_steps_quality_level
         record.next_steps_quality_reason = next_steps_quality_reason
-        save_visit_record_to_crm_table(record)
-        # 推送飞书消息
-        push_visit_record_feishu_message(
-            external=external,
-            sales_visit_record={
-                **record.model_dump()
-            }
-        )
-        return {"code": 0, "message": "success", "data": data}
+        try:
+            save_visit_record_to_crm_table(record, db_session)
+            db_session.commit()
+            # 推送飞书消息
+            push_visit_record_feishu_message(
+                external=external,
+                visit_type=record.visit_type,
+                sales_visit_record={
+                    **record.model_dump()
+                }
+            )
+            return {"code": 0, "message": "success", "data": data}
+        except Exception as e:
+            db_session.rollback()
+            logger.error(f"Failed to save visit record after quality check: {e}")
+            return {"code": 400, "message": "保存拜访记录失败，请重试", "data": {}}
     except HTTPException:
         raise
     except Exception as e:

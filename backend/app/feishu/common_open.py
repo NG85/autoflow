@@ -95,7 +95,7 @@ DEFAULT_INTERNAL_USERS = [
 
 DEFAULT_INTERNAL_GROUP_CHATS = [
     {
-        "name": "Sia内部试用群",
+        "name": "集结号",
         "chat_id": "oc_9b167146c8e0d78121898641fd91d61b"
     },
     # {
@@ -136,6 +136,10 @@ def parse_feishu_url(url):
     m = re.match(r"https://[^/]+/wiki/([a-zA-Z0-9]+)", url)
     if m:
         return "wiki_node", m.group(1)
+    # 飞书妙记
+    m = re.match(r"https://[^/]+/minutes/([a-zA-Z0-9]+)", url)
+    if m:
+        return "minutes", m.group(1)
     return None, None
 
 # 解析飞书多维表格/知识空间URL，返回(url_type, token, table_id, view_id)
@@ -347,6 +351,47 @@ def get_single_sheet_content(token, spreadsheet_token, sheet_id):
     resp.raise_for_status()
     return resp.json()["data"]["valueRange"]["values"]
 
+# 获取飞书妙记内容（minute）
+def get_minute_content(token, minute_token):
+    try:
+        # 使用转录接口获取妙记内容
+        # 参考: https://open.feishu.cn/open-apis/minutes/v1/minutes/{minute_token}/transcript
+        
+        # 构建请求参数
+        params = {
+            "minute_token": minute_token,
+            "need_speaker": "true",      # 包含发言人信息
+            "need_timestamp": "true",    # 包含时间戳信息  
+            "file_format": "txt"         # 文件格式，可选：txt, json, srt, docx
+        }
+        
+        url = f"https://open.feishu.cn/open-apis/minutes/v1/minutes/{minute_token}/transcript"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        
+        resp = requests.get(url, headers=headers, params=params)
+        
+        if resp.status_code != 200:
+            logger.error(f"访问妙记转录内容失败 {minute_token}, status: {resp.status_code}")
+            logger.error(f"Response: {resp.text}")
+            return None
+        
+        # 直接返回响应内容
+        content = resp.text
+        
+        if content:
+            logger.info(f"获取妙记内容成功, 内容长度: {len(content)}")
+            return content
+        else:
+            logger.warning("获取妙记内容为空")
+            return None
+        
+    except Exception as e:
+        logger.error(f"获取妙记内容失败: {e}")
+        return None
+
 
 # 发送飞书消息
 def send_feishu_message(receive_id, token, text, receive_id_type="open_id", msg_type="text"):
@@ -367,3 +412,181 @@ def send_feishu_message(receive_id, token, text, receive_id_type="open_id", msg_
         logger.error(f"发送飞书消息失败 {resp.text}, content: {content}")
     # resp.raise_for_status()
     return resp.json()
+
+# 自定义异常类
+class FeishuAuthError(Exception):
+    """飞书授权异常"""
+    pass
+
+class UnsupportedDocumentTypeError(Exception):
+    """不支持的文档类型异常"""
+    pass
+
+# 支持的文档类型
+SUPPORTED_DOCUMENT_TYPES = {
+    'doc', 'docx',      # 飞书文档
+    'minutes',           # 飞书妙记
+    'wiki_node',        # 知识库节点
+}
+
+# 暂不支持但可识别的类型
+UNSUPPORTED_DOCUMENT_TYPES = {
+    'sheet',            # 电子表格
+    'bitable',          # 多维表格
+}
+
+def check_document_type_support(url_type: str, url: str) -> None:
+    """
+    检查文档类型是否支持
+    
+    Args:
+        url_type: 解析出的文档类型
+        url: 原始URL
+        
+    Raises:
+        UnsupportedDocumentTypeError: 当文档类型不支持时抛出
+    """
+    if url_type in UNSUPPORTED_DOCUMENT_TYPES:
+        type_names = {
+            'sheet': '电子表格',
+            'bitable': '多维表格'
+        }
+        type_name = type_names.get(url_type, url_type)
+        raise UnsupportedDocumentTypeError(f"暂不支持{type_name}内容获取: {url}")
+    
+    if url_type not in SUPPORTED_DOCUMENT_TYPES:
+        raise UnsupportedDocumentTypeError(f"不支持的飞书内容类型: {url_type}")
+
+# 从非结构化内容中获取原文
+def get_content_from_unstructured_source(access_token: str, url: str) -> tuple[Optional[str], Optional[str]]:
+    """
+    从非结构化内容中获取原文
+    
+    Args:
+        access_token: 飞书访问令牌
+        url: 内容链接（飞书文档、会议链接、文件URL等）
+        
+    Returns:
+        tuple[content, document_type]: (原文内容, 文档类型)，如果获取失败则返回 (None, None)
+    """
+    try:
+        # 判断URL类型
+        if 'feishu.cn' in url or 'larksuite.com' in url:
+            # 飞书相关链接
+            return get_content_from_feishu_source(access_token, url)
+        else:
+            # TODO: 支持其他类型的链接（如文件URL）
+            logger.warning(f"暂不支持的内容类型: {url}")
+            return None, "file"
+        
+    except (FeishuAuthError, UnsupportedDocumentTypeError):
+        # 重新抛出授权异常和不支持类型异常
+        raise
+    except Exception as e:
+        logger.error(f"从非结构化内容获取失败: {e}")
+        return None, None
+
+# 从飞书相关链接中获取原文
+def get_content_from_feishu_source(access_token: str, url: str) -> tuple[Optional[str], Optional[str]]:
+    """
+    从飞书相关链接中获取原文
+    
+    Args:
+        access_token: 飞书访问令牌
+        url: 飞书链接（文档、会议等）
+        
+    Returns:
+        tuple[content, document_type]: (原文内容, 文档类型)，如果获取失败则返回 (None, None)
+        
+    Raises:
+        FeishuAuthError: 当无法获取用户token时抛出
+    """
+    try:
+        return get_content_from_feishu_source_with_token(url, access_token)
+        
+    except (FeishuAuthError, UnsupportedDocumentTypeError):
+        # 重新抛出授权异常和不支持类型异常
+        raise
+    except Exception as e:
+        logger.error(f"从飞书内容获取失败: {e}")
+        return None, None
+
+
+# 使用指定token从飞书相关链接中获取原文
+def get_content_from_feishu_source_with_token(url: str, access_token: str) -> tuple[Optional[str], Optional[str]]:
+    """
+    使用指定的access token从飞书相关链接中获取原文
+    
+    Args:
+        url: 飞书链接（文档、会议等）
+        access_token: 飞书访问令牌
+        
+    Returns:
+        tuple[content, document_type]: (原文内容, 文档类型)，如果获取失败则返回 (None, None)
+        
+    Raises:
+        UnsupportedDocumentTypeError: 当文档类型不支持时抛出
+    """
+    try:
+        # 解析URL类型
+        url_type, doc_token = parse_feishu_url(url)
+        if not url_type or not doc_token:
+            logger.error(f"无法解析飞书URL: {url}")
+            return None, None
+        
+        # 检查文档类型是否支持
+        check_document_type_support(url_type, url)
+        
+        # 根据URL类型获取内容
+        content = None
+        if url_type in ['doc', 'docx']:
+            # 文档类型
+            content = get_doc_markdown(access_token, doc_token)
+            if not content:
+                content = get_doc_content(access_token, doc_token)
+        elif url_type == 'minutes':
+            # 飞书妙记类型
+            content = get_minute_content(access_token, doc_token)
+        elif url_type == 'wiki_node':
+            # 知识库节点类型
+            node_info = get_node_detail(access_token, doc_token)
+    
+            if node_info is None:
+                logger.error(f"无法获取知识库节点内容: {doc_token}")
+                return None, url_type
+            
+            obj_type = None
+            obj_token = None
+            if "node" in node_info:
+                obj_type = node_info["node"]["obj_type"]
+                obj_token = node_info["node"]["obj_token"]
+            else:
+                obj_type = node_info.get("obj_type")
+                obj_token = node_info.get("obj_token")
+                
+            if obj_type == "docx":
+                content = get_doc_markdown(access_token, obj_token)
+            else:
+                logger.error(f"知识库节点类型不支持: {obj_type}")
+                return None, url_type                        
+                        
+        if not content:
+            logger.error(f"无法获取内容: {url}")
+            return None, url_type
+        logger.info(f"获取到内容: {content}")
+        # 统一文档类型命名
+        if url_type in ['doc', 'docx']:
+            document_type = 'feishu_doc'
+        elif url_type == 'minutes':
+            document_type = 'feishu_minute'
+        else:
+            document_type = f'feishu_{url_type}'
+        
+        return content, document_type
+        
+    except UnsupportedDocumentTypeError:
+        # 重新抛出不支持类型异常
+        raise
+    except Exception as e:
+        logger.error(f"从飞书内容获取失败: {e}")
+        return None, None

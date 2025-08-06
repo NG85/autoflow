@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 # 定义响应模型
@@ -159,3 +159,5 @@ class VisitRecordCreate(BaseModel):
     attachment: Optional[str] = None # 附件
     parent_record: Optional[str] = None # 父记录
     remarks: Optional[str] = None # 备注
+    visit_type: Optional[Literal["form", "link"]] = None # 拜访类型：form(用户填报)、link(非结构化链接/文件)
+    visit_url: Optional[str] = None # 会议链接或文件URL

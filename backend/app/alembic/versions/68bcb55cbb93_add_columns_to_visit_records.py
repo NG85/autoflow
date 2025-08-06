@@ -25,6 +25,12 @@ def upgrade():
     # Add recorder_id column to crm_sales_visit_records table
     op.add_column('crm_sales_visit_records', sa.Column('recorder_id', sqlmodel.sql.sqltypes.GUID(), nullable=True)) 
 
+    # Add visit_type column to crm_sales_visit_records table
+    op.add_column('crm_sales_visit_records', sa.Column('visit_type', sa.String(20), nullable=True))
+    
+    # Add visit_url column to crm_sales_visit_records table
+    op.add_column('crm_sales_visit_records', sa.Column('visit_url', sa.Text(), nullable=True))
+
     # Add foreign key constraint for recorder_id column
     op.create_foreign_key(
         "fk_recorder_id",
@@ -41,14 +47,30 @@ def upgrade():
         ["is_first_visit"],
         unique=False,
     )
+    
+    op.create_index(
+        "idx_visit_type",
+        "crm_sales_visit_records",
+        ["visit_type"],
+        unique=False,
+    )
 
 
 def downgrade():
+    # Drop index for visit_type column
+    op.drop_index("idx_visit_type", table_name="crm_sales_visit_records")
+
     # Drop index for is_first_visit column
     op.drop_index("idx_is_first_visit", table_name="crm_sales_visit_records")
     
     # Drop foreign key constraint for recorder_id column
     op.drop_constraint("fk_recorder_id", "crm_sales_visit_records", type_="foreignkey")
+
+    # Drop visit_url column from crm_sales_visit_records table
+    op.drop_column('crm_sales_visit_records', 'visit_url')
+    
+    # Drop visit_type column from crm_sales_visit_records table
+    op.drop_column('crm_sales_visit_records', 'visit_type') 
     
     # Drop recorder_id column from crm_sales_visit_records table
     op.drop_column('crm_sales_visit_records', 'recorder_id') 

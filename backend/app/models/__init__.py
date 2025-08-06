@@ -33,3 +33,4 @@ from .evaluation_task import EvaluationTask, EvaluationTaskItem, EvaluationStatu
 from .evaluation_dataset import EvaluationDataset, EvaluationDatasetItem
 from .file_permission import FilePermission
 from .crm_sales_visit_records import CRMSalesVisitRecord
+from .document_contents import DocumentContent

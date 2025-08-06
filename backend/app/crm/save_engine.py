@@ -8,15 +8,17 @@ from app.feishu.common_open import DEFAULT_INTERNAL_GROUP_CHATS, send_feishu_mes
 from app.feishu.push_review import DEFAULT_EXTERNAL_GROUP_CHATS, DEFAULT_EXTERNAL_SALES
 import json
 
+from app.api.routes.crm.models import VisitRecordCreate
+
 logger = logging.getLogger(__name__)
 
-def _generate_form_record_id(now):
+def _generate_record_id(record_type, now):
     dt = now.strftime("%Y%m%d")
     rand = uuid6().hex[:8]
-    return f"form_{dt}_{rand}"
+    return f"{record_type}_{dt}_{rand}"
 
-# 保存表单拜访记录到 crm_intermediate_import_visit_records
-def save_visit_record_to_crm_table(record_schema):
+# 保存表单拜访记录到 crm_sales_visit_records
+def save_visit_record_to_crm_table(record_schema: VisitRecordCreate, db_session=None):
     now = datetime.now()
     # 英文转中文
     fields = record_schema.dict(exclude_none=True)
@@ -25,12 +27,37 @@ def save_visit_record_to_crm_table(record_schema):
         for feishu_key, db_key in FIELD_MAP.items()
         if db_key in fields and fields[db_key] not in ("", None)
     }
+    record_id = _generate_record_id(record_schema.visit_type, now)
     item = {
         "fields": feishu_fields,
         "last_modified_time": int(now.timestamp() * 1000),
-        "record_id": _generate_form_record_id(now),
+        "record_id": record_id,
     }
-    upsert_visit_records([item])
+    
+    # 如果提供了数据库会话，使用事务保存
+    if db_session:
+        # 直接使用传入的会话进行保存
+        batch_time = datetime.now()
+        from app.tasks.bitable_import import map_fields, CRM_TABLE
+        from sqlalchemy import MetaData, Table, text
+        from sqlalchemy.dialects.mysql import insert as mysql_insert
+        
+        metadata = MetaData()
+        crm_table = Table(CRM_TABLE, metadata, autoload_with=db_session.bind)
+        
+        mapped = map_fields(item, batch_time=batch_time)
+        insert_stmt = mysql_insert(crm_table).values(**mapped)
+        update_stmt = {k: mapped[k] for k in mapped if k != 'record_id'}
+        if mapped.get('account_id') in (None, '', 'null'):
+            update_stmt['account_id'] = text('account_id')
+        ondup_stmt = insert_stmt.on_duplicate_key_update(**update_stmt)
+        db_session.execute(ondup_stmt)
+        # 不在这里commit，由调用方控制事务
+    else:
+        # 使用原有的方式保存
+        upsert_visit_records([item])
+    
+    return record_id
 
 def call_ark_llm(prompt):
     api_key = settings.ARK_API_KEY
@@ -187,7 +214,7 @@ def fill_sales_visit_record_fields(sales_visit_record):
     return sales_visit_record
 
 
-def push_visit_record_feishu_message(external, sales_visit_record, receive_id=None, receive_id_type="chat_id"):
+def push_visit_record_feishu_message(external, sales_visit_record, visit_type, receive_id=None, receive_id_type="chat_id"):
     sales_visit_record = fill_sales_visit_record_fields(sales_visit_record)
     if not external:
         logger.info(f"push visit record feishu message to internal group")
@@ -198,9 +225,9 @@ def push_visit_record_feishu_message(external, sales_visit_record, receive_id=No
     else:
         logger.info(f"skip push visit record feishu message for {sales_visit_record.get('recorder')}")
         return
-    template_id = "AAqII006k7Mt7" # 拜访记录卡片模板ID
+    template_id = "AAqz0J0JSTciO" if visit_type == "form" else "AAqz0v4nx70HL" # 拜访记录卡片模板ID
     template_vars = {
-        "visit_date": sales_visit_record["visit_communication_date"],
+        "visit_date": sales_visit_record.get("visit_communication_date", "--"),
         "sales_visit_records": [sales_visit_record]
     }
     
