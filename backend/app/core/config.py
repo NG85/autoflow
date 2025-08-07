@@ -102,6 +102,7 @@ class Settings(BaseSettings):
  
     # Storage configuration
     STORAGE_TYPE: StorageType = StorageType.MINIO
+    STORAGE_PATH_PREFIX: str = "data/customer-uploads/"
     
     # TOS STS
     TOS_API_KEY: str = ""
@@ -110,7 +111,6 @@ class Settings(BaseSettings):
     TOS_REGION: str = "cn-beijing"
     TOS_ENDPOINT: str = f"tos-{TOS_REGION}.volces.com"
     TOS_BUCKET: str = "aptsell-dev"
-    TOS_PATH_PREFIX: str = "data/customer-uploads/"
     
     # MinIO configuration
     MINIO_ENDPOINT: str = "localhost:9000"
@@ -118,7 +118,6 @@ class Settings(BaseSettings):
     MINIO_SECRET_KEY: str = "minioadmin"
     MINIO_SECURE: bool = False
     MINIO_BUCKET: str = "autoflow"
-    MINIO_PATH_PREFIX: str = "data/customer-uploads/"
     
     # CRM authority API
     CRM_AUTHORITY_API_URL: str = "http://auth:8018/crm/authority/user"

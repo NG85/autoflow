@@ -4,7 +4,7 @@ from app.tasks.bitable_import import FIELD_MAP, upsert_visit_records
 from app.utils.uuid6 import uuid6
 from app.core.config import settings
 import requests
-from app.feishu.common_open import DEFAULT_INTERNAL_GROUP_CHATS, send_feishu_message, get_tenant_access_token
+from app.feishu.common_open import DEFAULT_INTERNAL_GROUP_CHATS, DEFAULT_INTERNAL_TEST_GROUP_CHATS, send_feishu_message, get_tenant_access_token
 from app.feishu.push_review import DEFAULT_EXTERNAL_GROUP_CHATS, DEFAULT_EXTERNAL_SALES
 import json
 from typing import Optional
@@ -219,9 +219,24 @@ def fill_sales_visit_record_fields(sales_visit_record):
 
 def push_visit_record_feishu_message(external, sales_visit_record, visit_type, receive_id=None, receive_id_type="chat_id"):
     sales_visit_record = fill_sales_visit_record_fields(sales_visit_record)
+    
     if not external:
         logger.info(f"push visit record feishu message to internal group")
-        receive_id = DEFAULT_INTERNAL_GROUP_CHATS[0]["chat_id"]
+        # 根据当前appid匹配内部群
+        current_app_id = settings.FEISHU_APP_ID
+        target_group = None
+        for group in DEFAULT_INTERNAL_GROUP_CHATS:
+            if group.get("client_id") == current_app_id:
+                target_group = group
+                break
+        
+        if target_group:
+            receive_id = target_group["chat_id"]
+            logger.info(f"matched internal group: {target_group['name']} for app_id: {current_app_id}")
+        else:
+            # 如果没有匹配到，使用默认逻辑
+            receive_id = DEFAULT_INTERNAL_GROUP_CHATS[0]["chat_id"]
+            logger.warning(f"no matched internal group for app_id: {current_app_id}, using default")
     elif sales_visit_record.get("recorder") in [user.get("name") for user in DEFAULT_EXTERNAL_SALES]:
         logger.info(f"push visit record feishu message to hanqiwei's external group")
         receive_id = DEFAULT_EXTERNAL_GROUP_CHATS[0]["chat_id"]
