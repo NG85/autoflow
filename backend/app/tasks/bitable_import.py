@@ -118,6 +118,8 @@ def parse_field_value(val, field_name=None):
         if isinstance(val, list):
             names = [v.get('name', '') for v in val if isinstance(v, dict)]
             return ','.join(names) if names else ''
+        if isinstance(val, str):
+            return val
         return ''
     if field_name == '父记录':
         # 只存 link_record_ids 的字符串

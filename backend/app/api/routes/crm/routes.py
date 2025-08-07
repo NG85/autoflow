@@ -221,10 +221,15 @@ def create_visit_record(
                 if record.visit_url.startswith("http") or not record.visit_url.startswith(settings.STORAGE_PATH_PREFIX):
                     return {"code": 400, "message": "不支持的文件链接", "data": {}}
                 
-                # 处理文件路径 data/customer-uploads/XXX.docx -> customer-uploads/XXX.docx
-                record.visit_url = record.visit_url[len(settings.STORAGE_PATH_PREFIX.rstrip('/')):]
-                if record.visit_url.startswith('/'):
-                    record.visit_url = record.visit_url[1:]
+                # 处理文件路径 data/customer-uploads/XXX.docx -> /shared/data/customer-uploads/XXX.docx
+                local_prefix = settings.LOCAL_FILE_STORAGE_PATH.rstrip('/')
+                storage_prefix = settings.STORAGE_PATH_PREFIX.rstrip('/')
+                visit_url = record.visit_url.lstrip('/')
+                if visit_url.startswith(storage_prefix.lstrip('/')):
+                    visit_url = visit_url[len(storage_prefix.lstrip('/')):]
+                    if visit_url.startswith('/'):
+                        visit_url = visit_url[1:]
+                record.visit_url = f"{local_prefix}/{visit_url}"
 
                 logger.info(f"Non-feishu URL detected: {record.visit_url}")
                 try:
