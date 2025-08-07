@@ -59,7 +59,7 @@ def get_sts(
                 endpoint=settings.TOS_ENDPOINT,
                 region=settings.TOS_REGION,
                 bucket=settings.TOS_BUCKET,
-                path_prefix=settings.TOS_PATH_PREFIX,
+                path_prefix=settings.STORAGE_PATH_PREFIX,
                 storage_type=storage_type
             )
         else:  # MinIO
@@ -78,7 +78,7 @@ def get_sts(
                 session_token=credentials["session_token"],
                 endpoint=settings.MINIO_ENDPOINT,
                 bucket=settings.MINIO_BUCKET,
-                path_prefix=settings.MINIO_PATH_PREFIX,
+                path_prefix=settings.STORAGE_PATH_PREFIX,
                 storage_type=storage_type
             )
     except Exception as e:
