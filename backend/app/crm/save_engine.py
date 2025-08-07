@@ -246,6 +246,7 @@ def push_visit_record_feishu_message(external, sales_visit_record, visit_type, r
     template_id = "AAqz0J0JSTciO" if visit_type == "form" else "AAqz0v4nx70HL" # 拜访记录卡片模板ID
     template_vars = {
         "visit_date": sales_visit_record.get("visit_communication_date", "--"),
+        "recorder": sales_visit_record.get("recorder", "--"),
         "sales_visit_records": [sales_visit_record]
     }
     

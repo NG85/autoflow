@@ -24,6 +24,7 @@ from app.feishu.common_open import (
 )
 from app.core.config import settings
 from app.crm.file_processor import get_file_content_from_local_storage
+from app.api.routes.crm.models import VisitRecordQueryRequest
 
 
 logger = logging.getLogger(__name__)
@@ -321,6 +322,173 @@ def verify_visit_record(
             "next_steps": {"level": next_steps_quality_level, "reason": next_steps_quality_reason}
         }        
         return {"code": 0, "message": "success", "data": data}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(e)
+        raise InternalServerError()
+
+
+@router.post("/crm/visit_records/query")
+def query_visit_records(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    request: VisitRecordQueryRequest,
+):
+    """
+    查询CRM拜访记录
+    支持条件查询和分页
+    """
+    try:
+        from app.repositories.visit_record import visit_record_repo
+        
+        result = visit_record_repo.query_visit_records(
+            session=db_session,
+            request=request
+        )
+        
+        return {
+            "code": 0,
+            "message": "success",
+            "data": {
+                "items": [item.model_dump() for item in result.items],
+                "total": result.total,
+                "page": result.page,
+                "page_size": result.size,
+                "pages": result.pages
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(e)
+        raise InternalServerError()
+
+
+@router.get("/crm/visit_records/filter-options")
+def get_visit_record_filter_options(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+):
+    """
+    获取拜访记录查询的过滤选项
+    用于前端下拉选择框等
+    """
+    try:
+        from sqlmodel import select, func, distinct
+        from app.models.crm_sales_visit_records import CRMSalesVisitRecord
+        from app.models.crm_accounts import CRMAccount
+        
+        # 获取客户名称选项
+        account_names = db_session.exec(
+            select(distinct(CRMSalesVisitRecord.account_name))
+            .where(CRMSalesVisitRecord.account_name.is_not(None))
+            .order_by(CRMSalesVisitRecord.account_name)
+        ).all()
+        
+        # 获取合作伙伴选项
+        partner_names = db_session.exec(
+            select(distinct(CRMSalesVisitRecord.partner_name))
+            .where(CRMSalesVisitRecord.partner_name.is_not(None))
+            .order_by(CRMSalesVisitRecord.partner_name)
+        ).all()
+        
+        # 获取记录人选项
+        recorders = db_session.exec(
+            select(distinct(CRMSalesVisitRecord.recorder))
+            .where(CRMSalesVisitRecord.recorder.is_not(None))
+            .order_by(CRMSalesVisitRecord.recorder)
+        ).all()
+        
+        # 获取跟进方式选项
+        communication_methods = db_session.exec(
+            select(distinct(CRMSalesVisitRecord.visit_communication_method))
+            .where(CRMSalesVisitRecord.visit_communication_method.is_not(None))
+            .order_by(CRMSalesVisitRecord.visit_communication_method)
+        ).all()
+        
+        # 获取跟进质量等级选项
+        followup_quality_levels = db_session.exec(
+            select(distinct(CRMSalesVisitRecord.followup_quality_level))
+            .where(CRMSalesVisitRecord.followup_quality_level.is_not(None))
+            .order_by(CRMSalesVisitRecord.followup_quality_level)
+        ).all()
+        
+        # 获取下一步计划质量等级选项
+        next_steps_quality_levels = db_session.exec(
+            select(distinct(CRMSalesVisitRecord.next_steps_quality_level))
+            .where(CRMSalesVisitRecord.next_steps_quality_level.is_not(None))
+            .order_by(CRMSalesVisitRecord.next_steps_quality_level)
+        ).all()
+        
+        # 获取拜访类型选项
+        visit_types = db_session.exec(
+            select(distinct(CRMSalesVisitRecord.visit_type))
+            .where(CRMSalesVisitRecord.visit_type.is_not(None))
+            .order_by(CRMSalesVisitRecord.visit_type)
+        ).all()
+        
+        # 获取客户分类选项
+        customer_levels = db_session.exec(
+            select(distinct(CRMAccount.customer_level))
+            .where(CRMAccount.customer_level.is_not(None))
+            .order_by(CRMAccount.customer_level)
+        ).all()
+        
+        # 获取部门选项
+        departments = db_session.exec(
+            select(distinct(CRMAccount.department))
+            .where(CRMAccount.department.is_not(None))
+            .order_by(CRMAccount.department)
+        ).all()
+        
+        return {
+            "code": 0,
+            "message": "success",
+            "data": {
+                "account_names": account_names,
+                "partner_names": partner_names,
+                "recorders": recorders,
+                "communication_methods": communication_methods,
+                "followup_quality_levels": followup_quality_levels,
+                "next_steps_quality_levels": next_steps_quality_levels,
+                "visit_types": visit_types,
+                "customer_levels": customer_levels,
+                "departments": departments,
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(e)
+        raise InternalServerError()
+
+
+@router.get("/crm/visit_records/{record_id}")
+def get_visit_record_by_id(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    record_id: int,
+):
+    """
+    根据ID获取单个拜访记录详情
+    """
+    try:
+        from app.repositories.visit_record import visit_record_repo
+        
+        record = visit_record_repo.get_visit_record_by_id(
+            session=db_session,
+            record_id=record_id
+        )
+        
+        if not record:
+            raise HTTPException(status_code=404, detail="拜访记录不存在")
+        
+        return {
+            "code": 0,
+            "message": "success",
+            "data": record.model_dump()
+        }
     except HTTPException:
         raise
     except Exception as e:
