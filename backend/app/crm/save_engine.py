@@ -4,7 +4,7 @@ from app.tasks.bitable_import import FIELD_MAP, upsert_visit_records
 from app.utils.uuid6 import uuid6
 from app.core.config import settings
 import requests
-from app.feishu.common_open import DEFAULT_INTERNAL_GROUP_CHATS, DEFAULT_INTERNAL_TEST_GROUP_CHATS, send_feishu_message, get_tenant_access_token
+from app.feishu.common_open import DEFAULT_INTERNAL_GROUP_CHATS, send_feishu_message, get_tenant_access_token
 from app.feishu.push_review import DEFAULT_EXTERNAL_GROUP_CHATS, DEFAULT_EXTERNAL_SALES
 import json
 from typing import Optional
