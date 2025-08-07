@@ -1,5 +1,6 @@
 import logging
 from typing import Optional
+import os
 from app.api.deps import CurrentUserDep, SessionDep
 from app.exceptions import InternalServerError
 from fastapi import APIRouter, Body, HTTPException
@@ -11,7 +12,8 @@ from app.crm.save_engine import (
     save_visit_record_to_crm_table, 
     check_followup_quality, 
     check_next_steps_quality, 
-    push_visit_record_feishu_message
+    push_visit_record_feishu_message,
+    save_visit_record_with_content
 )
 from app.feishu.oauth_service import FeishuOAuthService
 from app.feishu.common_open import (
@@ -20,9 +22,8 @@ from app.feishu.common_open import (
     parse_feishu_url,
     check_document_type_support
 )
-from app.feishu.oauth_service import FeishuOAuthService
-from app.models.document_contents import DocumentContent
 from app.core.config import settings
+from app.crm.file_processor import get_file_content_from_local_storage
 
 
 logger = logging.getLogger(__name__)
@@ -199,39 +200,14 @@ def create_visit_record(
                         return {"code": 400, "message": "未获取到飞书内容，请检查链接或重新授权", "data": {}}
                     
                     # 保存拜访记录和文档内容
-                    try:
-                        # 先保存拜访记录以获取 record_id
-                        record_id = save_visit_record_to_crm_table(record, db_session)
-                        
-                        # 创建文档内容存储记录
-                        doc_content = DocumentContent(
-                            user_id=user.id,
-                            visit_record_id=record_id,
-                            document_type=document_type,
-                            source_url=record.visit_url,
-                            raw_content=original_content,
-                            title=None,
-                            file_size=len(original_content.encode('utf-8')) if original_content else 0
-                        )
-                        
-                        # 保存到数据库
-                        db_session.add(doc_content)
-                        db_session.commit()
-                        
-                        # 推送飞书消息
-                        push_visit_record_feishu_message(
-                            external=external,
-                            visit_type=record.visit_type,
-                            sales_visit_record={
-                                **record.model_dump()
-                            }
-                        )
-                        
-                    except Exception as e:
-                        # 如果保存失败，回滚事务
-                        db_session.rollback()
-                        logger.error(f"Failed to save visit record or document content: {e}")
-                        return {"code": 400, "message": "保存拜访记录失败，请重试", "data": {}}
+                    return save_visit_record_with_content(
+                        record=record,
+                        content=original_content,
+                        document_type=document_type,
+                        user=user,
+                        db_session=db_session,
+                        external=external
+                    )
                         
                 except UnsupportedDocumentTypeError as e:
                     # 返回不支持的文档类型错误
@@ -240,26 +216,39 @@ def create_visit_record(
                     logger.error(f"Failed to get feishu content: {e}")
                     return {"code": 400, "message": "获取飞书内容失败，请检查授权或重试", "data": {}}
             else:
-                # 非飞书链接处理（如TOS文件等）
+                # 暂不支持除飞书外的其他网络链接，以及非本地挂载的存储路径
+                if record.visit_url.startswith("http") or not record.visit_url.startswith(settings.STORAGE_PATH_PREFIX):
+                    return {"code": 400, "message": "不支持的文件链接", "data": {}}
+                
+                # 处理文件路径 data/customer-uploads/XXX.docx -> customer-uploads/XXX.docx
+                record.visit_url = record.visit_url[len(settings.STORAGE_PATH_PREFIX.rstrip('/')):]
+                if record.visit_url.startswith('/'):
+                    record.visit_url = record.visit_url[1:]
+
                 logger.info(f"Non-feishu URL detected: {record.visit_url}")
-                # 对于非飞书链接，暂时只保存拜访记录，不获取文档内容
                 try:
-                    save_visit_record_to_crm_table(record, db_session)
-                    db_session.commit()
-                    # 推送飞书消息
-                    push_visit_record_feishu_message(
+                    # 获取文件内容
+                    file_content, document_type = get_file_content_from_local_storage(record.visit_url)
+                    
+                    if not file_content:
+                        return {"code": 400, "message": "未获取到文件内容，请检查后重试", "data": {}}
+                    
+                    # 保存拜访记录和文档内容
+                    return save_visit_record_with_content(
+                        record=record,
+                        content=file_content,
+                        document_type=document_type,
+                        user=user,
+                        db_session=db_session,
                         external=external,
-                        visit_type=record.visit_type,
-                        sales_visit_record={
-                            **record.model_dump()
-                        }
+                        title=os.path.basename(record.visit_url)
                     )
+                    
                 except Exception as e:
+                    # 如果保存失败，回滚事务
                     db_session.rollback()
                     logger.error(f"Failed to save non-feishu visit record: {e}")
                     return {"code": 400, "message": "保存拜访记录失败，请重试", "data": {}}
-        
-            return {"code": 0, "message": "success", "data": {}}
         
         if force:
             # 直接保存，不做AI判断

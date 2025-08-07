@@ -7,8 +7,11 @@ import requests
 from app.feishu.common_open import DEFAULT_INTERNAL_GROUP_CHATS, send_feishu_message, get_tenant_access_token
 from app.feishu.push_review import DEFAULT_EXTERNAL_GROUP_CHATS, DEFAULT_EXTERNAL_SALES
 import json
-
+from typing import Optional
+from sqlmodel import Session
+from app.models.document_contents import DocumentContent
 from app.api.routes.crm.models import VisitRecordCreate
+from app.api.deps import CurrentUserDep, SessionDep
 
 logger = logging.getLogger(__name__)
 
@@ -239,4 +242,69 @@ def push_visit_record_feishu_message(external, sales_visit_record, visit_type, r
             "template_variable": template_vars
         }
     }
-    send_feishu_message(receive_id, token, card_content, receive_id_type=receive_id_type, msg_type="interactive")
+    try:
+        send_feishu_message(receive_id, token, card_content, receive_id_type=receive_id_type, msg_type="interactive")
+    except Exception as e:
+        logger.error(f"Failed to push visit record feishu message: {e}")
+        return False
+
+
+def save_visit_record_with_content(
+    record: VisitRecordCreate,
+    content: str,
+    document_type: str,
+    user: CurrentUserDep,
+    db_session: SessionDep,
+    external: bool,
+    title: Optional[str] = None
+) -> dict:
+    """
+    保存拜访记录和文档内容的公共函数
+    
+    Args:
+        record: 拜访记录
+        content: 文档内容
+        document_type: 文档类型
+        user: 当前用户
+        db_session: 数据库会话
+        external: 是否为外部调用
+        title: 文档标题（可选）
+        
+    Returns:
+        dict: 操作结果
+    """
+    try:
+        # 先保存拜访记录以获取 record_id
+        record_id = save_visit_record_to_crm_table(record, db_session)
+        
+        # 创建文档内容存储记录
+        doc_content = DocumentContent(
+            user_id=user.id,
+            visit_record_id=record_id,
+            document_type=document_type,
+            source_url=record.visit_url,
+            raw_content=content,
+            title=title,
+            file_size=len(content.encode('utf-8')) if content else 0
+        )
+        
+        # 保存到数据库
+        db_session.add(doc_content)
+        db_session.commit()
+        
+        # 推送飞书消息
+        push_visit_record_feishu_message(
+            external=external,
+            visit_type=record.visit_type,
+            sales_visit_record={
+                **record.model_dump()
+            }
+        )
+        
+        return {"code": 0, "message": "success", "data": {}}
+        
+    except Exception as e:
+        # 如果保存失败，回滚事务
+        db_session.rollback()
+        logger.error(f"Failed to save visit record or document content: {e}")
+        return {"code": 400, "message": "保存拜访记录失败，请重试", "data": {}}

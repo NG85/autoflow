@@ -34,8 +34,8 @@ class FileDataSource(BaseDataSource):
                 logger.error(f"Upload with id {upload_id} not found")
                 continue
             # handle customer uploads
-            if upload.path.startswith(settings.TOS_PATH_PREFIX):
-                upload.path = upload.path[len(settings.TOS_PATH_PREFIX.rstrip('/')):]
+            if upload.path.startswith(settings.STORAGE_PATH_PREFIX):
+                upload.path = upload.path[len(settings.STORAGE_PATH_PREFIX.rstrip('/')):]
                 if upload.path.startswith('/'):
                     upload.path = upload.path[1:]
 
