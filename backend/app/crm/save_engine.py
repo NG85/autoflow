@@ -249,7 +249,7 @@ def push_visit_record_feishu_message(external, sales_visit_record, visit_type, r
         "sales_visit_records": [sales_visit_record]
     }
     
-    token = get_tenant_access_token(external=external)
+    token = get_tenant_access_token(app_id=settings.FEISHU_APP_ID,app_secret=settings.FEISHU_APP_SECRET, external=external)
     card_content = {
         "type": "template",
         "data": {

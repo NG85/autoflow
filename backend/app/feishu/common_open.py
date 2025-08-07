@@ -105,9 +105,9 @@ DEFAULT_INTERNAL_GROUP_CHATS = [
     #     "chat_id": "oc_0b983a12f112ba3a8ae98cd3fd141d0e"
     # },
     {
-        "client_id": "cli_a74a312d91b9d00d",
-        "name": "测试企业 - 治真治合",
-        "chat_id": "oc_0d781b1b6ea81422d998176de2c7d57f"
+        "client_id": "cli_a808bc341680d00b",
+        "name": "拜访跟进",
+        "chat_id": "oc_695eb4b33d0835d58181be4d47ab7494"
     },
 ]
 
@@ -115,8 +115,8 @@ DEFAULT_INTERNAL_GROUP_CHATS = [
 def get_tenant_access_token(app_id: Optional[str] = None, app_secret: Optional[str] = None, external=False):
     url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal/"
     resp = requests.post(url, json={
-        "app_id": app_id or settings.FEISHU_APP_ID if external else INTERNAL_APP_ID,
-        "app_secret": app_secret or settings.FEISHU_APP_SECRET if external else INTERNAL_APP_SECRET
+        "app_id": app_id or (settings.FEISHU_APP_ID if external else INTERNAL_APP_ID),
+        "app_secret": app_secret or (settings.FEISHU_APP_SECRET if external else INTERNAL_APP_SECRET)
     })
     resp.raise_for_status()
     return resp.json()["tenant_access_token"]
