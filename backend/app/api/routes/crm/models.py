@@ -170,16 +170,19 @@ class VisitRecordQueryRequest(BaseModel):
     page_size: int = 20
     
     # 过滤条件
-    account_name: Optional[str] = None  # 客户名称
-    partner_name: Optional[str] = None  # 合作伙伴
+    customer_level: Optional[List[str]] = None  # 客户等级（多选）
+    account_id: Optional[List[str]] = None  # 客户ID（多选）
+    account_name: Optional[List[str]] = None  # 客户名称（多选）
+    partner_name: Optional[List[str]] = None  # 合作伙伴（多选）
     visit_communication_date_start: Optional[str] = None  # 跟进日期开始
     visit_communication_date_end: Optional[str] = None  # 跟进日期结束
-    recorder: Optional[str] = None  # 记录人
-    department: Optional[str] = None  # 所在团队
-    visit_communication_method: Optional[str] = None  # 跟进方式
-    followup_quality_level: Optional[str] = None  # AI对跟进记录质量评估
-    next_steps_quality_level: Optional[str] = None  # AI对下一步计划质量评估
-    visit_type: Optional[str] = None  # 信息来源（表单填写、会议纪要）
+    recorder: Optional[List[str]] = None  # 记录人（多选）
+    department: Optional[List[str]] = None  # 所在团队（多选）
+    visit_communication_method: Optional[List[str]] = None  # 跟进方式（多选）
+    followup_quality_level: Optional[List[str]] = None  # AI对跟进记录质量评估（多选）
+    next_steps_quality_level: Optional[List[str]] = None  # AI对下一步计划质量评估（多选）
+    visit_type: Optional[List[str]] = None  # 信息来源（多选）
+    is_first_visit: Optional[bool] = None  # 是否首次拜访
     
     # 排序 - 默认按拜访日期降序
     sort_by: str = "visit_communication_date"  # 排序字段

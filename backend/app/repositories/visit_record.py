@@ -1,7 +1,7 @@
 from typing import Optional, List
 from datetime import datetime, date
 import logging
-from sqlmodel import Session, select, func, and_, or_, desc, asc
+from sqlmodel import Session, select, func, and_, or_, desc, asc, text
 from fastapi_pagination import Params, Page
 from fastapi_pagination.ext.sqlmodel import paginate
 
@@ -74,15 +74,33 @@ class VisitRecordRepo(BaseRepo):
         )
 
         # 应用过滤条件
-        if request.account_name:
+        if request.customer_level:
             query = query.where(
-                CRMSalesVisitRecord.account_name.ilike(f"%{request.account_name}%")
+                CRMAccount.customer_level.in_(request.customer_level)
             )
 
-        if request.partner_name:
+        if request.account_id:
             query = query.where(
-                CRMSalesVisitRecord.partner_name.ilike(f"%{request.partner_name}%")
+                CRMSalesVisitRecord.account_id.in_(request.account_id)
             )
+
+        if request.account_name:
+            # 对客户名称进行模糊检索，支持多选
+            account_name_conditions = []
+            for account_name in request.account_name:
+                account_name_conditions.append(
+                    CRMSalesVisitRecord.account_name.ilike(f"%{account_name}%")
+                )
+            query = query.where(or_(*account_name_conditions))
+
+        if request.partner_name:
+            # 对合作伙伴进行模糊检索，支持多选
+            partner_conditions = []
+            for partner in request.partner_name:
+                partner_conditions.append(
+                    CRMSalesVisitRecord.partner_name.ilike(f"%{partner}%")
+                )
+            query = query.where(or_(*partner_conditions))
 
         if request.visit_communication_date_start:
             try:
@@ -100,33 +118,38 @@ class VisitRecordRepo(BaseRepo):
 
         if request.recorder:
             query = query.where(
-                CRMSalesVisitRecord.recorder.ilike(f"%{request.recorder}%")
+                CRMSalesVisitRecord.recorder.in_(request.recorder)
             )
 
         # 使用客户表的department字段作为所在团队
         if request.department:
             query = query.where(
-                CRMAccount.department.ilike(f"%{request.department}%")
+                CRMAccount.department.in_(request.department)
             )
 
         if request.visit_communication_method:
             query = query.where(
-                CRMSalesVisitRecord.visit_communication_method.ilike(f"%{request.visit_communication_method}%")
+                CRMSalesVisitRecord.visit_communication_method.in_(request.visit_communication_method)
             )
 
         if request.followup_quality_level:
             query = query.where(
-                CRMSalesVisitRecord.followup_quality_level == request.followup_quality_level
+                CRMSalesVisitRecord.followup_quality_level.in_(request.followup_quality_level)
             )
 
         if request.next_steps_quality_level:
             query = query.where(
-                CRMSalesVisitRecord.next_steps_quality_level == request.next_steps_quality_level
+                CRMSalesVisitRecord.next_steps_quality_level.in_(request.next_steps_quality_level)
             )
 
         if request.visit_type:
             query = query.where(
-                CRMSalesVisitRecord.visit_type == request.visit_type
+                CRMSalesVisitRecord.visit_type.in_(request.visit_type)
+            )
+
+        if request.is_first_visit is not None:
+            query = query.where(
+                CRMSalesVisitRecord.is_first_visit == request.is_first_visit
             )
 
         # 应用排序 - 默认按拜访日期降序

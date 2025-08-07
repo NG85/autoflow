@@ -375,7 +375,7 @@ def get_visit_record_filter_options(
     用于前端下拉选择框等
     """
     try:
-        from sqlmodel import select, func, distinct
+        from sqlmodel import select, func, distinct, text
         from app.models.crm_sales_visit_records import CRMSalesVisitRecord
         from app.models.crm_accounts import CRMAccount
         
