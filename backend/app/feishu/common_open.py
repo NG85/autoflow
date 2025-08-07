@@ -359,7 +359,7 @@ def get_single_sheet_content(token, spreadsheet_token, sheet_id):
     return resp.json()["data"]["valueRange"]["values"]
 
 # 获取飞书妙记内容（minute）
-def get_minute_content(token, minute_token):
+def get_minutes_content(token, minute_token):
     try:
         # 使用转录接口获取妙记内容
         # 参考: https://open.feishu.cn/open-apis/minutes/v1/minutes/{minute_token}/transcript
@@ -369,7 +369,7 @@ def get_minute_content(token, minute_token):
             "minute_token": minute_token,
             "need_speaker": "true",      # 包含发言人信息
             "need_timestamp": "true",    # 包含时间戳信息  
-            "file_format": "txt"         # 文件格式，可选：txt, json, srt, docx
+            "file_format": "txt"         # 文件格式，可选：txt, srt
         }
         
         url = f"https://open.feishu.cn/open-apis/minutes/v1/minutes/{minute_token}/transcript"
@@ -385,8 +385,9 @@ def get_minute_content(token, minute_token):
             logger.error(f"Response: {resp.text}")
             return None
         
-        # 直接返回响应内容
-        content = resp.text
+        # 处理二进制流响应
+        # 获取二进制内容并解码为UTF-8字符串
+        content = resp.content.decode('utf-8')
         
         if content:
             logger.info(f"获取妙记内容成功, 内容长度: {len(content)}")
@@ -553,7 +554,7 @@ def get_content_from_feishu_source_with_token(url: str, access_token: str) -> tu
                 content = get_doc_content(access_token, doc_token)
         elif url_type == 'minutes':
             # 飞书妙记类型
-            content = get_minute_content(access_token, doc_token)
+            content = get_minutes_content(access_token, doc_token)
         elif url_type == 'wiki_node':
             # 知识库节点类型
             node_info = get_node_detail(access_token, doc_token)
