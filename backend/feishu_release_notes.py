@@ -126,6 +126,26 @@ users = [
         "email": "jason.yu@pingcap.cn",
         "open_id": "ou_f750a3628dc15388a198c643ce786910"
     },
+    {
+        "name": "蔡镇城",
+        "email": "zhencheng.cai@pingcap.cn",
+        "open_id": "ou_a4e6dbd5e9eb08887383404d8aedb709"
+    },
+    {
+        "name": "肖章博",
+        "email": "zhangbo.xiao@pingcap.cn",
+        "open_id": "ou_8cc1d496c513d8202997c8218cc3446c"
+    },
+    {
+        "name": "石祥波",
+        "email": "jason.yu@pingcap.cn",
+        "open_id": "ou_32950b4c4786219a716606404ae122d8"
+    },
+    {
+        "name": "张燕",
+        "email": "yanice.zhang@pingcap.cn",
+        "open_id": "ou_0b9c66a57a2472620a2c438b07cc2587"
+    }
 ]
 
 group_chats = []

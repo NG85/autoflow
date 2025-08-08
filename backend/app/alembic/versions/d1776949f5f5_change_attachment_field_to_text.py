@@ -9,6 +9,7 @@ from alembic import op
 import sqlalchemy as sa
 import sqlmodel.sql.sqltypes
 from tidb_vector.sqlalchemy import VectorType
+from sqlalchemy.dialects import mysql
 
 
 # revision identifiers, used by Alembic.
@@ -19,22 +20,22 @@ depends_on = None
 
 
 def upgrade():
-    # 将 attachment 字段从 VARCHAR(255) 改为 TEXT
+    # 将 attachment 字段从 VARCHAR(255) 改为 MEDIUMTEXT (MySQL)
     op.alter_column(
         'crm_sales_visit_records',
         'attachment',
         existing_type=sa.String(length=255),
-        type_=sa.MEDIUMTEXT(),
+        type_=mysql.MEDIUMTEXT(),
         existing_nullable=True
     )
 
 
 def downgrade():
-    # 将 attachment 字段从 TEXT 改回 VARCHAR(255)
+    # 将 attachment 字段从 MEDIUMTEXT 改回 VARCHAR(255)
     op.alter_column(
         'crm_sales_visit_records',
         'attachment',
-        existing_type=sa.MEDIUMTEXT(),
+        existing_type=mysql.MEDIUMTEXT(),
         type_=sa.String(length=255),
         existing_nullable=True
     )

@@ -16,11 +16,11 @@ DEFAULT_LEGACY_ADMINS = [
         "email": "cuiqiu@pingcap.cn",
         "open_id": "ou_718d03819e549537c4dc972154798a81"
     },
-    {
-        "name": "余梦杰",
-        "email": "jason.yu@pingcap.cn", 
-        "open_id": "ou_f750a3628dc15388a198c643ce786910"
-    },
+    # {
+    #     "name": "余梦杰",
+    #     "email": "jason.yu@pingcap.cn", 
+    #     "open_id": "ou_f750a3628dc15388a198c643ce786910"
+    # },
     {
         "name": "龙恒",
         "email": "ls@pingcap.cn",
