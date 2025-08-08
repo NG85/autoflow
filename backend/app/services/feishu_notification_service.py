@@ -1,11 +1,8 @@
 import logging
-from typing import List, Dict, Any, Optional
-from uuid import UUID
+from typing import List, Dict, Any
 from sqlmodel import Session, select
-from app.models.auth import User
-from app.models.oauth_user import OAuthUser
 from app.repositories.user_profile import UserProfileRepo
-from app.feishu.common_open import send_feishu_message, get_tenant_access_token, DEFAULT_INTERNAL_GROUP_CHATS, INTERNAL_APP_ID
+from app.feishu.common_open import send_feishu_message, get_tenant_access_token, DEFAULT_INTERNAL_GROUP_CHATS, INTERNAL_APP_IDS
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -38,7 +35,12 @@ class FeishuNotificationService:
     def _get_matching_group_chats(self) -> List[Dict[str, str]]:
         """获取当前应用匹配的群聊"""
         matching_groups = []
-        current_app_id = INTERNAL_APP_ID
+        current_app_id = settings.FEISHU_APP_ID
+        
+        # 如果当前应用ID不在内部应用列表中，使用第一个内部应用ID
+        if current_app_id not in INTERNAL_APP_IDS:
+            current_app_id = INTERNAL_APP_IDS[0]
+            logger.info(f"Current app ID {INTERNAL_APP_ID} not in internal app list, using first internal app ID: {current_app_id}")
         
         for group in DEFAULT_INTERNAL_GROUP_CHATS:
             if group["client_id"] == current_app_id:

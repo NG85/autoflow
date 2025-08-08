@@ -17,6 +17,11 @@ HOST = settings.REVIEW_REPORT_HOST
 INTERNAL_APP_ID = 'cli_a74a312d91b9d00d'
 INTERNAL_APP_SECRET = 'kkiilUjGS79NPL1vVUZywc7cKojThgjE'
 
+INTERNAL_APP_IDS = [
+    'cli_a74a312d91b9d00d',
+    'cli_a735685d1c39100e',
+    'cli_a808bc341680d00b',
+]
 
 DEFAULT_INTERNAL_ADMINS = [
     {
