@@ -4,13 +4,37 @@ import logging
 from sqlmodel import Session, select, func, and_, or_, desc, asc, text
 from fastapi_pagination import Params, Page
 from fastapi_pagination.ext.sqlmodel import paginate
+from uuid import UUID
 
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
 from app.models.crm_accounts import CRMAccount
 from app.api.routes.crm.models import VisitRecordQueryRequest, VisitRecordResponse
 from app.repositories.base_repo import BaseRepo
+from app.repositories.user_profile import UserProfileRepo
 
 logger = logging.getLogger(__name__)
+
+# 管理团队配置
+DEFAULT_EXTERNAL_EXTENDED_ADMINS = [
+    {
+        "name": "龙恒",
+        "email": "ls@pingcap.cn",
+        "open_id": "ou_adcaafc471d57fc6f9b209c05c0f5ce1",
+        "user_id": "01971c23-28be-70de-a08c-6e58e0911491"
+    },
+    {
+        "name": "林微",
+        "email": "wei.lin@pingcap.cn",
+        "open_id": "ou_edbdc2e3fc8eb411bbc49cc586629709",
+        "user_id": "0196d251-3fa0-71f8-91d3-9a03a412c954"
+    },
+    {
+        "name": "崔秋",
+        "email": "cuiqiu@pingcap.cn",
+        "open_id": "ou_718d03819e549537c4dc972154798a81",
+        "user_id": "019739bd-4be4-79a5-92d8-f2fb470b10c8"
+    },
+]
 
 
 def _convert_to_response(record: CRMSalesVisitRecord, customer_level: Optional[str] = None, department: Optional[str] = None, person_in_charge: Optional[str] = None) -> VisitRecordResponse:
@@ -43,13 +67,54 @@ def _convert_to_response(record: CRMSalesVisitRecord, customer_level: Optional[s
 class VisitRecordRepo(BaseRepo):
     model_cls = CRMSalesVisitRecord
 
+    def _is_admin_user(self, current_user_id: UUID) -> bool:
+        """
+        检查当前用户是否为管理团队成员
+        """
+        user_id_str = str(current_user_id)
+        for admin in DEFAULT_EXTERNAL_EXTENDED_ADMINS:
+            if admin.get("user_id") == user_id_str:
+                return True
+        return False
+
+    def _get_user_accessible_recorder_ids(self, session: Session, current_user_id: UUID) -> List[str]:
+        """
+        获取当前用户可访问的记录人ID列表
+        包括：当前用户自己 + 所有下属
+        """
+        user_profile_repo = UserProfileRepo()
+        
+        # 1. 获取当前用户的档案
+        current_user_profile = user_profile_repo.get_by_user_id(session, current_user_id)
+        
+        accessible_recorder_ids = []
+        
+        if current_user_profile:
+            # 2. 添加当前用户自己（如果有recorder_id）
+            if current_user_profile.oauth_user_id:
+                accessible_recorder_ids.append(current_user_profile.oauth_user_id)
+            
+            # 3. 获取所有下属
+            subordinates = user_profile_repo.get_subordinates(session, current_user_profile.oauth_user_id or str(current_user_id))
+            for subordinate in subordinates:
+                if subordinate.oauth_user_id:
+                    accessible_recorder_ids.append(subordinate.oauth_user_id)
+        else:
+            # 如果找不到用户档案，只允许查看自己的记录
+            # 这里需要根据实际情况调整，可能需要从其他表获取用户信息
+            logger.warning(f"No user profile found for user_id: {current_user_id}")
+        
+        return accessible_recorder_ids
+
     def query_visit_records(
         self,
         session: Session,
         request: VisitRecordQueryRequest,
+        current_user_id: Optional[UUID] = None,
     ) -> Page[VisitRecordResponse]:
         """
         查询拜访记录，支持条件过滤和分页
+        根据当前用户的汇报关系限制数据访问权限
         """
         # 验证分页参数
         if request.page < 1:
@@ -72,6 +137,31 @@ class VisitRecordRepo(BaseRepo):
                 CRMSalesVisitRecord.account_id == CRMAccount.unique_id
             )
         )
+
+        # 应用权限控制 - 用户只能查看自己及下属的拜访记录
+        if current_user_id:
+            # 检查是否为管理团队成员
+            if self._is_admin_user(current_user_id):
+                logger.info(f"Admin user {current_user_id} detected, skipping access control")
+                # 管理团队成员可以查看所有记录
+            else:
+                accessible_recorder_ids = self._get_user_accessible_recorder_ids(session, current_user_id)
+                if accessible_recorder_ids:
+                    # 根据recorder_id过滤
+                    query = query.where(CRMSalesVisitRecord.recorder_id.in_(accessible_recorder_ids))
+                else:
+                    # 如果没有可访问的记录人，返回空结果
+                    logger.warning(f"No accessible recorder IDs for user: {current_user_id}")
+                    return Page(
+                        items=[],
+                        total=0,
+                        page=request.page,
+                        size=request.page_size,
+                        pages=0
+                    )
+        else:
+            # 如果没有提供用户ID，记录警告但不限制访问（向后兼容）
+            logger.warning("No current_user_id provided, skipping access control")
 
         # 应用过滤条件
         if request.customer_level:
@@ -180,9 +270,11 @@ class VisitRecordRepo(BaseRepo):
         self,
         session: Session,
         record_id: int,
+        current_user_id: Optional[UUID] = None,
     ) -> Optional[VisitRecordResponse]:
         """
         根据ID获取单个拜访记录
+        根据当前用户的汇报关系限制数据访问权限
         """
         query = (
             select(
@@ -198,12 +290,31 @@ class VisitRecordRepo(BaseRepo):
             .where(CRMSalesVisitRecord.id == record_id)
         )
 
-        result = session.exec(query).first()
-        if not result:
-            return None
+        # 应用权限控制
+        if current_user_id:
+            # 检查是否为管理团队成员
+            if self._is_admin_user(current_user_id):
+                logger.info(f"Admin user {current_user_id} detected, skipping access control")
+                # 管理团队成员可以查看所有记录
+            else:
+                accessible_recorder_ids = self._get_user_accessible_recorder_ids(session, current_user_id)
+                if accessible_recorder_ids:
+                    query = query.where(CRMSalesVisitRecord.recorder_id.in_(accessible_recorder_ids))
+                else:
+                    # 如果没有可访问的记录人，返回None
+                    logger.warning(f"No accessible recorder IDs for user: {current_user_id}")
+                    return None
+        else:
+            # 如果没有提供用户ID，记录警告但不限制访问（向后兼容）
+            logger.warning("No current_user_id provided, skipping access control")
 
-        record, customer_level, department, person_in_charge = result
-        return _convert_to_response(record, customer_level, department, person_in_charge)
+        result = session.exec(query).first()
+        
+        if result:
+            record, customer_level, department, person_in_charge = result
+            return _convert_to_response(record, customer_level, department, person_in_charge)
+        
+        return None
 
 
 # 创建repository实例

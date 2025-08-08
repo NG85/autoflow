@@ -337,13 +337,15 @@ def query_visit_records(
     """
     查询CRM拜访记录
     支持条件查询和分页
+    根据当前用户的汇报关系限制数据访问权限
     """
     try:
         from app.repositories.visit_record import visit_record_repo
         
         result = visit_record_repo.query_visit_records(
             session=db_session,
-            request=request
+            request=request,
+            current_user_id=user.id
         )
         
         return {
@@ -471,17 +473,19 @@ def get_visit_record_by_id(
 ):
     """
     根据ID获取单个拜访记录详情
+    根据当前用户的汇报关系限制数据访问权限
     """
     try:
         from app.repositories.visit_record import visit_record_repo
         
         record = visit_record_repo.get_visit_record_by_id(
             session=db_session,
-            record_id=record_id
+            record_id=record_id,
+            current_user_id=user.id
         )
         
         if not record:
-            raise HTTPException(status_code=404, detail="拜访记录不存在")
+            raise HTTPException(status_code=404, detail="拜访记录不存在或无权限访问")
         
         return {
             "code": 0,

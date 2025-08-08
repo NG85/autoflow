@@ -11,11 +11,21 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
-DEFAULT_EXTERNAL_FINAL_ADMINS = [
+DEFAULT_EXTERNAL_ADMINS = [
     {
         "name": "龙恒",
         "email": "ls@pingcap.cn",
-        "open_id": "ou_adcaafc471d57fc6f9b209c05c0f5ce1"
+        "open_id": "ou_adcaafc471d57fc6f9b209c05c0f5ce1",
+        "user_id": "01971c23-28be-70de-a08c-6e58e0911491"
+    }
+]
+
+DEFAULT_EXTERNAL_EXTENDED_ADMINS = DEFAULT_EXTERNAL_ADMINS + [
+    {
+        "name": "林微",
+        "email": "wei.lin@pingcap.cn",
+        "open_id": "ou_edbdc2e3fc8eb411bbc49cc586629709",
+        "user_id": "0196d251-3fa0-71f8-91d3-9a03a412c954"
     },
 ]
 
@@ -106,7 +116,7 @@ class FeishuNotificationService:
         
         # 5. 如果是外部推送，添加特别管理者
         if external:
-            for admin in DEFAULT_EXTERNAL_FINAL_ADMINS:
+            for admin in DEFAULT_EXTERNAL_ADMINS:
                 # 避免重复推送（如果特别管理者已经在接收者列表中）
                 if not any(r["open_id"] == admin["open_id"] for r in recipients):
                     recipients.append({
