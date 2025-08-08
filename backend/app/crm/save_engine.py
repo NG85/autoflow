@@ -227,6 +227,11 @@ def push_visit_record_feishu_message(external, sales_visit_record, visit_type, r
         logger.warning("No recorder_id or recorder_name found in sales visit record")
         return False
     
+    # 去掉attachment字段，避免传输过大的base64编码数据
+    if "attachment" in sales_visit_record:
+        logger.info("Removing attachment field from visit record to avoid large base64 data transmission")
+        del sales_visit_record["attachment"]
+    
     # 使用飞书推送服务
     from app.services.feishu_notification_service import FeishuNotificationService
     
@@ -309,12 +314,16 @@ def save_visit_record_with_content(
         db_session.commit()
         
         # 推送飞书消息
+        record_data = record.model_dump()
+        # 去掉attachment字段，避免传输过大的base64编码数据
+        if "attachment" in record_data:
+            logger.info("Removing attachment field from record data to avoid large base64 data transmission")
+            del record_data["attachment"]
+        
         push_visit_record_feishu_message(
             external=external,
             visit_type=record.visit_type,
-            sales_visit_record={
-                **record.model_dump()
-            },
+            sales_visit_record=record_data,
             db_session=db_session
         )
         

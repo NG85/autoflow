@@ -80,7 +80,7 @@ class VisitRecordRepo(BaseRepo):
     def _get_user_accessible_recorder_ids(self, session: Session, current_user_id: UUID) -> List[str]:
         """
         获取当前用户可访问的记录人ID列表
-        包括：当前用户自己 + 所有下属
+        包括：当前用户自己 + 所有汇报关系（递归获取所有下属） + 如果是部门负责人则包括全部门
         """
         user_profile_repo = UserProfileRepo()
         
@@ -94,15 +94,29 @@ class VisitRecordRepo(BaseRepo):
             if current_user_profile.oauth_user_id:
                 accessible_recorder_ids.append(current_user_profile.oauth_user_id)
             
-            # 3. 获取所有下属
-            subordinates = user_profile_repo.get_subordinates(session, current_user_profile.oauth_user_id or str(current_user_id))
-            for subordinate in subordinates:
-                if subordinate.oauth_user_id:
-                    accessible_recorder_ids.append(subordinate.oauth_user_id)
+            # 3. 递归获取所有汇报关系（包括直接下属和间接下属）
+            if current_user_profile.oauth_user_id:
+                all_subordinates = user_profile_repo.get_all_subordinates_recursive(session, current_user_profile.oauth_user_id)
+                for subordinate in all_subordinates:
+                    if subordinate.oauth_user_id:
+                        accessible_recorder_ids.append(subordinate.oauth_user_id)
+            
+            # 4. 如果是部门负责人（没有直属上级），获取全部门所有成员
+            if current_user_profile.department and not current_user_profile.direct_manager_id:
+                logger.info(f"User {current_user_id} is department manager for {current_user_profile.department}, getting all department members")
+                department_members = user_profile_repo.get_department_members(session, current_user_profile.department)
+                for member in department_members:
+                    if member.oauth_user_id and member.oauth_user_id not in accessible_recorder_ids:
+                        accessible_recorder_ids.append(member.oauth_user_id)
+                        logger.info(f"Added department member {member.name} ({member.oauth_user_id}) to accessible list")
         else:
             # 如果找不到用户档案，只允许查看自己的记录
             # 这里需要根据实际情况调整，可能需要从其他表获取用户信息
             logger.warning(f"No user profile found for user_id: {current_user_id}")
+        
+        # 去重
+        accessible_recorder_ids = list(set(accessible_recorder_ids))
+        logger.info(f"User {current_user_id} can access {len(accessible_recorder_ids)} recorders: {accessible_recorder_ids}")
         
         return accessible_recorder_ids
 

@@ -253,12 +253,16 @@ def create_visit_record(
             try:
                 save_visit_record_to_crm_table(record, db_session)
                 db_session.commit()
+                # 推送飞书消息
+                record_data = record.model_dump()
+                # 去掉attachment字段，避免传输过大的base64编码数据
+                if "attachment" in record_data:
+                    del record_data["attachment"]
+                
                 push_visit_record_feishu_message(
                     external=external,
                     visit_type=record.visit_type,
-                    sales_visit_record={
-                        **record.model_dump()
-                    },
+                    sales_visit_record=record_data,
                     db_session=db_session
                 )
                 return {"code": 0, "message": "success", "data": {}}
@@ -286,12 +290,15 @@ def create_visit_record(
             save_visit_record_to_crm_table(record, db_session)
             db_session.commit()
             # 推送飞书消息
+            record_data = record.model_dump()
+            # 去掉attachment字段，避免传输过大的base64编码数据
+            if "attachment" in record_data:
+                del record_data["attachment"]
+            
             push_visit_record_feishu_message(
                 external=external,
                 visit_type=record.visit_type,
-                sales_visit_record={
-                    **record.model_dump()
-                },
+                sales_visit_record=record_data,
                 db_session=db_session
             )
             return {"code": 0, "message": "success", "data": data}

@@ -236,14 +236,34 @@ class UserProfileRepo(BaseRepo):
         query = select(UserProfile).where(UserProfile.department == department)
         return db_session.exec(query).all()
 
-    def get_subordinates(
-        self, 
-        db_session: Session, 
-        manager_id: str
-    ) -> list[UserProfile]:
-        """获取下属"""
-        query = select(UserProfile).where(UserProfile.direct_manager_id == manager_id)
-        return db_session.exec(query).all()
+    def get_subordinates(self, db_session: Session, manager_id: str) -> List[UserProfile]:
+        """获取指定管理者的直接下属"""
+        return db_session.exec(
+            select(UserProfile).where(
+                UserProfile.direct_manager_id == manager_id,
+                UserProfile.is_active == True
+            )
+        ).all()
+
+    def get_all_subordinates_recursive(self, db_session: Session, manager_id: str) -> List[UserProfile]:
+        """
+        递归获取指定管理者的所有汇报关系（包括直接下属和间接下属）
+        """
+        all_subordinates = []
+        
+        # 获取直接下属
+        direct_subordinates = self.get_subordinates(db_session, manager_id)
+        
+        for subordinate in direct_subordinates:
+            # 添加直接下属
+            all_subordinates.append(subordinate)
+            
+            # 递归获取间接下属
+            if subordinate.oauth_user_id:
+                indirect_subordinates = self.get_all_subordinates_recursive(db_session, subordinate.oauth_user_id)
+                all_subordinates.extend(indirect_subordinates)
+        
+        return all_subordinates
 
     def get_department_manager(
         self, 
