@@ -199,8 +199,9 @@ class VisitRecordResponse(CRMSalesVisitRecord):
     
     # 关联字段 - 来自crm_accounts表
     customer_level: Optional[str] = None  # 客户等级
-    department: Optional[str] = None  # 负责人主属部门
-    person_in_charge: Optional[str] = None  # 负责人
+    
+    # 关联字段 - 来自user_profiles表
+    department: Optional[str] = None  # 拜访人所在部门
     
     class Config:
         # 允许从ORM模型创建

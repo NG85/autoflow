@@ -386,6 +386,7 @@ def get_visit_record_filter_options(
         from sqlmodel import select, func, distinct, text
         from app.models.crm_sales_visit_records import CRMSalesVisitRecord
         from app.models.crm_accounts import CRMAccount
+        from app.models.user_profile import UserProfile
         
         # 获取客户名称选项
         account_names = db_session.exec(
@@ -443,11 +444,11 @@ def get_visit_record_filter_options(
             .order_by(CRMAccount.customer_level)
         ).all()
         
-        # 获取部门选项
+        # 获取部门选项 - 从用户档案表获取拜访人的部门
         departments = db_session.exec(
-            select(distinct(CRMAccount.department))
-            .where(CRMAccount.department.is_not(None))
-            .order_by(CRMAccount.department)
+            select(distinct(UserProfile.department))
+            .where(UserProfile.department.is_not(None))
+            .order_by(UserProfile.department)
         ).all()
         
         return {

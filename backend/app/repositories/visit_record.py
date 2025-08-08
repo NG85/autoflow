@@ -8,6 +8,7 @@ from uuid import UUID
 
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
 from app.models.crm_accounts import CRMAccount
+from app.models.user_profile import UserProfile
 from app.api.routes.crm.models import VisitRecordQueryRequest, VisitRecordResponse
 from app.repositories.base_repo import BaseRepo
 from app.repositories.user_profile import UserProfileRepo
@@ -37,7 +38,7 @@ DEFAULT_EXTERNAL_EXTENDED_ADMINS = [
 ]
 
 
-def _convert_to_response(record: CRMSalesVisitRecord, customer_level: Optional[str] = None, department: Optional[str] = None, person_in_charge: Optional[str] = None) -> VisitRecordResponse:
+def _convert_to_response(record: CRMSalesVisitRecord, customer_level: Optional[str] = None, department: Optional[str] = None) -> VisitRecordResponse:
     """
     将CRMSalesVisitRecord转换为VisitRecordResponse
     """
@@ -59,8 +60,8 @@ def _convert_to_response(record: CRMSalesVisitRecord, customer_level: Optional[s
     
     # 添加关联字段
     response.customer_level = customer_level
-    response.department = department
-    response.person_in_charge = person_in_charge
+    response.department = department  # 拜访人部门
+    
     return response
 
 
@@ -138,17 +139,20 @@ class VisitRecordRepo(BaseRepo):
         elif request.page_size > 100:  # 限制最大页面大小
             request.page_size = 100
             
-        # 构建基础查询，关联客户表获取客户分类、部门信息和负责人
+        # 构建基础查询，关联客户表获取客户分类、关联用户档案表获取拜访人部门信息
         query = (
             select(
                 CRMSalesVisitRecord,
                 CRMAccount.customer_level,
-                CRMAccount.department,
-                CRMAccount.person_in_charge
+                UserProfile.department
             )
             .outerjoin(
                 CRMAccount,
                 CRMSalesVisitRecord.account_id == CRMAccount.unique_id
+            )
+            .outerjoin(
+                UserProfile,
+                CRMSalesVisitRecord.recorder_id == UserProfile.oauth_user_id
             )
         )
 
@@ -225,10 +229,10 @@ class VisitRecordRepo(BaseRepo):
                 CRMSalesVisitRecord.recorder.in_(request.recorder)
             )
 
-        # 使用客户表的department字段作为所在团队
+        # 使用拜访人的department字段作为所在团队
         if request.department:
             query = query.where(
-                CRMAccount.department.in_(request.department)
+                UserProfile.department.in_(request.department)
             )
 
         if request.visit_communication_method:
@@ -268,8 +272,8 @@ class VisitRecordRepo(BaseRepo):
         result = paginate(session, query, params)
 
         # 转换结果格式 - 复用现有模型
-        items = [_convert_to_response(record, customer_level, department, person_in_charge) 
-                for record, customer_level, department, person_in_charge in result.items]
+        items = [_convert_to_response(record, customer_level, department) 
+                for record, customer_level, department in result.items]
 
         # 返回自定义分页结果
         return Page(
@@ -294,12 +298,15 @@ class VisitRecordRepo(BaseRepo):
             select(
                 CRMSalesVisitRecord,
                 CRMAccount.customer_level,
-                CRMAccount.department,
-                CRMAccount.person_in_charge
+                UserProfile.department
             )
             .outerjoin(
                 CRMAccount,
                 CRMSalesVisitRecord.account_id == CRMAccount.unique_id
+            )
+            .outerjoin(
+                UserProfile,
+                CRMSalesVisitRecord.recorder_id == UserProfile.oauth_user_id
             )
             .where(CRMSalesVisitRecord.id == record_id)
         )
@@ -325,8 +332,8 @@ class VisitRecordRepo(BaseRepo):
         result = session.exec(query).first()
         
         if result:
-            record, customer_level, department, person_in_charge = result
-            return _convert_to_response(record, customer_level, department, person_in_charge)
+            record, customer_level, department = result
+            return _convert_to_response(record, customer_level, department)
         
         return None
 
