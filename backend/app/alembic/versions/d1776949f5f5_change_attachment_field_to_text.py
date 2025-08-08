@@ -24,7 +24,7 @@ def upgrade():
         'crm_sales_visit_records',
         'attachment',
         existing_type=sa.String(length=255),
-        type_=sa.Text(),
+        type_=sa.MEDIUMTEXT(),
         existing_nullable=True
     )
 
@@ -34,7 +34,7 @@ def downgrade():
     op.alter_column(
         'crm_sales_visit_records',
         'attachment',
-        existing_type=sa.Text(),
+        existing_type=sa.MEDIUMTEXT(),
         type_=sa.String(length=255),
         existing_nullable=True
     )
