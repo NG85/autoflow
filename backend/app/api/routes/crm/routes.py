@@ -258,7 +258,8 @@ def create_visit_record(
                     visit_type=record.visit_type,
                     sales_visit_record={
                         **record.model_dump()
-                    }
+                    },
+                    db_session=db_session
                 )
                 return {"code": 0, "message": "success", "data": {}}
             except Exception as e:
@@ -290,7 +291,8 @@ def create_visit_record(
                 visit_type=record.visit_type,
                 sales_visit_record={
                     **record.model_dump()
-                }
+                },
+                db_session=db_session
             )
             return {"code": 0, "message": "success", "data": data}
         except Exception as e:

@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from uuid import UUID
 from fastapi_pagination import Page, Params
 from fastapi_pagination.ext.sqlmodel import paginate
@@ -21,6 +21,61 @@ class UserProfileRepo(BaseRepo):
         """根据OAuth用户ID获取档案"""
         query = select(UserProfile).where(UserProfile.oauth_user_id == oauth_user_id)
         return db_session.exec(query).first()
+
+    def get_by_recorder_id(self, db_session: Session, recorder_id: str) -> Optional[UserProfile]:
+        """根据记录人ID获取档案"""
+        # 尝试作为OAuth用户ID查找
+        profile = self.get_by_oauth_user_id(db_session, recorder_id)
+        if profile:
+            return profile
+        
+        # 如果不是OAuth ID，尝试作为系统用户ID查找
+        try:
+            from uuid import UUID
+            user_uuid = UUID(recorder_id)
+            return self.get_by_user_id(db_session, user_uuid)
+        except ValueError:
+            # 如果不是有效的UUID，返回None
+            return None
+
+    def get_by_name(self, db_session: Session, name: str) -> Optional[UserProfile]:
+        """通过姓名查找用户档案"""
+        try:
+            profiles = db_session.exec(
+                select(UserProfile).where(
+                    UserProfile.name == name,
+                    UserProfile.is_active == True
+                )
+            ).all()
+            
+            if profiles:
+                return profiles[0]  # 返回第一个匹配的
+            return None
+        except Exception as e:
+            return None
+
+    def get_all_active_profiles(self, db_session: Session) -> List[UserProfile]:
+        """获取所有有效的用户档案"""
+        return db_session.exec(
+            select(UserProfile).where(UserProfile.is_active == True)
+        ).all()
+
+    def get_all_profiles(self, db_session: Session) -> List[UserProfile]:
+        """获取所有用户档案"""
+        return db_session.exec(select(UserProfile)).all()
+
+    def get_profile_stats(self, db_session: Session) -> Dict[str, Any]:
+        """获取档案统计信息"""
+        all_profiles = self.get_all_profiles(db_session)
+        
+        profiles_with_system_user = [p for p in all_profiles if p.user_id is not None]
+        profiles_without_system_user = [p for p in all_profiles if p.user_id is None]
+        
+        return {
+            "total_profiles": len(all_profiles),
+            "profiles_with_system_user": len(profiles_with_system_user),
+            "profiles_without_system_user": len(profiles_without_system_user)
+        }
 
     def get_user_profile_for_feishu(self, db_session: Session, user_id: UUID) -> Optional[dict]:
         """获取用户档案信息用于飞书消息推送"""

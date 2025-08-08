@@ -95,15 +95,15 @@ DEFAULT_INTERNAL_USERS = [
 
 DEFAULT_INTERNAL_GROUP_CHATS = [
     {
-        "client_id": "cli_a735685d1c39100e",
+        "client_id": "cli_a74a312d91b9d00d",
         "name": "集结号",
         "chat_id": "oc_9b167146c8e0d78121898641fd91d61b"
     },
-    # {
-        # "client_id": "cli_a735685d1c39100e",
-    #     "name": "Release",
-    #     "chat_id": "oc_0b983a12f112ba3a8ae98cd3fd141d0e"
-    # },
+    {
+        "client_id": "cli_a735685d1c39100e",
+        "name": "Release",
+        "chat_id": "oc_0b983a12f112ba3a8ae98cd3fd141d0e"
+    },
     {
         "client_id": "cli_a808bc341680d00b",
         "name": "拜访跟进",

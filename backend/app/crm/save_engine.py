@@ -1,17 +1,16 @@
 import logging
-from datetime import datetime
-from app.tasks.bitable_import import FIELD_MAP, upsert_visit_records
-from app.utils.uuid6 import uuid6
-from app.core.config import settings
-import requests
-from app.feishu.common_open import DEFAULT_INTERNAL_GROUP_CHATS, send_feishu_message, get_tenant_access_token
-from app.feishu.push_review import DEFAULT_EXTERNAL_GROUP_CHATS, DEFAULT_EXTERNAL_SALES
 import json
-from typing import Optional
-from sqlmodel import Session
-from app.models.document_contents import DocumentContent
+from typing import Dict, Any, Optional, List
+from datetime import datetime, timedelta
+from sqlmodel import Session, select
+from app.core.config import settings
+from app.core.db import get_db_session
 from app.api.routes.crm.models import VisitRecordCreate
 from app.api.deps import CurrentUserDep, SessionDep
+from app.tasks.bitable_import import FIELD_MAP, upsert_visit_records
+from app.utils.uuid6 import uuid6
+import requests
+from app.models.document_contents import DocumentContent
 
 logger = logging.getLogger(__name__)
 
@@ -217,52 +216,53 @@ def fill_sales_visit_record_fields(sales_visit_record):
     return sales_visit_record
 
 
-def push_visit_record_feishu_message(external, sales_visit_record, visit_type, receive_id=None, receive_id_type="chat_id"):
+def push_visit_record_feishu_message(external, sales_visit_record, visit_type, receive_id=None, receive_id_type="chat_id", db_session=None):
     sales_visit_record = fill_sales_visit_record_fields(sales_visit_record)
     
-    if not external:
-        logger.info(f"push visit record feishu message to internal group")
-        # 根据当前appid匹配内部群
-        current_app_id = settings.FEISHU_APP_ID
-        target_group = None
-        for group in DEFAULT_INTERNAL_GROUP_CHATS:
-            if group.get("client_id") == current_app_id:
-                target_group = group
-                break
-        
-        if target_group:
-            receive_id = target_group["chat_id"]
-            logger.info(f"matched internal group: {target_group['name']} for app_id: {current_app_id}")
-        else:
-            # 如果没有匹配到，使用默认逻辑
-            receive_id = DEFAULT_INTERNAL_GROUP_CHATS[0]["chat_id"]
-            logger.warning(f"no matched internal group for app_id: {current_app_id}, using default")
-    elif sales_visit_record.get("recorder") in [user.get("name") for user in DEFAULT_EXTERNAL_SALES]:
-        logger.info(f"push visit record feishu message to hanqiwei's external group")
-        receive_id = DEFAULT_EXTERNAL_GROUP_CHATS[0]["chat_id"]
-    else:
-        logger.info(f"skip push visit record feishu message for {sales_visit_record.get('recorder')}")
-        return
-    template_id = "AAqz0J0JSTciO" if visit_type == "form" else "AAqz0v4nx70HL" # 拜访记录卡片模板ID
-    template_vars = {
-        "visit_date": sales_visit_record.get("visit_communication_date", "--"),
-        "recorder": sales_visit_record.get("recorder", "--"),
-        "sales_visit_records": [sales_visit_record]
-    }
+    # 获取记录人信息
+    recorder_id = sales_visit_record.get("recorder_id")
+    recorder_name = sales_visit_record.get("recorder")
     
-    token = get_tenant_access_token(app_id=settings.FEISHU_APP_ID,app_secret=settings.FEISHU_APP_SECRET, external=external)
-    card_content = {
-        "type": "template",
-        "data": {
-            "template_id": template_id,
-            "template_variable": template_vars
-        }
-    }
+    if not recorder_id and not recorder_name:
+        logger.warning("No recorder_id or recorder_name found in sales visit record")
+        return False
+    
+    # 使用飞书推送服务
+    from app.services.feishu_notification_service import FeishuNotificationService
+    
+    notification_service = FeishuNotificationService()
+    
+    # 如果没有传入db_session，则创建一个新的
+    should_close_session = False
+    if db_session is None:
+        db_session = get_db_session()
+        should_close_session = True
+    
     try:
-        send_feishu_message(receive_id, token, card_content, receive_id_type=receive_id_type, msg_type="interactive")
+        # 发送拜访记录通知
+        result = notification_service.send_visit_record_notification(
+            db_session=db_session,
+            recorder_name=recorder_name,
+            recorder_id=recorder_id,
+            visit_record=sales_visit_record,
+            visit_type=visit_type,
+            external=external
+        )
+        
+        if result["success"]:
+            logger.info(f"Successfully pushed visit record notification: {result['message']}")
+        else:
+            logger.warning(f"Failed to push visit record notification: {result['message']}")
+        
+        return result["success"]
+        
     except Exception as e:
         logger.error(f"Failed to push visit record feishu message: {e}")
         return False
+    finally:
+        # 只有当我们创建了session时才关闭它
+        if should_close_session:
+            db_session.close()
 
 
 def save_visit_record_with_content(
@@ -314,7 +314,8 @@ def save_visit_record_with_content(
             visit_type=record.visit_type,
             sales_visit_record={
                 **record.model_dump()
-            }
+            },
+            db_session=db_session
         )
         
         return {"code": 0, "message": "success", "data": {}}
