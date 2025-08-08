@@ -152,7 +152,7 @@ class VisitRecordRepo(BaseRepo):
             )
             .outerjoin(
                 UserProfile,
-                func.replace(func.cast(CRMSalesVisitRecord.recorder_id, String), '-', '') == UserProfile.oauth_user_id
+                func.replace(func.cast(CRMSalesVisitRecord.recorder_id, String), '-', '') == func.replace(UserProfile.oauth_user_id, '-', '')
             )
         )
 
@@ -330,7 +330,7 @@ class VisitRecordRepo(BaseRepo):
             )
             .outerjoin(
                 UserProfile,
-                func.replace(func.cast(CRMSalesVisitRecord.recorder_id, String), '-', '') == UserProfile.oauth_user_id
+                func.replace(func.cast(CRMSalesVisitRecord.recorder_id, String), '-', '') == func.replace(UserProfile.oauth_user_id, '-', '')
             )
             .where(CRMSalesVisitRecord.id == record_id)
         )
