@@ -1,7 +1,7 @@
 from typing import Optional, List
 from datetime import datetime, date
 import logging
-from sqlmodel import Session, select, func, and_, or_, desc, asc, text
+from sqlmodel import Session, select, func, and_, or_, desc, asc, text, String
 from fastapi_pagination import Params, Page
 from fastapi_pagination.ext.sqlmodel import paginate
 from uuid import UUID
@@ -152,7 +152,7 @@ class VisitRecordRepo(BaseRepo):
             )
             .outerjoin(
                 UserProfile,
-                CRMSalesVisitRecord.recorder_id == UserProfile.oauth_user_id
+                func.replace(func.cast(CRMSalesVisitRecord.recorder_id, String), '-', '') == UserProfile.oauth_user_id
             )
         )
 
@@ -165,8 +165,32 @@ class VisitRecordRepo(BaseRepo):
             else:
                 accessible_recorder_ids = self._get_user_accessible_recorder_ids(session, current_user_id)
                 if accessible_recorder_ids:
-                    # 根据recorder_id过滤
-                    query = query.where(CRMSalesVisitRecord.recorder_id.in_(accessible_recorder_ids))
+                    # 根据recorder_id过滤 - 需要转换类型
+                    from uuid import UUID
+                    try:
+                        # 将字符串ID转换为UUID进行过滤，同时处理去掉短横线的情况
+                        uuid_recorder_ids = []
+                        for rid in accessible_recorder_ids:
+                            if rid:
+                                # 如果已经是32位字符串（去掉短横线的UUID），需要重新格式化
+                                if len(rid) == 32:
+                                    # 重新插入短横线以创建标准UUID格式
+                                    formatted_uuid = f"{rid[:8]}-{rid[8:12]}-{rid[12:16]}-{rid[16:20]}-{rid[20:32]}"
+                                    uuid_recorder_ids.append(UUID(formatted_uuid))
+                                else:
+                                    # 标准UUID格式
+                                    uuid_recorder_ids.append(UUID(rid))
+                        query = query.where(CRMSalesVisitRecord.recorder_id.in_(uuid_recorder_ids))
+                    except ValueError as e:
+                        logger.error(f"Invalid UUID format in accessible_recorder_ids: {e}")
+                        # 如果转换失败，返回空结果
+                        return Page(
+                            items=[],
+                            total=0,
+                            page=request.page,
+                            size=request.page_size,
+                            pages=0
+                        )
                 else:
                     # 如果没有可访问的记录人，返回空结果
                     logger.warning(f"No accessible recorder IDs for user: {current_user_id}")
@@ -306,7 +330,7 @@ class VisitRecordRepo(BaseRepo):
             )
             .outerjoin(
                 UserProfile,
-                CRMSalesVisitRecord.recorder_id == UserProfile.oauth_user_id
+                func.replace(func.cast(CRMSalesVisitRecord.recorder_id, String), '-', '') == UserProfile.oauth_user_id
             )
             .where(CRMSalesVisitRecord.id == record_id)
         )
