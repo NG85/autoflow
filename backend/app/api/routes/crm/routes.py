@@ -2,7 +2,7 @@ import logging
 from typing import List, Optional
 import os
 from app.api.deps import CurrentUserDep, SessionDep
-from app.exceptions import InternalServerError, BadRequest
+from app.exceptions import InternalServerError
 from fastapi import APIRouter, Body, HTTPException
 from app.crm.view_engine import CrmViewRequest, ViewType, CrmViewEngine, ViewRegistry
 from fastapi_pagination import Page
@@ -819,7 +819,7 @@ def get_department_daily_reports(
             try:
                 parsed_date = datetime.strptime(target_date, '%Y-%m-%d').date()
             except ValueError:
-                raise BadRequest("日期格式错误，请使用YYYY-MM-DD格式")
+                raise HTTPException(status_code=400, detail="日期格式错误，请使用YYYY-MM-DD格式")
         else:
             parsed_date = (datetime.now() - timedelta(days=1)).date()
         
@@ -889,7 +889,7 @@ def get_company_daily_report(
             try:
                 parsed_date = datetime.strptime(target_date, '%Y-%m-%d').date()
             except ValueError:
-                raise BadRequest("日期格式错误，请使用YYYY-MM-DD格式")
+                raise HTTPException(status_code=400, detail="日期格式错误，请使用YYYY-MM-DD格式")
         else:
             parsed_date = (datetime.now() - timedelta(days=1)).date()
         
@@ -903,7 +903,7 @@ def get_company_daily_report(
         
         if not company_report:
             logger.warning(f"{parsed_date} 没有找到任何公司日报数据")
-            raise BadRequest(f"{parsed_date} 没有找到任何数据")
+            raise HTTPException(status_code=400, detail=f"{parsed_date} 没有找到任何数据")
         
         # 转换日期格式
         if hasattr(company_report.get('report_date'), 'isoformat'):
