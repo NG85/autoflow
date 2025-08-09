@@ -136,6 +136,11 @@ class Settings(BaseSettings):
     CRM_DAILY_TASK_MINUTE: int = 0
     CRM_ACCOUNT_PRIMARY_EXCLUDE: bool = False
     
+    # CRM daily statistics task configuration
+    CRM_DAILY_STATISTICS_ENABLED: bool = False
+    CRM_DAILY_STATISTICS_CRON: str = '30 8 * * *'  # 每天早上8:30执行
+    CRM_DAILY_STATISTICS_FEISHU_ENABLED: bool = True  # 是否启用飞书推送
+    
     # Feishu Btable sync configuration
     ENABLE_FEISHU_BTABLE_SYNC: bool = False
     FEISHU_BTABLE_SYNC_CRON: str = '5 0 * * *'
@@ -145,6 +150,12 @@ class Settings(BaseSettings):
     
     # Feishu send message configuration
     REVIEW_REPORT_HOST: str = "https://aptsell.pingcap.net"
+    
+    # Visit detail page URL configuration
+    VISIT_DETAIL_PAGE_URL: str = "https://demo.aptsell.ai/registerVisitRecord/list"
+    
+    # Account list page URL configuration
+    ACCOUNT_LIST_PAGE_URL: str = "https://demo.aptsell.ai/review/list/account"
     
     # Ark LLM API
     ARK_API_KEY: str = "b1529268-82ea-407a-bd79-d01514a2ed60"

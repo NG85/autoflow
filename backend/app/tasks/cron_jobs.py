@@ -70,4 +70,84 @@ def create_crm_daily_datasource(self):
         logger.error(f"创建CRM数据源失败: {str(e)}")
         # 使用Celery的重试机制
         self.retry(exc=e, countdown=60)  # 1分钟后重试
+
+
+@app.task(bind=True, max_retries=3)
+def generate_crm_daily_statistics(self, target_date_str=None):
+    """
+    生成CRM销售日报完整数据并推送飞书通知
+    每天早上8:30执行，处理前一天的销售日报数据
     
+    Args:
+        target_date_str: 目标日期字符串，格式YYYY-MM-DD，不传则默认为昨天
+    
+    工作流程：
+    1. 从crm_daily_account_statistics表查询每个销售的统计数据
+    2. 通过correlation_id关联crm_account_assessment表获取评估详情
+    3. 组合成完整的日报数据
+    4. 推送个人日报飞书卡片给每个销售人员本人
+    5. 按部门汇总数据生成部门日报
+    6. 推送部门日报飞书卡片给各部门负责人
+    7. 汇总公司级数据生成公司日报
+    8. 推送公司日报飞书卡片（内部环境推送到群聊，外部环境推送给管理员）
+    """
+    try:
+        from app.services.crm_daily_statistics_service import crm_daily_statistics_service
+        from datetime import datetime, timedelta
+        
+        # 解析目标日期
+        if target_date_str:
+            try:
+                target_date = datetime.strptime(target_date_str, '%Y-%m-%d').date()
+                logger.info(f"开始执行CRM日报数据生成任务，目标日期: {target_date}")
+            except ValueError:
+                logger.error(f"无效的日期格式: {target_date_str}")
+                target_date = (datetime.now() - timedelta(days=1)).date()
+                logger.info(f"使用默认日期: {target_date}")
+        else:
+            target_date = (datetime.now() - timedelta(days=1)).date()
+            logger.info(f"开始执行CRM日报数据生成任务，默认处理昨天: {target_date}")
+        
+        with Session(engine) as session:
+            # 生成指定日期的完整日报数据
+            sales_count = crm_daily_statistics_service.generate_daily_statistics(session, target_date)
+            
+            if sales_count > 0:
+                logger.info(f"CRM日报数据生成完成，处理了 {sales_count} 个销售人员的数据")
+                from app.core.config import settings
+                feishu_status = "已推送" if settings.CRM_DAILY_STATISTICS_FEISHU_ENABLED else "已禁用"
+                
+                # 如果启用了飞书推送，统计部门数量
+                department_count = 0
+                if settings.CRM_DAILY_STATISTICS_FEISHU_ENABLED:
+                    try:
+                        department_reports = crm_daily_statistics_service.aggregate_department_reports(session, target_date)
+                        department_count = len(department_reports)
+                    except Exception as e:
+                        logger.warning(f"统计部门数量失败: {e}")
+                
+                return {
+                    "success": True,
+                    "target_date": target_date.isoformat(),
+                    "sales_count": sales_count,
+                    "department_count": department_count,
+                    "company_report_generated": settings.CRM_DAILY_STATISTICS_FEISHU_ENABLED,
+                    "feishu_enabled": settings.CRM_DAILY_STATISTICS_FEISHU_ENABLED,
+                    "feishu_status": feishu_status,
+                    "message": f"成功处理了 {sales_count} 个销售人员的数据，{department_count} 个部门，生成公司日报，飞书推送: {feishu_status}"
+                }
+            else:
+                logger.warning(f"{target_date} 没有找到任何销售人员的数据，可能是节假日或数据未同步")
+                return {
+                    "success": True,
+                    "target_date": target_date.isoformat(),
+                    "sales_count": 0,
+                    "feishu_enabled": False,
+                    "feishu_status": "无数据",
+                    "message": "没有找到销售数据"
+                }
+            
+    except Exception as e:
+        logger.error(f"CRM日报数据生成任务失败: {str(e)}")
+        # 使用Celery的重试机制
+        self.retry(exc=e, countdown=300)  # 5分钟后重试

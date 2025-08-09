@@ -1,5 +1,6 @@
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
+from datetime import date
 from pydantic import BaseModel, Field
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
 
@@ -214,3 +215,84 @@ class VisitRecordQueryResponse(BaseModel):
     page: int
     page_size: int
     pages: int
+
+# 销售个人日报统计数据模型
+class DailyReportStatistics(BaseModel):
+    """销售个人日报统计数据"""
+    end_customer_total_follow_up: int = Field(description="总跟进最终客户数")
+    end_customer_total_first_visit: int = Field(description="总首次拜访最终客户数")
+    end_customer_total_multi_visit: int = Field(description="总多次拜访最终客户数")
+    parter_total_follow_up: int = Field(description="总跟进合作伙伴数")
+    parter_total_first_visit: int = Field(description="总首次拜访合作伙伴数")
+    parter_total_multi_visit: int = Field(description="总多次拜访合作伙伴数")
+    assessment_red_count: int = Field(description="评估为red的次数")
+    assessment_yellow_count: int = Field(description="评估为yellow的次数")
+    assessment_green_count: int = Field(description="评估为green的次数")
+
+# 客户评估详情模型
+class AssessmentDetail(BaseModel):
+    """客户评估详情"""
+    account_name: str = Field(description="客户名称")
+    opportunity_names: str = Field(description="商机名称列表，用 | 分隔")
+    follow_up_note: str = Field(description="销售跟进记录")
+    follow_up_next_step: str = Field(description="销售跟进下一步")
+    assessment_flag: str = Field(description="评估标志(🔴/🟡/🟢)")
+    assessment_description: str = Field(description="评估描述")
+    account_level: str = Field(description="客户等级")
+    sales_name: str = Field(description="销售人员姓名")
+    department_name: str = Field(description="部门名称")
+
+# 销售个人日报响应模型
+class DailyReportResponse(BaseModel):
+    """销售个人日报响应"""
+    recorder: str = Field(description="记录人/销售人员")
+    department_name: str = Field(description="部门名称")
+    report_date: date = Field(description="报告日期")
+    statistics: List[DailyReportStatistics] = Field(description="统计数据")
+    visit_detail_page: str = Field(description="拜访记录详情页面链接")
+    account_list_page: str = Field(description="客户列表页面链接")
+    first_assessment: List[AssessmentDetail] = Field(description="首次拜访评估详情")
+    multi_assessment: List[AssessmentDetail] = Field(description="多次拜访评估详情")
+
+# 客户评估精简详情模型 - 用于公司日报
+class CompanyAssessmentDetail(BaseModel):
+    """公司级评估详情（不包含跟进记录）"""
+    account_name: str = Field(description="客户名称")
+    opportunity_names: str = Field(description="商机名称列表，用 | 分隔")
+    assessment_flag: str = Field(description="评估标志(🔴/🟡/🟢)")
+    assessment_description: str = Field(description="评估描述")
+    account_level: str = Field(description="客户等级")
+    sales_name: str = Field(description="销售人员姓名")
+    department_name: str = Field(description="部门名称")
+
+# 部门日报响应模型
+class DepartmentDailyReportResponse(BaseModel):
+    """部门日报响应"""
+    department_name: str = Field(description="部门名称")
+    report_date: date = Field(description="报告日期")
+    statistics: List[DailyReportStatistics] = Field(description="部门汇总统计数据")
+    visit_detail_page: str = Field(description="拜访记录详情页面链接")
+    account_list_page: str = Field(description="客户列表页面链接")
+    first_assessment: List[AssessmentDetail] = Field(description="部门首次拜访评估详情汇总")
+    multi_assessment: List[AssessmentDetail] = Field(description="部门多次拜访评估详情汇总")
+
+# 公司日报响应模型
+class CompanyDailyReportResponse(BaseModel):
+    """公司日报响应"""
+    report_date: date = Field(description="报告日期")
+    statistics: List[DailyReportStatistics] = Field(description="公司汇总统计数据")
+    visit_detail_page: str = Field(description="拜访记录详情页面链接")
+    account_list_page: str = Field(description="客户列表页面链接")
+    first_assessment: List[CompanyAssessmentDetail] = Field(description="公司首次拜访评估详情汇总")
+    multi_assessment: List[CompanyAssessmentDetail] = Field(description="公司多次拜访评估详情汇总")
+
+# 销售个人日报查询请求
+class DailyReportRequest(BaseModel):
+    """销售个人日报查询请求"""
+    sales_id: Optional[str] = Field(default=None, description="销售人员ID，不传则查询所有销售")
+    sales_name: Optional[str] = Field(default=None, description="销售人员姓名，支持模糊查询")
+    start_date: Optional[date] = Field(default=None, description="开始日期")
+    end_date: Optional[date] = Field(default=None, description="结束日期")
+    department_name: Optional[str] = Field(default=None, description="部门名称过滤")
+    page: int = Field(default=1, ge=1, description="页码")
+    page_size: int = Field(default=20, ge=1, le=100, description="每页大小")
