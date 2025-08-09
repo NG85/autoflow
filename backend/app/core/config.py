@@ -152,10 +152,10 @@ class Settings(BaseSettings):
     REVIEW_REPORT_HOST: str = "https://aptsell.pingcap.net"
     
     # Visit detail page URL configuration
-    VISIT_DETAIL_PAGE_URL: str = "https://demo.aptsell.ai/registerVisitRecord/list"
+    VISIT_DETAIL_PAGE_URL: str = REVIEW_REPORT_HOST + "/registerVisitRecord/list"
     
     # Account list page URL configuration
-    ACCOUNT_LIST_PAGE_URL: str = "https://demo.aptsell.ai/review/list/account"
+    ACCOUNT_LIST_PAGE_URL: str = REVIEW_REPORT_HOST + "/review/list/account"
     
     # Ark LLM API
     ARK_API_KEY: str = "b1529268-82ea-407a-bd79-d01514a2ed60"
