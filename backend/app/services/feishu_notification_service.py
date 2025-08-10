@@ -651,7 +651,7 @@ class FeishuNotificationService:
             # 外部应用：推送给外部管理员
             logger.info(f"当前应用 {current_app_id} 是外部应用，公司日报将推送给外部管理员")
             
-            for admin in DEFAULT_EXTERNAL_EXTENDED_ADMINS:
+            for admin in DEFAULT_EXTERNAL_ADMINS:
                 recipients.append({
                     "open_id": admin["open_id"],
                     "name": admin["name"],
