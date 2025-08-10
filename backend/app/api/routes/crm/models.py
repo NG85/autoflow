@@ -241,6 +241,25 @@ class AssessmentDetail(BaseModel):
     account_level: str = Field(description="客户等级")
     sales_name: str = Field(description="销售人员姓名")
     department_name: str = Field(description="部门名称")
+    
+    @classmethod
+    def safe_placeholder(cls, value: str) -> str:
+        """为空值提供 -- 占位符"""
+        if not value or (isinstance(value, str) and value.strip() == ''):
+            return "--"
+        return value
+    
+    def __init__(self, **data):
+        # 统一处理占位符
+        data['account_name'] = self.safe_placeholder(data.get('account_name', ''))
+        data['opportunity_names'] = self.safe_placeholder(data.get('opportunity_names', ''))
+        data['follow_up_note'] = self.safe_placeholder(data.get('follow_up_note', ''))
+        data['follow_up_next_step'] = self.safe_placeholder(data.get('follow_up_next_step', ''))
+        data['assessment_description'] = self.safe_placeholder(data.get('assessment_description', ''))
+        data['account_level'] = self.safe_placeholder(data.get('account_level', ''))
+        data['sales_name'] = self.safe_placeholder(data.get('sales_name', ''))
+        data['department_name'] = self.safe_placeholder(data.get('department_name', ''))
+        super().__init__(**data)
 
 # 销售个人日报响应模型
 class DailyReportResponse(BaseModel):
@@ -264,6 +283,23 @@ class CompanyAssessmentDetail(BaseModel):
     account_level: str = Field(description="客户等级")
     sales_name: str = Field(description="销售人员姓名")
     department_name: str = Field(description="部门名称")
+    
+    @classmethod
+    def safe_placeholder(cls, value: str) -> str:
+        """为空值提供 -- 占位符"""
+        if not value or (isinstance(value, str) and value.strip() == ''):
+            return "--"
+        return value
+    
+    def __init__(self, **data):
+        # 统一处理占位符
+        data['account_name'] = self.safe_placeholder(data.get('account_name', ''))
+        data['opportunity_names'] = self.safe_placeholder(data.get('opportunity_names', ''))
+        data['assessment_description'] = self.safe_placeholder(data.get('assessment_description', ''))
+        data['account_level'] = self.safe_placeholder(data.get('account_level', ''))
+        data['sales_name'] = self.safe_placeholder(data.get('sales_name', ''))
+        data['department_name'] = self.safe_placeholder(data.get('department_name', ''))
+        super().__init__(**data)
 
 # 部门日报响应模型
 class DepartmentDailyReportResponse(BaseModel):

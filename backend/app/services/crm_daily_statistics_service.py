@@ -206,11 +206,19 @@ class CRMDailyStatisticsService:
             import json
             opportunity_list = json.loads(opportunity_names_json)
             if isinstance(opportunity_list, list):
-                return " | ".join(opportunity_list)
+                if not opportunity_list:  # 空数组
+                    return ""
+                # 过滤空字符串并用 | 连接
+                filtered_list = [name.strip() for name in opportunity_list if name and name.strip()]
+                if not filtered_list:  # 所有元素都是空字符串
+                    return ""
+                return " | ".join(filtered_list)
             else:
-                return str(opportunity_list)
+                result = str(opportunity_list).strip()
+                return result
         except (json.JSONDecodeError, TypeError):
-            return opportunity_names_json
+            # 如果解析失败，直接返回原字符串
+            return opportunity_names_json.strip() if opportunity_names_json else ""
     
     def _convert_assessment_flag(self, flag: str) -> str:
         """

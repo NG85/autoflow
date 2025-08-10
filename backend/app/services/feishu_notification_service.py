@@ -147,6 +147,7 @@ class FeishuNotificationService:
         db_session: Session,
         recorder_name: str = None,
         recorder_id: str = None,
+        department_name: str = None,
         external: bool = False
     ) -> List[Dict[str, Any]]:
         """
@@ -156,6 +157,7 @@ class FeishuNotificationService:
             db_session: 数据库会话
             recorder_name: 记录人姓名
             recorder_id: 记录人ID
+            department_name: 部门名称（用于精确匹配）
             external: 是否外部推送
             
         Returns:
@@ -169,13 +171,37 @@ class FeishuNotificationService:
         if recorder_id:
             # 优先使用recorder_id查找
             recorder_profile = self.user_profile_repo.get_by_recorder_id(db_session, recorder_id)
+            if recorder_profile:
+                logger.info(f"Found profile by recorder_id: {recorder_id} -> {recorder_profile.name}")
         
         if not recorder_profile and recorder_name:
-            # 如果recorder_id没找到，再尝试通过姓名查找
-            recorder_profile = self.user_profile_repo.get_by_name(db_session, recorder_name)
+            # 如果recorder_id没找到，使用姓名和部门组合查找（更精确）
+            if department_name:
+                recorder_profile = self.user_profile_repo.get_by_name_and_department(
+                    db_session, recorder_name, department_name
+                )
+                if recorder_profile:
+                    logger.info(f"Found profile by name+department: {recorder_name} in {department_name} -> {recorder_profile.name}")
+            else:
+                # 如果没有部门信息，只按姓名查找
+                recorder_profile = self.user_profile_repo.get_by_name(db_session, recorder_name)
+                if recorder_profile:
+                    logger.info(f"Found profile by name only: {recorder_name} -> {recorder_profile.name}")
         
         if not recorder_profile:
-            logger.warning(f"No profile found for daily report recipient: name={recorder_name}, id={recorder_id}")
+            logger.warning(f"No profile found for daily report recipient: name={recorder_name}, id={recorder_id}, department={department_name}")
+            # 记录详细信息以便调试
+            logger.warning(f"Available profiles with similar names:")
+            try:
+                all_profiles = self.user_profile_repo.get_all_active_profiles(db_session)
+                if recorder_name:
+                    similar_names = [p.name for p in all_profiles if recorder_name == p.name]
+                    if similar_names:
+                        logger.warning(f"Exact name matches found: {similar_names}")
+                    else:
+                        logger.warning(f"No exact name matches found. Available names: {[p.name for p in all_profiles[:10]]}")
+            except Exception as e:
+                logger.error(f"Error checking available profiles: {e}")
             return recipients
         
         # 2. 只添加记录人本人
@@ -187,9 +213,9 @@ class FeishuNotificationService:
                 "department": recorder_profile.department,
                 "receive_id_type": "open_id"
             })
-            logger.info(f"Found daily report recipient: {recorder_profile.name} ({recorder_profile.department})")
+            logger.info(f"Found daily report recipient: {recorder_profile.name} ({recorder_profile.department}) with open_id: {recorder_profile.feishu_open_id}")
         else:
-            logger.warning(f"Recorder {recorder_name} has no feishu_open_id, cannot send daily report")
+            logger.warning(f"Recorder {recorder_name} (profile: {recorder_profile.name}) has no feishu_open_id, cannot send daily report")
         
         return recipients
     
@@ -327,10 +353,14 @@ class FeishuNotificationService:
                 "success_count": 0
             }
         
+        # 从日报数据中提取部门信息
+        department_name = daily_report_data.get("department_name")
+        
         # 获取推送对象 - 个人日报只推送给销售本人
         recipients = self.get_recipients_for_daily_report(
             db_session=db_session,
             recorder_name=recorder_name,
+            department_name=department_name,
             external=external
         )
         

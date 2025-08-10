@@ -39,7 +39,12 @@ class UserProfileRepo(BaseRepo):
             return None
 
     def get_by_name(self, db_session: Session, name: str) -> Optional[UserProfile]:
-        """通过姓名查找用户档案"""
+        """通过姓名查找用户档案（精确匹配）"""
+        if not name or not name.strip():
+            return None
+            
+        name = name.strip()
+        
         try:
             profiles = db_session.exec(
                 select(UserProfile).where(
@@ -52,6 +57,45 @@ class UserProfileRepo(BaseRepo):
                 return profiles[0]  # 返回第一个匹配的
             return None
         except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error in get_by_name for '{name}': {e}")
+            return None
+    
+    def get_by_name_and_department(self, db_session: Session, name: str, department: str) -> Optional[UserProfile]:
+        """通过姓名和部门组合查找用户档案（精确匹配）"""
+        if not name or not name.strip():
+            return None
+            
+        name = name.strip()
+        department = department.strip() if department else None
+        
+        try:
+            if department:
+                # 使用姓名和部门组合查找
+                profiles = db_session.exec(
+                    select(UserProfile).where(
+                        UserProfile.name == name,
+                        UserProfile.department == department,
+                        UserProfile.is_active == True
+                    )
+                ).all()
+            else:
+                # 如果部门为空，只按姓名查找
+                profiles = db_session.exec(
+                    select(UserProfile).where(
+                        UserProfile.name == name,
+                        UserProfile.is_active == True
+                    )
+                ).all()
+            
+            if profiles:
+                return profiles[0]  # 返回第一个匹配的
+            return None
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error in get_by_name_and_department for '{name}' in '{department}': {e}")
             return None
 
     def get_all_active_profiles(self, db_session: Session) -> List[UserProfile]:
