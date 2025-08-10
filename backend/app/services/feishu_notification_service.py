@@ -24,6 +24,11 @@ DEFAULT_EXTERNAL_EXTENDED_ADMINS = DEFAULT_EXTERNAL_ADMINS + [
         "open_id": "ou_edbdc2e3fc8eb411bbc49cc586629709",
         "user_id": "0196d251-3fa0-71f8-91d3-9a03a412c954"
     },
+    {
+        "name": "崔秋",
+        "email": "cuiqiu@pingcap.cn",
+        "open_id": "ou_718d03819e549537c4dc972154798a81"
+    },
 ]
 
 class FeishuNotificationService:
@@ -646,7 +651,7 @@ class FeishuNotificationService:
             # 外部应用：推送给外部管理员
             logger.info(f"当前应用 {current_app_id} 是外部应用，公司日报将推送给外部管理员")
             
-            for admin in DEFAULT_EXTERNAL_ADMINS:
+            for admin in DEFAULT_EXTERNAL_EXTENDED_ADMINS:
                 recipients.append({
                     "open_id": admin["open_id"],
                     "name": admin["name"],
