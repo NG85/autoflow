@@ -333,8 +333,10 @@ class CRMDailyStatisticsService:
         for report in complete_reports:
             try:
                 # 转换日期格式为字符串，因为JSON序列化不支持date对象
+                # 同时将sales_name字段重命名为recorder，以适配飞书卡片模板
                 report_data = {
                     **report,
+                    'recorder': report.get('sales_name', ''),  # 将sales_name重命名为recorder
                     'report_date': report['report_date'].isoformat() if hasattr(report.get('report_date'), 'isoformat') else str(report.get('report_date'))
                 }
                 
