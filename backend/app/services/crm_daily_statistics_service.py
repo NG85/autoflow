@@ -334,10 +334,28 @@ class CRMDailyStatisticsService:
             try:
                 # 转换日期格式为字符串，因为JSON序列化不支持date对象
                 # 同时将sales_name字段重命名为recorder，以适配飞书卡片模板
+                # 将统计数据组织成statistics数组，以适配飞书卡片模板
+                statistics_data = {
+                    'end_customer_total_follow_up': report.get('end_customer_total_follow_up', 0),
+                    'end_customer_total_first_visit': report.get('end_customer_total_first_visit', 0),
+                    'end_customer_total_multi_visit': report.get('end_customer_total_multi_visit', 0),
+                    'parter_total_follow_up': report.get('parter_total_follow_up', 0),
+                    'parter_total_first_visit': report.get('parter_total_first_visit', 0),
+                    'parter_total_multi_visit': report.get('parter_total_multi_visit', 0),
+                    'assessment_red_count': report.get('assessment_red_count', 0),
+                    'assessment_yellow_count': report.get('assessment_yellow_count', 0),
+                    'assessment_green_count': report.get('assessment_green_count', 0)
+                }
+                
                 report_data = {
-                    **report,
                     'recorder': report.get('sales_name', ''),  # 将sales_name重命名为recorder
-                    'report_date': report['report_date'].isoformat() if hasattr(report.get('report_date'), 'isoformat') else str(report.get('report_date'))
+                    'department_name': report.get('department_name', ''),
+                    'report_date': report['report_date'].isoformat() if hasattr(report.get('report_date'), 'isoformat') else str(report.get('report_date')),
+                    'statistics': [statistics_data],  # 将统计数据组织成数组
+                    'visit_detail_page': report.get('visit_detail_page', ''),
+                    'account_list_page': report.get('account_list_page', ''),
+                    'first_assessment': report.get('first_assessment', []),
+                    'multi_assessment': report.get('multi_assessment', [])
                 }
                 
                 # 发送飞书通知
