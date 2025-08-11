@@ -361,8 +361,7 @@ class CRMDailyStatisticsService:
                 # 发送飞书通知
                 result = notification_service.send_daily_report_notification(
                     db_session=session,
-                    daily_report_data=report_data,
-                    external=False  # 默认内部应用
+                    daily_report_data=report_data
                 )
                 
                 total_notifications += 1
@@ -415,8 +414,7 @@ class CRMDailyStatisticsService:
                 # 发送部门日报飞书通知
                 result = notification_service.send_department_report_notification(
                     db_session=session,
-                    department_report_data=department_report,
-                    external=False  # 默认内部应用
+                    department_report_data=department_report
                 )
                 
                 total_departments += 1
@@ -465,8 +463,7 @@ class CRMDailyStatisticsService:
             # 发送公司日报飞书通知
             result = notification_service.send_company_report_notification(
                 db_session=session,
-                company_report_data=company_report,
-                external=False  # 默认内部应用
+                company_report_data=company_report
             )
             
             if result["success"]:

@@ -231,8 +231,7 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None):
                         # 发送部门周报通知给部门负责人
                         result = notification_service.send_weekly_report_notification(
                             db_session=session,
-                            department_report_data=department_report,
-                            external=False  # 默认内部应用
+                            department_report_data=department_report
                         )
                         
                         if result["success"]:

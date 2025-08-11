@@ -113,7 +113,6 @@ def create_visit_record(
     db_session: SessionDep,
     user: CurrentUserDep,
     record: VisitRecordCreate,
-    external: bool = Body(False, example=False),
     force: bool = Body(False, example=False),
     feishu_auth_code: Optional[str] = Body(None, description="飞书授权码，用于换取访问令牌")
 ):
@@ -219,7 +218,6 @@ def create_visit_record(
                         document_type=document_type,
                         user=user,
                         db_session=db_session,
-                        external=external
                     )
                         
                 except UnsupportedDocumentTypeError as e:
@@ -250,7 +248,6 @@ def create_visit_record(
                         document_type=document_type,
                         user=user,
                         db_session=db_session,
-                        external=external,
                         title=os.path.basename(record.visit_url)
                     )
                     
@@ -272,7 +269,6 @@ def create_visit_record(
                     del record_data["attachment"]
                 
                 push_visit_record_feishu_message(
-                    external=external,
                     visit_type=record.visit_type,
                     sales_visit_record=record_data,
                     db_session=db_session
@@ -308,7 +304,6 @@ def create_visit_record(
                 del record_data["attachment"]
             
             push_visit_record_feishu_message(
-                external=external,
                 visit_type=record.visit_type,
                 sales_visit_record=record_data,
                 db_session=db_session

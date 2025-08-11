@@ -57,8 +57,7 @@ class FeishuNotificationService:
         self, 
         db_session: Session, 
         recorder_name: str = None,
-        recorder_id: str = None,
-        external: bool = False
+        recorder_id: str = None
     ) -> List[Dict[str, Any]]:
         """
         获取记录人相关的推送接收者
@@ -121,8 +120,23 @@ class FeishuNotificationService:
                         "department": dept_manager.department
                     })
         
-        # 5. 如果是外部推送，添加特别管理者
-        if external:
+        # 5. 根据应用ID判断推送类型
+        current_app_id = settings.FEISHU_APP_ID
+        is_internal_app = current_app_id in INTERNAL_APP_IDS
+        
+        if is_internal_app:
+            # 内部应用：添加群聊
+            matching_groups = self._get_matching_group_chats()
+            for group in matching_groups:
+                recipients.append({
+                    "open_id": group["chat_id"],
+                    "name": group["name"],
+                    "type": "group_chat",
+                    "department": "群聊",
+                    "receive_id_type": "chat_id"  # 群聊使用chat_id
+                })
+        else:
+            # 外部应用：添加特别管理者
             for admin in DEFAULT_EXTERNAL_ADMINS:
                 # 避免重复推送（如果特别管理者已经在接收者列表中）
                 if not any(r["open_id"] == admin["open_id"] for r in recipients):
@@ -133,18 +147,6 @@ class FeishuNotificationService:
                         "department": "管理团队"
                     })
         
-        # 6. 如果不是外部推送，添加群聊
-        if not external:
-            matching_groups = self._get_matching_group_chats()
-            for group in matching_groups:
-                recipients.append({
-                    "open_id": group["chat_id"],
-                    "name": group["name"],
-                    "type": "group_chat",
-                    "department": "群聊",
-                    "receive_id_type": "chat_id"  # 群聊使用chat_id
-                })
-        
         return recipients
     
     def get_recipients_for_daily_report(
@@ -152,8 +154,7 @@ class FeishuNotificationService:
         db_session: Session,
         recorder_name: str = None,
         recorder_id: str = None,
-        department_name: str = None,
-        external: bool = False
+        department_name: str = None
     ) -> List[Dict[str, Any]]:
         """
         获取日报推送的接收者 - 只推送给销售本人
@@ -163,7 +164,6 @@ class FeishuNotificationService:
             recorder_name: 记录人姓名
             recorder_id: 记录人ID
             department_name: 部门名称（用于精确匹配）
-            external: 是否外部推送
             
         Returns:
             接收者列表，只包含销售本人
@@ -231,8 +231,7 @@ class FeishuNotificationService:
         recorder_name: str = None,
         recorder_id: str = None,
         visit_record: Dict[str, Any] = None,
-        visit_type: str = "form",
-        external: bool = False
+        visit_type: str = "form"
     ) -> Dict[str, Any]:
         """
         发送拜访记录通知
@@ -243,8 +242,7 @@ class FeishuNotificationService:
         recipients = self.get_recipients_for_recorder(
             db_session, 
             recorder_name=recorder_name, 
-            recorder_id=recorder_id,
-            external=external
+            recorder_id=recorder_id
         )
         
         if not recipients:
@@ -277,8 +275,7 @@ class FeishuNotificationService:
         try:
             token = get_tenant_access_token(
                 app_id=settings.FEISHU_APP_ID,
-                app_secret=settings.FEISHU_APP_SECRET,
-                external=external
+                app_secret=settings.FEISHU_APP_SECRET
             )
         except Exception as e:
             logger.error(f"Failed to get tenant access token: {e}")
@@ -332,8 +329,7 @@ class FeishuNotificationService:
     def send_daily_report_notification(
         self,
         db_session: Session,
-        daily_report_data: Dict[str, Any],
-        external: bool = False
+        daily_report_data: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
         发送CRM日报飞书卡片通知
@@ -341,7 +337,6 @@ class FeishuNotificationService:
         Args:
             db_session: 数据库会话
             daily_report_data: 日报数据，包含recorder、department_name、report_date、statistics等
-            external: 是否为外部应用
             
         Returns:
             推送结果信息
@@ -365,8 +360,7 @@ class FeishuNotificationService:
         recipients = self.get_recipients_for_daily_report(
             db_session=db_session,
             recorder_name=recorder_name,
-            department_name=department_name,
-            external=external
+            department_name=department_name
         )
         
         if not recipients:
@@ -394,8 +388,7 @@ class FeishuNotificationService:
         try:
             token = get_tenant_access_token(
                 app_id=settings.FEISHU_APP_ID,
-                app_secret=settings.FEISHU_APP_SECRET,
-                external=external
+                app_secret=settings.FEISHU_APP_SECRET
             )
         except Exception as e:
             logger.error(f"Failed to get tenant access token for daily report: {e}")
@@ -454,8 +447,7 @@ class FeishuNotificationService:
     def get_recipients_for_department_report(
         self,
         db_session: Session,
-        department_name: str,
-        external: bool = False
+        department_name: str
     ) -> List[Dict[str, Any]]:
         """
         获取部门日报推送的接收者 - 推送给部门负责人
@@ -492,8 +484,7 @@ class FeishuNotificationService:
     def send_department_report_notification(
         self,
         db_session: Session,
-        department_report_data: Dict[str, Any],
-        external: bool = False
+        department_report_data: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
         发送部门日报飞书卡片通知
@@ -521,8 +512,7 @@ class FeishuNotificationService:
         # 获取推送对象 - 部门负责人
         recipients = self.get_recipients_for_department_report(
             db_session=db_session,
-            department_name=department_name,
-            external=external
+            department_name=department_name
         )
         
         if not recipients:
@@ -553,8 +543,7 @@ class FeishuNotificationService:
         try:
             token = get_tenant_access_token(
                 app_id=settings.FEISHU_APP_ID,
-                app_secret=settings.FEISHU_APP_SECRET,
-                external=external
+                app_secret=settings.FEISHU_APP_SECRET
             )
         except Exception as e:
             logger.error(f"Failed to get tenant access token for department report: {e}")
@@ -609,16 +598,10 @@ class FeishuNotificationService:
             "failed_recipients": failed_recipients
         }
     
-    def get_recipients_for_company_report(
-        self,
-        external: bool = False
-    ) -> List[Dict[str, Any]]:
+    def get_recipients_for_company_report(self) -> List[Dict[str, Any]]:
         """
         获取公司日报推送的接收者 - 根据应用ID判断推送目标
         
-        Args:
-            external: 是否外部推送
-            
         Returns:
             接收者列表，内部环境推送到群聊，外部环境推送给管理员
         """
@@ -669,8 +652,7 @@ class FeishuNotificationService:
     def send_company_report_notification(
         self,
         db_session: Session,
-        company_report_data: Dict[str, Any],
-        external: bool = False
+        company_report_data: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
         发送公司日报飞书卡片通知
@@ -685,8 +667,8 @@ class FeishuNotificationService:
         """
         from app.feishu.common_open import get_tenant_access_token, send_feishu_message
         
-        # 获取推送对象 - 外部管理员
-        recipients = self.get_recipients_for_company_report(external=external)
+        # 获取推送对象 - 根据应用ID判断推送目标
+        recipients = self.get_recipients_for_company_report()
         
         if not recipients:
             logger.warning("No recipients found for company report")
@@ -716,8 +698,7 @@ class FeishuNotificationService:
         try:
             token = get_tenant_access_token(
                 app_id=settings.FEISHU_APP_ID,
-                app_secret=settings.FEISHU_APP_SECRET,
-                external=external
+                app_secret=settings.FEISHU_APP_SECRET
             )
         except Exception as e:
             logger.error(f"Failed to get tenant access token for company report: {e}")
@@ -775,8 +756,7 @@ class FeishuNotificationService:
     def send_weekly_report_notification(
         self,
         db_session: Session,
-        department_report_data: Dict[str, Any],
-        external: bool = False
+        department_report_data: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
         发送部门周报飞书卡片通知
@@ -804,8 +784,7 @@ class FeishuNotificationService:
         # 获取推送对象 - 部门负责人
         recipients = self.get_recipients_for_department_report(
             db_session=db_session,
-            department_name=department_name,
-            external=external
+            department_name=department_name
         )
         
         if not recipients:
@@ -833,8 +812,7 @@ class FeishuNotificationService:
         try:
             token = get_tenant_access_token(
                 app_id=settings.FEISHU_APP_ID,
-                app_secret=settings.FEISHU_APP_SECRET,
-                external=external
+                app_secret=settings.FEISHU_APP_SECRET
             )
         except Exception as e:
             logger.error(f"Failed to get tenant access token for weekly report: {e}")
@@ -1042,13 +1020,13 @@ class FeishuNotificationService:
     
     def _convert_weekly_report_data_for_feishu(self, report_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        将周报数据转换为飞书卡片所需的格式（所有数值转换为字符串）
+        将周报数据转换为飞书卡片所需的格式（所有数值和日期转换为字符串）
         
         Args:
             report_data: 原始周报数据
             
         Returns:
-            转换后的数据，所有数值字段都转换为字符串
+            转换后的数据，所有数值和日期字段都转换为字符串
         """
         converted_data = report_data.copy()
         
@@ -1061,22 +1039,24 @@ class FeishuNotificationService:
                         if isinstance(value, (int, float)):
                             stats[key] = str(value)
         
-        # 处理其他可能的数值字段
+        # 处理其他可能的数值和日期字段
         for key, value in converted_data.items():
             if isinstance(value, (int, float)) and key not in ['statistics']:
                 converted_data[key] = str(value)
+            elif hasattr(value, 'isoformat'):  # 处理date对象
+                converted_data[key] = value.isoformat()
         
         return converted_data
     
     def _convert_daily_report_data_for_feishu(self, report_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        将日报数据转换为飞书卡片所需的格式（所有数值转换为字符串）
+        将日报数据转换为飞书卡片所需的格式（所有数值和日期转换为字符串）
         
         Args:
             report_data: 原始日报数据
             
         Returns:
-            转换后的数据，所有数值字段都转换为字符串
+            转换后的数据，所有数值和日期字段都转换为字符串
         """
         converted_data = report_data.copy()
         
@@ -1089,9 +1069,11 @@ class FeishuNotificationService:
                         if isinstance(value, (int, float)):
                             stats[key] = str(value)
         
-        # 处理其他可能的数值字段
+        # 处理其他可能的数值和日期字段
         for key, value in converted_data.items():
             if isinstance(value, (int, float)) and key not in ['statistics']:
                 converted_data[key] = str(value)
+            elif hasattr(value, 'isoformat'):  # 处理date对象
+                converted_data[key] = value.isoformat()
         
         return converted_data

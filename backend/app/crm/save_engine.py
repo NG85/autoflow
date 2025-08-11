@@ -216,7 +216,7 @@ def fill_sales_visit_record_fields(sales_visit_record):
     return sales_visit_record
 
 
-def push_visit_record_feishu_message(external, sales_visit_record, visit_type, receive_id=None, receive_id_type="chat_id", db_session=None):
+def push_visit_record_feishu_message(sales_visit_record, visit_type, db_session=None):
     sales_visit_record = fill_sales_visit_record_fields(sales_visit_record)
     
     # 获取记录人信息
@@ -250,8 +250,7 @@ def push_visit_record_feishu_message(external, sales_visit_record, visit_type, r
             recorder_name=recorder_name,
             recorder_id=recorder_id,
             visit_record=sales_visit_record,
-            visit_type=visit_type,
-            external=external
+            visit_type=visit_type
         )
         
         if result["success"]:
@@ -276,7 +275,6 @@ def save_visit_record_with_content(
     document_type: str,
     user: CurrentUserDep,
     db_session: SessionDep,
-    external: bool,
     title: Optional[str] = None
 ) -> dict:
     """
@@ -288,7 +286,6 @@ def save_visit_record_with_content(
         document_type: 文档类型
         user: 当前用户
         db_session: 数据库会话
-        external: 是否为外部调用
         title: 文档标题（可选）
         
     Returns:
@@ -321,7 +318,6 @@ def save_visit_record_with_content(
             del record_data["attachment"]
         
         push_visit_record_feishu_message(
-            external=external,
             visit_type=record.visit_type,
             sales_visit_record=record_data,
             db_session=db_session

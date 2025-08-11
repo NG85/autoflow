@@ -117,11 +117,17 @@ DEFAULT_INTERNAL_GROUP_CHATS = [
 ]
 
 # 获取tenant_access_token
-def get_tenant_access_token(app_id: Optional[str] = None, app_secret: Optional[str] = None, external=False):
+def get_tenant_access_token(app_id: Optional[str] = None, app_secret: Optional[str] = None):
     url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal/"
+    
+    # 如果没有指定app_id，使用当前配置的应用ID
+    if app_id is None:
+        app_id = settings.FEISHU_APP_ID
+        app_secret = settings.FEISHU_APP_SECRET
+    
     resp = requests.post(url, json={
-        "app_id": app_id or (settings.FEISHU_APP_ID if external else INTERNAL_APP_ID),
-        "app_secret": app_secret or (settings.FEISHU_APP_SECRET if external else INTERNAL_APP_SECRET)
+        "app_id": app_id,
+        "app_secret": app_secret
     })
     resp.raise_for_status()
     return resp.json()["tenant_access_token"]
