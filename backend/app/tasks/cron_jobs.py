@@ -115,11 +115,11 @@ def generate_crm_daily_statistics(self, target_date_str=None):
             if sales_count > 0:
                 logger.info(f"CRM日报数据生成完成，处理了 {sales_count} 个销售人员的数据")
                 from app.core.config import settings
-                feishu_status = "已推送" if settings.CRM_DAILY_STATISTICS_FEISHU_ENABLED else "已禁用"
+                feishu_status = "已推送" if settings.CRM_DAILY_REPORT_FEISHU_ENABLED else "已禁用"
                 
                 # 如果启用了飞书推送，统计部门数量
                 department_count = 0
-                if settings.CRM_DAILY_STATISTICS_FEISHU_ENABLED:
+                if settings.CRM_DAILY_REPORT_FEISHU_ENABLED:
                     try:
                         department_reports = crm_daily_statistics_service.aggregate_department_reports(session, target_date)
                         department_count = len(department_reports)
@@ -131,8 +131,8 @@ def generate_crm_daily_statistics(self, target_date_str=None):
                     "target_date": target_date.isoformat(),
                     "sales_count": sales_count,
                     "department_count": department_count,
-                    "company_report_generated": settings.CRM_DAILY_STATISTICS_FEISHU_ENABLED,
-                    "feishu_enabled": settings.CRM_DAILY_STATISTICS_FEISHU_ENABLED,
+                    "company_report_generated": settings.CRM_DAILY_REPORT_FEISHU_ENABLED,
+                    "feishu_enabled": settings.CRM_DAILY_REPORT_FEISHU_ENABLED,
                     "feishu_status": feishu_status,
                     "message": f"成功处理了 {sales_count} 个销售人员的数据，{department_count} 个部门，生成公司日报，飞书推送: {feishu_status}"
                 }
@@ -151,3 +151,158 @@ def generate_crm_daily_statistics(self, target_date_str=None):
         logger.error(f"CRM日报数据生成任务失败: {str(e)}")
         # 使用Celery的重试机制
         self.retry(exc=e, countdown=300)  # 5分钟后重试
+
+
+
+
+@app.task(bind=True, max_retries=3)
+def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None):
+    """
+    生成CRM周报数据并推送给团队leader
+    每周日上午11点执行，处理上周的销售周报数据
+    
+    Args:
+        start_date_str: 开始日期字符串，格式YYYY-MM-DD，不传则默认为上周一
+        end_date_str: 结束日期字符串，格式YYYY-MM-DD，不传则默认为上周日
+    
+    工作流程：
+    1. 计算上周的日期范围（周一到周日）
+    2. 从crm_daily_account_statistics表查询上周的统计数据
+    3. 按部门汇总数据生成部门周报
+    4. 推送部门周报飞书卡片给各部门负责人
+    """
+    try:
+        from app.services.crm_daily_statistics_service import crm_daily_statistics_service
+        from app.services.feishu_notification_service import FeishuNotificationService
+        from datetime import datetime, timedelta
+        
+        # 计算上周的日期范围
+        if start_date_str and end_date_str:
+            try:
+                start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+                end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
+                logger.info(f"开始执行CRM周报数据生成任务，日期范围: {start_date} 到 {end_date}")
+            except ValueError:
+                logger.error(f"无效的日期格式: start_date={start_date_str}, end_date={end_date_str}")
+                return {
+                    "success": False,
+                    "message": "无效的日期格式",
+                    "data": {}
+                }
+        else:
+            # 默认处理上周的数据
+            today = datetime.now().date()
+            # 计算上周一（今天往前推7天，然后找到最近的周一）
+            days_since_monday = today.weekday()
+            last_monday = today - timedelta(days=days_since_monday + 7)
+            last_sunday = last_monday + timedelta(days=6)
+            
+            start_date = last_monday
+            end_date = last_sunday
+            logger.info(f"开始执行CRM周报数据生成任务，默认处理上周: {start_date} 到 {end_date}")
+        
+        with Session(engine) as session:
+            # 生成指定日期范围的部门周报数据
+            department_reports = crm_daily_statistics_service.aggregate_department_weekly_reports(
+                session=session,
+                start_date=start_date,
+                end_date=end_date
+            )
+            
+            if not department_reports:
+                logger.warning(f"{start_date} 到 {end_date} 没有找到任何周报数据")
+                return {
+                    "success": False,
+                    "message": f"{start_date} 到 {end_date} 没有找到任何周报数据",
+                    "data": {}
+                }
+            
+            logger.info(f"CRM周报数据生成完成，共 {len(department_reports)} 个部门")
+            
+            # 如果启用了飞书推送，发送周报通知
+            if settings.CRM_WEEKLY_REPORT_FEISHU_ENABLED:
+                notification_service = FeishuNotificationService()
+                department_success_count = 0
+                department_failed_count = 0
+                
+                # 发送部门周报通知
+                for department_report in department_reports:
+                    try:
+                        # 发送部门周报通知给部门负责人
+                        result = notification_service.send_weekly_report_notification(
+                            db_session=session,
+                            department_report_data=department_report,
+                            external=False  # 默认内部应用
+                        )
+                        
+                        if result["success"]:
+                            department_success_count += 1
+                            logger.info(
+                                f"成功发送 {department_report.get('department_name', '未知部门')} 周报通知，"
+                                f"推送成功 {result['success_count']}/{result['recipients_count']} 次"
+                            )
+                        else:
+                            department_failed_count += 1
+                            logger.warning(f"部门周报通知发送失败: {result['message']}")
+                            
+                    except Exception as e:
+                        department_failed_count += 1
+                        logger.error(f"发送部门周报通知时出错: {str(e)}")
+                
+                # 生成并发送公司周报通知
+                try:
+                    company_weekly_report = crm_daily_statistics_service.aggregate_company_weekly_report(
+                        session=session,
+                        start_date=start_date,
+                        end_date=end_date
+                    )
+                    
+                    if company_weekly_report:
+                        company_result = notification_service.send_company_weekly_report_notification(
+                            company_weekly_report_data=company_weekly_report
+                        )
+                        
+                        if company_result["success"]:
+                            logger.info(
+                                f"成功发送公司周报通知，"
+                                f"推送成功 {company_result['success_count']}/{company_result['recipients_count']} 次"
+                            )
+                        else:
+                            logger.warning(f"公司周报通知发送失败: {company_result['message']}")
+                    else:
+                        logger.warning(f"{start_date} 到 {end_date} 没有找到任何数据，跳过公司周报推送")
+                        
+                except Exception as e:
+                    logger.error(f"发送公司周报通知时出错: {str(e)}")
+                
+                logger.info(f"CRM周报飞书通知发送完成: 部门周报成功 {department_success_count} 个，失败 {department_failed_count} 个，公司周报已发送")
+                
+                return {
+                    "success": True,
+                    "start_date": start_date.isoformat(),
+                    "end_date": end_date.isoformat(),
+                    "department_count": len(department_reports),
+                    "company_report_generated": True,
+                    "feishu_enabled": True,
+                    "department_success_count": department_success_count,
+                    "department_failed_count": department_failed_count,
+                    "message": f"成功处理了 {len(department_reports)} 个部门的周报数据，生成公司周报，飞书推送: 部门周报成功 {department_success_count} 个，失败 {department_failed_count} 个"
+                }
+            else:
+                logger.info("飞书推送已禁用，仅生成周报数据")
+                return {
+                    "success": True,
+                    "start_date": start_date.isoformat(),
+                    "end_date": end_date.isoformat(),
+                    "department_count": len(department_reports),
+                    "feishu_enabled": False,
+                    "message": f"成功处理了 {len(department_reports)} 个部门的周报数据，飞书推送已禁用"
+                }
+                
+    except Exception as e:
+        logger.exception(f"CRM周报数据生成任务执行失败: {e}")
+        return {
+            "success": False,
+            "message": f"任务执行失败: {str(e)}",
+            "data": {}
+        }

@@ -58,8 +58,8 @@ if settings.ENABLE_FEISHU_BTABLE_SYNC:
     }
 
 # CRM日报统计任务
-if settings.CRM_DAILY_STATISTICS_ENABLED:
-    cron_expr = settings.CRM_DAILY_STATISTICS_CRON
+if settings.CRM_DAILY_REPORT_ENABLED:
+    cron_expr = settings.CRM_DAILY_REPORT_CRON
     # 解析crontab表达式
     cron_fields = cron_expr.strip().split()
     if len(cron_fields) == 5:
@@ -76,7 +76,31 @@ if settings.CRM_DAILY_STATISTICS_ENABLED:
         statistics_schedule = crontab(hour=8, minute=30)
     
     app.conf.beat_schedule = getattr(app.conf, 'beat_schedule', {})
-    app.conf.beat_schedule['generate_crm_daily_statistics'] = {
+    app.conf.beat_schedule['generate_crm_daily_report'] = {
         'task': 'app.tasks.cron_jobs.generate_crm_daily_statistics',
         'schedule': statistics_schedule,
+    }
+
+# CRM周报推送任务
+if settings.CRM_WEEKLY_REPORT_ENABLED:
+    cron_expr = settings.CRM_WEEKLY_REPORT_CRON
+    # 解析crontab表达式
+    cron_fields = cron_expr.strip().split()
+    if len(cron_fields) == 5:
+        minute, hour, day_of_month, month_of_year, day_of_week = cron_fields
+        weekly_schedule = crontab(
+            minute=minute, 
+            hour=hour, 
+            day_of_month=day_of_month, 
+            month_of_year=month_of_year, 
+            day_of_week=day_of_week
+        )
+    else:
+        # 默认值：每周日上午11点
+        weekly_schedule = crontab(hour=11, minute=0, day_of_week=0)
+    
+    app.conf.beat_schedule = getattr(app.conf, 'beat_schedule', {})
+    app.conf.beat_schedule['generate_crm_weekly_report'] = {
+        'task': 'app.tasks.cron_jobs.generate_crm_weekly_report',
+        'schedule': weekly_schedule,
     }

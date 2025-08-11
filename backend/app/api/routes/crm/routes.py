@@ -7,7 +7,19 @@ from fastapi import APIRouter, Body, HTTPException
 from app.crm.view_engine import CrmViewRequest, ViewType, CrmViewEngine, ViewRegistry
 from fastapi_pagination import Page
 
-from app.api.routes.crm.models import Account, VisitRecordCreate, DailyReportRequest, DailyReportResponse, DailyReportStatistics, AssessmentDetail, DepartmentDailyReportResponse, CompanyDailyReportResponse
+from app.api.routes.crm.models import (
+    Account,
+    VisitRecordCreate,
+    DailyReportRequest,
+    DailyReportResponse,
+    DailyReportStatistics,
+    AssessmentDetail,
+    DepartmentDailyReportResponse,
+    CompanyDailyReportResponse,
+    DepartmentWeeklyReportResponse,
+    CompanyWeeklyReportResponse,
+    WeeklyReportRequest
+)
 from app.crm.save_engine import (
     save_visit_record_to_crm_table, 
     check_followup_quality, 
@@ -570,9 +582,9 @@ def get_daily_reports(
                         end_customer_total_follow_up=report.get('end_customer_total_follow_up', 0),
                         end_customer_total_first_visit=report.get('end_customer_total_first_visit', 0),
                         end_customer_total_multi_visit=report.get('end_customer_total_multi_visit', 0),
-                        parter_total_follow_up=report.get('parter_total_follow_up', 0),
-                        parter_total_first_visit=report.get('parter_total_first_visit', 0),
-                        parter_total_multi_visit=report.get('parter_total_multi_visit', 0),
+                        partner_total_follow_up=report.get('partner_total_follow_up', 0),
+                        partner_total_first_visit=report.get('partner_total_first_visit', 0),
+                        partner_total_multi_visit=report.get('partner_total_multi_visit', 0),
                         assessment_red_count=report.get('assessment_red_count', 0),
                         assessment_yellow_count=report.get('assessment_yellow_count', 0),
                         assessment_green_count=report.get('assessment_green_count', 0)
@@ -727,6 +739,84 @@ def trigger_daily_statistics_task(
         
     except Exception as e:
         logger.exception(f"触发CRM日报统计任务失败: {e}")
+        return {
+            "code": 500,
+            "message": f"触发任务失败: {str(e)}",
+            "data": {}
+        }
+
+
+@router.post("/crm/weekly-reports/trigger-task")
+def trigger_weekly_report_task(
+    user: CurrentUserDep,
+    start_date: Optional[str] = Body(None, description="开始日期，格式YYYY-MM-DD，不传则默认为上周一"),
+    end_date: Optional[str] = Body(None, description="结束日期，格式YYYY-MM-DD，不传则默认为上周日"),
+    enable_feishu_push: Optional[bool] = Body(None, description="是否启用飞书推送，不传则使用系统配置")
+):
+    """
+    手动触发CRM周报推送任务
+    
+    用于测试或手动执行周报推送功能
+    """
+    if not user.is_superuser:
+        return {
+            "code": 403,
+            "message": "权限不足，只有超级管理员可以触发此任务",
+            "data": {}
+        }
+
+    try:
+        from app.tasks.cron_jobs import generate_crm_weekly_report
+        from datetime import datetime, timedelta
+        
+        # 解析日期范围
+        if start_date and end_date:
+            try:
+                parsed_start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
+                parsed_end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
+            except ValueError:
+                return {
+                    "code": 400,
+                    "message": "日期格式错误，请使用YYYY-MM-DD格式",
+                    "data": {}
+                }
+        else:
+            # 默认处理上周的数据
+            today = datetime.now().date()
+            # 计算上周一（今天往前推7天，然后找到最近的周一）
+            days_since_monday = today.weekday()
+            last_monday = today - timedelta(days=days_since_monday + 7)
+            last_sunday = last_monday + timedelta(days=6)
+            
+            parsed_start_date = last_monday
+            parsed_end_date = last_sunday
+        
+        logger.info(f"用户 {user.id} 手动触发CRM周报推送任务，日期范围: {parsed_start_date} 到 {parsed_end_date}")
+        
+        # 如果用户指定了飞书推送设置，需要临时修改配置
+        if enable_feishu_push is not None:
+            logger.info(f"用户指定飞书推送设置: {enable_feishu_push}")
+        
+        # 触发异步任务，传递日期参数
+        task = generate_crm_weekly_report.delay(
+            start_date_str=parsed_start_date.isoformat(),
+            end_date_str=parsed_end_date.isoformat()
+        )
+        
+        return {
+            "code": 0,
+            "message": "CRM周报推送任务已触发",
+            "data": {
+                "task_id": task.id,
+                "start_date": parsed_start_date.isoformat(),
+                "end_date": parsed_end_date.isoformat(),
+                "status": "PENDING",
+                "description": f"已提交 {parsed_start_date} 到 {parsed_end_date} 的CRM周报推送任务到队列，任务ID: {task.id}"
+            }
+        }
+        
+    except Exception as e:
+        logger.exception(f"触发CRM周报推送任务失败: {e}")
         return {
             "code": 500,
             "message": f"触发任务失败: {str(e)}",
@@ -920,3 +1010,137 @@ def get_company_daily_report(
     except Exception as e:
         logger.exception(f"获取公司日报数据失败: {e}")
         raise InternalServerError()
+
+
+@router.post("/crm/department-weekly-reports", response_model=List[DepartmentWeeklyReportResponse])
+def get_department_weekly_reports(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    request: WeeklyReportRequest,
+):
+    """
+    获取团队周报数据
+    
+    按部门汇总销售人员的周报数据：
+    1. 统计数据直接加和
+    2. 计算平均值（总跟进数除以销售人员数量）
+    3. 提供周报相关的页面链接
+    
+    Args:
+        request: 周报查询请求，包含部门名称和日期范围
+        
+    Returns:
+        团队周报数据列表
+    """
+    try:
+        from app.services.crm_daily_statistics_service import crm_daily_statistics_service
+        from datetime import datetime, timedelta
+        
+        # 解析日期范围
+        if request.start_date and request.end_date:
+            start_date = request.start_date
+            end_date = request.end_date
+        else:
+            # 默认查询最近一周的数据
+            end_date = datetime.now().date()
+            start_date = end_date - timedelta(days=7)
+        
+        logger.info(f"用户 {user.id} 查询 {start_date} 到 {end_date} 的团队周报数据")
+        
+        # 获取部门汇总报告
+        department_reports = crm_daily_statistics_service.aggregate_department_weekly_reports(
+            session=db_session,
+            start_date=start_date,
+            end_date=end_date
+        )
+        
+        if not department_reports:
+            logger.warning(f"{start_date} 到 {end_date} 没有找到任何团队周报数据")
+            return []
+        
+        # 如果指定了部门名称，进行过滤
+        if request.department_name:
+            department_reports = [
+                report for report in department_reports 
+                if report.get('department_name') == request.department_name
+            ]
+        
+        # 转换为响应格式
+        response_reports = []
+        for report in department_reports:
+            # 转换日期格式
+            if hasattr(report.get('report_start_date'), 'isoformat'):
+                report['report_start_date'] = report['report_start_date'].isoformat()
+            if hasattr(report.get('report_end_date'), 'isoformat'):
+                report['report_end_date'] = report['report_end_date'].isoformat()
+            
+            # 构造响应对象
+            department_response = DepartmentWeeklyReportResponse(**report)
+            response_reports.append(department_response)
+        
+        logger.info(f"成功返回 {len(response_reports)} 个团队的周报数据")
+        return response_reports
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"获取团队周报数据失败: {e}")
+        raise InternalServerError()
+
+
+@router.post("/crm/company-weekly-report", response_model=CompanyWeeklyReportResponse)
+def get_company_weekly_report(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    request: WeeklyReportRequest,
+):
+    """
+    获取公司周报数据
+    
+    汇总所有部门的周报数据：
+    1. 统计数据直接加和
+    2. 计算平均值（总跟进数除以公司所有销售人员数量）
+    3. 提供周报相关的页面链接
+    
+    Args:
+        request: 周报查询请求，包含日期范围
+        
+    Returns:
+        公司周报数据
+    """
+    try:
+        from app.services.crm_daily_statistics_service import crm_daily_statistics_service
+        from datetime import datetime, timedelta
+        
+        # 解析日期范围
+        if request.start_date and request.end_date:
+            start_date = request.start_date
+            end_date = request.end_date
+        else:
+            # 默认查询最近一周的数据
+            end_date = datetime.now().date()
+            start_date = end_date - timedelta(days=7)
+        
+        logger.info(f"用户 {user.id} 查询 {start_date} 到 {end_date} 的公司周报数据")
+        
+        # 获取公司汇总报告
+        company_report = crm_daily_statistics_service.aggregate_company_weekly_report(
+            session=db_session,
+            start_date=start_date,
+            end_date=end_date
+        )
+        
+        if not company_report:
+            logger.warning(f"{start_date} 到 {end_date} 没有找到任何公司周报数据")
+            return None
+        
+        logger.info(f"成功生成公司周报数据，日期范围: {start_date} 到 {end_date}")
+        
+        return company_report
+        
+    except Exception as e:
+        logger.exception(f"查询公司周报数据失败: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"查询公司周报数据失败: {str(e)}"
+        )

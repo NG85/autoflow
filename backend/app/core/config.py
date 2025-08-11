@@ -136,10 +136,15 @@ class Settings(BaseSettings):
     CRM_DAILY_TASK_MINUTE: int = 0
     CRM_ACCOUNT_PRIMARY_EXCLUDE: bool = False
     
-    # CRM daily statistics task configuration
-    CRM_DAILY_STATISTICS_ENABLED: bool = False
-    CRM_DAILY_STATISTICS_CRON: str = '30 8 * * *'  # 每天早上8:30执行
-    CRM_DAILY_STATISTICS_FEISHU_ENABLED: bool = True  # 是否启用飞书推送
+    # CRM daily report task configuration
+    CRM_DAILY_REPORT_ENABLED: bool = False
+    CRM_DAILY_REPORT_CRON: str = '30 8 * * *'  # 每天早上8:30执行
+    CRM_DAILY_REPORT_FEISHU_ENABLED: bool = True  # 是否启用飞书推送
+    
+    # CRM weekly report task configuration
+    CRM_WEEKLY_REPORT_ENABLED: bool = False
+    CRM_WEEKLY_REPORT_CRON: str = '0 11 * * 0'  # 每周日上午11点执行
+    CRM_WEEKLY_REPORT_FEISHU_ENABLED: bool = True  # 是否启用飞书推送
     
     # Feishu Btable sync configuration
     ENABLE_FEISHU_BTABLE_SYNC: bool = False

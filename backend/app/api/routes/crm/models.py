@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Literal, Optional
 from datetime import date
 from pydantic import BaseModel, Field
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
+from app.core.config import settings
 
 # 定义响应模型
 class Opportunity(BaseModel):
@@ -217,25 +218,34 @@ class VisitRecordQueryResponse(BaseModel):
     pages: int
 
 # 销售个人日报统计数据模型
-class DailyReportStatistics(BaseModel):
-    """销售个人日报统计数据"""
-    end_customer_total_follow_up: int = Field(description="总跟进最终客户数")
-    end_customer_total_first_visit: int = Field(description="总首次拜访最终客户数")
-    end_customer_total_multi_visit: int = Field(description="总多次拜访最终客户数")
-    parter_total_follow_up: int = Field(description="总跟进合作伙伴数")
-    parter_total_first_visit: int = Field(description="总首次拜访合作伙伴数")
-    parter_total_multi_visit: int = Field(description="总多次拜访合作伙伴数")
-    assessment_red_count: int = Field(description="评估为red的次数")
-    assessment_yellow_count: int = Field(description="评估为yellow的次数")
-    assessment_green_count: int = Field(description="评估为green的次数")
+class BaseReportStatistics(BaseModel):
+    """基础报告统计数据"""
+    end_customer_total_follow_up: int = Field(description="总跟进最终客户数", ge=0)
+    end_customer_total_first_visit: int = Field(description="总首次拜访最终客户数", ge=0)
+    end_customer_total_multi_visit: int = Field(description="总多次拜访最终客户数", ge=0)
+    partner_total_follow_up: int = Field(description="总跟进合作伙伴数", ge=0)
+    partner_total_first_visit: int = Field(description="总首次拜访合作伙伴数", ge=0)
+    partner_total_multi_visit: int = Field(description="总多次拜访合作伙伴数", ge=0)
+    assessment_red_count: int = Field(description="评估为red的次数", ge=0)
+    assessment_yellow_count: int = Field(description="评估为yellow的次数", ge=0)
+    assessment_green_count: int = Field(description="评估为green的次数", ge=0)
 
-# 客户评估详情模型
-class AssessmentDetail(BaseModel):
-    """客户评估详情"""
+class DailyReportStatistics(BaseReportStatistics):
+    """销售个人日报统计数据"""
+    pass
+
+# 团队周报统计数据模型
+class WeeklyReportStatistics(BaseReportStatistics):
+    """团队周报统计数据"""
+    # 平均值字段（字符串类型，因为包含格式化后的数值）
+    end_customer_avg_follow_up: str = Field(description="平均跟进最终客户数")
+    partner_avg_follow_up: str = Field(description="平均跟进合作伙伴数")
+
+# 基础评估详情模型
+class BaseAssessmentDetail(BaseModel):
+    """基础评估详情模型"""
     account_name: str = Field(description="客户名称")
     opportunity_names: str = Field(description="商机名称列表，用 | 分隔")
-    follow_up_note: str = Field(description="销售跟进记录")
-    follow_up_next_step: str = Field(description="销售跟进下一步")
     assessment_flag: str = Field(description="评估标志(🔴/🟡/🟢)")
     assessment_description: str = Field(description="评估描述")
     account_level: str = Field(description="客户等级")
@@ -253,19 +263,32 @@ class AssessmentDetail(BaseModel):
         # 统一处理占位符
         data['account_name'] = self.safe_placeholder(data.get('account_name', ''))
         data['opportunity_names'] = self.safe_placeholder(data.get('opportunity_names', ''))
-        data['follow_up_note'] = self.safe_placeholder(data.get('follow_up_note', ''))
-        data['follow_up_next_step'] = self.safe_placeholder(data.get('follow_up_next_step', ''))
         data['assessment_description'] = self.safe_placeholder(data.get('assessment_description', ''))
         data['account_level'] = self.safe_placeholder(data.get('account_level', ''))
         data['sales_name'] = self.safe_placeholder(data.get('sales_name', ''))
         data['department_name'] = self.safe_placeholder(data.get('department_name', ''))
         super().__init__(**data)
 
+# 客户评估详情模型（包含跟进记录）
+class AssessmentDetail(BaseAssessmentDetail):
+    """客户评估详情（包含跟进记录）"""
+    follow_up_note: str = Field(description="销售跟进记录")
+    follow_up_next_step: str = Field(description="销售跟进下一步")
+    
+    def __init__(self, **data):
+        # 处理跟进记录字段的占位符
+        data['follow_up_note'] = self.safe_placeholder(data.get('follow_up_note', ''))
+        data['follow_up_next_step'] = self.safe_placeholder(data.get('follow_up_next_step', ''))
+        super().__init__(**data)
+
+# 客户评估精简详情模型 - 用于公司日报
+class CompanyAssessmentDetail(BaseAssessmentDetail):
+    """公司级评估详情（不包含跟进记录）"""
+    pass
+
 # 销售个人日报响应模型
-class DailyReportResponse(BaseModel):
-    """销售个人日报响应"""
-    recorder: str = Field(description="记录人/销售人员")
-    department_name: str = Field(description="部门名称")
+class BaseDailyReportResponse(BaseModel):
+    """基础日报响应模型"""
     report_date: date = Field(description="报告日期")
     statistics: List[DailyReportStatistics] = Field(description="统计数据")
     visit_detail_page: str = Field(description="拜访记录详情页面链接")
@@ -273,46 +296,15 @@ class DailyReportResponse(BaseModel):
     first_assessment: List[AssessmentDetail] = Field(description="首次拜访评估详情")
     multi_assessment: List[AssessmentDetail] = Field(description="多次拜访评估详情")
 
-# 客户评估精简详情模型 - 用于公司日报
-class CompanyAssessmentDetail(BaseModel):
-    """公司级评估详情（不包含跟进记录）"""
-    account_name: str = Field(description="客户名称")
-    opportunity_names: str = Field(description="商机名称列表，用 | 分隔")
-    assessment_flag: str = Field(description="评估标志(🔴/🟡/🟢)")
-    assessment_description: str = Field(description="评估描述")
-    account_level: str = Field(description="客户等级")
-    sales_name: str = Field(description="销售人员姓名")
+class DailyReportResponse(BaseDailyReportResponse):
+    """销售个人日报响应"""
+    recorder: str = Field(description="记录人/销售人员")
     department_name: str = Field(description="部门名称")
-    
-    @classmethod
-    def safe_placeholder(cls, value: str) -> str:
-        """为空值提供 -- 占位符"""
-        if not value or (isinstance(value, str) and value.strip() == ''):
-            return "--"
-        return value
-    
-    def __init__(self, **data):
-        # 统一处理占位符
-        data['account_name'] = self.safe_placeholder(data.get('account_name', ''))
-        data['opportunity_names'] = self.safe_placeholder(data.get('opportunity_names', ''))
-        data['assessment_description'] = self.safe_placeholder(data.get('assessment_description', ''))
-        data['account_level'] = self.safe_placeholder(data.get('account_level', ''))
-        data['sales_name'] = self.safe_placeholder(data.get('sales_name', ''))
-        data['department_name'] = self.safe_placeholder(data.get('department_name', ''))
-        super().__init__(**data)
 
-# 部门日报响应模型
-class DepartmentDailyReportResponse(BaseModel):
+class DepartmentDailyReportResponse(BaseDailyReportResponse):
     """部门日报响应"""
     department_name: str = Field(description="部门名称")
-    report_date: date = Field(description="报告日期")
-    statistics: List[DailyReportStatistics] = Field(description="部门汇总统计数据")
-    visit_detail_page: str = Field(description="拜访记录详情页面链接")
-    account_list_page: str = Field(description="客户列表页面链接")
-    first_assessment: List[AssessmentDetail] = Field(description="部门首次拜访评估详情汇总")
-    multi_assessment: List[AssessmentDetail] = Field(description="部门多次拜访评估详情汇总")
 
-# 公司日报响应模型
 class CompanyDailyReportResponse(BaseModel):
     """公司日报响应"""
     report_date: date = Field(description="报告日期")
@@ -321,6 +313,39 @@ class CompanyDailyReportResponse(BaseModel):
     account_list_page: str = Field(description="客户列表页面链接")
     first_assessment: List[CompanyAssessmentDetail] = Field(description="公司首次拜访评估详情汇总")
     multi_assessment: List[CompanyAssessmentDetail] = Field(description="公司多次拜访评估详情汇总")
+
+# 团队周报响应模型
+class BaseWeeklyReportResponse(BaseModel):
+    """基础周报响应模型"""
+    report_start_date: date = Field(description="报告开始日期")
+    report_end_date: date = Field(description="报告结束日期")
+    statistics: List[WeeklyReportStatistics] = Field(description="周报统计数据")
+    visit_detail_page: str = Field(description="拜访记录详情页面链接")
+    account_list_page: str = Field(description="客户列表页面链接")
+    weekly_review_1_page: str = Field(
+        description="周报Review1页面链接",
+        default_factory=lambda: f"{settings.REVIEW_REPORT_HOST}/review/weeklyDetail"
+    )
+    weekly_review_5_page: str = Field(
+        description="周报Review5页面链接", 
+        default_factory=lambda: f"{settings.REVIEW_REPORT_HOST}/review/muban5Detail"
+    )
+
+class DepartmentWeeklyReportResponse(BaseWeeklyReportResponse):
+    """团队周报响应"""
+    department_name: str = Field(description="部门名称")
+
+# 公司周报响应模型
+class CompanyWeeklyReportResponse(BaseWeeklyReportResponse):
+    """公司周报响应"""
+    pass
+
+# 团队周报查询请求
+class WeeklyReportRequest(BaseModel):
+    """团队周报查询请求"""
+    department_name: Optional[str] = Field(default=None, description="部门名称，不传则查询所有部门")
+    start_date: Optional[date] = Field(default=None, description="开始日期")
+    end_date: Optional[date] = Field(default=None, description="结束日期")
 
 # 销售个人日报查询请求
 class DailyReportRequest(BaseModel):

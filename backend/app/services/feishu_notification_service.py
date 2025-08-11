@@ -380,7 +380,7 @@ class FeishuNotificationService:
         
         # 准备CRM日报卡片消息内容
         template_id = "AAqzUJ4fpg5XQ"  # CRM日报卡片模板ID
-        template_vars = daily_report_data  # 直接使用整个日报数据作为模板变量
+        template_vars = self._convert_daily_report_data_for_feishu(daily_report_data)
         
         card_content = {
             "type": "template",
@@ -536,10 +536,10 @@ class FeishuNotificationService:
         
         # 准备部门日报卡片消息内容
         template_id = "AAqz3wUpXTF3g"  # 部门日报卡片模板ID
-        template_vars = {
-            **department_report_data,
-            'report_date': department_report_data['report_date'].isoformat() if hasattr(department_report_data.get('report_date'), 'isoformat') else str(department_report_data.get('report_date'))
-        }
+        template_vars = self._convert_daily_report_data_for_feishu(department_report_data)
+        # 确保日期字段是字符串格式
+        if 'report_date' in template_vars and hasattr(template_vars['report_date'], 'isoformat'):
+            template_vars['report_date'] = template_vars['report_date'].isoformat()
         
         card_content = {
             "type": "template",
@@ -699,10 +699,10 @@ class FeishuNotificationService:
         
         # 准备公司日报卡片消息内容
         template_id = "AAqz3y0IwJLDp"  # 公司日报卡片模板ID
-        template_vars = {
-            **company_report_data,
-            'report_date': company_report_data['report_date'].isoformat() if hasattr(company_report_data.get('report_date'), 'isoformat') else str(company_report_data.get('report_date'))
-        }
+        template_vars = self._convert_daily_report_data_for_feishu(company_report_data)
+        # 确保日期字段是字符串格式
+        if 'report_date' in template_vars and hasattr(template_vars['report_date'], 'isoformat'):
+            template_vars['report_date'] = template_vars['report_date'].isoformat()
         
         card_content = {
             "type": "template",
@@ -771,3 +771,327 @@ class FeishuNotificationService:
             "success_count": success_count,
             "failed_recipients": failed_recipients
         }
+    
+    def send_weekly_report_notification(
+        self,
+        db_session: Session,
+        department_report_data: Dict[str, Any],
+        external: bool = False
+    ) -> Dict[str, Any]:
+        """
+        发送部门周报飞书卡片通知
+        
+        Args:
+            db_session: 数据库会话
+            department_report_data: 部门周报数据
+            external: 是否为外部应用
+            
+        Returns:
+            推送结果信息
+        """
+        from app.feishu.common_open import get_tenant_access_token, send_feishu_message
+        
+        department_name = department_report_data.get("department_name")
+        if not department_name:
+            logger.warning("Department weekly report data missing department name")
+            return {
+                "success": False,
+                "message": "Missing department name in department weekly report data",
+                "recipients_count": 0,
+                "success_count": 0
+            }
+        
+        # 获取推送对象 - 部门负责人
+        recipients = self.get_recipients_for_department_report(
+            db_session=db_session,
+            department_name=department_name,
+            external=external
+        )
+        
+        if not recipients:
+            logger.warning(f"No department manager found for department weekly report of {department_name}")
+            return {
+                "success": False,
+                "message": f"No department manager found for {department_name}",
+                "recipients_count": 0,
+                "success_count": 0
+            }
+        
+        # 准备部门周报卡片消息内容
+        template_id = "AAqzdm8MsqNjD"  # 团队周报卡片模板ID
+        template_vars = self._convert_weekly_report_data_for_feishu(department_report_data)
+        
+        card_content = {
+            "type": "template",
+            "data": {
+                "template_id": template_id,
+                "template_variable": template_vars
+            }
+        }
+        
+        # 获取飞书访问令牌
+        try:
+            token = get_tenant_access_token(
+                app_id=settings.FEISHU_APP_ID,
+                app_secret=settings.FEISHU_APP_SECRET,
+                external=external
+            )
+        except Exception as e:
+            logger.error(f"Failed to get tenant access token for weekly report: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to get token: {str(e)}",
+                "recipients_count": len(recipients),
+                "success_count": 0
+            }
+        
+        # 逐个推送消息
+        success_count = 0
+        failed_recipients = []
+        
+        for recipient in recipients:
+            try:
+                # 确定接收者ID类型
+                receive_id_type = recipient.get("receive_id_type", "open_id")
+                
+                send_feishu_message(
+                    recipient["open_id"],
+                    token,
+                    card_content,
+                    receive_id_type=receive_id_type,
+                    msg_type="interactive"
+                )
+                logger.info(
+                    f"Successfully pushed weekly report to {recipient['name']} "
+                    f"({recipient['type']}) for department {department_name}"
+                )
+                success_count += 1
+                
+            except Exception as e:
+                logger.error(
+                    f"Failed to send weekly report to {recipient['name']}: {str(e)}"
+                )
+                failed_recipients.append({
+                    "name": recipient['name'],
+                    "type": recipient['type'],
+                    "error": str(e)
+                })
+        
+        logger.info(
+            f"Weekly report for {department_name} sent to {success_count}/{len(recipients)} recipient(s)"
+        )
+        
+        return {
+            "success": success_count > 0,
+            "message": f"Weekly report for {department_name} sent to {success_count}/{len(recipients)} recipient(s)",
+            "recipients_count": len(recipients),
+            "success_count": success_count,
+            "failed_recipients": failed_recipients
+        }
+    
+    def get_recipients_for_company_weekly_report(
+        self
+    ) -> List[Dict[str, Any]]:
+        """
+        获取公司周报推送的接收者 - 根据应用ID判断推送目标
+        
+        Returns:
+            接收者列表，内部环境推送到群聊，外部环境推送给扩展管理团队
+        """
+        from app.feishu.common_open import INTERNAL_APP_IDS, DEFAULT_INTERNAL_GROUP_CHATS
+        
+        recipients = []
+        current_app_id = settings.FEISHU_APP_ID
+        
+        # 判断是否为内部应用
+        is_internal_app = current_app_id in INTERNAL_APP_IDS
+        
+        if is_internal_app:
+            # 内部应用：推送到匹配的群聊
+            logger.info(f"当前应用 {current_app_id} 是内部应用，公司周报将推送到群聊")
+            
+            for group in DEFAULT_INTERNAL_GROUP_CHATS:
+                if group["client_id"] == current_app_id:
+                    recipients.append({
+                        "open_id": group["chat_id"],
+                        "name": group["name"],
+                        "type": "group_chat",
+                        "department": "群聊",
+                        "receive_id_type": "chat_id"
+                    })
+                    logger.info(f"Added company weekly report group chat recipient: {group['name']}")
+            
+            if not recipients:
+                logger.warning(f"内部应用 {current_app_id} 没有找到匹配的群聊配置")
+        else:
+            # 外部应用：推送给扩展管理团队
+            logger.info(f"当前应用 {current_app_id} 是外部应用，公司周报将推送给扩展管理团队")
+            
+            for admin in DEFAULT_EXTERNAL_EXTENDED_ADMINS:
+                recipients.append({
+                    "open_id": admin["open_id"],
+                    "name": admin["name"],
+                    "type": "external_extended_admin",
+                    "department": "扩展管理团队",
+                    "receive_id_type": "open_id"
+                })
+                logger.info(f"Added company weekly report external extended admin recipient: {admin['name']}")
+            
+            if not recipients:
+                logger.warning("No external extended admins configured for company weekly report")
+        
+        return recipients
+    
+    def send_company_weekly_report_notification(
+        self,
+        company_weekly_report_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        发送公司周报飞书卡片通知
+        
+        Args:
+            company_weekly_report_data: 公司周报数据
+            
+        Returns:
+            推送结果信息
+        """
+        from app.feishu.common_open import get_tenant_access_token, send_feishu_message
+        
+        # 获取推送对象
+        recipients = self.get_recipients_for_company_weekly_report()
+        
+        if not recipients:
+            logger.warning("No recipients found for company weekly report")
+            return {
+                "success": False,
+                "message": "No recipients found for company weekly report",
+                "recipients_count": 0,
+                "success_count": 0
+            }
+        
+        # 准备公司周报卡片消息内容
+        template_id = "AAqzdMIhll3Et"  # 使用团队周报卡片模板ID
+        template_vars = self._convert_weekly_report_data_for_feishu(company_weekly_report_data)
+        
+        card_content = {
+            "type": "template",
+            "data": {
+                "template_id": template_id,
+                "template_variable": template_vars
+            }
+        }
+        
+        # 获取飞书访问令牌
+        try:
+            token = get_tenant_access_token(
+                app_id=settings.FEISHU_APP_ID,
+                app_secret=settings.FEISHU_APP_SECRET
+            )
+        except Exception as e:
+            logger.error(f"Failed to get tenant access token for company weekly report: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to get token: {str(e)}",
+                "recipients_count": len(recipients),
+                "success_count": 0
+            }
+        
+        # 逐个推送消息
+        success_count = 0
+        failed_recipients = []
+        
+        for recipient in recipients:
+            try:
+                # 确定接收者ID类型
+                receive_id_type = recipient.get("receive_id_type", "open_id")
+                
+                send_feishu_message(
+                    recipient["open_id"],
+                    token,
+                    card_content,
+                    receive_id_type=receive_id_type,
+                    msg_type="interactive"
+                )
+                logger.info(
+                    f"Successfully pushed company weekly report to {recipient['name']} "
+                    f"({recipient['type']})"
+                )
+                success_count += 1
+                
+            except Exception as e:
+                logger.error(
+                    f"Failed to send company weekly report to {recipient['name']}: {str(e)}"
+                )
+                failed_recipients.append({
+                    "name": recipient['name'],
+                    "type": recipient['type'],
+                    "error": str(e)
+                })
+        
+        logger.info(
+            f"Company weekly report sent to {success_count}/{len(recipients)} recipient(s)"
+        )
+        
+        return {
+            "success": success_count > 0,
+            "message": f"Company weekly report sent to {success_count}/{len(recipients)} recipient(s)",
+            "recipients_count": len(recipients),
+            "success_count": success_count,
+            "failed_recipients": failed_recipients
+        }
+    
+    def _convert_weekly_report_data_for_feishu(self, report_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        将周报数据转换为飞书卡片所需的格式（所有数值转换为字符串）
+        
+        Args:
+            report_data: 原始周报数据
+            
+        Returns:
+            转换后的数据，所有数值字段都转换为字符串
+        """
+        converted_data = report_data.copy()
+        
+        # 处理statistics数组中的数值字段
+        if 'statistics' in converted_data and isinstance(converted_data['statistics'], list):
+            for stats in converted_data['statistics']:
+                if isinstance(stats, dict):
+                    for key, value in stats.items():
+                        # 将所有数值转换为字符串
+                        if isinstance(value, (int, float)):
+                            stats[key] = str(value)
+        
+        # 处理其他可能的数值字段
+        for key, value in converted_data.items():
+            if isinstance(value, (int, float)) and key not in ['statistics']:
+                converted_data[key] = str(value)
+        
+        return converted_data
+    
+    def _convert_daily_report_data_for_feishu(self, report_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        将日报数据转换为飞书卡片所需的格式（所有数值转换为字符串）
+        
+        Args:
+            report_data: 原始日报数据
+            
+        Returns:
+            转换后的数据，所有数值字段都转换为字符串
+        """
+        converted_data = report_data.copy()
+        
+        # 处理statistics数组中的数值字段
+        if 'statistics' in converted_data and isinstance(converted_data['statistics'], list):
+            for stats in converted_data['statistics']:
+                if isinstance(stats, dict):
+                    for key, value in stats.items():
+                        # 将所有数值转换为字符串
+                        if isinstance(value, (int, float)):
+                            stats[key] = str(value)
+        
+        # 处理其他可能的数值字段
+        for key, value in converted_data.items():
+            if isinstance(value, (int, float)) and key not in ['statistics']:
+                converted_data[key] = str(value)
+        
+        return converted_data
