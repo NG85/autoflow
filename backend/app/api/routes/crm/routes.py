@@ -661,14 +661,14 @@ def trigger_daily_statistics_task(
 @router.post("/crm/weekly-reports/trigger-task")
 def trigger_weekly_report_task(
     user: CurrentUserDep,
-    start_date: Optional[str] = Body(None, description="开始日期，格式YYYY-MM-DD，不传则默认为上周一"),
-    end_date: Optional[str] = Body(None, description="结束日期，格式YYYY-MM-DD，不传则默认为上周日"),
+    start_date: Optional[str] = Body(None, description="开始日期，格式YYYY-MM-DD，不传则默认为上周日"),
+    end_date: Optional[str] = Body(None, description="结束日期，格式YYYY-MM-DD，不传则默认为本周六"),
     enable_feishu_push: Optional[bool] = Body(None, description="是否启用飞书推送，不传则使用系统配置")
 ):
     """
     手动触发CRM周报推送任务
     
-    用于测试或手动执行周报推送功能
+    用于测试或手动执行周报推送功能，默认处理上周日到本周六的数据
     """
     if not user.is_superuser:
         return {
@@ -693,15 +693,15 @@ def trigger_weekly_report_task(
                     "data": {}
                 }
         else:
-            # 默认处理上周的数据
+            # 默认处理上周日到本周六的数据
             today = datetime.now().date()
-            # 计算上周一（今天往前推7天，然后找到最近的周一）
-            days_since_monday = today.weekday()
-            last_monday = today - timedelta(days=days_since_monday + 7)
-            last_sunday = last_monday + timedelta(days=6)
+            # 计算上周日（今天往前推7天，然后找到最近的周日）
+            days_since_sunday = (today.weekday() + 1) % 7  # 0=周一，1=周二，...，6=周日
+            last_sunday = today - timedelta(days=days_since_sunday + 7)
+            this_saturday = last_sunday + timedelta(days=6)
             
-            parsed_start_date = last_monday
-            parsed_end_date = last_sunday
+            parsed_start_date = last_sunday
+            parsed_end_date = this_saturday
         
         logger.info(f"用户 {user.id} 手动触发CRM周报推送任务，日期范围: {parsed_start_date} 到 {parsed_end_date}")
         

@@ -159,17 +159,18 @@ def generate_crm_daily_statistics(self, target_date_str=None):
 def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None):
     """
     生成CRM周报数据并推送给团队leader
-    每周日上午11点执行，处理上周的销售周报数据
+    每周日上午11点执行，处理上周日到本周六的销售周报数据
     
     Args:
-        start_date_str: 开始日期字符串，格式YYYY-MM-DD，不传则默认为上周一
-        end_date_str: 结束日期字符串，格式YYYY-MM-DD，不传则默认为上周日
+        start_date_str: 开始日期字符串，格式YYYY-MM-DD，不传则默认为上周日
+        end_date_str: 结束日期字符串，格式YYYY-MM-DD，不传则默认为本周六
     
     工作流程：
-    1. 计算上周的日期范围（周一到周日）
-    2. 从crm_daily_account_statistics表查询上周的统计数据
+    1. 计算上周日到本周六的日期范围
+    2. 从crm_daily_account_statistics表查询该时间范围的统计数据
     3. 按部门汇总数据生成部门周报
     4. 推送部门周报飞书卡片给各部门负责人
+    5. 生成并推送公司周报给管理团队
     """
     try:
         from app.services.crm_daily_statistics_service import crm_daily_statistics_service
@@ -190,16 +191,16 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None):
                     "data": {}
                 }
         else:
-            # 默认处理上周的数据
+            # 默认处理上周日到本周六的数据
             today = datetime.now().date()
-            # 计算上周一（今天往前推7天，然后找到最近的周一）
-            days_since_monday = today.weekday()
-            last_monday = today - timedelta(days=days_since_monday + 7)
-            last_sunday = last_monday + timedelta(days=6)
+            # 计算上周日（今天往前推7天，然后找到最近的周日）
+            days_since_sunday = (today.weekday() + 1) % 7  # 0=周一，1=周二，...，6=周日
+            last_sunday = today - timedelta(days=days_since_sunday + 7)
+            this_saturday = last_sunday + timedelta(days=6)
             
-            start_date = last_monday
-            end_date = last_sunday
-            logger.info(f"开始执行CRM周报数据生成任务，默认处理上周: {start_date} 到 {end_date}")
+            start_date = last_sunday
+            end_date = this_saturday
+            logger.info(f"开始执行CRM周报数据生成任务，默认处理上周日到本周六: {start_date} 到 {end_date}")
         
         with Session(engine) as session:
             # 生成指定日期范围的部门周报数据

@@ -203,11 +203,11 @@ def fill_sales_visit_record_fields(sales_visit_record):
     # 协同参与人
     if sales_visit_record.get("collaborative_participants") is None:
         sales_visit_record["collaborative_participants"] = "--"
-    # AI评判不合格时，填充为"--"
-    if sales_visit_record.get("followup_quality_level") == '不合格':
-        sales_visit_record["followup_quality_level"] = "--"
-    if sales_visit_record.get("next_steps_quality_level") == '不合格':
-        sales_visit_record["next_steps_quality_level"] = "--"
+    # # AI评判不合格时，填充为"--"
+    # if sales_visit_record.get("followup_quality_level") == '不合格':
+    #     sales_visit_record["followup_quality_level"] = "--"
+    # if sales_visit_record.get("next_steps_quality_level") == '不合格':
+    #     sales_visit_record["next_steps_quality_level"] = "--"
     # 其他字段
     for k, v in sales_visit_record.items():
         if v is None:
