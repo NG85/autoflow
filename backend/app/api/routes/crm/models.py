@@ -135,6 +135,7 @@ class FieldMetadata(BaseModel):
 # 拜访记录创建请求
 class VisitRecordCreate(BaseModel):
     is_first_visit: Optional[bool] = None # 是否首次拜访
+    is_call_high: Optional[bool] = None # 是否call high
     account_name: Optional[str] = None # 客户名称
     account_id: Optional[str] = None # 客户ID
     opportunity_name: Optional[str] = None # 商机名称
@@ -185,6 +186,7 @@ class VisitRecordQueryRequest(BaseModel):
     next_steps_quality_level: Optional[List[str]] = None  # AI对下一步计划质量评估（多选）
     visit_type: Optional[List[str]] = None  # 信息来源（多选）
     is_first_visit: Optional[bool] = None  # 是否首次拜访
+    is_call_high: Optional[bool] = None  # 是否call high
     
     # 排序 - 默认按拜访日期降序
     sort_by: str = "visit_communication_date"  # 排序字段

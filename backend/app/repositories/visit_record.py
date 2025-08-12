@@ -284,6 +284,11 @@ class VisitRecordRepo(BaseRepo):
                 CRMSalesVisitRecord.is_first_visit == request.is_first_visit
             )
 
+        if request.is_call_high is not None:
+            query = query.where(
+                CRMSalesVisitRecord.is_call_high == request.is_call_high
+            )
+
         # 应用排序 - 默认按拜访日期降序
         sort_field = getattr(CRMSalesVisitRecord, request.sort_by, CRMSalesVisitRecord.visit_communication_date)
         if request.sort_direction.lower() == "desc":

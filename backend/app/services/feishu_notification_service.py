@@ -254,22 +254,25 @@ class FeishuNotificationService:
                 "success_count": 0
             }
         
-        # 准备消息内容
-        template_id = "AAqz0J0JSTciO" if visit_type == "form" else "AAqz0v4nx70HL"
-        template_vars = {
+        # 准备基础消息内容
+        base_template_vars = {
             "visit_date": visit_record.get("visit_communication_date", "--") if visit_record else "--",
             "recorder": recorder_name or "--",
             "department": visit_record.get("department", "--") if visit_record else "--",
             "sales_visit_records": [visit_record] if visit_record else []
         }
         
-        card_content = {
-            "type": "template",
-            "data": {
-                "template_id": template_id,
-                "template_variable": template_vars
-            }
-        }
+        # 根据拜访类型和接收者类型确定模板ID
+        def get_template_id(recipient_type: str) -> str:
+            if visit_type == "form":
+                # form类型：销售个人使用新卡片，leader和管理者使用原卡片
+                if recipient_type == "recorder":
+                    return "AAqzzmP2uT85t"  # 销售个人新卡片
+                else:
+                    return "AAqz0J0JSTciO"  # leader和管理者原卡片
+            else:
+                # link类型：使用原有卡片
+                return "AAqz0v4nx70HL"
         
         # 获取飞书访问令牌
         try:
@@ -295,6 +298,18 @@ class FeishuNotificationService:
                 # 确定接收者ID类型
                 receive_id_type = recipient.get("receive_id_type", "open_id")
                 
+                # 根据接收者类型选择模板ID
+                template_id = get_template_id(recipient["type"])
+                
+                # 构建卡片内容
+                card_content = {
+                    "type": "template",
+                    "data": {
+                        "template_id": template_id,
+                        "template_variable": base_template_vars
+                    }
+                }
+                
                 send_feishu_message(
                     recipient["open_id"],
                     token,
@@ -304,7 +319,8 @@ class FeishuNotificationService:
                 )
                 logger.info(
                     f"Successfully pushed visit record to {recipient['name']} "
-                    f"({recipient['type']}) in {recipient.get('department', 'Unknown')}"
+                    f"({recipient['type']}) in {recipient.get('department', 'Unknown')} "
+                    f"using template {template_id}"
                 )
                 success_count += 1
             except Exception as e:

@@ -36,6 +36,7 @@ class CRMSalesVisitRecord(SQLModel, table=True):
     last_modified_time: Optional[datetime] = Field(nullable=True, description="最后修改时间")
     record_id: Optional[str] = Field(nullable=True, max_length=100, description="记录id")
     is_first_visit: Optional[bool] = Field(nullable=True, description="是否首次拜访")
+    is_call_high: Optional[bool] = Field(nullable=True, description="是否call high")
     visit_type: Optional[str] = Field(nullable=True, max_length=20, description="拜访类型：form(用户填报)、link(非结构化链接/文件)")
     visit_url: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="会议链接或文件URL")
    

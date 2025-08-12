@@ -38,6 +38,7 @@ FIELD_MAP = {
     '客户职位': 'contact_position',
     '客户名字': 'contact_name',
     '是否首次拜访': 'is_first_visit',
+    '是否call high': 'is_call_high',
     '记录人': 'recorder',
     '记录人ID': 'recorder_id',
     '协同参与人': 'collaborative_participants',
