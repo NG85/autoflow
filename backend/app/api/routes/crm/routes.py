@@ -1,8 +1,8 @@
 import logging
 from typing import List, Optional
-import os
 from app.api.deps import CurrentUserDep, SessionDep
 from app.exceptions import InternalServerError
+from app.models.customer_document import CustomerDocument
 from fastapi import APIRouter, Body, HTTPException
 from app.crm.view_engine import CrmViewRequest, ViewType, CrmViewEngine, ViewRegistry
 from fastapi_pagination import Page
@@ -18,7 +18,9 @@ from app.api.routes.crm.models import (
     CompanyDailyReportResponse,
     DepartmentWeeklyReportResponse,
     CompanyWeeklyReportResponse,
-    WeeklyReportRequest
+    WeeklyReportRequest,
+    CustomerDocumentUploadRequest,
+    CustomerDocumentUploadResponse
 )
 from app.crm.save_engine import (
     save_visit_record_to_crm_table, 
@@ -27,16 +29,12 @@ from app.crm.save_engine import (
     push_visit_record_feishu_message,
     save_visit_record_with_content
 )
-from app.feishu.oauth_service import FeishuOAuthService
-from app.feishu.common_open import (
-    get_content_from_feishu_source_with_token,
-    UnsupportedDocumentTypeError,
-    parse_feishu_url,
-    check_document_type_support
-)
-from app.core.config import settings
-from app.crm.file_processor import get_file_content_from_local_storage
 from app.api.routes.crm.models import VisitRecordQueryRequest
+from app.services.customer_document_service import CustomerDocumentService
+from app.services.document_processing_service import DocumentProcessingService
+from app.repositories.user_profile import UserProfileRepo
+from sqlmodel import select, or_
+from uuid import UUID
 
 
 logger = logging.getLogger(__name__)
@@ -119,143 +117,62 @@ def create_visit_record(
     try:
         if not record.visit_type:
             record.visit_type = "form"
+        
+        # 确保记录人ID与当前用户ID一致
+        if record.recorder_id:
+            try:
+                recorder_id = UUID(record.recorder_id)
+                if recorder_id != user.id:
+                    return {"code": 400, "message": "记录人ID必须与当前用户ID一致", "data": {}}
+            except ValueError:
+                return {"code": 400, "message": "记录人ID格式无效，应为有效的UUID", "data": {}}
+        record.recorder_id = str(user.id)
 
         # 根据拜访类型处理
         if record.visit_type == "link":
             if not record.visit_url:
                 return {"code": 400, "message": "visit_url is required", "data": {}}
             
-            # 检查是否为飞书链接
-            if 'feishu.cn' in record.visit_url or 'larksuite.com' in record.visit_url:                
-                # 检查文档类型是否支持
-                try:
-                    url_type, doc_token = parse_feishu_url(record.visit_url)
-                    if not url_type or not doc_token:
-                        return {"code": 400, "message": "无法解析飞书URL", "data": {}}
-                    
-                    check_document_type_support(url_type, record.visit_url)
-                except UnsupportedDocumentTypeError as e:
-                    return {"code": 400, "message": str(e), "data": {"unsupported_type": True}}
-                
-                # 辅助函数：生成scope和授权URL
-                def generate_auth_response(message: str, auth_expired: bool = False, auth_error: bool = False):
-                    scope_parts = []
-                    
-                    if url_type in ['doc', 'docx']:
-                        scope_parts.append("docx:document:readonly")
-                        scope_parts.append("docs:document.content:read")
-                    elif url_type == 'minutes':
-                        scope_parts.append("minutes:minutes:readonly")
-                        scope_parts.append("minutes:minutes.transcript:export")
-                    elif url_type == 'wiki_node':
-                        scope_parts.append("wiki:wiki:readonly")
-                        scope_parts.append("wiki:node:read")
-                    
-                    scope = " ".join(scope_parts)
-                    
-                    auth_url = oauth_service.generate_auth_url(
-                        scope=scope,
-                        # redirect_uri='http://localhost:8000/api/v1'
-                    )
-                    
-                    data = {
-                        "auth_required": True,
-                        "auth_url": auth_url,
-                        "channel": "feishu",
-                        "url": record.visit_url,
-                        "document_type": url_type
-                    }
-                    
-                    if auth_expired:
-                        data["auth_expired"] = True
-                    if auth_error:
-                        data["auth_error"] = True
-                    
+            # 使用通用文档处理服务
+            document_processing_service = DocumentProcessingService()
+            result = document_processing_service.process_document_url(
+                document_url=record.visit_url,
+                user_id=str(user.id),
+                feishu_auth_code=feishu_auth_code
+            )
+            
+            # 如果处理失败，直接返回结果
+            if not result.get("success"):
+                # 转换响应格式以匹配拜访记录的API格式
+                if result.get("data", {}).get("auth_required"):
+                    data = result["data"]
                     return {
                         "code": 401,
-                        "message": message,
+                        "message": result["message"],
                         "data": data
                     }
-                
-                # 首先尝试从Redis获取用户的飞书access token
-                oauth_service = FeishuOAuthService()
-                logger.debug(f"app_id: {oauth_service.app_id}, app_secret: {oauth_service.app_secret}")
-                feishu_access_token = oauth_service.get_access_token_from_redis(str(user.id), url_type)
-                
-                # 如果Redis中没有token，且提供了授权码，则换取token
-                if not feishu_access_token and feishu_auth_code:
-                    try:
-                        success, message, access_token = oauth_service.exchange_code_for_token(feishu_auth_code, str(user.id), url_type)
-                        
-                        if not success or not access_token:
-                            # 授权码失败（可能过期），生成新的授权URL
-                            logger.warning(f"Auth code exchange failed: {message}, generating new auth URL")
-                            return generate_auth_response("授权码已过期，需要重新授权", auth_expired=True)
-                        
-                        feishu_access_token = access_token
-                        logger.info(f"Successfully exchanged auth code for token: {access_token}")
-                        
-                    except Exception as e:
-                        logger.error(f"Failed to exchange auth code for token: {e}")
-                        # 异常情况下也生成授权URL
-                        return generate_auth_response("授权处理异常，需要重新授权", auth_error=True)
-                
-                # 如果没有提供飞书access token，生成授权URL
-                if not feishu_access_token:
-                    return generate_auth_response("需要飞书授权才能访问该链接")
-                
-                # 有access token，尝试获取内容
-                try:
-                    original_content, document_type = get_content_from_feishu_source_with_token(record.visit_url, feishu_access_token)
-                    
-                    if not original_content:
-                        return {"code": 400, "message": "未获取到飞书内容，请检查链接或重新授权", "data": {}}
-                    
-                    # 保存拜访记录和文档内容
-                    return save_visit_record_with_content(
-                        record=record,
-                        content=original_content,
-                        document_type=document_type,
-                        user=user,
-                        db_session=db_session,
-                    )
-                        
-                except UnsupportedDocumentTypeError as e:
-                    # 返回不支持的文档类型错误
-                    return {"code": 400, "message": str(e), "data": {"unsupported_type": True}}
-                except Exception as e:
-                    logger.error(f"Failed to get feishu content: {e}")
-                    return {"code": 400, "message": "获取飞书内容失败，请检查授权或重试", "data": {}}
-            else:
-                # 暂不支持除飞书外的其他网络链接，以及非本地挂载的存储路径
-                if record.visit_url.startswith("http") or not record.visit_url.startswith(settings.STORAGE_PATH_PREFIX):
-                    return {"code": 400, "message": "不支持的文件链接", "data": {}}
-                
-                # 处理文件路径 data/customer-uploads/XXX.docx -> /shared/data/customer-uploads/XXX.docx
-                record.visit_url = record.visit_url.replace('data', settings.LOCAL_FILE_STORAGE_PATH)
-                logger.info(f"Non-feishu URL detected, should be customer uploaded file: {record.visit_url}")
-                try:
-                    # 获取文件内容
-                    file_content, document_type = get_file_content_from_local_storage(record.visit_url)
-                    
-                    if not file_content:
-                        return {"code": 400, "message": "未获取到文件内容，请检查后重试", "data": {}}
-                    
-                    # 保存拜访记录和文档内容
-                    return save_visit_record_with_content(
-                        record=record,
-                        content=file_content,
-                        document_type=document_type,
-                        user=user,
-                        db_session=db_session,
-                        title=os.path.basename(record.visit_url)
-                    )
-                    
-                except Exception as e:
-                    # 如果保存失败，回滚事务
-                    db_session.rollback()
-                    logger.error(f"Failed to save non-feishu visit record: {e}")
-                    return {"code": 400, "message": "保存拜访记录失败，请重试", "data": {}}
+                else:
+                    return {
+                        "code": 400,
+                        "message": result["message"],
+                        "data": result.get("data", {})
+                    }
+            
+            # 处理成功，保存拜访记录和文档内容
+            try:
+                return save_visit_record_with_content(
+                    record=record,
+                    content=result["content"],
+                    document_type=result["document_type"],
+                    user=user,
+                    db_session=db_session,
+                    title=result.get("title")
+                )
+            except Exception as e:
+                # 如果保存失败，回滚事务
+                db_session.rollback()
+                logger.error(f"Failed to save visit record: {e}")
+                return {"code": 400, "message": "保存拜访记录失败，请重试", "data": {}}
         
         if force:
             # 直接保存，不做AI判断
@@ -1139,3 +1056,391 @@ def get_company_weekly_report(
             status_code=500,
             detail=f"查询公司周报数据失败: {str(e)}"
         )
+
+
+@router.post("/crm/customer-document/upload", response_model=CustomerDocumentUploadResponse)
+def upload_customer_document(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    request: CustomerDocumentUploadRequest,
+):
+    """
+    上传客户文档
+    
+    支持飞书文档链接和本地文件路径，自动处理授权和内容读取。
+    
+    Args:
+        request: 文档上传请求，包含文件类别、客户信息、文档链接等。
+        
+    Returns:
+        文档上传响应，包含上传结果、文档ID或授权信息等。
+    """
+    try:
+        customer_document_service = CustomerDocumentService()
+        
+        # 处理uploader_id类型转换和验证
+        uploader_id = request.uploader_id
+        if uploader_id:
+            try:
+                uploader_id = UUID(uploader_id)
+                # 确保上传者ID与当前用户ID一致
+                if uploader_id != user.id:
+                    return {"code": 400, "message": "上传者ID必须与当前用户ID一致", "data": {}}
+            except ValueError:
+                return {"code": 400, "message": "uploader_id格式无效，应为有效的UUID", "data": {}}
+        else:
+            uploader_id = user.id
+        
+        # 上传客户文档
+        result = customer_document_service.upload_customer_document(
+            db_session=db_session,
+            file_category=request.file_category,
+            account_name=request.account_name,
+            account_id=request.account_id,
+            document_url=request.document_url,
+            uploader_id=uploader_id,
+            uploader_name=request.uploader_name or user.name or user.email,
+            feishu_auth_code=request.feishu_auth_code
+        )
+        
+        # 如果上传成功
+        if result.get("success"):
+            return CustomerDocumentUploadResponse(
+                success=True,
+                message=result["message"],
+                document_id=result.get("document_id")
+            )
+        
+        # 如果需要授权
+        if result.get("data", {}).get("auth_required"):
+            data = result["data"]
+            return CustomerDocumentUploadResponse(
+                success=False,
+                message=result["message"],
+                auth_required=True,
+                auth_url=data.get("auth_url"),
+                auth_expired=data.get("auth_expired", False),
+                auth_error=data.get("auth_error", False),
+                channel=data.get("channel"),
+                document_type=data.get("document_type")
+            )
+        
+        # 其他错误情况
+        return CustomerDocumentUploadResponse(
+            success=False,
+            message=result["message"]
+        )
+        
+    except Exception as e:
+        logger.exception(f"上传客户文档失败: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"上传客户文档失败: {str(e)}"
+        )
+
+
+@router.get("/crm/customer-documents")
+def get_customer_documents(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    account_id: Optional[str] = None,
+    file_category: Optional[str] = None,
+    uploader_id: Optional[str] = None,
+    view_type: Optional[str] = "auto",  # auto, my, team, all
+):
+    """
+    获取客户文档列表（根据用户权限自动过滤）
+    
+    权限规则：
+    - 普通用户：只能查看自己上传的文档
+    - 团队lead：可以查看本团队的所有文档
+    - 超级管理员或管理员：可以查看所有文档
+    
+    Args:
+        account_id: 客户ID（可选）
+        file_category: 文件类别（可选）
+        uploader_id: 上传者ID（可选，仅超级管理员或管理员可用）
+        view_type: 视图类型
+            - "auto": 根据用户权限自动选择（默认）
+            - "my": 只查看自己的文档
+            - "team": 查看团队文档（仅团队lead和超管可用）
+            - "all": 查看所有文档（仅超管可用）
+        
+    Returns:
+        根据权限过滤的客户文档列表
+    """
+    try:
+        customer_document_service = CustomerDocumentService()
+        user_profile_repo = UserProfileRepo()
+        
+        # 获取当前用户的部门信息
+        user_profile = user_profile_repo.get_by_oauth_user_id(db_session, str(user.id))
+        current_user_department = user_profile.department if user_profile else None
+        
+        # 检查是否为团队lead（没有直属上级且有部门名称的用户被认为是leader）
+        is_team_lead = user_profile and not user_profile.direct_manager_id and user_profile.department
+        
+        # 检查是否为超级管理员或管理员
+        is_superuser_or_admin = customer_document_service._is_superuser_or_admin(
+            db_session=db_session,
+            user_id=user.id,
+            user_is_superuser=user.is_superuser,
+            user_profile=user_profile
+        )
+        
+        # 根据view_type和用户权限确定查询范围
+        if view_type == "my":
+            # 强制查看自己的文档
+            documents = customer_document_service.get_customer_documents(
+                db_session=db_session,
+                uploader_id=str(user.id),
+                file_category=file_category
+            )
+            user_role = "user"
+            view_description = "我的文档"
+            
+        elif view_type == "team":
+            # 查看团队文档
+            if not is_team_lead and not is_superuser_or_admin:
+                raise HTTPException(
+                    status_code=403,
+                    detail="只有团队lead和超级管理员可以查看团队文档"
+                )
+            
+            if is_superuser_or_admin:
+                # 管理员可以查看所有文档
+                documents = customer_document_service.get_customer_documents(
+                    db_session=db_session,
+                    account_id=account_id,
+                    file_category=file_category,
+                    uploader_id=uploader_id
+                )
+                view_description = "所有团队文档"
+            else:
+                # 团队lead查看本团队文档
+                team_members = user_profile_repo.get_department_members(db_session, current_user_department)
+                team_member_ids = [str(member.oauth_user_id) for member in team_members if member.oauth_user_id]
+                
+                if not team_member_ids:
+                    documents = []
+                else:
+                    statement = select(CustomerDocument).where(
+                        or_(*[CustomerDocument.uploader_id == member_id for member_id in team_member_ids])
+                    )
+                    
+                    if account_id:
+                        statement = statement.where(CustomerDocument.account_id == account_id)
+                    if file_category:
+                        statement = statement.where(CustomerDocument.file_category == file_category)
+                    
+                    statement = statement.order_by(CustomerDocument.created_at.desc())
+                    
+                    documents = db_session.exec(statement).all()
+                
+                view_description = f"{current_user_department}团队文档"
+            user_role = "team_lead" if is_team_lead else "superuser_or_admin"
+            
+        elif view_type == "all":
+            # 查看所有文档（仅超管可用）
+            if not is_superuser_or_admin:
+                raise HTTPException(
+                    status_code=403,
+                    detail="只有超级管理员或管理员可以查看所有文档"
+                )
+            
+            documents = customer_document_service.get_customer_documents(
+                db_session=db_session,
+                account_id=account_id,
+                file_category=file_category,
+                uploader_id=uploader_id
+            )
+            user_role = "superuser_or_admin"
+            view_description = "所有文档"
+            
+        else:  # view_type == "auto" 或默认
+            # 根据用户权限自动选择
+            if is_superuser_or_admin:
+                # 超管默认查看所有文档
+                documents = customer_document_service.get_customer_documents(
+                    db_session=db_session,
+                    account_id=account_id,
+                    file_category=file_category,
+                    uploader_id=uploader_id
+                )
+                user_role = "superuser_or_admin"
+                view_description = "所有文档"
+                
+            elif is_team_lead:
+                # 团队lead默认查看本团队文档
+                team_members = user_profile_repo.get_department_members(db_session, current_user_department)
+                team_member_ids = [str(member.oauth_user_id) for member in team_members if member.oauth_user_id]
+                
+                if not team_member_ids:
+                    documents = []
+                else:
+                    statement = select(CustomerDocument).where(
+                        or_(*[CustomerDocument.uploader_id == member_id for member_id in team_member_ids])
+                    )
+                    
+                    if account_id:
+                        statement = statement.where(CustomerDocument.account_id == account_id)
+                    if file_category:
+                        statement = statement.where(CustomerDocument.file_category == file_category)
+                    
+                    statement = statement.order_by(CustomerDocument.created_at.desc())
+                    
+                    documents = db_session.exec(statement).all()
+                
+                user_role = "team_lead"
+                view_description = f"{current_user_department}团队文档"
+                
+            else:
+                # 普通用户默认查看自己的文档
+                documents = customer_document_service.get_customer_documents(
+                    db_session=db_session,
+                    uploader_id=user.id,
+                    file_category=file_category
+                )
+                user_role = "user"
+                view_description = "我的文档"
+        
+        return {
+            "code": 0,
+            "message": "success",
+            "data": {
+                "documents": [
+                    {
+                        "id": doc.id,
+                        "file_category": doc.file_category,
+                        "account_name": doc.account_name,
+                        "account_id": doc.account_id,
+                        "document_url": doc.document_url,
+                        "document_type": doc.document_type,
+                        "document_title": doc.document_title,
+                        "uploader_id": doc.uploader_id,
+                        "uploader_name": doc.uploader_name,
+                        "created_at": doc.created_at.isoformat(),
+                        "updated_at": doc.updated_at.isoformat()
+                    }
+                    for doc in documents
+                ],
+                "total": len(documents),
+                "user_role": user_role,
+                "view_type": view_type,
+                "view_description": view_description,
+                "team_department": current_user_department if is_team_lead else None
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"获取客户文档列表失败: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"获取客户文档列表失败: {str(e)}"
+        )
+
+
+@router.get("/crm/customer-documents/{document_id}")
+def get_customer_document(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    document_id: int,
+):
+    """
+    获取客户文档详情（根据用户权限）
+    
+    - 普通用户：只能查看自己上传的文档
+    - 团队lead：可以查看本团队的所有文档
+    - 超级管理员：可以查看所有文档
+    
+    Args:
+        document_id: 文档ID
+        
+    Returns:
+        客户文档详情
+    """
+    try:
+        customer_document_service = CustomerDocumentService()
+        user_profile_repo = UserProfileRepo()
+        
+        # 获取文档详情
+        document = customer_document_service.get_customer_document_by_id(
+            db_session=db_session,
+            document_id=document_id
+        )
+        
+        if not document:
+            raise HTTPException(
+                status_code=404,
+                detail="文档不存在"
+            )
+        
+        # 获取当前用户的部门信息
+        user_profile = user_profile_repo.get_by_oauth_user_id(db_session, str(user.id))
+        current_user_department = user_profile.department if user_profile else None
+        
+        # 权限检查
+        # 检查是否为超级管理员或管理员
+        is_superuser_or_admin = customer_document_service._is_superuser_or_admin(
+            db_session=db_session,
+            user_id=user.id,
+            user_is_superuser=user.is_superuser,
+            user_profile=user_profile
+        )
+        
+        if is_superuser_or_admin:
+            # 超级管理员或管理员可以查看所有文档
+            pass
+        else:
+            # 检查是否为团队lead（没有直属上级且有部门名称的用户被认为是leader）
+            is_team_lead = user_profile and not user_profile.direct_manager_id and user_profile.department
+            
+            if is_team_lead:
+                # 团队lead可以查看本团队的文档
+                team_members = user_profile_repo.get_department_members(db_session, current_user_department)
+                team_member_ids = [str(member.oauth_user_id) for member in team_members if member.oauth_user_id]
+                
+                if document.uploader_id not in team_member_ids:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="无权访问此文档"
+                    )
+            else:
+                # 普通用户只能查看自己上传的文档
+                if document.uploader_id != user.id:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="无权访问此文档"
+                    )
+        
+        return {
+            "code": 0,
+            "message": "success",
+            "data": {
+                "id": document.id,
+                "file_category": document.file_category,
+                "account_name": document.account_name,
+                "account_id": document.account_id,
+                "document_url": document.document_url,
+                "document_type": document.document_type,
+                "document_title": document.document_title,
+                "uploader_id": document.uploader_id,
+                "uploader_name": document.uploader_name,
+                "created_at": document.created_at.isoformat(),
+                "updated_at": document.updated_at.isoformat(),
+                "document_content_id": document.document_content_id
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"获取客户文档详情失败: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"获取客户文档详情失败: {str(e)}"
+        )
+
+

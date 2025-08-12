@@ -1,8 +1,7 @@
 import logging
 import json
-from typing import Dict, Any, Optional, List
-from datetime import datetime, timedelta
-from sqlmodel import Session, select
+from typing import Optional
+from datetime import datetime
 from app.core.config import settings
 from app.core.db import get_db_session
 from app.api.routes.crm.models import VisitRecordCreate
@@ -10,7 +9,7 @@ from app.api.deps import CurrentUserDep, SessionDep
 from app.tasks.bitable_import import FIELD_MAP, upsert_visit_records
 from app.utils.uuid6 import uuid6
 import requests
-from app.models.document_contents import DocumentContent
+from app.repositories.document_content import DocumentContentRepo
 
 logger = logging.getLogger(__name__)
 
@@ -295,19 +294,20 @@ def save_visit_record_with_content(
         # 先保存拜访记录以获取 record_id
         record_id = save_visit_record_to_crm_table(record, db_session)
         
-        # 创建文档内容存储记录
-        doc_content = DocumentContent(
-            user_id=user.id,
-            visit_record_id=record_id,
+        # 保存文档内容
+        document_content_repo = DocumentContentRepo()
+        document_content_repo.create_document_content(
+            session=db_session,
+            raw_content=content,
             document_type=document_type,
             source_url=record.visit_url,
-            raw_content=content,
+            user_id=user.id,
+            visit_record_id=record_id,
             title=title,
-            file_size=len(content.encode('utf-8')) if content else 0
+            auto_commit=False
         )
         
-        # 保存到数据库
-        db_session.add(doc_content)
+        # 提交事务
         db_session.commit()
         
         # 推送飞书消息

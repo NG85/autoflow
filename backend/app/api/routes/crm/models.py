@@ -357,3 +357,27 @@ class DailyReportRequest(BaseModel):
     department_name: Optional[str] = Field(default=None, description="部门名称过滤")
     page: int = Field(default=1, ge=1, description="页码")
     page_size: int = Field(default=20, ge=1, le=100, description="每页大小")
+
+# 客户资料上传请求模型
+class CustomerDocumentUploadRequest(BaseModel):
+    """客户资料上传请求"""
+    file_category: Literal["ABP", "CallHigh"] = Field(description="文件类别，如ABP、CallHigh等")
+    account_name: str = Field(description="客户名称")
+    account_id: str = Field(description="客户ID")
+    document_url: str = Field(description="文档链接")
+    uploader_id: Optional[str] = Field(default=None, description="上传者ID")
+    uploader_name: Optional[str] = Field(default=None, description="上传者姓名")
+    feishu_auth_code: Optional[str] = Field(default=None, description="飞书授权码")
+
+# 客户资料上传响应模型
+class CustomerDocumentUploadResponse(BaseModel):
+    """客户资料上传响应"""
+    success: bool = Field(description="是否成功")
+    message: str = Field(description="响应消息")
+    document_id: Optional[int] = Field(default=None, description="文档ID")
+    auth_required: Optional[bool] = Field(default=None, description="是否需要授权")
+    auth_url: Optional[str] = Field(default=None, description="授权URL")
+    auth_expired: Optional[bool] = Field(default=None, description="授权是否过期")
+    auth_error: Optional[bool] = Field(default=None, description="授权是否有错误")
+    channel: Optional[str] = Field(default=None, description="文档来源渠道")
+    document_type: Optional[str] = Field(default=None, description="文档类型")
