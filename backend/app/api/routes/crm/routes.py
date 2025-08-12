@@ -1058,7 +1058,7 @@ def get_company_weekly_report(
         )
 
 
-@router.post("/crm/customer-document/upload", response_model=CustomerDocumentUploadResponse)
+@router.post("/crm/customer-document/upload")
 def upload_customer_document(
     db_session: SessionDep,
     user: CurrentUserDep,
@@ -1105,31 +1105,27 @@ def upload_customer_document(
         
         # 如果上传成功
         if result.get("success"):
-            return CustomerDocumentUploadResponse(
-                success=True,
-                message=result["message"],
-                document_id=result.get("document_id")
-            )
+            return {
+                "code": 0,
+                "message": "success",
+                "data": {}
+            }
         
-        # 如果需要授权
+        # 如果需要授权，返回401状态码
         if result.get("data", {}).get("auth_required"):
             data = result["data"]
-            return CustomerDocumentUploadResponse(
-                success=False,
-                message=result["message"],
-                auth_required=True,
-                auth_url=data.get("auth_url"),
-                auth_expired=data.get("auth_expired", False),
-                auth_error=data.get("auth_error", False),
-                channel=data.get("channel"),
-                document_type=data.get("document_type")
-            )
+            return {
+                "code": 401,
+                "message": result["message"],
+                "data": data
+            }
         
         # 其他错误情况
-        return CustomerDocumentUploadResponse(
-            success=False,
-            message=result["message"]
-        )
+        return {
+            "code": 400,
+            "message": result["message"],
+            "data": result.get("data", {})
+        }
         
     except Exception as e:
         logger.exception(f"上传客户文档失败: {e}")
