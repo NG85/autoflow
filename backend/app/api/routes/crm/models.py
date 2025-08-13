@@ -316,7 +316,15 @@ class CompanyDailyReportResponse(BaseModel):
     first_assessment: List[CompanyAssessmentDetail] = Field(description="公司首次拜访评估详情汇总")
     multi_assessment: List[CompanyAssessmentDetail] = Field(description="公司多次拜访评估详情汇总")
 
-# 团队周报响应模型
+# 销售四象限分布模型
+class SalesQuadrants(BaseModel):
+    """销售四象限分布"""
+    behavior_hh: List[str] = Field(description="高行为高结果象限的销售人员列表")
+    behavior_hl: List[str] = Field(description="高行为低结果象限的销售人员列表")
+    behavior_lh: List[str] = Field(description="低行为高结果象限的销售人员列表")
+    behavior_ll: List[str] = Field(description="低行为低结果象限的销售人员列表")
+
+# 周报响应模型
 class BaseWeeklyReportResponse(BaseModel):
     """基础周报响应模型"""
     report_start_date: date = Field(description="报告开始日期")
@@ -326,12 +334,13 @@ class BaseWeeklyReportResponse(BaseModel):
     account_list_page: str = Field(description="客户列表页面链接")
     weekly_review_1_page: str = Field(
         description="周报Review1页面链接",
-        default_factory=lambda: f"{settings.REVIEW_REPORT_HOST}/review/weeklyDetail"
+        default_factory=lambda: f"{settings.REVIEW_REPORT_HOST}/review/weeklyDetail/execution_id"
     )
     weekly_review_5_page: str = Field(
         description="周报Review5页面链接", 
-        default_factory=lambda: f"{settings.REVIEW_REPORT_HOST}/review/muban5Detail"
+        default_factory=lambda: f"{settings.REVIEW_REPORT_HOST}/review/muban5Detail/execution_id"
     )
+    sales_quadrants: Optional[SalesQuadrants] = Field(default=None, description="销售四象限分布")
 
 class DepartmentWeeklyReportResponse(BaseWeeklyReportResponse):
     """团队周报响应"""

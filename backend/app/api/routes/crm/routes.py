@@ -6,6 +6,7 @@ from app.models.customer_document import CustomerDocument
 from fastapi import APIRouter, Body, HTTPException
 from app.crm.view_engine import CrmViewRequest, ViewType, CrmViewEngine, ViewRegistry
 from fastapi_pagination import Page
+from datetime import datetime, timedelta
 
 from app.api.routes.crm.models import (
     Account,
@@ -20,7 +21,6 @@ from app.api.routes.crm.models import (
     CompanyWeeklyReportResponse,
     WeeklyReportRequest,
     CustomerDocumentUploadRequest,
-    CustomerDocumentUploadResponse
 )
 from app.crm.save_engine import (
     save_visit_record_to_crm_table, 
@@ -32,8 +32,14 @@ from app.crm.save_engine import (
 from app.api.routes.crm.models import VisitRecordQueryRequest
 from app.services.customer_document_service import CustomerDocumentService
 from app.services.document_processing_service import DocumentProcessingService
+from app.services.crm_statistics_service import crm_statistics_service
+from app.models.crm_daily_account_statistics import CRMDailyAccountStatistics
 from app.repositories.user_profile import UserProfileRepo
-from sqlmodel import select, or_
+from app.repositories.visit_record import visit_record_repo
+from sqlmodel import select, or_, distinct, func, text
+from app.models.crm_sales_visit_records import CRMSalesVisitRecord
+from app.models.crm_accounts import CRMAccount
+from app.models.user_profile import UserProfile
 from uuid import UUID
 
 
@@ -271,7 +277,6 @@ def query_visit_records(
     根据当前用户的汇报关系限制数据访问权限
     """
     try:
-        from app.repositories.visit_record import visit_record_repo
         
         result = visit_record_repo.query_visit_records(
             session=db_session,
@@ -307,10 +312,6 @@ def get_visit_record_filter_options(
     用于前端下拉选择框等
     """
     try:
-        from sqlmodel import select, func, distinct, text
-        from app.models.crm_sales_visit_records import CRMSalesVisitRecord
-        from app.models.crm_accounts import CRMAccount
-        from app.models.user_profile import UserProfile
         
         # 获取客户名称选项
         account_names = db_session.exec(
@@ -408,8 +409,6 @@ def get_visit_record_by_id(
     根据当前用户的汇报关系限制数据访问权限
     """
     try:
-        from app.repositories.visit_record import visit_record_repo
-        
         record = visit_record_repo.get_visit_record_by_id(
             session=db_session,
             record_id=record_id,
@@ -455,9 +454,6 @@ def get_daily_reports(
     - 分页参数: page, page_size
     """
     try:
-        from app.services.crm_daily_statistics_service import crm_daily_statistics_service
-        from datetime import datetime, timedelta
-        
         # 如果没有指定日期范围，使用最近7天的数据
         if not request.start_date and not request.end_date:
             end_date = datetime.now().date()
@@ -471,7 +467,7 @@ def get_daily_reports(
         current_date = start_date
         
         while current_date <= end_date:
-            daily_reports = crm_daily_statistics_service.get_complete_daily_report(
+            daily_reports = crm_statistics_service.get_complete_daily_report(
                 session=db_session, 
                 target_date=current_date
             )
@@ -546,9 +542,6 @@ def get_daily_report_filter_options(
     用于前端下拉选择框等
     """
     try:
-        from sqlmodel import select, distinct, func
-        from app.models.crm_daily_account_statistics import CRMDailyAccountStatistics
-        
         # 获取销售人员选项
         sales_names = db_session.exec(
             select(distinct(CRMDailyAccountStatistics.sales_name))
@@ -813,9 +806,6 @@ def get_department_daily_reports(
         部门日报数据列表
     """
     try:
-        from app.services.crm_daily_statistics_service import crm_daily_statistics_service
-        from datetime import datetime, timedelta
-        
         # 解析目标日期
         if target_date:
             try:
@@ -828,7 +818,7 @@ def get_department_daily_reports(
         logger.info(f"用户 {user.id} 查询 {parsed_date} 的部门日报数据")
         
         # 获取部门汇总报告
-        department_reports = crm_daily_statistics_service.aggregate_department_reports(
+        department_reports = crm_statistics_service.aggregate_department_reports(
             session=db_session,
             target_date=parsed_date
         )
@@ -883,9 +873,6 @@ def get_company_daily_report(
         公司日报数据
     """
     try:
-        from app.services.crm_daily_statistics_service import crm_daily_statistics_service
-        from datetime import datetime, timedelta
-        
         # 解析目标日期
         if target_date:
             try:
@@ -898,7 +885,7 @@ def get_company_daily_report(
         logger.info(f"用户 {user.id} 查询 {parsed_date} 的公司日报数据")
         
         # 获取公司汇总报告
-        company_report = crm_daily_statistics_service.aggregate_company_report(
+        company_report = crm_statistics_service.aggregate_company_report(
             session=db_session,
             target_date=parsed_date
         )
@@ -945,9 +932,6 @@ def get_department_weekly_reports(
         团队周报数据列表
     """
     try:
-        from app.services.crm_daily_statistics_service import crm_daily_statistics_service
-        from datetime import datetime, timedelta
-        
         # 解析日期范围
         if request.start_date and request.end_date:
             start_date = request.start_date
@@ -960,7 +944,7 @@ def get_department_weekly_reports(
         logger.info(f"用户 {user.id} 查询 {start_date} 到 {end_date} 的团队周报数据")
         
         # 获取部门汇总报告
-        department_reports = crm_daily_statistics_service.aggregate_department_weekly_reports(
+        department_reports = crm_statistics_service.aggregate_department_weekly_reports(
             session=db_session,
             start_date=start_date,
             end_date=end_date
@@ -1021,9 +1005,6 @@ def get_company_weekly_report(
         公司周报数据
     """
     try:
-        from app.services.crm_daily_statistics_service import crm_daily_statistics_service
-        from datetime import datetime, timedelta
-        
         # 解析日期范围
         if request.start_date and request.end_date:
             start_date = request.start_date
@@ -1036,7 +1017,7 @@ def get_company_weekly_report(
         logger.info(f"用户 {user.id} 查询 {start_date} 到 {end_date} 的公司周报数据")
         
         # 获取公司汇总报告
-        company_report = crm_daily_statistics_service.aggregate_company_weekly_report(
+        company_report = crm_statistics_service.aggregate_company_weekly_report(
             session=db_session,
             start_date=start_date,
             end_date=end_date

@@ -1,12 +1,15 @@
+import logging
+from datetime import datetime, timedelta
+from sqlmodel import Session
+
 from app.core.config import settings
-from app.tasks.knowledge_base import import_documents_from_kb_datasource
+from app.core.db import engine
+from app.celery import app
 from app.models import DataSource, DataSourceType
 from app.repositories import knowledge_base_repo
-from app.core.db import engine
-from sqlmodel import Session
-from datetime import datetime, timedelta
-import logging
-from app.celery import app
+from app.services.crm_statistics_service import crm_statistics_service
+from app.services.feishu_notification_service import FeishuNotificationService
+from app.tasks.knowledge_base import import_documents_from_kb_datasource
 
 logger = logging.getLogger(__name__)
 
@@ -92,9 +95,6 @@ def generate_crm_daily_statistics(self, target_date_str=None):
     8. 推送公司日报飞书卡片（内部环境推送到群聊，外部环境推送给管理员）
     """
     try:
-        from app.services.crm_daily_statistics_service import crm_daily_statistics_service
-        from datetime import datetime, timedelta
-        
         # 解析目标日期
         if target_date_str:
             try:
@@ -110,7 +110,7 @@ def generate_crm_daily_statistics(self, target_date_str=None):
         
         with Session(engine) as session:
             # 生成指定日期的完整日报数据
-            sales_count = crm_daily_statistics_service.generate_daily_statistics(session, target_date)
+            sales_count = crm_statistics_service.generate_daily_statistics(session, target_date)
             
             if sales_count > 0:
                 logger.info(f"CRM日报数据生成完成，处理了 {sales_count} 个销售人员的数据")
@@ -121,7 +121,7 @@ def generate_crm_daily_statistics(self, target_date_str=None):
                 department_count = 0
                 if settings.CRM_DAILY_REPORT_FEISHU_ENABLED:
                     try:
-                        department_reports = crm_daily_statistics_service.aggregate_department_reports(session, target_date)
+                        department_reports = crm_statistics_service.aggregate_department_reports(session, target_date)
                         department_count = len(department_reports)
                     except Exception as e:
                         logger.warning(f"统计部门数量失败: {e}")
@@ -173,9 +173,6 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None):
     5. 生成并推送公司周报给管理团队
     """
     try:
-        from app.services.crm_daily_statistics_service import crm_daily_statistics_service
-        from app.services.feishu_notification_service import FeishuNotificationService
-        from datetime import datetime, timedelta
         
         # 计算上周的日期范围
         if start_date_str and end_date_str:
@@ -204,7 +201,7 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None):
         
         with Session(engine) as session:
             # 生成指定日期范围的部门周报数据
-            department_reports = crm_daily_statistics_service.aggregate_department_weekly_reports(
+            department_reports = crm_statistics_service.aggregate_department_weekly_reports(
                 session=session,
                 start_date=start_date,
                 end_date=end_date
@@ -251,7 +248,7 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None):
                 
                 # 生成并发送公司周报通知
                 try:
-                    company_weekly_report = crm_daily_statistics_service.aggregate_company_weekly_report(
+                    company_weekly_report = crm_statistics_service.aggregate_company_weekly_report(
                         session=session,
                         start_date=start_date,
                         end_date=end_date

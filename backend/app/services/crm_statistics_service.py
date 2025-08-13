@@ -1,6 +1,6 @@
 """
-CRM日报统计服务
-用于从现有的统计表中读取和处理销售人员的日报数据
+CRM统计服务
+用于从现有的统计表中读取和处理销售人员的日报和周报数据
 """
 
 from typing import Dict, List, Optional
@@ -13,8 +13,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class CRMDailyStatisticsService:
-    """CRM日报统计服务类 - 直接从现有统计表查询数据"""
+class CRMStatisticsService:
+    """CRM统计服务类 - 直接从现有统计表查询数据，支持日报和周报统计"""
     
     def __init__(self):
         pass
@@ -862,6 +862,15 @@ class CRMDailyStatisticsService:
                 # 其他字段保持整数类型
                 avg_stats[key] = value
         
+        # 获取报告信息
+        report_info_1 = self._get_weekly_report_info(session, 'review1s', end_date, department_name)
+        report_info_5 = self._get_weekly_report_info(session, 'review5', end_date, department_name)
+        
+        # 获取销售四象限数据
+        sales_quadrants = None
+        if report_info_5 and report_info_5.get('execution_id'):
+            sales_quadrants = self._get_sales_quadrants_data(report_info_5['execution_id'])
+        
         # 构造部门周报数据
         department_report = {
             'department_name': department_name,
@@ -870,8 +879,9 @@ class CRMDailyStatisticsService:
             'statistics': [avg_stats],  # 作为数组，包含平均值
             'visit_detail_page': f"{settings.VISIT_DETAIL_PAGE_URL}?start_date={start_date}&end_date={end_date}",
             'account_list_page': f"{settings.ACCOUNT_LIST_PAGE_URL}?department={department_name}",
-            'weekly_review_1_page': f"{settings.REVIEW_REPORT_HOST}/review/weeklyDetail?start_date={start_date}&end_date={end_date}",
-            'weekly_review_5_page': f"{settings.REVIEW_REPORT_HOST}/review/muban5Detail?start_date={start_date}&end_date={end_date}"
+            'weekly_review_1_page': self._get_weekly_report_url(report_info_1['execution_id'], 'review1s') if report_info_1 and report_info_1.get('execution_id') else f"{settings.REVIEW_REPORT_HOST}",
+            'weekly_review_5_page': self._get_weekly_report_url(report_info_5['execution_id'], 'review5') if report_info_5 and report_info_5.get('execution_id') else f"{settings.REVIEW_REPORT_HOST}",
+            'sales_quadrants': sales_quadrants
         }
         
         logger.info(
@@ -985,6 +995,15 @@ class CRMDailyStatisticsService:
                 # 其他字段保持整数类型
                 avg_stats[key] = value
         
+        # 获取报告信息
+        report_info_1 = self._get_weekly_report_info(session, 'review1', start_date, None)
+        report_info_5 = self._get_weekly_report_info(session, 'review5', start_date, None)
+        
+        # 获取销售四象限数据
+        sales_quadrants = None
+        if report_info_5 and report_info_5.get('execution_id'):
+            sales_quadrants = self._get_sales_quadrants_data(report_info_5['execution_id'])
+        
         # 构造公司周报数据
         company_report = {
             'report_start_date': start_date,
@@ -992,8 +1011,9 @@ class CRMDailyStatisticsService:
             'statistics': [avg_stats],  # 作为数组，包含平均值
             'visit_detail_page': f"{settings.VISIT_DETAIL_PAGE_URL}?start_date={start_date}&end_date={end_date}",
             'account_list_page': settings.ACCOUNT_LIST_PAGE_URL,
-            'weekly_review_1_page': f"{settings.REVIEW_REPORT_HOST}/review/weeklyDetail?start_date={start_date}&end_date={end_date}",
-            'weekly_review_5_page': f"{settings.REVIEW_REPORT_HOST}/review/muban5Detail?start_date={start_date}&end_date={end_date}"
+            'weekly_review_1_page': self._get_weekly_report_url(report_info_1['execution_id'], 'review1') if report_info_1 and report_info_1.get('execution_id') else f"{settings.REVIEW_REPORT_HOST}",
+            'weekly_review_5_page': self._get_weekly_report_url(report_info_5['execution_id'], 'review5') if report_info_5 and report_info_5.get('execution_id') else f"{settings.REVIEW_REPORT_HOST}",
+            'sales_quadrants': sales_quadrants
         }
         
         logger.info(
@@ -1003,6 +1023,104 @@ class CRMDailyStatisticsService:
         
         return company_report
     
+    def _get_weekly_report_url(self, execution_id: str, report_type: str) -> str:
+        """
+        根据execution_id和report_type构建周报报告链接
+        
+        Args:
+            execution_id: 报告执行ID
+            report_type: 报告类型，如review1s, review1, review5
+            
+        Returns:
+            str: 报告链接
+        """
+        try:
+            from app.core.config import settings
+            
+            # 根据报告类型构建不同的URL
+            if report_type == 'review1s' or report_type == 'review1':
+                return f"{settings.REVIEW_REPORT_HOST}/review/weeklyDetail/{execution_id}"
+            elif report_type == 'review5':
+                return f"{settings.REVIEW_REPORT_HOST}/review/muban5Detail/{execution_id}"
+            else:
+                # 未知报告类型，使用默认URL
+                logger.warning(f"未知的报告类型: {report_type}，使用默认链接")
+                return f"{settings.REVIEW_REPORT_HOST}"
+                
+        except Exception as e:
+            logger.error(f"构建周报报告链接失败: {e}")
+            # 出错时使用默认URL
+            return f"{settings.REVIEW_REPORT_HOST}"
+
+    def _get_weekly_report_info(self, session: Session, report_type: str, report_date: str, department_name: str = None) -> Optional[Dict]:
+        """
+        获取周报报告信息（包括execution_id）
+        
+        Args:
+            session: 数据库会话
+            report_type: 报告类型，如review1s,review1,review5
+            report_date: 报告日期
+            department_name: 部门名称，None表示公司级报告
+            
+        Returns:
+            Dict: 包含execution_id的报告信息，如果未找到返回None
+        """
+        try:
+            from app.utils.date_utils import get_week_of_year
+            from app.repositories.crm_report_index import CRMReportIndexRepo
+            
+            # 计算周数和年份
+            week_of_year, year = get_week_of_year(report_date)
+            
+            # 查询报告索引
+            report_repo = CRMReportIndexRepo()
+            
+            if department_name:
+                # 部门级报告
+                report = report_repo.get_weekly_report_by_department(
+                    session, report_type, week_of_year, year, department_name
+                )
+            else:
+                # 公司级报告
+                report = report_repo.get_weekly_report_by_company(
+                    session, report_type, week_of_year, year
+                )
+            
+            if report and report.execution_id:
+                return {
+                    'execution_id': report.execution_id,
+                    'report_type': report.report_type,
+                    'department_name': report.department_name
+                }
+            else:
+                logger.warning(f"未找到 {report_type} 报告")
+                return None
+                
+        except Exception as e:
+            logger.error(f"获取周报报告信息失败: {e}")
+            return None
+
+    def _get_sales_quadrants_data(self, execution_id: str) -> Optional[Dict]:
+        """
+        获取销售四象限数据
+        
+        Args:
+            execution_id: 报告执行ID
+            
+        Returns:
+            Dict: 销售四象限数据，如果获取失败返回None
+        """
+        try:
+            from app.services.sales_quadrants_service import sales_quadrants_service
+            
+            # 调用外部接口获取销售四象限数据
+            sales_quadrants = sales_quadrants_service.get_sales_quadrants(execution_id)
+            return sales_quadrants
+                
+        except Exception as e:
+            logger.error(f"获取销售四象限数据失败: {e}")
+            return None
+
     def _get_company_sales_count(self, session: Session) -> int:
         """
         获取公司所有销售人员数量（不包含leader）
@@ -1037,4 +1155,4 @@ class CRMDailyStatisticsService:
 
 
 # 创建服务实例
-crm_daily_statistics_service = CRMDailyStatisticsService()
+crm_statistics_service = CRMStatisticsService()
