@@ -31,24 +31,10 @@ class CRMDailyAccountStatistics(SQLModel, table=True):
     end_customer_total_multi_visit: Optional[int] = Field(default=None, sa_column=Column(Integer), description="总多次拜访最终客户数")
 
     # 合作伙伴跟进统计
-    parter_total_follow_up: Optional[int] = Field(default=None, sa_column=Column(Integer), description="总跟进合作伙伴数")
-    parter_total_first_visit: Optional[int] = Field(default=None, sa_column=Column(Integer), description="总首次拜访合作伙伴数")
-    parter_total_multi_visit: Optional[int] = Field(default=None, sa_column=Column(Integer), description="总多次拜访合作伙伴数")
+    partner_total_follow_up: Optional[int] = Field(default=None, sa_column=Column(Integer), description="总跟进合作伙伴数")
+    partner_total_first_visit: Optional[int] = Field(default=None, sa_column=Column(Integer), description="总首次拜访合作伙伴数")
+    partner_total_multi_visit: Optional[int] = Field(default=None, sa_column=Column(Integer), description="总多次拜访合作伙伴数")
     
-    @property
-    def partner_total_follow_up(self) -> Optional[int]:
-        """总跟进合作伙伴数（正确拼写）"""
-        return self.parter_total_follow_up
-    
-    @property
-    def partner_total_first_visit(self) -> Optional[int]:
-        """总首次拜访合作伙伴数（正确拼写）"""
-        return self.parter_total_first_visit
-    
-    @property
-    def partner_total_multi_visit(self) -> Optional[int]:
-        """总多次拜访合作伙伴数（正确拼写）"""
-        return self.parter_total_multi_visit
 
     create_time: Optional[datetime] = Field(
         default=None,
