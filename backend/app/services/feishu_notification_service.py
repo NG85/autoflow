@@ -359,6 +359,7 @@ class FeishuNotificationService:
         """
         from app.feishu.common_open import get_tenant_access_token, send_feishu_message
         
+        recorder_id = daily_report_data.get("recorder_id")
         recorder_name = daily_report_data.get("recorder")
         if not recorder_name:
             logger.warning("Daily report data missing recorder name")
@@ -376,6 +377,7 @@ class FeishuNotificationService:
         recipients = self.get_recipients_for_daily_report(
             db_session=db_session,
             recorder_name=recorder_name,
+            recorder_id=recorder_id,
             department_name=department_name
         )
         

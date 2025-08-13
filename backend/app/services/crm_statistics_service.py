@@ -3,7 +3,7 @@ CRM统计服务
 用于从现有的统计表中读取和处理销售人员的日报和周报数据
 """
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import date, datetime, timedelta
 from sqlmodel import Session, select, and_
 from app.models.crm_daily_account_statistics import CRMDailyAccountStatistics
@@ -52,9 +52,8 @@ class CRMStatisticsService:
                 'unique_id': record.unique_id,
                 'report_date': record.report_date,
                 'sales_id': record.sales_id,
-                'sales_name': record.sales_name,
-                'department_id': record.department_id,
-                'department_name': record.department_name,
+                'sales_name': self._format_empty_value(record.sales_name),
+                'department_name': self._format_empty_value(record.department_name),
                 'assessment_red_count': record.assessment_red_count or 0,
                 'assessment_yellow_count': record.assessment_yellow_count or 0,
                 'assessment_green_count': record.assessment_green_count or 0,
@@ -170,13 +169,13 @@ class CRMStatisticsService:
         
         for assessment in assessment_records:
             assessment_data = {
-                'account_name': assessment.account_name or "",
-                'opportunity_names': self._format_opportunity_names(assessment.opportunity_names),
-                'follow_up_note': assessment.follow_up_note or "",
-                'follow_up_next_step': assessment.follow_up_next_step or "",
+                'account_name': self._format_empty_value(assessment.account_name),
+                'opportunity_names': self._format_empty_value(self._format_opportunity_names(assessment.opportunity_names)),
+                'follow_up_note': self._format_empty_value(assessment.follow_up_note),
+                'follow_up_next_step': self._format_empty_value(assessment.follow_up_next_step),
                 'assessment_flag': self._convert_assessment_flag(assessment.assessment_flag),
-                'assessment_description': assessment.assessment_description or "",
-                'account_level': assessment.account_level or "",
+                'assessment_description': self._format_empty_value(assessment.assessment_description),
+                'account_level': self._format_empty_value(assessment.account_level),
                 'sales_name': "",  # 这个字段将在上层填充
                 'department_name': "",  # 这个字段将在上层填充
                 'assessment_flag_raw': assessment.assessment_flag or ""  # 保留原始标志用于排序
@@ -230,6 +229,22 @@ class CRMStatisticsService:
             "green": "🟢"
         }
         return flag_mapping.get(flag.lower() if flag else "", "")
+    
+    def _format_empty_value(self, value: Any) -> str:
+        """
+        统一处理空值，将None、空字符串等替换为"--"
+        
+        Args:
+            value: 要处理的值
+            
+        Returns:
+            处理后的字符串，空值返回"--"
+        """
+        if value is None:
+            return "--"
+        if isinstance(value, str) and not value.strip():
+            return "--"
+        return str(value).strip()
     
     def _sort_assessments(self, assessments: List[Dict]) -> List[Dict]:
         """
@@ -348,6 +363,7 @@ class CRMStatisticsService:
                 }
                 
                 report_data = {
+                    'recorder_id': report.get('sales_id', ''),
                     'recorder': report.get('sales_name', ''),  # 将sales_name重命名为recorder
                     'department_name': report.get('department_name', ''),
                     'report_date': report['report_date'].isoformat() if hasattr(report.get('report_date'), 'isoformat') else str(report.get('report_date')),
@@ -746,9 +762,8 @@ class CRMStatisticsService:
                 'unique_id': record.unique_id,
                 'report_date': record.report_date,
                 'sales_id': record.sales_id,
-                'sales_name': record.sales_name,
-                'department_id': record.department_id,
-                'department_name': record.department_name,
+                'sales_name': self._format_empty_value(record.sales_name),
+                'department_name': self._format_empty_value(record.department_name),
                 'assessment_red_count': record.assessment_red_count or 0,
                 'assessment_yellow_count': record.assessment_yellow_count or 0,
                 'assessment_green_count': record.assessment_green_count or 0,
