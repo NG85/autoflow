@@ -133,8 +133,7 @@ class Settings(BaseSettings):
     # CRM daily task configuration
     CRM_DAILY_TASK_ENABLED: bool = False
     CRM_DAILY_KB_ID: int = 2
-    CRM_DAILY_TASK_HOUR: int = 10
-    CRM_DAILY_TASK_MINUTE: int = 0
+    CRM_DAILY_TASK_CRON: str = '0 10 * * *'  # 每天早上10点执行
     CRM_ACCOUNT_PRIMARY_EXCLUDE: bool = False
     
     # CRM daily report task configuration

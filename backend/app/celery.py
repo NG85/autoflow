@@ -28,13 +28,26 @@ app.autodiscover_tasks(['app.tasks.cron_jobs'])
 
 # 配置定时任务
 if settings.CRM_DAILY_TASK_ENABLED:
+    cron_expr = settings.CRM_DAILY_TASK_CRON
+    # 解析crontab表达式
+    cron_fields = cron_expr.strip().split()
+    if len(cron_fields) == 5:
+        minute, hour, day_of_month, month_of_year, day_of_week = cron_fields
+        daily_schedule = crontab(
+            minute=minute, 
+            hour=hour, 
+            day_of_month=day_of_month, 
+            month_of_year=month_of_year, 
+            day_of_week=day_of_week
+        )
+    else:
+        # 默认值：每天早上10点
+        daily_schedule = crontab(hour=10, minute=0)
+    
     app.conf.beat_schedule = {
         'create-crm-daily-datasource': {
             'task': 'app.tasks.cron_jobs.create_crm_daily_datasource',
-            'schedule': crontab(
-                hour=settings.CRM_DAILY_TASK_HOUR,
-                minute=settings.CRM_DAILY_TASK_MINUTE
-            ),
+            'schedule': daily_schedule,
         },
     }
 
@@ -50,6 +63,7 @@ if settings.ENABLE_FEISHU_BTABLE_SYNC:
         minute, hour, day_of_month, month_of_year, day_of_week = cron_fields
         schedule = crontab(minute=minute, hour=hour, day_of_month=day_of_month, month_of_year=month_of_year, day_of_week=day_of_week)
     else:
+        # 默认值：每天早上00:05
         schedule = crontab(hour=0, minute=5)
     app.conf.beat_schedule = getattr(app.conf, 'beat_schedule', {})
     app.conf.beat_schedule['sync_bitable_visit_records'] = {
