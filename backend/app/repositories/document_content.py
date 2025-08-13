@@ -38,6 +38,9 @@ class DocumentContentRepo(BaseRepo):
         
         session.add(document_content)
         
+        # 总是flush以生成ID，但不提交事务
+        session.flush()
+        
         if auto_commit:
             session.commit()
             session.refresh(document_content)

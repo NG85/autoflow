@@ -98,7 +98,10 @@ class CustomerDocumentService:
                 auto_commit=False
             )
             
-            # 2. 保存客户文档记录（不自动提交）
+            # 2. 使用flush()生成ID，但不提交事务
+            db_session.flush()
+            
+            # 3. 保存客户文档记录（不自动提交）
             customer_document = self.customer_document_repo.create_customer_document(
                 session=db_session,
                 file_category=file_category,
@@ -113,7 +116,7 @@ class CustomerDocumentService:
                 auto_commit=False
             )
             
-            # 3. 统一提交事务
+            # 4. 统一提交事务
             db_session.commit()
             
             # 4. 刷新对象以获取数据库生成的ID
