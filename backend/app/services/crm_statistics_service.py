@@ -881,7 +881,7 @@ class CRMStatisticsService:
             'account_list_page': f"{settings.ACCOUNT_LIST_PAGE_URL}?department={department_name}",
             'weekly_review_1_page': self._get_weekly_report_url(report_info_1['execution_id'], 'review1s') if report_info_1 and report_info_1.get('execution_id') else f"{settings.REVIEW_REPORT_HOST}",
             'weekly_review_5_page': self._get_weekly_report_url(report_info_5['execution_id'], 'review5') if report_info_5 and report_info_5.get('execution_id') else f"{settings.REVIEW_REPORT_HOST}",
-            'sales_quadrants': [sales_quadrants]
+            'sales_quadrants': [sales_quadrants] if sales_quadrants else [{"behavior_hh": "--", "behavior_hl": "--", "behavior_lh": "--", "behavior_ll": "--"}]
         }
         
         logger.info(
@@ -1013,7 +1013,7 @@ class CRMStatisticsService:
             'account_list_page': settings.ACCOUNT_LIST_PAGE_URL,
             'weekly_review_1_page': self._get_weekly_report_url(report_info_1['execution_id'], 'review1') if report_info_1 and report_info_1.get('execution_id') else f"{settings.REVIEW_REPORT_HOST}",
             'weekly_review_5_page': self._get_weekly_report_url(report_info_5['execution_id'], 'review5') if report_info_5 and report_info_5.get('execution_id') else f"{settings.REVIEW_REPORT_HOST}",
-            'sales_quadrants': sales_quadrants
+            'sales_quadrants': [sales_quadrants] if sales_quadrants else [{"behavior_hh": "--", "behavior_hl": "--", "behavior_lh": "--", "behavior_ll": "--"}]
         }
         
         logger.info(
@@ -1123,10 +1123,10 @@ class CRMStatisticsService:
                     if isinstance(sales_list, list):
                         # 过滤空字符串并用 | 连接
                         filtered_list = [name.strip() for name in sales_list if name and name.strip()]
-                        processed_quadrants[quadrant_key] = " | ".join(filtered_list) if filtered_list else ""
+                        processed_quadrants[quadrant_key] = " | ".join(filtered_list) if filtered_list else "--"
                     else:
-                        # 如果不是列表，保持原样
-                        processed_quadrants[quadrant_key] = sales_list
+                        # 如果不是列表，用--填充
+                        processed_quadrants[quadrant_key] = "--"
                 
                 logger.info(f"销售四象限数据处理完成: {processed_quadrants}")
                 return processed_quadrants
