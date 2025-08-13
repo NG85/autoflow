@@ -881,7 +881,7 @@ class CRMStatisticsService:
             'account_list_page': f"{settings.ACCOUNT_LIST_PAGE_URL}?department={department_name}",
             'weekly_review_1_page': self._get_weekly_report_url(report_info_1['execution_id'], 'review1s') if report_info_1 and report_info_1.get('execution_id') else f"{settings.REVIEW_REPORT_HOST}",
             'weekly_review_5_page': self._get_weekly_report_url(report_info_5['execution_id'], 'review5') if report_info_5 and report_info_5.get('execution_id') else f"{settings.REVIEW_REPORT_HOST}",
-            'sales_quadrants': sales_quadrants
+            'sales_quadrants': [sales_quadrants]
         }
         
         logger.info(
@@ -1115,6 +1115,22 @@ class CRMStatisticsService:
             
             # 调用外部接口获取销售四象限数据
             sales_quadrants = sales_quadrants_service.get_sales_quadrants(execution_id)
+            
+            if sales_quadrants:
+                # 处理四象限数据，将每个数组中的销售名字用 | 拼接
+                processed_quadrants = {}
+                for quadrant_key, sales_list in sales_quadrants.items():
+                    if isinstance(sales_list, list):
+                        # 过滤空字符串并用 | 连接
+                        filtered_list = [name.strip() for name in sales_list if name and name.strip()]
+                        processed_quadrants[quadrant_key] = " | ".join(filtered_list) if filtered_list else ""
+                    else:
+                        # 如果不是列表，保持原样
+                        processed_quadrants[quadrant_key] = sales_list
+                
+                logger.info(f"销售四象限数据处理完成: {processed_quadrants}")
+                return processed_quadrants
+            
             return sales_quadrants
                 
         except Exception as e:

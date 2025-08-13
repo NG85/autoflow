@@ -123,7 +123,7 @@ class Settings(BaseSettings):
     CRM_AUTHORITY_API_URL: str = "http://auth:8018/crm/authority"
     
     # Client Visit Guide Generation API
-    ALDEBARAN_BASE_URL: str = "http://aldebaran:8001"
+    ALDEBARAN_BASE_URL: str = "http://aldebaran:8000"
     ALDEBARAN_CVGG_URL: str = f"{ALDEBARAN_BASE_URL}/api/v1/previsit/create_v4"
     ALDEBARAN_TENANT_ID: str = "PINGCAP"
     
