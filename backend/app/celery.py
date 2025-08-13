@@ -14,8 +14,12 @@ app.conf.update(
     enable_utc=True,
     task_acks_late=True,
     task_reject_on_worker_lost=True,
+    # 配置队列路由
     task_routes=[
-        {"app.tasks.evaluate.*": {"queue": "evaluation"}},
+        # {"app.tasks.evaluate.*": {"queue": "evaluation"}},
+        {"app.tasks.cron_jobs.generate_crm_daily_statistics": {"queue": "cron"}},
+        {"app.tasks.cron_jobs.generate_crm_weekly_report": {"queue": "cron"}},
+        {"app.tasks.bitable_import.*": {"queue": "cron"}},
         {"*": {"queue": "default"}},
     ],
     broker_connection_retry_on_startup=True,
