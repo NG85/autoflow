@@ -203,14 +203,25 @@ def fill_sales_visit_record_fields(sales_visit_record):
     # 协同参与人
     if sales_visit_record.get("collaborative_participants") is None:
         sales_visit_record["collaborative_participants"] = "--"
+    
+    # 处理是否首次拜访字段
+    is_first_visit = sales_visit_record.get("is_first_visit")
+    if is_first_visit is not None:
+        sales_visit_record["is_first_visit"] = "首次拜访" if is_first_visit else None
+    
+    # 处理是否call high字段
+    is_call_high = sales_visit_record.get("is_call_high")
+    if is_call_high is not None:
+        sales_visit_record["is_call_high"] = "call high" if is_call_high else None
     # # AI评判不合格时，填充为"--"
     # if sales_visit_record.get("followup_quality_level") == '不合格':
     #     sales_visit_record["followup_quality_level"] = "--"
     # if sales_visit_record.get("next_steps_quality_level") == '不合格':
     #     sales_visit_record["next_steps_quality_level"] = "--"
-    # 其他字段
+
+    # 其他字段（排除特殊处理的字段）
     for k, v in sales_visit_record.items():
-        if v is None:
+        if v is None and k not in ["is_first_visit", "is_call_high"]:
             sales_visit_record[k] = "--"
     return sales_visit_record
 
