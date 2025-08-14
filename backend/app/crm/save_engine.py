@@ -338,7 +338,11 @@ def save_visit_record_with_content(
             sales_name=record.recorder,
             account_name=record.account_name,
             contact_name=record.contact_name,
-            contact_position=record.contact_position
+            contact_position=record.contact_position,
+            visit_date=record.visit_communication_date,
+            opportunity_name=record.opportunity_name,
+            is_first_visit=record.is_first_visit,
+            is_call_high=record.is_call_high
         )
         
         if summary_result["success"]:

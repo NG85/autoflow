@@ -46,18 +46,25 @@ class MeetingSummaryService:
                 "error": str(e),
                 "summary": None
             }
-    
-    def _build_summary_prompt(self, content: str, title: Optional[str] = None,
-                         sales_name: Optional[str] = None,
-                         account_name: Optional[str] = None,
-                         contact_name: Optional[str] = None,
-                         contact_position: Optional[str] = None) -> str:
-        """构建会议纪要总结的提示词"""
-        
-        # 构建核心背景信息
+
+    def _build_summary_prompt(
+        self,
+        content: str,
+        title: Optional[str] = None,
+        sales_name: Optional[str] = None,
+        account_name: Optional[str] = None,
+        contact_name: Optional[str] = None,
+        contact_position: Optional[str] = None,
+        visit_date: Optional[str] = None,
+        opportunity_name: Optional[str] = None,
+        is_first_visit: Optional[bool] = None,
+        is_call_high: Optional[bool] = None
+    ) -> str:
+        """构建销售拜访会议纪要提示词（飞书卡片专用）"""
+
         background_info = ""
-        if any([sales_name, account_name, contact_name, contact_position]):
-            background_info = "**背景信息：**\n"
+        if any([sales_name, account_name, contact_name, contact_position, visit_date, opportunity_name, is_first_visit, is_call_high]):
+            background_info = "**背景信息（仅供理解，不在输出中显示）：**\n"
             if sales_name:
                 background_info += f"• 销售人员：{sales_name}\n"
             if account_name:
@@ -67,66 +74,54 @@ class MeetingSummaryService:
                 if contact_position:
                     contact_info += f"（{contact_position}）"
                 background_info += contact_info + "\n"
-            background_info += "• 文档类型：销售拜访记录中的会议文件\n"
-            background_info += "• 用途：推送给销售人员、销售Leader和销售VP的拜访记录信息卡片\n\n"
-        
-        return f"""你是一位专业的销售会议记录专家，请基于以下背景信息，对销售拜访记录中的会议文档内容进行高质量的会议纪要总结。
+            if visit_date:
+                background_info += f"• 拜访日期：{visit_date}\n"
+            if opportunity_name:
+                background_info += f"• 商机名称：{opportunity_name}\n"
+            if is_first_visit is not None:
+                background_info += f"• 拜访类型：{'首次拜访' if is_first_visit else '多次拜访'}\n"
+            if is_call_high is not None:
+                background_info += f"• 拜访层级：{'Call High' if is_call_high else '普通拜访'}\n"
+            background_info += "• 文档类型：销售拜访记录会议文件\n\n"
 
-{background_info}文档标题: {title or "未提供标题"}
+        return f"""{background_info}
+    你是一位专业销售会议纪要生成专家，请基于上述背景信息与以下文档内容，生成一份可直接用于飞书卡片推送的会议纪要。
 
-**重要说明：**
-这是一份销售拜访记录中的会议文档，将推送给销售人员本人、其Leader以及销售VP。请结合背景信息，生成一份信息完整、层次清晰、便于各层级快速理解的会议纪要。
+    **生成要求：**
+    1. **内容重点**  
+    - 首次拜访：需求挖掘、关系建立、探索方向  
+    - 多次拜访：进展对比、新需求变化、成果推进  
+    - Call High：高层决策、战略合作、关键决策点  
+    - 普通拜访：业务细节、技术需求、执行计划  
+    - 无商机：需求探索、关系维护、机会识别  
+    - 有商机：推进状态、里程碑、执行计划
 
-**会议纪要要求：**
+    2. **结构格式（严格遵守）**  
+    **会议主题：** [主题]  
+    **参会人员：** [姓名1]、[姓名2]  
+    ---
+    **客户需求与关注点：**  
+    • [需求1] - [商机价值/时间节点]（如有）  
+    • [需求2] - [商机价值/时间节点]（如有）  
 
-1. **内容结构**（按重要性排序）：
-   - 会议主题和核心议题（结合拜访背景理解）
-   - 参会人员（如文档中明确提及，结合拜访对象信息）
-   - 客户需求和关注点（重点关注商机价值和紧迫性）
-   - 达成的共识（体现销售推进成果）
-   - 下一步计划（明确责任人、时间节点，便于跟进）
+    **达成的共识：**  
+    • [共识1]  
+    • [共识2]  
 
-2. **格式要求**（使用最基础的格式，确保兼容性）：
-   - 使用 `**标题**` 加粗标题
-   - 使用 `•` 符号作为列表标记
-   - 使用 `---` 作为分隔线
-   - 避免使用表格、特殊符号、复杂缩进
-   - 保持简洁的段落结构
+    **下一步计划：**  
+    • [任务1]（负责人，截止时间）  
+    • [任务2]（负责人，截止时间）  
 
-3. **表达与逻辑**：
-   - 使用简洁、专业的商务语言
-   - 结合拜访记录背景，准确理解文档内容
-   - 下一步计划格式：任务内容（负责人，截止时间）
-   - 每个任务描述必须清晰、可执行
+    3. **输出规则**  
+    - 字数控制在 300-400 字  
+    - 仅输出纪要正文，不包含拜访记录原字段  
+    - 使用简洁、专业的商务语言  
+    - 避免编造信息，如无对应信息则省略该项  
+    - 确保 Markdown 在飞书富文本中正常显示  
+    - 内容需同时满足销售、Leader、VP 三个角色的关注点
 
-4. **输出示例**：
+    文档标题：{title or "未提供标题"}  
+    文档内容：
+    {content}
+    """
 
-**会议主题：** [结合拜访背景的核心主题]
-**参会人员：** [姓名1]、[姓名2]
-
----
-**客户需求与关注点：**
-• [需求1]
-• [需求2]
-
-**达成的共识：**
-• [共识1]
-• [共识2]
-
----
-**下一步计划：**
-• [计划1]（[负责人]，[截止时间]）
-• [计划2]（[负责人]，[截止时间]）
-
-5. **其他要求**：
-
-- 字数限制：300-400字
-- 使用简洁、清晰的表达
-- 确保在飞书富文本中正常显示
-- 内容要便于三个层级快速理解：销售关注具体任务，Leader关注推进状态，VP关注商机价值
-
-文档内容：
-{content}
-
-请结合背景信息，按照上述格式生成会议纪要，确保内容准确、简洁、可读性强，并便于各层级人员快速了解项目进展和后续安排。
-"""
