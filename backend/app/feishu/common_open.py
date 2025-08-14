@@ -8,6 +8,28 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+def log_content_preview(content: str, max_length: int = 100, prefix: str = "内容") -> str:
+    """
+    生成内容预览用于日志记录，避免日志过长
+    
+    Args:
+        content: 原始内容
+        max_length: 最大显示长度
+        prefix: 日志前缀
+        
+    Returns:
+        格式化的日志字符串
+    """
+    if not content:
+        return f"{prefix}: (空)"
+    
+    content_length = len(content)
+    if content_length <= max_length:
+        return f"{prefix}: {content}"
+    else:
+        preview = content[:max_length]
+        return f"{prefix}: {preview}... (总长度: {content_length})"
+
 HOST = settings.REVIEW_REPORT_HOST
 # Sia 销售助理
 # INTERNAL_APP_ID = 'cli_a735685d1c39100e'
@@ -592,7 +614,8 @@ def get_content_from_feishu_source_with_token(url: str, access_token: str) -> tu
         if not content:
             logger.error(f"无法获取内容: {url}")
             return None, url_type
-        logger.info(f"获取到内容: {content}")
+        
+        logger.info(f"获取到内容，{log_content_preview(content, prefix='内容预览')}")
         # 统一文档类型命名
         if url_type in ['doc', 'docx']:
             document_type = 'feishu_doc'
