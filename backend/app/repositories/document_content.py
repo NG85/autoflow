@@ -46,3 +46,40 @@ class DocumentContentRepo(BaseRepo):
             session.refresh(document_content)
         
         return document_content
+    
+    def update_meeting_summary(
+        self,
+        session: Session,
+        document_content_id: int,
+        meeting_summary: str,
+        summary_status: str = "success",
+        auto_commit: bool = False
+    ) -> Optional[DocumentContent]:
+        """更新文档内容的会议纪要总结"""
+        try:
+            document_content = session.get(DocumentContent, document_content_id)
+            if not document_content:
+                return None
+            
+            document_content.meeting_summary = meeting_summary
+            document_content.summary_status = summary_status
+            
+            if auto_commit:
+                session.commit()
+                session.refresh(document_content)
+            
+            return document_content
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"更新会议纪要总结失败: {e}")
+            return None
+    
+    def get_by_visit_record_id(
+        self,
+        session: Session,
+        visit_record_id: str
+    ) -> Optional[DocumentContent]:
+        """根据拜访记录ID获取文档内容"""
+        query = select(DocumentContent).where(DocumentContent.visit_record_id == visit_record_id)
+        return session.exec(query).first()

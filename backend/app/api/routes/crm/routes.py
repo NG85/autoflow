@@ -194,7 +194,8 @@ def create_visit_record(
                 push_visit_record_feishu_message(
                     visit_type=record.visit_type,
                     sales_visit_record=record_data,
-                    db_session=db_session
+                    db_session=db_session,
+                    meeting_notes=None
                 )
                 return {"code": 0, "message": "success", "data": {}}
             except Exception as e:
@@ -229,7 +230,8 @@ def create_visit_record(
             push_visit_record_feishu_message(
                 visit_type=record.visit_type,
                 sales_visit_record=record_data,
-                db_session=db_session
+                db_session=db_session,
+                meeting_notes=None
             )
             return {"code": 0, "message": "success", "data": data}
         except Exception as e:

@@ -226,7 +226,7 @@ def fill_sales_visit_record_fields(sales_visit_record):
     return sales_visit_record
 
 
-def push_visit_record_feishu_message(sales_visit_record, visit_type, db_session=None):
+def push_visit_record_feishu_message(sales_visit_record, visit_type, db_session=None, meeting_notes=None):
     sales_visit_record = fill_sales_visit_record_fields(sales_visit_record)
     
     # 获取记录人信息
@@ -260,7 +260,8 @@ def push_visit_record_feishu_message(sales_visit_record, visit_type, db_session=
             recorder_name=recorder_name,
             recorder_id=recorder_id,
             visit_record=sales_visit_record,
-            visit_type=visit_type
+            visit_type=visit_type,
+            meeting_notes=meeting_notes
         )
         
         if result["success"]:
@@ -307,7 +308,7 @@ def save_visit_record_with_content(
         
         # 保存文档内容
         document_content_repo = DocumentContentRepo()
-        document_content_repo.create_document_content(
+        document_content = document_content_repo.create_document_content(
             session=db_session,
             raw_content=content,
             document_type=document_type,
@@ -321,6 +322,45 @@ def save_visit_record_with_content(
         # 提交事务
         db_session.commit()
         
+        # 同步生成会议纪要总结
+        meeting_summary = None
+        try:
+            from app.services.meeting_summary_service import MeetingSummaryService
+            meeting_summary_service = MeetingSummaryService()
+            
+            # 生成会议纪要总结
+            summary_result = meeting_summary_service.generate_meeting_summary(
+                content=content,
+                title=title
+            )
+            
+            if summary_result["success"]:
+                meeting_summary = summary_result["summary"]
+                
+                # 更新文档内容，添加会议纪要总结
+                document_content_repo.update_meeting_summary(
+                    session=db_session,
+                    document_content_id=document_content.id,
+                    meeting_summary=summary_result["summary"],
+                    summary_status="success",
+                    auto_commit=False
+                )
+                logger.info(f"成功生成会议纪要总结，文档ID: {document_content.id}")
+            else:
+                # 更新状态为失败
+                document_content_repo.update_meeting_summary(
+                    session=db_session,
+                    document_content_id=document_content.id,
+                    meeting_summary="",
+                    summary_status="failed",
+                    auto_commit=False
+                )
+                logger.warning(f"生成会议纪要总结失败，文档ID: {document_content.id}, 错误: {summary_result.get('error')}")
+                
+        except Exception as e:
+            logger.error(f"生成会议纪要总结时出错: {e}")
+            # 不影响主流程，继续执行
+        
         # 推送飞书消息
         record_data = record.model_dump()
         # 去掉attachment字段，避免传输过大的base64编码数据
@@ -328,10 +368,12 @@ def save_visit_record_with_content(
             logger.info("Removing attachment field from record data to avoid large base64 data transmission")
             del record_data["attachment"]
         
+        # 推送飞书消息
         push_visit_record_feishu_message(
             visit_type=record.visit_type,
             sales_visit_record=record_data,
-            db_session=db_session
+            db_session=db_session,
+            meeting_notes=meeting_summary
         )
         
         return {"code": 0, "message": "success", "data": {}}

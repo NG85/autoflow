@@ -231,12 +231,14 @@ class FeishuNotificationService:
         recorder_name: str = None,
         recorder_id: str = None,
         visit_record: Dict[str, Any] = None,
-        visit_type: str = "form"
+        visit_type: str = "form",
+        meeting_notes: str = None
     ) -> Dict[str, Any]:
         """
         发送拜访记录通知
         
         支持通过recorder_name或recorder_id查找记录人
+        对于link类型的拜访记录，会包含会议纪要总结
         """
         # 获取接收者列表
         recipients = self.get_recipients_for_recorder(
@@ -259,7 +261,8 @@ class FeishuNotificationService:
             "visit_date": visit_record.get("visit_communication_date", "--") if visit_record else "--",
             "recorder": recorder_name or "--",
             "department": visit_record.get("department", "--") if visit_record else "--",
-            "sales_visit_records": [visit_record] if visit_record else []
+            "sales_visit_records": [visit_record] if visit_record else [],
+            "meeting_notes": meeting_notes
         }
         
         # 根据拜访类型和接收者类型确定模板ID

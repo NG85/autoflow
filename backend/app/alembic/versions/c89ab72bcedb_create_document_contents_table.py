@@ -26,7 +26,7 @@ def upgrade():
         sa.Column('visit_record_id', sa.String(128), nullable=True, comment='关联的拜访记录ID'),
         sa.Column('document_type', sa.String(50), nullable=False, comment='文档类型: feishu_doc, feishu_minute, file'),
         sa.Column('source_url', sa.Text(), nullable=False, comment='原文档URL'),
-        sa.Column('raw_content', mysql.LONGTEXT(), nullable=False, comment='原始文档内容'),
+        sa.Column('raw_content', mysql.MEDIUMTEXT(), nullable=False, comment='原始文档内容'),
         sa.Column('title', sa.String(500), nullable=True, comment='文档标题'),
         sa.Column('file_size', sa.Integer(), nullable=True, comment='文件大小(字节)'),
         sa.Column('created_at', sa.DateTime(), server_default=sa.func.current_timestamp(), nullable=False, comment='创建时间'),
