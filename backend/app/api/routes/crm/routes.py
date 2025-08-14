@@ -166,7 +166,7 @@ def create_visit_record(
             
             # 处理成功，保存拜访记录和文档内容
             try:
-                return save_visit_record_with_content(
+                result_data = save_visit_record_with_content(
                     record=record,
                     content=result["content"],
                     document_type=result["document_type"],
@@ -174,12 +174,17 @@ def create_visit_record(
                     db_session=db_session,
                     title=result.get("title")
                 )
+                
+                # 提交事务
+                db_session.commit()                
+                return result_data                
             except Exception as e:
                 # 如果保存失败，回滚事务
                 db_session.rollback()
                 logger.error(f"Failed to save visit record: {e}")
                 return {"code": 400, "message": "保存拜访记录失败，请重试", "data": {}}
         
+        # 处理 form 类型的拜访记录（包括 force 和普通保存）
         if force:
             # 直接保存，不做AI判断
             try:
