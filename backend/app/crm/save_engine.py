@@ -334,7 +334,11 @@ def save_visit_record_with_content(
         
         summary_result = meeting_summary_service.generate_meeting_summary(
             content=content,
-            title=title
+            title=title,
+            sales_name=record.recorder,
+            account_name=record.account_name,
+            contact_name=record.contact_name,
+            contact_position=record.contact_position
         )
         
         if summary_result["success"]:
