@@ -16,7 +16,18 @@ logger = logging.getLogger(__name__)
 class MeetingSummaryService:
     """会议纪要生成服务"""
     
-    def generate_meeting_summary(self, content: str, title: Optional[str] = None, sales_name: Optional[str] = None, account_name: Optional[str] = None, contact_name: Optional[str] = None, contact_position: Optional[str] = None) -> Dict[str, Any]:
+    def generate_meeting_summary(
+        self, 
+        content: str,
+        title: Optional[str] = None,
+        sales_name: Optional[str] = None,
+        account_name: Optional[str] = None,
+        contact_name: Optional[str] = None,
+        contact_position: Optional[str] = None,
+        visit_date: Optional[str] = None,
+        opportunity_name: Optional[str] = None,
+        is_first_visit: Optional[bool] = None,
+        is_call_high: Optional[bool] = None) -> Dict[str, Any]:
         """
         使用LLM生成会议纪要总结
         
@@ -29,7 +40,7 @@ class MeetingSummaryService:
         """
         try:
             # 构建提示词
-            prompt = self._build_summary_prompt(content, title, sales_name, account_name, contact_name, contact_position)
+            prompt = self._build_summary_prompt(content, title, sales_name, account_name, contact_name, contact_position, visit_date, opportunity_name, is_first_visit, is_call_high)
             
             # 调用LLM生成总结
             summary = call_ark_llm(prompt)
