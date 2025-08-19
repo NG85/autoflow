@@ -198,10 +198,11 @@ class CRMDataSource(BaseDataSource):
         # Extended table: only use incremental filter, and opportunity_id must not be None or ''
         sales_query = select(CRMSalesActivities.opportunity_id).where(
             text(increment_filter),
-            text(opportunity_filter),
             CRMSalesActivities.opportunity_id.isnot(None),
             CRMSalesActivities.opportunity_id != ""
         )
+        if opportunity_filter:
+            sales_query = sales_query.where(text(opportunity_filter))
         sales_ids = set(db_session.exec(sales_query).all())
         logger.info(f"crm opportunity sales_ids: length {len(sales_ids)}")
         all_ids = main_ids | sales_ids
@@ -286,10 +287,11 @@ class CRMDataSource(BaseDataSource):
         # Only activities not linked to any opportunity
         sales_query = select(CRMSalesActivities.account_id).where(
             text(increment_filter),
-            text(account_filter),
             (CRMSalesActivities.opportunity_id == None) | (CRMSalesActivities.opportunity_id == ""),
             (CRMSalesActivities.opportunity_name == None) | (CRMSalesActivities.opportunity_name == "")
         )
+        if account_filter:
+            sales_query = sales_query.where(text(account_filter))
         sales_ids = set(db_session.exec(sales_query).all())
         logger.info(f"crm account sales_ids: length {len(sales_ids)}")
         all_ids = main_ids | sales_ids
