@@ -153,6 +153,10 @@ class Settings(BaseSettings):
     FEISHU_APP_ID: str = 'cli_a74bce3ec73d901c'
     FEISHU_APP_SECRET: str = '1xC7zUP6PQpUoOMJte8tddgPm5zaqfoW'
     
+    # Lark configuration
+    LARK_APP_ID: str = 'cli_a8294dbbcdb8d02d'
+    LARK_APP_SECRET: str = 'PonwmInSR6PzmRNKHzeNybdV0PDew8EY'
+    
     # Feishu send message configuration
     REVIEW_REPORT_HOST: str = "https://aptsell.pingcap.net"
     

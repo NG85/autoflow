@@ -1,29 +1,51 @@
 import logging
 from typing import Optional, Tuple
 import requests
-from app.core.config import settings
+from urllib.parse import quote
+from abc import ABC, abstractmethod
 from app.utils.redis_client import redis_client
 
 logger = logging.getLogger(__name__)
 
 
-class FeishuOAuthService:
-    """飞书 OAuth 授权服务（无状态）"""
+class BaseOAuthService(ABC):
+    """OAuth服务基类"""
     
-    def __init__(self, app_id: Optional[str] = None, app_secret: Optional[str] = None):
-        self.app_id = app_id or settings.FEISHU_APP_ID
-        self.app_secret = app_secret or settings.FEISHU_APP_SECRET
-        self.token_url = "https://open.feishu.cn/open-apis/authen/v1/access_token"
+    def __init__(self, app_id: str, app_secret: str):
+        self.app_id = app_id
+        self.app_secret = app_secret
     
+    # 抽象方法
+    @property
+    @abstractmethod
+    def token_url(self) -> str:
+        """获取访问令牌的URL"""
+        pass
+    
+    @property
+    @abstractmethod
+    def auth_url(self) -> str:
+        """OAuth授权URL"""
+        pass
+    
+    @property
+    @abstractmethod
+    def platform_name(self) -> str:
+        """平台名称，用于Redis键前缀"""
+        pass
+    
+    # 具体方法（共享实现）
     def get_access_token_from_redis(self, user_id: str, type: str) -> Optional[str]:
-        return redis_client.get_feishu_access_token(user_id, type)
+        """从Redis获取访问令牌"""
+        return redis_client._get_access_token(self.platform_name, user_id, type)
     
     def store_access_token_to_redis(self, user_id: str, access_token: str, type: str, expires_in: int = 7200) -> bool:
-        return redis_client.set_feishu_access_token(user_id, access_token, type, expires_in)
+        """将访问令牌存储到Redis"""
+        return redis_client._set_access_token(self.platform_name, user_id, access_token, type, expires_in)
     
     def generate_auth_url(self, scope: str, redirect_uri: Optional[str] = None, state: Optional[str] = None) -> str:
         """
-        生成飞书授权URL
+        生成授权URL
         
         Args:
             scope: 授权范围，多个scope用空格分隔
@@ -33,7 +55,6 @@ class FeishuOAuthService:
         Returns:
             授权URL
         """
-        base_url = "https://open.feishu.cn/open-apis/authen/v1/index"
         params = {
             'app_id': self.app_id,
             'redirect_uri': redirect_uri,
@@ -42,13 +63,12 @@ class FeishuOAuthService:
         }        
             
         # 构建查询字符串，对参数值进行URL编码
-        from urllib.parse import quote
         query_parts = []
         for k, v in params.items():
             if v:
                 query_parts.append(f"{k}={quote(str(v))}")
         query_string = '&'.join(query_parts)
-        return f"{base_url}?{query_string}"
+        return f"{self.auth_url}?{query_string}"
      
     def exchange_code_for_token(self, code: str, user_id: Optional[str] = None, type: str = None) -> Tuple[bool, str, Optional[str]]:
         """

@@ -3,11 +3,10 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import requests
 from sqlalchemy import text, Table, MetaData
-from app.feishu.common_open import (
-    get_tenant_access_token,
-    parse_feishu_bitable_url,
-    resolve_bitable_app_token,
-)
+from app.platforms.feishu.client import feishu_client
+from app.platforms.lark.client import lark_client
+from app.platforms.utils.url_parser import parse_bitable_url, resolve_bitable_app_token, get_platform_from_url
+from app.platforms.constants import PLATFORM_FEISHU, PLATFORM_LARK
 from sqlmodel import Session
 from app.core.db import engine
 from app.core.config import settings
@@ -16,14 +15,47 @@ from sqlalchemy.dialects.mysql import insert as mysql_insert
 
 logger = logging.getLogger(__name__)
 
-APP_ID = settings.FEISHU_APP_ID
-APP_SECRET = settings.FEISHU_APP_SECRET
-
 CRM_TABLE = 'crm_sales_visit_records'
 
 # 配置区
 FEISHU_URL = getattr(settings, 'FEISHU_BTABLE_URL', None)
-external, url_type, url_token, table_id, view_id = parse_feishu_bitable_url(FEISHU_URL)
+url_type, url_token, table_id, view_id = parse_bitable_url(FEISHU_URL) if FEISHU_URL else (None, None, None, None)
+
+# 根据URL自动检测平台
+def get_platform_and_config():
+    """
+    根据bitable URL获取平台和配置信息
+    
+    Returns:
+        (platform, app_id, app_secret, client) 的元组
+    """
+    if not FEISHU_URL:
+        logger.warning("FEISHU_BTABLE_URL 未配置")
+        return None, None, None, None
+    
+    platform = get_platform_from_url(FEISHU_URL)
+    
+    if platform == PLATFORM_FEISHU:
+        app_id = settings.FEISHU_APP_ID
+        app_secret = settings.FEISHU_APP_SECRET
+        client = feishu_client
+        logger.info(f"检测到飞书平台: {FEISHU_URL}")
+    elif platform == PLATFORM_LARK:
+        app_id = settings.LARK_APP_ID
+        app_secret = settings.LARK_APP_SECRET
+        client = lark_client
+        logger.info(f"检测到Lark平台: {FEISHU_URL}")
+    else:
+        logger.warning(f"无法识别平台，默认使用飞书: {FEISHU_URL}")
+        platform = PLATFORM_FEISHU
+        app_id = settings.FEISHU_APP_ID
+        app_secret = settings.FEISHU_APP_SECRET
+        client = feishu_client
+    
+    return platform, app_id, app_secret, client
+
+# 获取平台配置
+PLATFORM, APP_ID, APP_SECRET, CLIENT = get_platform_and_config()
 
 
 # 字段映射关系（Feishu字段名 -> DB字段名）
@@ -63,13 +95,34 @@ FIELD_MAP = {
 CRM_FIELDS = list(FIELD_MAP.values()) + ['last_modified_time', 'record_id']
 
 # 拉取bitable全量记录，包含系统自动生成字段，比如last_modified_time，record_id
-def fetch_bitable_records(token, app_token, table_id, view_id, start_time=None, end_time=None):
-    url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/search"
+def fetch_bitable_records(token, app_token, table_id, view_id, start_time=None, end_time=None, platform=None):
+    """
+    拉取bitable记录
+    
+    Args:
+        token: 访问令牌
+        app_token: 应用令牌
+        table_id: 表格ID
+        view_id: 视图ID
+        start_time: 开始时间
+        end_time: 结束时间
+        platform: 平台名称 (feishu/lark)
+    """
+    # 根据平台选择API端点
+    if platform == PLATFORM_LARK:
+        base_url = "https://open.larksuite.com/open-apis"
+        platform_name = "Lark"
+    else:
+        base_url = "https://open.feishu.cn/open-apis"
+        platform_name = "飞书"
+    
+    url = f"{base_url}/bitable/v1/apps/{app_token}/tables/{table_id}/records/search"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     records = []
     page_token = None
     filter_obj = None
     conditions = []
+    
     if start_time:
         start_ts = str(int(start_time.timestamp()) * 1000)
         conditions.append({"field_name": "拜访及沟通日期", "operator": "isGreater", "value": [start_ts]})
@@ -78,15 +131,17 @@ def fetch_bitable_records(token, app_token, table_id, view_id, start_time=None, 
         conditions.append({"field_name": "拜访及沟通日期", "operator": "isLess", "value": [end_ts]})
     if conditions:
         filter_obj = {"conditions": conditions, "conjunction": "and"}
+    
     while True:
         body = {"page_size": 100, "automatic_fields": True, "view_id": view_id}
         if filter_obj:
             body["filter"] = filter_obj
         if page_token:
             body["page_token"] = page_token
+        
         resp = requests.post(url, headers=headers, json=body)
         if resp.status_code != 200:
-            logger.error(f"拉取飞书多维表格拜访记录失败: {resp.text}")
+            logger.error(f"拉取{platform_name}多维表格拜访记录失败: {resp.text}")
             break
         resp.raise_for_status()
         data = resp.json()["data"]
@@ -95,6 +150,8 @@ def fetch_bitable_records(token, app_token, table_id, view_id, start_time=None, 
         if not data.get("has_more"):
             break
         page_token = data.get("page_token")
+    
+    logger.info(f"从{platform_name}拉取了 {len(records)} 条记录")
     return records
 
 # 解析Feishu字段为DB字段
@@ -154,20 +211,35 @@ def get_local_max_mtime(session):
 @app.task(bind=True, max_retries=3)
 def sync_bitable_visit_records(self):
     """
-    定时同步飞书多维表格拜访记录到crm_intermediate_import_visit_records
+    定时同步多维表格拜访记录到crm_sales_visit_records
+    支持飞书和Lark平台
     """
     try:
-        logger.info("开始同步飞书多维表格拜访记录")
-        token = get_tenant_access_token(APP_ID, APP_SECRET, external=external)
-        logger.info(f"token: {token}")
-        app_token = resolve_bitable_app_token(token, url_type, url_token)
-        logger.info(f"app_token: {app_token}")
+        # 检查配置
+        if not PLATFORM or not APP_ID or not APP_SECRET or not CLIENT:
+            logger.error("平台配置不完整，无法同步")
+            return
+        
+        logger.info(f"开始同步{PLATFORM}多维表格拜访记录")
+        
+        # 获取访问令牌
+        token = CLIENT.get_tenant_access_token()
+        logger.info(f"获取到{PLATFORM}访问令牌: {token[:20]}...")
+        
+        # 解析应用令牌
+        app_token = resolve_bitable_app_token(url_token)
+        logger.info(f"应用令牌: {app_token}")
+        
+        # 获取本地最大修改时间
         with Session(engine) as session:
             local_max_mtime = get_local_max_mtime(session)
         logger.info(f"本地最大last_modified_time: {local_max_mtime}")
+        
         # 拉取数据（可全量或按区间）
-        records = fetch_bitable_records(token, app_token, table_id, view_id)
+        records = fetch_bitable_records(token, app_token, table_id, view_id, platform=PLATFORM)
         logger.info(f"本次全量拉取{len(records)}条记录")
+        
+        # 过滤增量记录
         filtered = []
         max_mtime = local_max_mtime
         for rec in records:
@@ -176,13 +248,16 @@ def sync_bitable_visit_records(self):
                 filtered.append(rec)
                 if mtime > max_mtime:
                     max_mtime = mtime
+        
         logger.info(f"本次需同步增量记录: {len(filtered)}")
+        
         if filtered:
             upsert_visit_records(filtered)
         else:
             logger.info("无需同步记录")
+            
     except Exception as e:
-        logger.error(f"同步飞书多维表格拜访记录失败: {e}")
+        logger.error(f"同步{PLATFORM}多维表格拜访记录失败: {e}")
         raise self.retry(exc=e, countdown=60)
 
 # 插入或更新记录

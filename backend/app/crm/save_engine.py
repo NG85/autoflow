@@ -1,16 +1,16 @@
 import logging
 import json
+import requests
 from typing import Optional
 from datetime import datetime
 from app.core.config import settings
 from app.core.db import get_db_session
 from app.api.routes.crm.models import VisitRecordCreate
 from app.api.deps import CurrentUserDep, SessionDep
+from app.repositories.document_content import DocumentContentRepo
+from app.services.platform_notification_service import platform_notification_service
 from app.tasks.bitable_import import FIELD_MAP, upsert_visit_records
 from app.utils.uuid6 import uuid6
-import requests
-from app.repositories.document_content import DocumentContentRepo
-
 logger = logging.getLogger(__name__)
 
 def _generate_record_id(record_type, now):
@@ -19,7 +19,7 @@ def _generate_record_id(record_type, now):
     return f"{record_type}_{dt}_{rand}"
 
 # 保存表单拜访记录到 crm_sales_visit_records
-def save_visit_record_to_crm_table(record_schema: VisitRecordCreate, db_session=None):
+def save_visit_record_to_crm_table(record_schema: VisitRecordCreate, db_session: SessionDep):
     now = datetime.now()
     # 英文转中文
     fields = record_schema.dict(exclude_none=True)
@@ -35,28 +35,23 @@ def save_visit_record_to_crm_table(record_schema: VisitRecordCreate, db_session=
         "record_id": record_id,
     }
     
-    # 如果提供了数据库会话，使用事务保存
-    if db_session:
-        # 直接使用传入的会话进行保存
-        batch_time = datetime.now()
-        from app.tasks.bitable_import import map_fields, CRM_TABLE
-        from sqlalchemy import MetaData, Table, text
-        from sqlalchemy.dialects.mysql import insert as mysql_insert
-        
-        metadata = MetaData()
-        crm_table = Table(CRM_TABLE, metadata, autoload_with=db_session.bind)
-        
-        mapped = map_fields(item, batch_time=batch_time)
-        insert_stmt = mysql_insert(crm_table).values(**mapped)
-        update_stmt = {k: mapped[k] for k in mapped if k != 'record_id'}
-        if mapped.get('account_id') in (None, '', 'null'):
-            update_stmt['account_id'] = text('account_id')
-        ondup_stmt = insert_stmt.on_duplicate_key_update(**update_stmt)
-        db_session.execute(ondup_stmt)
-        # 不在这里commit，由调用方控制事务
-    else:
-        # 使用原有的方式保存
-        upsert_visit_records([item])
+    # 使用事务保存
+    batch_time = datetime.now()
+    from app.tasks.bitable_import import map_fields, CRM_TABLE
+    from sqlalchemy import MetaData, Table, text
+    from sqlalchemy.dialects.mysql import insert as mysql_insert
+    
+    metadata = MetaData()
+    crm_table = Table(CRM_TABLE, metadata, autoload_with=db_session.bind)
+    
+    mapped = map_fields(item, batch_time=batch_time)
+    insert_stmt = mysql_insert(crm_table).values(**mapped)
+    update_stmt = {k: mapped[k] for k in mapped if k != 'record_id'}
+    if mapped.get('account_id') in (None, '', 'null'):
+        update_stmt['account_id'] = text('account_id')
+    ondup_stmt = insert_stmt.on_duplicate_key_update(**update_stmt)
+    db_session.execute(ondup_stmt)
+    # 不在这里commit，由调用方控制事务
     
     return record_id
 
@@ -208,6 +203,7 @@ def fill_sales_visit_record_fields(sales_visit_record):
     is_first_visit = sales_visit_record.get("is_first_visit")
     if is_first_visit is not None:
         sales_visit_record["is_first_visit"] = "首次拜访" if is_first_visit else None
+        sales_visit_record["is_first_visit_en"] = "first visit" if is_first_visit else None
     
     # 处理是否call high字段
     is_call_high = sales_visit_record.get("is_call_high")
@@ -226,7 +222,7 @@ def fill_sales_visit_record_fields(sales_visit_record):
     return sales_visit_record
 
 
-def push_visit_record_feishu_message(sales_visit_record, visit_type, db_session=None, meeting_notes=None):
+def push_visit_record_message(sales_visit_record, visit_type, db_session=None, meeting_notes=None):
     sales_visit_record = fill_sales_visit_record_fields(sales_visit_record)
     
     # 获取记录人信息
@@ -242,10 +238,6 @@ def push_visit_record_feishu_message(sales_visit_record, visit_type, db_session=
         logger.info("Removing attachment field from visit record to avoid large base64 data transmission")
         del sales_visit_record["attachment"]
     
-    # 使用飞书推送服务
-    from app.services.feishu_notification_service import FeishuNotificationService
-    
-    notification_service = FeishuNotificationService()
     
     # 如果没有传入db_session，则创建一个新的
     should_close_session = False
@@ -255,7 +247,7 @@ def push_visit_record_feishu_message(sales_visit_record, visit_type, db_session=
     
     try:
         # 发送拜访记录通知
-        result = notification_service.send_visit_record_notification(
+        result = platform_notification_service.send_visit_record_notification(
             db_session=db_session,
             recorder_name=recorder_name,
             recorder_id=recorder_id,
@@ -272,7 +264,7 @@ def push_visit_record_feishu_message(sales_visit_record, visit_type, db_session=
         return result["success"]
         
     except Exception as e:
-        logger.error(f"Failed to push visit record feishu message: {e}")
+        logger.error(f"Failed to push visit record message: {e}")
         return False
     finally:
         # 只有当我们创建了session时才关闭它
@@ -400,7 +392,7 @@ def save_visit_record_with_content(
             del record_data["attachment"]
         
         # 推送飞书消息
-        push_visit_record_feishu_message(
+        push_visit_record_message(
             visit_type=record.visit_type,
             sales_visit_record=record_data,
             db_session=db_session,

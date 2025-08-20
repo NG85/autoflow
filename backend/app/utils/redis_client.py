@@ -48,53 +48,57 @@ class RedisClient:
                 decode_responses=True
             )
     
-    def set_feishu_access_token(self, user_id: str, access_token: str, type: str, expires_in: int = 7200) -> bool:
+    def _set_access_token(self, platform: str, user_id: str, access_token: str, type: str, expires_in: int = 7200) -> bool:
         """
-        存储飞书access token
+        通用方法：存储平台access token
         
         Args:
+            platform: 平台名称 (feishu/lark)
             user_id: 用户ID
             access_token: 访问令牌
+            type: 令牌类型
             expires_in: 过期时间（秒），默认2小时
             
         Returns:
             是否存储成功
         """
         try:
-            key = f"token:feishu:user:{user_id}:{type}"
-            # 按照飞书API返回格式存储
+            key = f"token:{platform}:user:{user_id}:{type}"
+            # 按照API返回格式存储
             token_data = {
                 "code": 0,
                 "access_token": access_token,
                 "expires_in": expires_in
             }
-            # 设置过期时间比飞书token过期时间短一些，确保安全
+            # 设置过期时间比token过期时间短一些，确保安全
             self.redis_client.setex(key, expires_in - 200, json.dumps(token_data))
-            logger.info(f"Successfully stored Feishu access token for user {user_id}")
+            logger.info(f"Successfully stored {platform} access token for user {user_id}")
             return True
         except Exception as e:
-            logger.error(f"Failed to store Feishu access token for user {user_id}: {e}")
+            logger.error(f"Failed to store {platform} access token for user {user_id}: {e}")
             return False
     
-    def get_feishu_access_token(self, user_id: str, type: str) -> Optional[str]:
+    def _get_access_token(self, platform: str, user_id: str, type: str) -> Optional[str]:
         """
-        获取飞书access token
+        通用方法：获取平台access token
         
         Args:
+            platform: 平台名称 (feishu/lark)
             user_id: 用户ID
+            type: 令牌类型
             
         Returns:
             access token，如果不存在或已过期则返回None
         """
         try:
-            key = f"token:feishu:user:{user_id}:{type}"
+            key = f"token:{platform}:user:{user_id}:{type}"
             token_data = self.redis_client.get(key)
             if token_data:
                 try:
                     data = json.loads(token_data)
                     access_token = data.get("access_token")
                     if access_token:
-                        logger.info(f"Successfully retrieved Feishu access token for user {user_id}")
+                        logger.info(f"Successfully retrieved {platform} access token for user {user_id}")
                         return access_token
                     else:
                         logger.warning(f"No access_token in stored data for user {user_id}")
@@ -103,38 +107,10 @@ class RedisClient:
                     logger.error(f"Failed to parse token data for user {user_id}: {e}")
                     return None
             else:
-                logger.info(f"No Feishu access token found for user {user_id}")
+                logger.info(f"No {platform} access token found for user {user_id}")
                 return None
         except Exception as e:
-            logger.error(f"Failed to get Feishu access token for user {user_id}: {e}")
-            return None
-    
-    def get_feishu_token_data(self, user_id: str) -> Optional[dict]:
-        """
-        获取飞书token完整信息
-        
-        Args:
-            user_id: 用户ID
-            
-        Returns:
-            token完整信息，如果不存在或已过期则返回None
-        """
-        try:
-            key = f"token:feishu:user:{user_id}"
-            token_data = self.redis_client.get(key)
-            if token_data:
-                try:
-                    data = json.loads(token_data)
-                    logger.info(f"Successfully retrieved Feishu token data for user {user_id}")
-                    return data
-                except json.JSONDecodeError as e:
-                    logger.error(f"Failed to parse token data for user {user_id}: {e}")
-                    return None
-            else:
-                logger.info(f"No Feishu token data found for user {user_id}")
-                return None
-        except Exception as e:
-            logger.error(f"Failed to get Feishu token data for user {user_id}: {e}")
+            logger.error(f"Failed to get {platform} access token for user {user_id}: {e}")
             return None
 
 # 全局Redis客户端实例

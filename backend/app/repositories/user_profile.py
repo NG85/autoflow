@@ -1,8 +1,6 @@
 from typing import Optional, List, Dict, Any
 from uuid import UUID
-from fastapi_pagination import Page, Params
-from fastapi_pagination.ext.sqlmodel import paginate
-from sqlmodel import Session, select, or_
+from sqlmodel import Session, select
 from app.models.user_profile import UserProfile
 from app.models.auth import User
 from app.models.oauth_user import OAuthUser
@@ -104,172 +102,6 @@ class UserProfileRepo(BaseRepo):
             select(UserProfile).where(UserProfile.is_active == True)
         ).all()
 
-    def get_all_profiles(self, db_session: Session) -> List[UserProfile]:
-        """获取所有用户档案"""
-        return db_session.exec(select(UserProfile)).all()
-
-    def get_profile_stats(self, db_session: Session) -> Dict[str, Any]:
-        """获取档案统计信息"""
-        all_profiles = self.get_all_profiles(db_session)
-        
-        profiles_with_system_user = [p for p in all_profiles if p.user_id is not None]
-        profiles_without_system_user = [p for p in all_profiles if p.user_id is None]
-        
-        return {
-            "total_profiles": len(all_profiles),
-            "profiles_with_system_user": len(profiles_with_system_user),
-            "profiles_without_system_user": len(profiles_without_system_user)
-        }
-
-    def get_user_profile_for_feishu(self, db_session: Session, user_id: UUID) -> Optional[dict]:
-        """获取用户档案信息用于飞书消息推送"""
-        query = (
-            select(User, UserProfile, OAuthUser)
-            .outerjoin(UserProfile, User.id == UserProfile.user_id)
-            .outerjoin(
-                OAuthUser,
-                OAuthUser.ask_id == UserProfile.oauth_user_id,
-            )
-            .where(User.id == user_id)
-        )
-        result = db_session.exec(query).first()
-        
-        if result:
-            user, profile, oauth_user = result
-            return {
-                "user_id": user.id,
-                "email": user.email,
-                "feishu_open_id": (
-                    profile.feishu_open_id if profile and profile.feishu_open_id else (
-                        oauth_user.open_id if oauth_user else None
-                    )
-                ),
-                "name": profile.name if profile else (oauth_user.name if oauth_user else None),
-                "department": profile.department if profile else None,
-                "position": profile.position if profile else None,
-                "direct_manager_id": profile.direct_manager_id if profile else None,
-                "direct_manager_name": profile.direct_manager_name if profile else None,
-            }
-        return None
-
-    def get_users_by_department(self, db_session: Session, department: str) -> list[dict]:
-        """根据部门获取所有用户档案信息（用于飞书推送）"""
-        query = (
-            select(User, UserProfile, OAuthUser)
-            .join(UserProfile, User.id == UserProfile.user_id)
-            .outerjoin(
-                OAuthUser,
-                OAuthUser.ask_id == UserProfile.oauth_user_id,
-            )
-            .where(UserProfile.department == department)
-            .where(UserProfile.is_active == True)
-        )
-        results = db_session.exec(query).all()
-        
-        return [
-            {
-                "user_id": user.id,
-                "email": user.email,
-                "feishu_open_id": (profile.feishu_open_id if profile.feishu_open_id else (oauth_user.open_id if oauth_user else None)),
-                "name": profile.name if profile.name else (oauth_user.name if oauth_user else None),
-                "department": profile.department,
-                "position": profile.position,
-                "direct_manager_id": profile.direct_manager_id,
-                "direct_manager_name": profile.direct_manager_name,
-            }
-            for user, profile, oauth_user in results
-        ]
-
-    def get_manager_and_subordinates(self, db_session: Session, manager_id: str) -> dict:
-        """获取管理者及其下属信息（用于飞书推送）"""
-        # 获取管理者信息
-        manager_query = (
-            select(User, UserProfile, OAuthUser)
-            .join(UserProfile, User.id == UserProfile.user_id)
-            .outerjoin(
-                OAuthUser,
-                OAuthUser.ask_id == UserProfile.oauth_user_id,
-            )
-            .where(UserProfile.direct_manager_id == manager_id)
-            .where(UserProfile.is_active == True)
-        )
-        manager_result = db_session.exec(manager_query).first()
-        
-        # 获取下属信息
-        subordinates_query = (
-            select(User, UserProfile, OAuthUser)
-            .join(UserProfile, User.id == UserProfile.user_id)
-            .outerjoin(
-                OAuthUser,
-                OAuthUser.ask_id == UserProfile.oauth_user_id,
-            )
-            .where(UserProfile.direct_manager_id == manager_id)
-            .where(UserProfile.is_active == True)
-        )
-        subordinates_results = db_session.exec(subordinates_query).all()
-        
-        manager_info = None
-        if manager_result:
-            user, profile, oauth_user = manager_result
-            manager_info = {
-                "user_id": user.id,
-                "email": user.email,
-                "feishu_open_id": (profile.feishu_open_id if profile.feishu_open_id else (oauth_user.open_id if oauth_user else None)),
-                "name": profile.name if profile.name else (oauth_user.name if oauth_user else None),
-                "department": profile.department,
-                "position": profile.position,
-                "direct_manager_id": profile.direct_manager_id,
-                "direct_manager_name": profile.direct_manager_name,
-            }
-        
-        subordinates = [
-            {
-                "user_id": user.id,
-                "email": user.email,
-                "feishu_open_id": (profile.feishu_open_id if profile.feishu_open_id else (oauth_user.open_id if oauth_user else None)),
-                "name": profile.name if profile.name else (oauth_user.name if oauth_user else None),
-                "department": profile.department,
-                "position": profile.position,
-                "direct_manager_id": profile.direct_manager_id,
-                "direct_manager_name": profile.direct_manager_name,
-            }
-            for user, profile, oauth_user in subordinates_results
-        ]
-        
-        return {
-            "manager": manager_info,
-            "subordinates": subordinates
-        }
-
-    def search_profiles(
-        self,
-        db_session: Session,
-        search: Optional[str] = None,
-        department: Optional[str] = None,
-        is_active: Optional[bool] = None,
-        params: Params = Params(),
-    ) -> Page[UserProfile]:
-        """搜索用户档案"""
-        query = select(UserProfile)
-
-        # 添加搜索条件
-        if search:
-            search_condition = or_(
-                UserProfile.department.ilike(f"%{search}%"),
-                UserProfile.position.ilike(f"%{search}%"),
-                UserProfile.direct_manager_name.ilike(f"%{search}%"),
-            )
-            query = query.where(search_condition)
-
-        # 添加过滤条件
-        if department:
-            query = query.where(UserProfile.department == department)
-        
-        if is_active is not None:
-            query = query.where(UserProfile.is_active == is_active)
-
-        query = query.order_by(UserProfile.id)
-        return paginate(db_session, query, params)
 
     def get_department_members(
         self, 
@@ -323,16 +155,16 @@ class UserProfileRepo(BaseRepo):
             )
         ).first()
 
-    def get_department_managers(
+    def get_users_by_notification_permission(
         self, 
         db_session: Session, 
-        department: str
+        notification_type: str
     ) -> list[UserProfile]:
-        """获取部门所有负责人（部门中没有直属上级的用户）"""
-        return db_session.exec(
-            select(UserProfile).where(
-                UserProfile.department == department,
-                UserProfile.direct_manager_id.is_(None),  # 没有直属上级
-                UserProfile.is_active == True
-            )
-        ).all()
+        """根据推送权限类型获取用户列表"""
+        query = select(UserProfile).where(
+            UserProfile.is_active == True,
+            UserProfile.open_id.is_not(None),
+            UserProfile.notification_tags.contains(notification_type)
+        )
+        
+        return db_session.exec(query).all()

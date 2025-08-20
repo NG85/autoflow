@@ -8,7 +8,7 @@ from app.celery import app
 from app.models import DataSource, DataSourceType
 from app.repositories import knowledge_base_repo
 from app.services.crm_statistics_service import crm_statistics_service
-from app.services.feishu_notification_service import FeishuNotificationService
+from app.services.platform_notification_service import platform_notification_service
 from app.tasks.knowledge_base import import_documents_from_kb_datasource
 
 logger = logging.getLogger(__name__)
@@ -219,7 +219,6 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None):
             
             # 如果启用了飞书推送，发送周报通知
             if settings.CRM_WEEKLY_REPORT_FEISHU_ENABLED:
-                notification_service = FeishuNotificationService()
                 department_success_count = 0
                 department_failed_count = 0
                 
@@ -227,7 +226,7 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None):
                 for department_report in department_reports:
                     try:
                         # 发送部门周报通知给部门负责人
-                        result = notification_service.send_weekly_report_notification(
+                        result = platform_notification_service.send_weekly_report_notification(
                             db_session=session,
                             department_report_data=department_report
                         )
@@ -255,7 +254,8 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None):
                     )
                     
                     if company_weekly_report:
-                        company_result = notification_service.send_company_weekly_report_notification(
+                        company_result = platform_notification_service.send_company_weekly_report_notification(
+                            db_session=session,
                             company_weekly_report_data=company_weekly_report
                         )
                         

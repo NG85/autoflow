@@ -26,17 +26,17 @@ from app.crm.save_engine import (
     save_visit_record_to_crm_table, 
     check_followup_quality, 
     check_next_steps_quality, 
-    push_visit_record_feishu_message,
+    push_visit_record_message,
     save_visit_record_with_content
 )
 from app.api.routes.crm.models import VisitRecordQueryRequest
 from app.services.customer_document_service import CustomerDocumentService
-from app.services.document_processing_service import DocumentProcessingService
+from app.services.document_processing_service import document_processing_service
 from app.services.crm_statistics_service import crm_statistics_service
 from app.models.crm_daily_account_statistics import CRMDailyAccountStatistics
 from app.repositories.user_profile import UserProfileRepo
 from app.repositories.visit_record import visit_record_repo
-from sqlmodel import select, or_, distinct, func, text
+from sqlmodel import select, or_, distinct, func
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
 from app.models.crm_accounts import CRMAccount
 from app.models.user_profile import UserProfile
@@ -140,11 +140,10 @@ def create_visit_record(
                 return {"code": 400, "message": "visit_url is required", "data": {}}
             
             # 使用通用文档处理服务
-            document_processing_service = DocumentProcessingService()
             result = document_processing_service.process_document_url(
                 document_url=record.visit_url,
                 user_id=str(user.id),
-                feishu_auth_code=feishu_auth_code
+                auth_code=feishu_auth_code
             )
             
             # 如果处理失败，直接返回结果
@@ -196,7 +195,7 @@ def create_visit_record(
                 if "attachment" in record_data:
                     del record_data["attachment"]
                 
-                push_visit_record_feishu_message(
+                push_visit_record_message(
                     visit_type=record.visit_type,
                     sales_visit_record=record_data,
                     db_session=db_session,
@@ -232,7 +231,7 @@ def create_visit_record(
             if "attachment" in record_data:
                 del record_data["attachment"]
             
-            push_visit_record_feishu_message(
+            push_visit_record_message(
                 visit_type=record.visit_type,
                 sales_visit_record=record_data,
                 db_session=db_session,

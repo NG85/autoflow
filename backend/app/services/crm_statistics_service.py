@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta
 from sqlmodel import Session, select, and_
 from app.models.crm_daily_account_statistics import CRMDailyAccountStatistics
 from app.models.crm_account_assessment import CRMAccountAssessment
+from app.services.platform_notification_service import platform_notification_service
 import logging
 
 logger = logging.getLogger(__name__)
@@ -312,13 +313,13 @@ class CRMStatisticsService:
                 from app.core.config import settings
                 if settings.CRM_DAILY_REPORT_FEISHU_ENABLED:
                     # 推送个人日报
-                    self._send_feishu_notifications(session, complete_reports)
+                    self._send_daily_report_notifications(session, complete_reports)
                     
                     # 生成并推送部门日报
-                    self._generate_and_send_department_reports(session, target_date)
+                    self._generate_and_send_department_daily_reports(session, target_date)
                     
                     # 生成并推送公司日报
-                    self._generate_and_send_company_report(session, target_date)
+                    self._generate_and_send_company_daily_report(session, target_date)
                 else:
                     logger.info("CRM日报飞书推送功能已禁用，跳过推送")
             else:
@@ -330,7 +331,7 @@ class CRMStatisticsService:
             logger.error(f"生成完整日报数据失败: {e}")
             raise
     
-    def _send_feishu_notifications(self, session: Session, complete_reports: List[Dict]) -> None:
+    def _send_daily_report_notifications(self, session: Session, complete_reports: List[Dict]) -> None:
         """
         向销售人员发送CRM日报飞书卡片通知
         
@@ -338,9 +339,6 @@ class CRMStatisticsService:
             session: 数据库会话
             complete_reports: 完整的日报数据列表
         """
-        from app.services.feishu_notification_service import FeishuNotificationService
-        
-        notification_service = FeishuNotificationService()
         
         total_notifications = 0
         successful_notifications = 0
@@ -375,7 +373,7 @@ class CRMStatisticsService:
                 }
                 
                 # 发送飞书通知
-                result = notification_service.send_daily_report_notification(
+                result = platform_notification_service.send_daily_report_notification(
                     db_session=session,
                     daily_report_data=report_data
                 )
@@ -401,7 +399,7 @@ class CRMStatisticsService:
             f"CRM个人日报飞书通知发送完成: {successful_notifications}/{total_notifications} 个销售人员的个人通知发送成功"
         )
     
-    def _generate_and_send_department_reports(self, session: Session, target_date: date) -> None:
+    def _generate_and_send_department_daily_reports(self, session: Session, target_date: date) -> None:
         """
         生成并推送部门日报
         
@@ -409,7 +407,6 @@ class CRMStatisticsService:
             session: 数据库会话
             target_date: 目标日期
         """
-        from app.services.feishu_notification_service import FeishuNotificationService
         
         logger.info(f"开始生成并推送 {target_date} 的部门日报")
         
@@ -420,15 +417,13 @@ class CRMStatisticsService:
             logger.warning(f"{target_date} 没有找到任何部门数据，跳过部门日报推送")
             return
         
-        notification_service = FeishuNotificationService()
-        
         total_departments = 0
         successful_departments = 0
         
         for department_report in department_reports:
             try:
                 # 发送部门日报飞书通知
-                result = notification_service.send_department_report_notification(
+                result = platform_notification_service.send_department_report_notification(
                     db_session=session,
                     department_report_data=department_report
                 )
@@ -454,7 +449,7 @@ class CRMStatisticsService:
             f"CRM部门日报飞书通知发送完成: {successful_departments}/{total_departments} 个部门的通知发送成功"
         )
     
-    def _generate_and_send_company_report(self, session: Session, target_date: date) -> None:
+    def _generate_and_send_company_daily_report(self, session: Session, target_date: date) -> None:
         """
         生成并推送公司日报
         
@@ -462,7 +457,6 @@ class CRMStatisticsService:
             session: 数据库会话
             target_date: 目标日期
         """
-        from app.services.feishu_notification_service import FeishuNotificationService
         
         logger.info(f"开始生成并推送 {target_date} 的公司日报")
         
@@ -473,11 +467,9 @@ class CRMStatisticsService:
             logger.warning(f"{target_date} 没有找到任何数据，跳过公司日报推送")
             return
         
-        notification_service = FeishuNotificationService()
-        
         try:
             # 发送公司日报飞书通知
-            result = notification_service.send_company_report_notification(
+            result = platform_notification_service.send_company_report_notification(
                 db_session=session,
                 company_report_data=company_report
             )
