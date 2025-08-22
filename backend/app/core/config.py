@@ -35,6 +35,11 @@ class StorageType(str, enum.Enum):
     MINIO = "minio"
 
 
+class VisitRecordFormType(str, enum.Enum):
+    SIMPLE = "simple"      # 简易版表单
+    COMPLETE = "complete"  # 完整版表单
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env", env_ignore_empty=True, extra="ignore"
@@ -135,6 +140,9 @@ class Settings(BaseSettings):
     CRM_DAILY_KB_ID: int = 2
     CRM_DAILY_TASK_CRON: str = '0 10 * * *'  # 每天早上10点执行
     CRM_ACCOUNT_PRIMARY_EXCLUDE: bool = False
+    
+    # CRM visit record form configuration
+    CRM_VISIT_RECORD_FORM_TYPE: VisitRecordFormType = VisitRecordFormType.COMPLETE
     
     # CRM daily report task configuration
     CRM_DAILY_REPORT_ENABLED: bool = False

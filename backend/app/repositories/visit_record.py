@@ -279,6 +279,11 @@ class VisitRecordRepo(BaseRepo):
                 CRMSalesVisitRecord.visit_type.in_(request.visit_type)
             )
 
+        if request.subject:
+            query = query.where(
+                CRMSalesVisitRecord.subject.in_(request.subject)
+            )
+
         if request.is_first_visit is not None:
             query = query.where(
                 CRMSalesVisitRecord.is_first_visit == request.is_first_visit

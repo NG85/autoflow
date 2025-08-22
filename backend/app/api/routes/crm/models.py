@@ -64,6 +64,41 @@ class OpportunityType(str, Enum):
     RENEW = "Renew"
     RENEWANDEXPANSION = "Renew+Expansion"
 
+# 定义拜访主题枚举
+class VisitSubject(str, Enum):
+    INITIAL_ENGAGEMENT = "Initial Engagement|初次接触"
+    TECHNICAL_ENGAGEMENT = "Technical Engagement|技术交流"
+    BUSINESS_ENGAGEMENT = "Business Engagement|商务洽谈"
+    MIXED_ENGAGEMENT = "Mixed Engagement|混合交流"
+    IQM_SCHEDULED = "IQM Scheduled|IQM已安排"
+    IQM_COMPLETED = "IQM Completed|IQM已完成"
+    
+    @property
+    def english(self) -> str:
+        """获取英文值"""
+        return self.value.split("|")[0]
+    
+    @property
+    def chinese(self) -> str:
+        """获取中文值"""
+        return self.value.split("|")[1]
+    
+    @classmethod
+    def from_english(cls, english_value: str) -> Optional['VisitSubject']:
+        """根据英文值获取枚举"""
+        for member in cls:
+            if member.english == english_value:
+                return member
+        return None
+    
+    @classmethod
+    def from_chinese(cls, chinese_value: str) -> Optional['VisitSubject']:
+        """根据中文值获取枚举"""
+        for member in cls:
+            if member.chinese == chinese_value:
+                return member
+        return None
+
 class SL_PULL_IN(str, Enum):
     YES = "是"
     OTHER = "其他"
@@ -132,39 +167,59 @@ class FieldMetadata(BaseModel):
     description: Optional[str] = None
     default_value: Optional[Any] = None
 
-# 拜访记录创建请求
-class VisitRecordCreate(BaseModel):
-    is_first_visit: Optional[bool] = None # 是否首次拜访
-    is_call_high: Optional[bool] = None # 是否call high
+# 拜访记录公共字段（所有表单类型都包含）
+class VisitRecordBase(BaseModel):
     account_name: Optional[str] = None # 客户名称
     account_id: Optional[str] = None # 客户ID
     opportunity_name: Optional[str] = None # 商机名称
     opportunity_id: Optional[str] = None # 商机ID
     partner_name: Optional[str] = None # 合作伙伴名称
-    customer_lead_source: Optional[str] = None # 客户/线索来源
+    visit_type: Optional[Literal["form", "link"]] = None # 拜访类型：form(用户填报)、link(非结构化链接/文件)
+    visit_url: Optional[str] = None # 会议链接或文件URL
+    followup_record: Optional[str] = None # 跟进记录（原文）
+    followup_record_zh: Optional[str] = None # 跟进记录（中文版）
+    followup_record_en: Optional[str] = None # 跟进记录（英文版）
+    followup_quality_level_zh: Optional[str] = None # 跟进质量等级（中文版）
+    followup_quality_level_en: Optional[str] = None # 跟进质量等级（英文版）
+    followup_quality_reason_zh: Optional[str] = None # 跟进质量原因（中文版）
+    followup_quality_reason_en: Optional[str] = None # 跟进质量原因（英文版）
+    next_steps: Optional[str] = None # 下一步计划（原文）
+    next_steps_zh: Optional[str] = None # 下一步计划（中文版）
+    next_steps_en: Optional[str] = None # 下一步计划（英文版）
+    next_steps_quality_level_zh: Optional[str] = None # 下一步计划质量等级（中文版）
+    next_steps_quality_level_en: Optional[str] = None # 下一步计划质量等级（英文版）
+    next_steps_quality_reason_zh: Optional[str] = None # 下一步计划质量原因（中文版）
+    next_steps_quality_reason_en: Optional[str] = None # 下一步计划质量原因（英文版）
+    attachment: Optional[str] = None # 附件
+    parent_record: Optional[str] = None # 父记录
+    remarks: Optional[str] = None # 备注
+
+# 拜访记录创建请求模型
+# 完整版表单
+class CompleteVisitRecordCreate(VisitRecordBase):
+    is_first_visit: Optional[bool] = None # 是否首次拜访
+    is_call_high: Optional[bool] = None # 是否call high
     visit_communication_date: Optional[str] = None # 拜访及沟通日期
-    visit_object_category: Optional[str] = None # 拜访对象类别
     contact_position: Optional[str] = None # 客户职位
     contact_name: Optional[str] = None # 客户名字
     recorder: Optional[str] = None # 记录人
     recorder_id: Optional[str] = None # 记录人ID
-    counterpart_location: Optional[str] = None # 拜访地点
     visit_communication_method: Optional[str] = None # 拜访及沟通方式
-    # visit_communication_location: Optional[str] = None # 拜访及沟通地点
+    collaborative_participants: Optional[str] = None # 协同参与人
+    
+    # 备用字段
+    customer_lead_source: Optional[str] = None # 客户/线索来源
+    visit_object_category: Optional[str] = None # 拜访对象类别
+    counterpart_location: Optional[str] = None # 拜访地点
+    visit_communication_location: Optional[str] = None # 拜访及沟通地点
     communication_duration: Optional[str] = None # 沟通时长
     expectation_achieved: Optional[str] = None # 是否达成预期
-    collaborative_participants: Optional[str] = None # 协同参与人
-    followup_record: Optional[str] = None # 跟进记录
-    next_steps: Optional[str] = None # 下一步计划
-    followup_quality_level: Optional[str] = None # 跟进质量等级
-    followup_quality_reason: Optional[str] = None # 跟进质量原因
-    next_steps_quality_level: Optional[str] = None # 下一步计划质量等级
-    next_steps_quality_reason: Optional[str] = None # 下一步计划质量原因
-    attachment: Optional[str] = None # 附件
-    parent_record: Optional[str] = None # 父记录
-    remarks: Optional[str] = None # 备注
-    visit_type: Optional[Literal["form", "link"]] = None # 拜访类型：form(用户填报)、link(非结构化链接/文件)
-    visit_url: Optional[str] = None # 会议链接或文件URL
+
+# 简易版表单
+class SimpleVisitRecordCreate(VisitRecordBase):
+    # 拜访主题
+    subject: Optional[VisitSubject] = Field(None, description="拜访主题")
+    followup_content: Optional[str] = None # 跟进内容（简易版表单使用，包含跟进记录和下一步计划）
 
 # 拜访记录查询请求模型
 class VisitRecordQueryRequest(BaseModel):
@@ -185,6 +240,7 @@ class VisitRecordQueryRequest(BaseModel):
     followup_quality_level: Optional[List[str]] = None  # AI对跟进记录质量评估（多选）
     next_steps_quality_level: Optional[List[str]] = None  # AI对下一步计划质量评估（多选）
     visit_type: Optional[List[str]] = None  # 信息来源（多选）
+    subject: Optional[List[str]] = None  # 拜访主题（多选）
     is_first_visit: Optional[bool] = None  # 是否首次拜访
     is_call_high: Optional[bool] = None  # 是否call high
     

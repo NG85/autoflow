@@ -10,7 +10,8 @@ from datetime import datetime, timedelta
 
 from app.api.routes.crm.models import (
     Account,
-    VisitRecordCreate,
+    CompleteVisitRecordCreate,
+    SimpleVisitRecordCreate,
     DailyReportRequest,
     DailyReportResponse,
     DailyReportStatistics,
@@ -116,10 +117,14 @@ async def get_filter_options(
 def create_visit_record(
     db_session: SessionDep,
     user: CurrentUserDep,
-    record: VisitRecordCreate,
+    record: SimpleVisitRecordCreate | CompleteVisitRecordCreate,
     force: bool = Body(False, example=False),
     feishu_auth_code: Optional[str] = Body(None, description="飞书授权码，用于换取访问令牌")
 ):
+    """
+    创建拜访记录
+    支持简易版和完整版表单
+    """
     try:
         if not record.visit_type:
             record.visit_type = "form"
@@ -207,21 +212,86 @@ def create_visit_record(
                 logger.error(f"Failed to save visit record with force: {e}")
                 return {"code": 400, "message": "保存拜访记录失败，请重试", "data": {}}
         
-        # 评估跟进质量
-        followup_quality_level, followup_quality_reason = check_followup_quality(record.followup_record)
-        next_steps_quality_level, next_steps_quality_reason = check_next_steps_quality(record.next_steps)
+        # 根据表单类型处理数据
+        from app.core.config import settings
+        form_type = settings.CRM_VISIT_RECORD_FORM_TYPE.value
+
+        # 处理跟进记录和下一步计划的双语版本生成
+        from app.crm.save_engine import extract_followup_record_and_next_steps, generate_bilingual_content
+        
+        if form_type == "simple" and record.followup_content:
+            # 简易版表单：从followup_content中提取followup_record和next_steps（保持原始语言）
+            try:
+                followup_record, next_steps = extract_followup_record_and_next_steps(record.followup_content)
+                record.followup_record = followup_record
+                record.next_steps = next_steps
+                logger.info(f"Successfully extracted followup_record and next_steps from followup_content")
+            except Exception as e:
+                logger.warning(f"Failed to extract followup_record and next_steps from followup_content: {e}")
+                # 如果提取失败，将整个内容作为跟进记录
+                record.followup_record = record.followup_content
+                record.next_steps = ""
+        
+        # 统一处理：基于followup_record和next_steps生成中英双语版本
+        # 处理跟进记录
+        if record.followup_record:
+            # 直接生成中英文版本
+            record.followup_record_zh = generate_bilingual_content(record.followup_record, "to_zh")
+            record.followup_record_en = generate_bilingual_content(record.followup_record, "to_en")
+        else:
+            record.followup_record_zh = ""
+            record.followup_record_en = ""
+        
+        # 处理下一步计划
+        if record.next_steps:
+            # 直接生成中英文版本
+            record.next_steps_zh = generate_bilingual_content(record.next_steps, "to_zh")
+            record.next_steps_en = generate_bilingual_content(record.next_steps, "to_en")
+        else:
+            record.next_steps_zh = ""
+            record.next_steps_en = ""
+        
+        # 评估跟进质量（中文版本）
+        followup_quality_level_zh, followup_quality_reason_zh = check_followup_quality(record.followup_record_zh, "zh")
+        next_steps_quality_level_zh, next_steps_quality_reason_zh = check_next_steps_quality(record.next_steps_zh, "zh")
+        
+        # 评估跟进质量（英文版本）
+        followup_quality_level_en, followup_quality_reason_en = check_followup_quality(record.followup_record_en, "en")
+        next_steps_quality_level_en, next_steps_quality_reason_en = check_next_steps_quality(record.next_steps_en, "en")
+        
         data = {
-            "followup": {"level": followup_quality_level, "reason": followup_quality_reason},
-            "next_steps": {"level": next_steps_quality_level, "reason": next_steps_quality_reason}
+            "followup": {
+                "level_zh": followup_quality_level_zh, 
+                "reason_zh": followup_quality_reason_zh, 
+                "content": record.followup_record,
+                "content_zh": record.followup_record_zh,
+                "content_en": record.followup_record_en,
+                "level_en": followup_quality_level_en,
+                "reason_en": followup_quality_reason_en
+            },
+            "next_steps": {
+                "level_zh": next_steps_quality_level_zh, 
+                "reason_zh": next_steps_quality_reason_zh, 
+                "content": record.next_steps,
+                "content_zh": record.next_steps_zh,
+                "content_en": record.next_steps_en,
+                "level_en": next_steps_quality_level_en,
+                "reason_en": next_steps_quality_reason_en
+            }
         }
-        # 只要有一项不合格就阻止保存
-        if followup_quality_level == "不合格" or next_steps_quality_level == "不合格":
+        # 只要有一项不合格就阻止保存（检查中英文版本）
+        if (followup_quality_level_zh == "不合格" or next_steps_quality_level_zh == "不合格" or 
+            followup_quality_level_en == "unqualified" or next_steps_quality_level_en == "unqualified"):
             return {"code": 400, "message": "failed", "data": data}
 
-        record.followup_quality_level = followup_quality_level
-        record.followup_quality_reason = followup_quality_reason
-        record.next_steps_quality_level = next_steps_quality_level
-        record.next_steps_quality_reason = next_steps_quality_reason
+        record.followup_quality_level_zh = followup_quality_level_zh
+        record.followup_quality_reason_zh = followup_quality_reason_zh
+        record.followup_quality_level_en = followup_quality_level_en
+        record.followup_quality_reason_en = followup_quality_reason_en
+        record.next_steps_quality_level_zh = next_steps_quality_level_zh
+        record.next_steps_quality_reason_zh = next_steps_quality_reason_zh
+        record.next_steps_quality_level_en = next_steps_quality_level_en
+        record.next_steps_quality_reason_en = next_steps_quality_reason_en
         try:
             save_visit_record_to_crm_table(record, db_session)
             db_session.commit()
@@ -253,16 +323,70 @@ def create_visit_record(
 @router.post("/crm/visit_record/verify")
 def verify_visit_record(
     user: CurrentUserDep,
-    followup_record: str = Body(..., example=""),
-    next_steps: str = Body(..., example=""),
+    followup_content: Optional[str] = Body(None, example=""),
+    followup_record: Optional[str] = Body(None, example=""),
+    next_steps: Optional[str] = Body(None, example=""),
 ):
     try:
-        followup_quality_level, followup_quality_reason = check_followup_quality(followup_record)
-        next_steps_quality_level, next_steps_quality_reason = check_next_steps_quality(next_steps)
+        from app.crm.save_engine import extract_followup_record_and_next_steps, generate_bilingual_content
+        
+        # 如果传入了followup_content，先进行拆分
+        if followup_content:
+            try:
+                extracted_followup_record, extracted_next_steps = extract_followup_record_and_next_steps(followup_content)
+                followup_record = extracted_followup_record
+                next_steps = extracted_next_steps
+                logger.info(f"Successfully extracted followup_record and next_steps from followup_content")
+            except Exception as e:
+                logger.warning(f"Failed to extract followup_record and next_steps from followup_content: {e}")
+                # 如果提取失败，将整个内容作为跟进记录
+                followup_record = followup_content
+                next_steps = ""
+        
+        # 生成多语言版本
+        followup_record_zh = ""
+        followup_record_en = ""
+        next_steps_zh = ""
+        next_steps_en = ""
+        
+        if followup_record:
+            followup_record_zh = generate_bilingual_content(followup_record, "to_zh")
+            followup_record_en = generate_bilingual_content(followup_record, "to_en")
+        
+        if next_steps:
+            next_steps_zh = generate_bilingual_content(next_steps, "to_zh")
+            next_steps_en = generate_bilingual_content(next_steps, "to_en")
+        
+        # 进行多语言版本质量评估
+        # 中文版本评估
+        followup_quality_level_zh, followup_quality_reason_zh = check_followup_quality(followup_record_zh, "zh")
+        next_steps_quality_level_zh, next_steps_quality_reason_zh = check_next_steps_quality(next_steps_zh, "zh")
+        
+        # 英文版本评估
+        followup_quality_level_en, followup_quality_reason_en = check_followup_quality(followup_record_en, "en")
+        next_steps_quality_level_en, next_steps_quality_reason_en = check_next_steps_quality(next_steps_en, "en")
+        
         data = {
-            "followup": {"level": followup_quality_level, "reason": followup_quality_reason},
-            "next_steps": {"level": next_steps_quality_level, "reason": next_steps_quality_reason}
-        }        
+            "followup": {
+                "level_zh": followup_quality_level_zh,
+                "reason_zh": followup_quality_reason_zh,
+                "content": followup_record,
+                "content_zh": followup_record_zh,
+                "content_en": followup_record_en,
+                "level_en": followup_quality_level_en,
+                "reason_en": followup_quality_reason_en
+            },
+            "next_steps": {
+                "level_zh": next_steps_quality_level_zh,
+                "reason_zh": next_steps_quality_reason_zh,
+                "content": next_steps,
+                "content_zh": next_steps_zh,
+                "content_en": next_steps_en,
+                "level_en": next_steps_quality_level_en,
+                "reason_en": next_steps_quality_reason_en
+            }
+        }
+        
         return {"code": 0, "message": "success", "data": data}
     except HTTPException:
         raise
@@ -316,9 +440,13 @@ def get_visit_record_filter_options(
     """
     获取拜访记录查询的过滤选项
     用于前端下拉选择框等
+    根据表单类型配置返回相应的字段
     """
     try:
+        from app.core.config import settings
+        form_type = settings.CRM_VISIT_RECORD_FORM_TYPE.value
         
+        # 通用字段：无论哪种类型都返回
         # 获取客户名称选项
         account_names = db_session.exec(
             select(distinct(CRMSalesVisitRecord.account_name))
@@ -340,32 +468,30 @@ def get_visit_record_filter_options(
             .order_by(CRMSalesVisitRecord.recorder)
         ).all()
         
-        # 获取跟进方式选项
-        communication_methods = db_session.exec(
-            select(distinct(CRMSalesVisitRecord.visit_communication_method))
-            .where(CRMSalesVisitRecord.visit_communication_method.is_not(None))
-            .order_by(CRMSalesVisitRecord.visit_communication_method)
+        # 获取跟进质量等级选项（中英文）
+        followup_quality_levels_zh = db_session.exec(
+            select(distinct(CRMSalesVisitRecord.followup_quality_level_zh))
+            .where(CRMSalesVisitRecord.followup_quality_level_zh.is_not(None))
+            .order_by(CRMSalesVisitRecord.followup_quality_level_zh)
         ).all()
         
-        # 获取跟进质量等级选项
-        followup_quality_levels = db_session.exec(
-            select(distinct(CRMSalesVisitRecord.followup_quality_level))
-            .where(CRMSalesVisitRecord.followup_quality_level.is_not(None))
-            .order_by(CRMSalesVisitRecord.followup_quality_level)
+        followup_quality_levels_en = db_session.exec(
+            select(distinct(CRMSalesVisitRecord.followup_quality_level_en))
+            .where(CRMSalesVisitRecord.followup_quality_level_en.is_not(None))
+            .order_by(CRMSalesVisitRecord.followup_quality_level_en)
         ).all()
         
-        # 获取下一步计划质量等级选项
-        next_steps_quality_levels = db_session.exec(
-            select(distinct(CRMSalesVisitRecord.next_steps_quality_level))
-            .where(CRMSalesVisitRecord.next_steps_quality_level.is_not(None))
-            .order_by(CRMSalesVisitRecord.next_steps_quality_level)
+        # 获取下一步计划质量等级选项（中英文）
+        next_steps_quality_levels_zh = db_session.exec(
+            select(distinct(CRMSalesVisitRecord.next_steps_quality_level_zh))
+            .where(CRMSalesVisitRecord.next_steps_quality_level_zh.is_not(None))
+            .order_by(CRMSalesVisitRecord.next_steps_quality_level_zh)
         ).all()
         
-        # 获取拜访类型选项
-        visit_types = db_session.exec(
-            select(distinct(CRMSalesVisitRecord.visit_type))
-            .where(CRMSalesVisitRecord.visit_type.is_not(None))
-            .order_by(CRMSalesVisitRecord.visit_type)
+        next_steps_quality_levels_en = db_session.exec(
+            select(distinct(CRMSalesVisitRecord.next_steps_quality_level_en))
+            .where(CRMSalesVisitRecord.next_steps_quality_level_en.is_not(None))
+            .order_by(CRMSalesVisitRecord.next_steps_quality_level_en)
         ).all()
         
         # 获取客户分类选项
@@ -382,20 +508,51 @@ def get_visit_record_filter_options(
             .order_by(UserProfile.department)
         ).all()
         
+        # 基础返回数据
+        result_data = {
+            "account_names": account_names,
+            "partner_names": partner_names,
+            "recorders": recorders,
+            "followup_quality_levels_zh": followup_quality_levels_zh,
+            "followup_quality_levels_en": followup_quality_levels_en,
+            "next_steps_quality_levels_zh": next_steps_quality_levels_zh,
+            "next_steps_quality_levels_en": next_steps_quality_levels_en,
+            "customer_levels": customer_levels,
+            "departments": departments,
+        }
+        
+        # 根据表单类型添加特定字段
+        if form_type == "simple":
+            # 简易版：添加拜访主题
+            subjects = db_session.exec(
+                select(distinct(CRMSalesVisitRecord.subject))
+                .where(CRMSalesVisitRecord.subject.is_not(None))
+                .order_by(CRMSalesVisitRecord.subject)
+            ).all()
+            result_data["subjects"] = subjects
+        else:
+            # 完整版：添加其他现有字段
+            communication_methods = db_session.exec(
+                select(distinct(CRMSalesVisitRecord.visit_communication_method))
+                .where(CRMSalesVisitRecord.visit_communication_method.is_not(None))
+                .order_by(CRMSalesVisitRecord.visit_communication_method)
+            ).all()
+            
+            visit_types = db_session.exec(
+                select(distinct(CRMSalesVisitRecord.visit_type))
+                .where(CRMSalesVisitRecord.visit_type.is_not(None))
+                .order_by(CRMSalesVisitRecord.visit_type)
+            ).all()
+            
+            result_data.update({
+                "communication_methods": communication_methods,
+                "visit_types": visit_types,
+            })
+        
         return {
             "code": 0,
             "message": "success",
-            "data": {
-                "account_names": account_names,
-                "partner_names": partner_names,
-                "recorders": recorders,
-                "communication_methods": communication_methods,
-                "followup_quality_levels": followup_quality_levels,
-                "next_steps_quality_levels": next_steps_quality_levels,
-                "visit_types": visit_types,
-                "customer_levels": customer_levels,
-                "departments": departments,
-            }
+            "data": result_data
         }
     except HTTPException:
         raise

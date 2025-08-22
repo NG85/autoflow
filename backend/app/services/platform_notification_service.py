@@ -518,10 +518,21 @@ class PlatformNotificationService:
                 return None
             
             if visit_type == "form":
-                if recipient_type == "recorder":
-                    return "AAqzzmP2uT85t"  # 销售个人卡片：无评估版
+                # 检查是否为简易版表单
+                form_type = settings.CRM_VISIT_RECORD_FORM_TYPE.value
+                
+                if form_type == "simple":
+                    # 简易版表单模板
+                    if recipient_type == "recorder":
+                        return "AAqzQK6iUiK2k"  # 销售个人卡片：简易版
+                    else:
+                        return "AAqzQKvKzOW1z"  # leader和管理者卡片：简易版
                 else:
-                    return "AAqz0J0JSTciO"  # leader和管理者卡片：完整版
+                    # 完整版表单模板
+                    if recipient_type == "recorder":
+                        return "AAqzzmP2uT85t"  # 销售个人卡片：完整版
+                    else:
+                        return "AAqz0J0JSTciO"  # leader和管理者卡片：完整版
             else:
                 return "AAqz0v4nx70HL"  # link类型使用通用卡片：会议纪要版
         
