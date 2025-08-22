@@ -25,8 +25,6 @@ from app.api.routes.crm.models import (
 )
 from app.crm.save_engine import (
     save_visit_record_to_crm_table, 
-    check_followup_quality, 
-    check_next_steps_quality, 
     push_visit_record_message,
     save_visit_record_with_content
 )
@@ -216,82 +214,63 @@ def create_visit_record(
         from app.core.config import settings
         form_type = settings.CRM_VISIT_RECORD_FORM_TYPE.value
 
-        # 处理跟进记录和下一步计划的双语版本生成
-        from app.crm.save_engine import extract_followup_record_and_next_steps, generate_bilingual_content
+        # 使用可靠的处理函数，分组处理任务
+        from app.crm.save_engine import process_visit_record_content_reliable
         
-        if form_type == "simple" and record.followup_content:
-            # 简易版表单：从followup_content中提取followup_record和next_steps（保持原始语言）
-            try:
-                followup_record, next_steps = extract_followup_record_and_next_steps(record.followup_content)
-                record.followup_record = followup_record
-                record.next_steps = next_steps
-                logger.info(f"Successfully extracted followup_record and next_steps from followup_content")
-            except Exception as e:
-                logger.warning(f"Failed to extract followup_record and next_steps from followup_content: {e}")
-                # 如果提取失败，将整个内容作为跟进记录
-                record.followup_record = record.followup_content
-                record.next_steps = ""
-        
-        # 统一处理：基于followup_record和next_steps生成中英双语版本
-        # 处理跟进记录
-        if record.followup_record:
-            # 直接生成中英文版本
-            record.followup_record_zh = generate_bilingual_content(record.followup_record, "to_zh")
-            record.followup_record_en = generate_bilingual_content(record.followup_record, "to_en")
+        # 根据表单类型调用可靠函数
+        if form_type == "simple":
+            # 简易版表单：传入followup_content
+            result = process_visit_record_content_reliable(followup_content=record.followup_content)
         else:
-            record.followup_record_zh = ""
-            record.followup_record_en = ""
+            # 完整版表单：传入followup_record和next_steps
+            result = process_visit_record_content_reliable(
+                followup_record=record.followup_record,
+                next_steps=record.next_steps
+            )
         
-        # 处理下一步计划
-        if record.next_steps:
-            # 直接生成中英文版本
-            record.next_steps_zh = generate_bilingual_content(record.next_steps, "to_zh")
-            record.next_steps_en = generate_bilingual_content(record.next_steps, "to_en")
-        else:
-            record.next_steps_zh = ""
-            record.next_steps_en = ""
+        # 将处理结果赋值给record
+        record.followup_record = result["followup_record"]
+        record.followup_record_zh = result["followup_record_zh"]
+        record.followup_record_en = result["followup_record_en"]
+        record.next_steps = result["next_steps"]
+        record.next_steps_zh = result["next_steps_zh"]
+        record.next_steps_en = result["next_steps_en"]
+        record.followup_quality_level_zh = result["followup_quality_level_zh"]
+        record.followup_quality_reason_zh = result["followup_quality_reason_zh"]
+        record.followup_quality_level_en = result["followup_quality_level_en"]
+        record.followup_quality_reason_en = result["followup_quality_reason_en"]
+        record.next_steps_quality_level_zh = result["next_steps_quality_level_zh"]
+        record.next_steps_quality_reason_zh = result["next_steps_quality_reason_zh"]
+        record.next_steps_quality_level_en = result["next_steps_quality_level_en"]
+        record.next_steps_quality_reason_en = result["next_steps_quality_reason_en"]
         
-        # 评估跟进质量（中文版本）
-        followup_quality_level_zh, followup_quality_reason_zh = check_followup_quality(record.followup_record_zh, "zh")
-        next_steps_quality_level_zh, next_steps_quality_reason_zh = check_next_steps_quality(record.next_steps_zh, "zh")
-        
-        # 评估跟进质量（英文版本）
-        followup_quality_level_en, followup_quality_reason_en = check_followup_quality(record.followup_record_en, "en")
-        next_steps_quality_level_en, next_steps_quality_reason_en = check_next_steps_quality(record.next_steps_en, "en")
-        
+        # 构建返回数据
         data = {
             "followup": {
-                "level_zh": followup_quality_level_zh, 
-                "reason_zh": followup_quality_reason_zh, 
-                "content": record.followup_record,
-                "content_zh": record.followup_record_zh,
-                "content_en": record.followup_record_en,
-                "level_en": followup_quality_level_en,
-                "reason_en": followup_quality_reason_en
+                "level_zh": result["followup_quality_level_zh"], 
+                "reason_zh": result["followup_quality_reason_zh"], 
+                "content": result["followup_record"],
+                "content_zh": result["followup_record_zh"],
+                "content_en": result["followup_record_en"],
+                "level_en": result["followup_quality_level_en"],
+                "reason_en": result["followup_quality_reason_en"]
             },
             "next_steps": {
-                "level_zh": next_steps_quality_level_zh, 
-                "reason_zh": next_steps_quality_reason_zh, 
-                "content": record.next_steps,
-                "content_zh": record.next_steps_zh,
-                "content_en": record.next_steps_en,
-                "level_en": next_steps_quality_level_en,
-                "reason_en": next_steps_quality_reason_en
+                "level_zh": result["next_steps_quality_level_zh"], 
+                "reason_zh": result["next_steps_quality_reason_zh"], 
+                "content": result["next_steps"],
+                "content_zh": result["next_steps_zh"],
+                "content_en": result["next_steps_en"],
+                "level_en": result["next_steps_quality_level_en"],
+                "reason_en": result["next_steps_quality_reason_en"]
             }
         }
-        # 只要有一项不合格就阻止保存（检查中英文版本）
-        if (followup_quality_level_zh == "不合格" or next_steps_quality_level_zh == "不合格" or 
-            followup_quality_level_en == "unqualified" or next_steps_quality_level_en == "unqualified"):
+        
+        # 质量检查：只要有一项不合格就阻止保存
+        if (result["followup_quality_level_zh"] == "不合格" or result["next_steps_quality_level_zh"] == "不合格" or 
+            result["followup_quality_level_en"] == "unqualified" or result["next_steps_quality_level_en"] == "unqualified"):
             return {"code": 400, "message": "failed", "data": data}
 
-        record.followup_quality_level_zh = followup_quality_level_zh
-        record.followup_quality_reason_zh = followup_quality_reason_zh
-        record.followup_quality_level_en = followup_quality_level_en
-        record.followup_quality_reason_en = followup_quality_reason_en
-        record.next_steps_quality_level_zh = next_steps_quality_level_zh
-        record.next_steps_quality_reason_zh = next_steps_quality_reason_zh
-        record.next_steps_quality_level_en = next_steps_quality_level_en
-        record.next_steps_quality_reason_en = next_steps_quality_reason_en
         try:
             save_visit_record_to_crm_table(record, db_session)
             db_session.commit()
@@ -328,62 +307,35 @@ def verify_visit_record(
     next_steps: Optional[str] = Body(None, example=""),
 ):
     try:
-        from app.crm.save_engine import extract_followup_record_and_next_steps, generate_bilingual_content
+        from app.crm.save_engine import process_visit_record_content_reliable
         
-        # 如果传入了followup_content，先进行拆分
+        # 使用统一的处理流程
         if followup_content:
-            try:
-                extracted_followup_record, extracted_next_steps = extract_followup_record_and_next_steps(followup_content)
-                followup_record = extracted_followup_record
-                next_steps = extracted_next_steps
-                logger.info(f"Successfully extracted followup_record and next_steps from followup_content")
-            except Exception as e:
-                logger.warning(f"Failed to extract followup_record and next_steps from followup_content: {e}")
-                # 如果提取失败，将整个内容作为跟进记录
-                followup_record = followup_content
-                next_steps = ""
-        
-        # 生成多语言版本
-        followup_record_zh = ""
-        followup_record_en = ""
-        next_steps_zh = ""
-        next_steps_en = ""
-        
-        if followup_record:
-            followup_record_zh = generate_bilingual_content(followup_record, "to_zh")
-            followup_record_en = generate_bilingual_content(followup_record, "to_en")
-        
-        if next_steps:
-            next_steps_zh = generate_bilingual_content(next_steps, "to_zh")
-            next_steps_en = generate_bilingual_content(next_steps, "to_en")
-        
-        # 进行多语言版本质量评估
-        # 中文版本评估
-        followup_quality_level_zh, followup_quality_reason_zh = check_followup_quality(followup_record_zh, "zh")
-        next_steps_quality_level_zh, next_steps_quality_reason_zh = check_next_steps_quality(next_steps_zh, "zh")
-        
-        # 英文版本评估
-        followup_quality_level_en, followup_quality_reason_en = check_followup_quality(followup_record_en, "en")
-        next_steps_quality_level_en, next_steps_quality_reason_en = check_next_steps_quality(next_steps_en, "en")
+            result = process_visit_record_content_reliable(followup_content=followup_content)
+        else:
+            result = process_visit_record_content_reliable(
+                followup_record=followup_record,
+                next_steps=next_steps
+            )
         
         data = {
             "followup": {
-                "level_zh": followup_quality_level_zh,
-                "reason_zh": followup_quality_reason_zh,
-                "content": followup_record,
-                "content_zh": followup_record_zh,
-                "content_en": followup_record_en,
-                "level_en": followup_quality_level_en,
-                "reason_en": followup_quality_reason_en
+                "level_zh": result["followup_quality_level_zh"],
+                "reason_zh": result["followup_quality_reason_zh"],
+                "content": result["followup_record"],
+                "content_zh": result["followup_record_zh"],
+                "content_en": result["followup_record_en"],
+                "level_en": result["followup_quality_level_en"],
+                "reason_en": result["followup_quality_reason_en"]
             },
             "next_steps": {
-                "level_zh": next_steps_quality_level_zh,
-                "reason_zh": next_steps_quality_reason_zh,
-                "content": next_steps,
-                "content_zh": next_steps_zh,
-                "content_en": next_steps_en,
-                "level_en": next_steps_quality_level_en,
-                "reason_en": next_steps_quality_reason_en
+                "level_zh": result["next_steps_quality_level_zh"],
+                "reason_zh": result["next_steps_quality_reason_zh"],
+                "content": result["next_steps"],
+                "content_zh": result["next_steps_zh"],
+                "content_en": result["next_steps_en"],
+                "level_en": result["next_steps_quality_level_en"],
+                "reason_en": result["next_steps_quality_reason_en"]
             }
         }
         

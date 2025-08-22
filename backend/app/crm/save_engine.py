@@ -76,50 +76,6 @@ def call_ark_llm(prompt):
     return result["choices"][0]["message"]["content"] if "choices" in result else ""
 
 
-def generate_bilingual_content(content: str, direction: str) -> str:
-    """
-    生成双语内容，支持中英文互译
-    
-    Args:
-        content: 原始内容
-        direction: 翻译方向
-            - "to_zh": 转换为中文
-            - "to_en": 转换为英文
-        
-    Returns:
-        str: 翻译后的内容
-    """
-    if not content or content.strip() == "":
-        return ""
-    
-    # 直接生成对应的翻译，不做语言检测
-    if direction == "to_zh":
-        prompt = f"""
-请将以下内容翻译成中文，保持专业性和准确性：
-
-{content}
-
-请直接返回中文翻译结果，不要添加任何解释或说明。
-"""
-    elif direction == "to_en":
-        prompt = f"""
-请将以下内容翻译成英文，保持专业性和准确性：
-
-{content}
-
-请直接返回英文翻译结果，不要添加任何解释或说明。
-"""
-    else:
-        return content
-    
-    try:
-        result = call_ark_llm(prompt)
-        return result.strip() if result else content
-    except Exception as e:
-        logger.warning(f"Failed to generate bilingual content: {e}")
-        return content
-
-
 def extract_followup_record_and_next_steps(followup_content: str) -> tuple[str, str]:
     """
     从跟进内容中提取followup_record（跟进记录）和next_steps（下一步计划）
@@ -180,230 +136,6 @@ Content to analyze:
         logger.warning(f"Failed to extract progress and next_steps: {e}")
         # 如果AI提取失败，返回原始内容作为followup_record，next_steps为空
         return followup_content, ""
-
-
-def check_followup_quality(followup_record, language: str = "zh"):
-    """
-    评判跟进记录质量，返回等级（不合格/合格/优秀）和评判说明（问题点+建议）。
-    
-    Args:
-        followup_record: 跟进记录内容
-        language: 语言版本，"zh"为中文，"en"为英文
-        
-    Returns:
-        tuple: (quality_level, quality_reason) 质量等级和评判说明
-    """
-    if language == "zh":
-        prompt = f"""
-你是一位销售管理专家，在销售团队管理和客户关系推进方面经验丰富，擅长评估销售人员记录的"跟进记录"质量。请对以下内容进行评判，并输出如下结构：
-{{
-  "level": "不合格/合格/优秀",
-  "assessment": "根据不同等级填写：问题点+建议 / 优化建议 / 亮点评价）"
-}}
-
-【评判说明】
-1. 拜访时间、对象、地点、参与人员等基础信息已通过表单其他字段填写，无需在"跟进记录"中重复描述，请专注于跟进内容本身的质量和推进效果。
-2. 评判重点为沟通过程是否具体清晰、客户反馈是否明确具体、有无有效推进行为。
-3. 不要求每次拜访都"达成共识"，但如有体现，可作为加分项。
-4. 不应因未提及客户异议或反馈而直接判不合格，前提是过程描述具体且体现真实交流。
-5. 若内容空泛但措辞华丽或无客户反馈，不得评为优秀。
-6. 如有合理解释（如该项信息已由表单填写覆盖），请勿因缺失判不合格。
-
-【评判要素】：
-1. 内容完整性：
-  - 过程描述：是否清楚说明了做了什么，沟通了哪些内容、有哪些过程细节？避免仅写"已沟通"等模糊词语。
-  - 客户反馈：是否记录了客户的观点、态度、建议或异议？内容是否具体清晰，非敷衍。
-2. 有效性：
-  - 是否体现销售理解客户的需求及一定的推进动作？
-3. 专业性/洞察力（加分项）：
-  - 是否体现销售专业素养或客户洞察，如客户原话、内部动态、真实异议等。
-4. 推进商机能力（加分项）：
-  - 内容是否体现有效推进商机，如安排会议、推进试用、协调资源等。
-
-【评判标准】
-1. 不合格：缺失上述任一主要要素，或内容简略/模糊，无法体现有效沟通或客户反馈。
-2. 合格：内容齐备，沟通过程清晰，能体现客户反馈和一定的推进动作，文字具体明了。
-3. 优秀：在合格基础上，内容具体详实，体现专业性、客户洞察和强推进意识；避免空泛华丽表述。
-
-【输出要求】
-1. 如不合格，指出所有主要问题点，并提出具体、可执行的改进建议；
-2. 如合格，给出优化建议（即使达标也要指出可提升之处）；
-3. 如优秀，指出1-2个亮点，说明其在具体性、洞察力或推进力方面的优势；
-4. 严格根据原始文本进行评判，不要虚构内容；
-5. 严格只输出 JSON 格式，不要添加任何多余说明。
-
-待评判内容如下：
-{followup_record}
-"""
-    else:  # English version
-        prompt = f"""
-You are a sales management expert with extensive experience in sales team management and customer relationship advancement, skilled at evaluating the quality of "follow-up records" recorded by sales personnel. Please assess the following content and output in the following structure:
-{{
-  "level": "unqualified/qualified/excellent",
-  "assessment": "Fill in according to different levels: issues + suggestions / optimization suggestions / highlight evaluation"
-}}
-
-[Assessment Guidelines]
-1. Basic information such as visit time, target, location, and participants has been filled in through other form fields, so there's no need to repeat descriptions in the "follow-up record". Please focus on the quality of the follow-up content itself and its advancement effectiveness.
-2. The assessment focuses on whether the communication process is specific and clear, whether customer feedback is clear and specific, and whether there are effective advancement actions.
-3. It's not required to "reach consensus" in every visit, but if it's reflected, it can be a bonus point.
-4. Don't directly judge as unqualified for not mentioning customer objections or feedback, provided the process description is specific and reflects genuine communication.
-5. If the content is vague but uses flowery language or lacks customer feedback, it cannot be rated as excellent.
-6. If there's a reasonable explanation (such as this information being covered by form fields), don't judge as unqualified due to omissions.
-
-[Assessment Elements]:
-1. Content Completeness:
-  - Process Description: Does it clearly explain what was done, what content was communicated, and what process details were involved? Avoid vague terms like "communicated".
-  - Customer Feedback: Does it record the customer's views, attitudes, suggestions, or objections? Is the content specific and clear, not perfunctory?
-2. Effectiveness:
-  - Does it reflect the salesperson's understanding of customer needs and certain advancement actions?
-3. Professionalism/Insight (Bonus Points):
-  - Does it reflect sales professional competence or customer insight, such as customer quotes, internal dynamics, genuine objections, etc.?
-4. Opportunity Advancement Capability (Bonus Points):
-  - Does the content reflect effective opportunity advancement, such as arranging meetings, promoting trials, coordinating resources, etc.?
-
-[Assessment Criteria]
-1. Unqualified: Missing any of the above main elements, or content is brief/vague, unable to reflect effective communication or customer feedback.
-2. Qualified: Content is complete, communication process is clear, can reflect customer feedback and certain advancement actions, text is specific and clear.
-3. Excellent: On the basis of qualified, content is specific and detailed, reflects professionalism, customer insight, and strong advancement awareness; avoid vague and flowery expressions.
-
-[Output Requirements]
-1. If unqualified, point out all main issues and provide specific, actionable improvement suggestions;
-2. If qualified, give optimization suggestions (even if standards are met, point out areas for improvement);
-3. If excellent, point out 1-2 highlights, explaining their advantages in specificity, insight, or advancement capability;
-4. Strictly assess based on the original text, don't fabricate content;
-5. Strictly output only in JSON format, don't add any extra explanations.
-
-Content to assess:
-{followup_record}
-"""
-    
-    result = call_ark_llm(prompt)
-    try:
-        data = json.loads(result)
-        if language == "zh":
-            return data.get("level", "不合格"), data.get("assessment", "AI输出格式异常，请完善内容后重试")
-        else:
-            return data.get("level", "unqualified"), data.get("assessment", "AI output format error, please improve content and retry")
-    except Exception:
-        if language == "zh":
-            return "不合格", "AI输出格式异常，请完善内容后重试"
-        else:
-            return "unqualified", "AI output format error, please improve content and retry"
-
-
-def check_next_steps_quality(next_steps, language: str = "zh"):
-    """
-    评判下一步计划质量，返回等级（不合格/合格/优秀）和评判说明（问题点+建议）。
-    
-    Args:
-        next_steps: 下一步计划内容
-        language: 语言版本，"zh"为中文，"en"为英文
-        
-    Returns:
-        tuple: (quality_level, quality_reason) 质量等级和评判说明
-    """
-    if language == "zh":
-        prompt = f"""
-你是一位销售管理专家，在销售团队管理和客户关系推进方面经验丰富，擅长评估销售人员记录的"下一步计划"质量。请对以下内容进行评判，并输出如下结构：
-{{
-  "level": "不合格/合格/优秀",
-  "assessment": "根据不同等级填写：问题点+建议 / 优化建议 / 亮点评价）"
-}}
-
-【评判说明】
-1. 本次评判仅聚焦"下一步计划"字段。其他字段如客户、项目、联系人等信息已通过表单结构记录，无需在此重复。
-2. 请重点判断该计划是否明确、具体、具备可执行性，并是否能有效推进客户关系或商机进展。
-
-【评判要素】
-1. 计划明确性：
-  - 是否写清楚要做什么？避免"持续沟通""保持联系"等泛泛描述，是否具体说明了任务/动作？
-2. 时间安排：
-  - 是否写明预期完成时间？可为具体日期或相对时间（如"下周二""近期""本周内"）。
-  - 如完全缺失时间安排，评为不合格。
-3. 目标导向（加分项）：
-  - 是否表达了希望达成的具体目标？如"推进评审、完成演示、达成意向"等，体现主动推进意识。
-4. 推进商机能力（加分项）：
-  - 整体计划是否有助于推进客户沟通、转化或成交？
-
-【评判标准】
-1. 不合格：
-  - 缺失关键要素（如无具体计划或无时间安排），或内容过于模糊/抽象，难以执行；
-  - 示例：仅写"等待客户反馈""保持沟通"而无具体动作或时间。
-2. 合格：
-  - 写明了要做的事和时间节点，内容清晰、可执行，体现出基本的客户推进意识；
-  - 示例："本周三前发送产品资料，并邀请客户安排下次演示。"
-3. 优秀：
-  - 在合格基础上，内容具体、详实，具备清晰的目标导向和较强的推进意识；
-  - 示例："下周二与客户完成方案讲解，获取初步反馈，争取推动其内部技术评审。"
-
-【输出要求】
-1. 如内容不合格，指出所有主要问题点，并提出具体、可执行的改进建议；
-2. 如内容合格，给出优化建议（即使达标也要指出可提升之处)；
-3. 如内容优秀，指出1-2个突出亮点，说明其在计划性、目标性或推进力方面的优势；
-4. 请严格只根据原始文本进行评判，不要虚构内容；
-5. 严格只输出 JSON 格式，不添加任何解释说明。
-
-待评判内容如下：
-{next_steps}
-"""
-    else:  # English version
-        prompt = f"""
-You are a sales management expert with extensive experience in sales team management and customer relationship advancement, skilled at evaluating the quality of "next steps" recorded by sales personnel. Please assess the following content and output in the following structure:
-{{
-  "level": "unqualified/qualified/excellent",
-  "assessment": "Fill in according to different levels: issues + suggestions / optimization suggestions / highlight evaluation"
-}}
-
-[Assessment Guidelines]
-1. This assessment focuses only on the "next steps" field. Other fields such as customer, project, contact person information have been recorded through the form structure and need not be repeated here.
-2. Please focus on judging whether the plan is clear, specific, executable, and whether it can effectively advance customer relationships or opportunity progress.
-
-[Assessment Elements]
-1. Plan Clarity:
-  - Is it clear what needs to be done? Avoid vague descriptions like "continue communication" or "maintain contact", does it specifically explain the tasks/actions?
-2. Time Arrangement:
-  - Is the expected completion time specified? Can be specific dates or relative time (such as "next Tuesday", "recently", "within this week").
-  - If time arrangement is completely missing, rate as unqualified.
-3. Goal Orientation (Bonus Points):
-  - Does it express specific goals to be achieved? Such as "advance review, complete demonstration, reach intention", etc., reflecting proactive advancement awareness.
-4. Opportunity Advancement Capability (Bonus Points):
-  - Does the overall plan help advance customer communication, conversion, or deal closure?
-
-[Assessment Criteria]
-1. Unqualified:
-  - Missing key elements (such as no specific plan or no time arrangement), or content is too vague/abstract, difficult to execute;
-  - Example: Only writing "wait for customer feedback" or "maintain communication" without specific actions or time.
-2. Qualified:
-  - Clearly states what needs to be done and time nodes, content is clear and executable, reflecting basic customer advancement awareness;
-  - Example: "Send product materials before Wednesday and invite customer to arrange next demonstration."
-3. Excellent:
-  - On the basis of qualified, content is specific and detailed, with clear goal orientation and strong advancement awareness;
-  - Example: "Complete solution presentation with customer next Tuesday, obtain initial feedback, and strive to promote their internal technical review."
-
-[Output Requirements]
-1. If content is unqualified, point out all main issues and provide specific, actionable improvement suggestions;
-2. If content is qualified, give optimization suggestions (even if standards are met, point out areas for improvement);
-3. If content is excellent, point out 1-2 outstanding highlights, explaining their advantages in planning, goal orientation, or advancement capability;
-4. Please strictly judge only based on the original text, don't fabricate content;
-5. Strictly output only in JSON format, don't add any explanatory notes.
-
-Content to assess:
-{next_steps}
-"""
-    
-    result = call_ark_llm(prompt)
-    try:
-        data = json.loads(result)
-        if language == "zh":
-            return data.get("level", "不合格"), data.get("assessment", "AI输出格式异常，请完善内容后重试")
-        else:
-            return data.get("level", "unqualified"), data.get("assessment", "AI output format error, please improve content and retry")
-    except Exception:
-        if language == "zh":
-            return "不合格", "AI输出格式异常，请完善内容后重试"
-        else:
-            return "unqualified", "AI output format error, please improve content and retry"
 
 
 def fill_sales_visit_record_fields(sales_visit_record):
@@ -657,3 +389,335 @@ def save_visit_record_with_content(
         # 不影响主流程，继续执行
     
     return {"code": 0, "message": "success", "data": {}}
+
+
+def process_visit_record_content_reliable(followup_content: str = None, followup_record: str = None, next_steps: str = None) -> dict:
+    """
+    可靠的拜访记录内容处理函数
+    将任务分组处理，在保证可靠性的同时减少LLM调用次数
+    
+    Args:
+        followup_content: 跟进内容（简易版表单使用）
+        followup_record: 跟进记录（完整版表单使用）
+        next_steps: 下一步计划（完整版表单使用）
+        
+    Returns:
+        dict: 包含所有处理结果的字典
+    """
+    if not followup_content and not followup_record:
+        return {
+            "followup_record": "",
+            "followup_record_zh": "",
+            "followup_record_en": "",
+            "next_steps": "",
+            "next_steps_zh": "",
+            "next_steps_en": "",
+            "followup_quality_level_zh": "不合格",
+            "followup_quality_reason_zh": "内容为空",
+            "followup_quality_level_en": "unqualified",
+            "followup_quality_reason_en": "Content is empty",
+            "next_steps_quality_level_zh": "不合格",
+            "next_steps_quality_reason_zh": "内容为空",
+            "next_steps_quality_level_en": "unqualified",
+            "next_steps_quality_reason_en": "Content is empty"
+        }
+    
+    try:
+        # 第一步：内容拆分（仅简易版表单需要）
+        if followup_content:
+            followup_record, next_steps = extract_followup_record_and_next_steps(followup_content)
+            logger.info(f"Extract from original followup content:\n[followup record]\n{followup_record}\n\n[next steps]\n{next_steps}")
+        else:
+            followup_record = followup_record or ""
+            next_steps = next_steps or ""
+        
+        # 第二步：双语生成（批量处理）
+        bilingual_result = generate_bilingual_content_batch(followup_record, next_steps)
+        
+        # 第三步：质量评估（批量处理）
+        quality_result = assess_quality_batch(bilingual_result["followup_record_zh"], bilingual_result["followup_record_en"], 
+                                            bilingual_result["next_steps_zh"], bilingual_result["next_steps_en"])
+        
+        return {
+            "followup_record": followup_record,
+            "followup_record_zh": bilingual_result["followup_record_zh"],
+            "followup_record_en": bilingual_result["followup_record_en"],
+            "next_steps": next_steps,
+            "next_steps_zh": bilingual_result["next_steps_zh"],
+            "next_steps_en": bilingual_result["next_steps_en"],
+            "followup_quality_level_zh": quality_result["followup_quality_level_zh"],
+            "followup_quality_reason_zh": quality_result["followup_quality_reason_zh"],
+            "followup_quality_level_en": quality_result["followup_quality_level_en"],
+            "followup_quality_reason_en": quality_result["followup_quality_reason_en"],
+            "next_steps_quality_level_zh": quality_result["next_steps_quality_level_zh"],
+            "next_steps_quality_reason_zh": quality_result["next_steps_quality_reason_zh"],
+            "next_steps_quality_level_en": quality_result["next_steps_quality_level_en"],
+            "next_steps_quality_reason_en": quality_result["next_steps_quality_reason_en"]
+        }
+        
+    except Exception as e:
+        logger.warning(f"Failed to process visit record content reliably: {e}")
+        # 返回默认值
+        return {
+            "followup_record": followup_record or followup_content or "",
+            "followup_record_zh": followup_record or followup_content or "",
+            "followup_record_en": followup_record or followup_content or "",
+            "next_steps": next_steps or "",
+            "next_steps_zh": next_steps or "",
+            "next_steps_en": next_steps or "",
+            "followup_quality_level_zh": "不合格",
+            "followup_quality_reason_zh": "AI处理失败，请重试",
+            "followup_quality_level_en": "unqualified",
+            "followup_quality_reason_en": "AI processing failed, please retry",
+            "next_steps_quality_level_zh": "不合格",
+            "next_steps_quality_reason_zh": "AI处理失败，请重试",
+            "next_steps_quality_level_en": "unqualified",
+            "next_steps_quality_reason_en": "AI processing failed, please retry"
+        }
+
+
+def generate_bilingual_content_batch(followup_record: str, next_steps: str) -> dict:
+    """
+    批量生成双语内容
+    """
+    if not followup_record and not next_steps:
+        return {
+            "followup_record_zh": "",
+            "followup_record_en": "",
+            "next_steps_zh": "",
+            "next_steps_en": ""
+        }
+    
+    prompt = f"""
+你是一个专业的翻译专家，请将以下内容翻译成中文和英文版本。
+
+**原始内容**：
+跟进记录：{followup_record or ""}
+下一步计划：{next_steps or ""}
+
+请按照以下要求进行翻译：
+1. 中文版本(zh)：主要使用中文表达，专业术语、品牌名称、产品名称等可以保持原文
+2. 英文版本(en)：主要使用英文表达，专业术语、品牌名称、产品名称等可以保持原文
+3. 保持专业性和准确性
+4. 保持原文的意思和语气
+5. 优先使用目标语言的表达习惯
+6. **重要：不要添加"跟进记录："或"下一步计划："等前缀，只翻译内容本身**
+7. **英文版本要求：在保持语意精准、不丢失信息的前提下，尽量使用精炼的表达，避免冗长句式**
+
+请输出严格的JSON格式：
+{{
+  "followup_record_zh": "跟进记录的中文翻译",
+  "followup_record_en": "Follow-up record English translation",
+  "next_steps_zh": "下一步计划的中文翻译", 
+  "next_steps_en": "Next steps English translation"
+}}
+
+重要提示：
+- 如果原始内容为空，对应的翻译也为空字符串
+- 优先使用目标语言的标点符号
+- 专业术语、品牌名称、产品名称等可以保持原文
+- **不要添加任何标签或前缀，只翻译内容本身**
+- **英文翻译要求精炼：使用简洁句式，避免不必要的修饰词，保持信息完整性**
+- 不要添加任何解释，只输出JSON
+"""
+    
+    try:
+        result = call_ark_llm(prompt)
+        data = json.loads(result)
+        
+        logger.info(f"Bilingual content result: {data}")
+        
+        return {
+            "followup_record_zh": data.get("followup_record_zh", ""),
+            "followup_record_en": data.get("followup_record_en", ""),
+            "next_steps_zh": data.get("next_steps_zh", ""),
+            "next_steps_en": data.get("next_steps_en", "")
+        }
+    except Exception as e:
+        logger.warning(f"Failed to generate bilingual content batch: {e}")
+        # 失败时直接使用原文
+        return {
+            "followup_record_zh": followup_record or "",
+            "followup_record_en": followup_record or "",
+            "next_steps_zh": next_steps or "",
+            "next_steps_en": next_steps or ""
+        }
+
+
+def assess_quality_batch(followup_record_zh: str, followup_record_en: str, next_steps_zh: str, next_steps_en: str) -> dict:
+    """
+    批量进行质量评估，按内容类型分组处理
+    """
+    result = {}
+    
+    # 第一步：评估跟进记录（中英双语）
+    followup_result = assess_followup_quality_bilingual(followup_record_zh, followup_record_en)
+    result.update(followup_result)
+    
+    # 第二步：评估下一步计划（中英双语）
+    next_steps_result = assess_next_steps_quality_bilingual(next_steps_zh, next_steps_en)
+    result.update(next_steps_result)
+    
+    return result
+
+
+def assess_followup_quality_bilingual(followup_record_zh: str, followup_record_en: str) -> dict:
+    """
+    评估跟进记录质量（中英双语）
+    """
+    prompt = f"""
+你是一位销售管理专家，在销售团队管理和客户关系推进方面经验丰富，擅长评估销售人员记录的"跟进记录"质量。请对以下内容进行评判，并输出如下结构：
+
+**跟进记录（中文）**：
+{followup_record_zh or ""}
+
+**跟进记录（英文）**：
+{followup_record_en or ""}
+
+请输出严格的JSON格式：
+{{
+  "followup_quality_zh": {{
+    "level": "合格/不合格/优秀",
+    "reason": "质量评估原因"
+  }},
+  "followup_quality_en": {{
+    "level": "qualified/unqualified/excellent",
+    "reason": "Quality assessment reason"
+  }}
+}}
+
+**评判说明**：
+1. 拜访时间、对象、地点、参与人员等基础信息已通过表单其他字段填写，无需在"跟进记录"中重复描述，请专注于跟进内容本身的质量和推进效果。
+2. 评判重点为沟通过程是否具体清晰、客户反馈是否明确具体、有无有效推进行为。
+3. 不要求每次拜访都"达成共识"，但如有体现，可作为加分项。
+4. 不应因未提及客户异议或反馈而直接判不合格，前提是过程描述具体且体现真实交流。
+5. 若内容空泛但措辞华丽或无客户反馈，不得评为优秀。
+6. 如有合理解释（如该项信息已由表单填写覆盖），请勿因缺失判不合格。
+
+**评判要素**：
+1. 内容完整性：
+  - 过程描述：是否清楚说明了做了什么，沟通了哪些内容、有哪些过程细节？避免仅写"已沟通"等模糊词语。
+  - 客户反馈：是否记录了客户的观点、态度、建议或异议？内容是否具体清晰，非敷衍。
+2. 有效性：
+  - 是否体现销售理解客户的需求及一定的推进动作？
+3. 专业性/洞察力（加分项）：
+  - 是否体现销售专业素养或客户洞察，如客户原话、内部动态、真实异议等。
+4. 推进商机能力（加分项）：
+  - 内容是否体现有效推进商机，如安排会议、推进试用、协调资源等。
+
+**评判标准**：
+1. 不合格：缺失上述任一主要要素，或内容简略/模糊，无法体现有效沟通或客户反馈。
+2. 合格：内容齐备，沟通过程清晰，能体现客户反馈和一定的推进动作，文字具体明了。
+3. 优秀：在合格基础上，内容具体详实，体现专业性、客户洞察和强推进意识；避免空泛华丽表述。
+
+**输出要求**：
+1. 如不合格，指出所有主要问题点，并提出具体、可执行的改进建议；
+2. 如合格，给出优化建议（即使达标也要指出可提升之处）；
+3. 如优秀，指出1-2个亮点，说明其在具体性、洞察力或推进力方面的优势；
+4. 严格根据原始文本进行评判，不要虚构内容；
+5. **严格只输出 JSON 格式，不要添加任何多余说明、解释或建议；**
+6. **所有评估内容都必须包含在JSON结构内，不要在JSON外部添加任何文字；**
+7. 如果内容为空，评估为"不合格"。
+8. **重要：输出必须是完整的JSON格式，以{{开始，以}}结束，中间不能有任何其他文字。**
+"""
+    
+    try:
+        result = call_ark_llm(prompt)
+        logger.info(f"Followup quality result: {result}")
+        data = json.loads(result)
+        return {
+            "followup_quality_level_zh": data.get("followup_quality_zh", {}).get("level", "不合格"),
+            "followup_quality_reason_zh": data.get("followup_quality_zh", {}).get("reason", "AI输出格式异常"),
+            "followup_quality_level_en": data.get("followup_quality_en", {}).get("level", "unqualified"),
+            "followup_quality_reason_en": data.get("followup_quality_en", {}).get("reason", "AI output format error")
+        }
+    except Exception as e:
+        logger.warning(f"Failed to assess followup quality bilingual: {e}")
+        return {
+            "followup_quality_level_zh": "不合格",
+            "followup_quality_reason_zh": "AI评估失败，请重试",
+            "followup_quality_level_en": "unqualified",
+            "followup_quality_reason_en": "AI assessment failed, please retry"
+        }
+
+
+def assess_next_steps_quality_bilingual(next_steps_zh: str, next_steps_en: str) -> dict:
+    """
+    评估下一步计划质量（中英双语）
+    """
+    prompt = f"""
+你是一位销售管理专家，在销售团队管理和客户关系推进方面经验丰富，擅长评估销售人员记录的"下一步计划"质量。请对以下内容进行评判，并输出如下结构：
+
+**下一步计划（中文）**：
+{next_steps_zh or ""}
+
+**下一步计划（英文）**：
+{next_steps_en or ""}
+
+请输出严格的JSON格式：
+{{
+  "next_steps_quality_zh": {{
+    "level": "合格/不合格/优秀",
+    "reason": "质量评估原因"
+  }},
+  "next_steps_quality_en": {{
+    "level": "qualified/unqualified/excellent",
+    "reason": "Quality assessment reason"
+  }}
+}}
+
+**评判说明**：
+1. 本次评判仅聚焦"下一步计划"字段。其他字段如客户、项目、联系人等信息已通过表单结构记录，无需在此重复。
+2. 请重点判断该计划是否明确、具体、具备可执行性，并是否能有效推进客户关系或商机进展。
+
+**评判要素**：
+1. 计划明确性：
+  - 是否写清楚要做什么？避免"持续沟通""保持联系"等泛泛描述，是否具体说明了任务/动作？
+2. 时间安排：
+  - 是否写明预期完成时间？可为具体日期或相对时间（如"下周二""近期""本周内"）。
+  - 如完全缺失时间安排，评为不合格。
+3. 目标导向（加分项）：
+  - 是否表达了希望达成的具体目标？如"推进评审、完成演示、达成意向"等，体现主动推进意识。
+4. 推进商机能力（加分项）：
+  - 整体计划是否有助于推进客户沟通、转化或成交？
+
+**评判标准**：
+1. 不合格：
+  - 缺失关键要素（如无具体计划或无时间安排），或内容过于模糊/抽象，难以执行；
+  - 示例：仅写"等待客户反馈""保持沟通"而无具体动作或时间。
+2. 合格：
+  - 写明了要做的事和时间节点，内容清晰、可执行，体现出基本的客户推进意识；
+  - 示例："本周三前发送产品资料，并邀请客户安排下次演示。"
+3. 优秀：
+  - 在合格基础上，内容具体、详实，具备清晰的目标导向和较强的推进意识；
+  - 示例："下周二与客户完成方案讲解，获取初步反馈，争取推动其内部技术评审。"
+
+**输出要求**：
+1. 如内容不合格，指出所有主要问题点，并提出具体、可执行的改进建议；
+2. 如内容合格，给出优化建议（即使达标也要指出可提升之处)；
+3. 如内容优秀，指出1-2个突出亮点，说明其在计划性、目标性或推进力方面的优势；
+4. 严格根据原始文本进行评判，不要虚构内容；
+5. **严格只输出 JSON 格式，不要添加任何多余说明、解释或建议；**
+6. **所有评估内容都必须包含在JSON结构内，不要在JSON外部添加任何文字；**
+7. 如果内容为空，评估为"不合格"。
+8. **重要：输出必须是完整的JSON格式，以{{开始，以}}结束，中间不能有任何其他文字。**
+"""
+    
+    try:
+        result = call_ark_llm(prompt)
+        logger.info(f"Next steps quality result: {result}")
+        data = json.loads(result)
+        return {
+            "next_steps_quality_level_zh": data.get("next_steps_quality_zh", {}).get("level", "不合格"),
+            "next_steps_quality_reason_zh": data.get("next_steps_quality_zh", {}).get("reason", "AI输出格式异常"),
+            "next_steps_quality_level_en": data.get("next_steps_quality_en", {}).get("level", "unqualified"),
+            "next_steps_quality_reason_en": data.get("next_steps_quality_en", {}).get("reason", "AI output format error")
+        }
+    except Exception as e:
+        logger.warning(f"Failed to assess next steps quality bilingual: {e}")
+        return {
+            "next_steps_quality_level_zh": "不合格",
+            "next_steps_quality_reason_zh": "AI评估失败，请重试",
+            "next_steps_quality_level_en": "unqualified",
+            "next_steps_quality_reason_en": "AI assessment failed, please retry"
+        }
