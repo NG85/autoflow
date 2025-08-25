@@ -164,11 +164,18 @@ def fill_sales_visit_record_fields(sales_visit_record):
     if is_call_high is not None:
         sales_visit_record["is_call_high"] = "call high" if is_call_high else None
     
-    # # AI评判不合格时，填充为"--"
-    # if sales_visit_record.get("followup_quality_level") == '不合格':
-    #     sales_visit_record["followup_quality_level"] = "--"
-    # if sales_visit_record.get("next_steps_quality_level") == '不合格':
-    #     sales_visit_record["next_steps_quality_level"] = "--"
+    # 后向兼容：为旧字段赋值对应的中文值
+    if sales_visit_record.get("followup_quality_level_zh") is not None:
+        sales_visit_record["followup_quality_level"] = sales_visit_record["followup_quality_level_zh"]
+    
+    if sales_visit_record.get("followup_quality_reason_zh") is not None:
+        sales_visit_record["followup_quality_reason"] = sales_visit_record["followup_quality_reason_zh"]
+    
+    if sales_visit_record.get("next_steps_quality_level_zh") is not None:
+        sales_visit_record["next_steps_quality_level"] = sales_visit_record["next_steps_quality_level_zh"]
+    
+    if sales_visit_record.get("next_steps_quality_reason_zh") is not None:
+        sales_visit_record["next_steps_quality_reason"] = sales_visit_record["next_steps_quality_reason_zh"]
 
 
     # 处理subject和subject_en字段 - 利用VisitSubject枚举的中英文支持

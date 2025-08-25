@@ -511,7 +511,7 @@ class PlatformNotificationService:
         }
         
         # 根据拜访类型、接收者类型和平台确定模板ID
-        def get_template_id(recipient_type: str, platform: str) -> str:
+        def get_template_id(recipient_type: str, platform: str, form_type: Optional[str] = None) -> str:
             # 验证平台支持
             if platform not in [PLATFORM_FEISHU, PLATFORM_LARK]:
                 logger.warning(f"Unsupported platform: {platform}")
@@ -519,7 +519,7 @@ class PlatformNotificationService:
             
             if visit_type == "form":
                 # 检查是否为简易版表单
-                form_type = settings.CRM_VISIT_RECORD_FORM_TYPE.value
+                form_type = form_type or settings.CRM_VISIT_RECORD_FORM_TYPE.value
                 
                 if form_type == "simple":
                     # 简易版表单模板
@@ -574,7 +574,7 @@ class PlatformNotificationService:
             for recipient in platform_recipients:
                 try:
                     # 根据接收者类型和平台选择模板ID
-                    template_id = get_template_id(recipient["type"], platform)
+                    template_id = get_template_id(recipient["type"], platform, visit_record.get("form_type"))
                     
                     # 如果模板ID为None，跳过该接收人
                     if template_id is None:
