@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Annotated
 from datetime import date
 from pydantic import BaseModel, Field
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
@@ -66,37 +66,56 @@ class OpportunityType(str, Enum):
 
 # 定义拜访主题枚举
 class VisitSubject(str, Enum):
-    INITIAL_ENGAGEMENT = "Initial Engagement|初次接触"
-    TECHNICAL_ENGAGEMENT = "Technical Engagement|技术交流"
-    BUSINESS_ENGAGEMENT = "Business Engagement|商务洽谈"
-    MIXED_ENGAGEMENT = "Mixed Engagement|混合交流"
-    IQM_SCHEDULED = "IQM Scheduled|IQM已安排"
-    IQM_COMPLETED = "IQM Completed|IQM已完成"
+    INITIAL_ENGAGEMENT = "Initial Engagement"
+    TECHNICAL_ENGAGEMENT = "Technical Engagement"
+    BUSINESS_ENGAGEMENT = "Business Engagement"
+    MIXED_ENGAGEMENT = "Mixed Engagement"
+    IQM_SCHEDULED = "IQM Scheduled"
+    IQM_COMPLETED = "IQM Completed"
     
     @property
     def english(self) -> str:
         """获取英文值"""
-        return self.value.split("|")[0]
+        return self.value
     
     @property
     def chinese(self) -> str:
         """获取中文值"""
-        return self.value.split("|")[1]
+        chinese_map = {
+            "Initial Engagement": "初次接触",
+            "Technical Engagement": "技术交流",
+            "Business Engagement": "商务洽谈",
+            "Mixed Engagement": "混合交流",
+            "IQM Scheduled": "IQM已安排",
+            "IQM Completed": "IQM已完成"
+        }
+        return chinese_map.get(self.value, self.value)
     
     @classmethod
     def from_english(cls, english_value: str) -> Optional['VisitSubject']:
         """根据英文值获取枚举"""
-        for member in cls:
-            if member.english == english_value:
-                return member
-        return None
+        try:
+            return cls(english_value)
+        except ValueError:
+            return None
     
     @classmethod
     def from_chinese(cls, chinese_value: str) -> Optional['VisitSubject']:
         """根据中文值获取枚举"""
-        for member in cls:
-            if member.chinese == chinese_value:
-                return member
+        chinese_to_english = {
+            "初次接触": "Initial Engagement",
+            "技术交流": "Technical Engagement",
+            "商务洽谈": "Business Engagement",
+            "混合交流": "Mixed Engagement",
+            "IQM已安排": "IQM Scheduled",
+            "IQM已完成": "IQM Completed"
+        }
+        english_value = chinese_to_english.get(chinese_value)
+        if english_value:
+            try:
+                return cls(english_value)
+            except ValueError:
+                return None
         return None
 
 class SL_PULL_IN(str, Enum):
@@ -174,6 +193,9 @@ class VisitRecordBase(BaseModel):
     opportunity_name: Optional[str] = None # 商机名称
     opportunity_id: Optional[str] = None # 商机ID
     partner_name: Optional[str] = None # 合作伙伴名称
+    visit_communication_date: Optional[str] = None # 拜访及沟通日期
+    recorder: Optional[str] = None # 记录人
+    recorder_id: Optional[str] = None # 记录人ID    
     visit_type: Optional[Literal["form", "link"]] = None # 拜访类型：form(用户填报)、link(非结构化链接/文件)
     visit_url: Optional[str] = None # 会议链接或文件URL
     followup_record: Optional[str] = None # 跟进记录（原文）
@@ -197,13 +219,11 @@ class VisitRecordBase(BaseModel):
 # 拜访记录创建请求模型
 # 完整版表单
 class CompleteVisitRecordCreate(VisitRecordBase):
+    form_type: Literal["complete"] = "complete"  # 表单类型标识
     is_first_visit: Optional[bool] = None # 是否首次拜访
     is_call_high: Optional[bool] = None # 是否call high
-    visit_communication_date: Optional[str] = None # 拜访及沟通日期
     contact_position: Optional[str] = None # 客户职位
     contact_name: Optional[str] = None # 客户名字
-    recorder: Optional[str] = None # 记录人
-    recorder_id: Optional[str] = None # 记录人ID
     visit_communication_method: Optional[str] = None # 拜访及沟通方式
     collaborative_participants: Optional[str] = None # 协同参与人
     
@@ -217,9 +237,16 @@ class CompleteVisitRecordCreate(VisitRecordBase):
 
 # 简易版表单
 class SimpleVisitRecordCreate(VisitRecordBase):
+    form_type: Literal["simple"] = "simple"  # 表单类型标识
     # 拜访主题
     subject: Optional[VisitSubject] = Field(None, description="拜访主题")
     followup_content: Optional[str] = None # 跟进内容（简易版表单使用，包含跟进记录和下一步计划）
+
+# 拜访记录联合类型（使用discriminator）
+VisitRecordCreate = Annotated[
+    SimpleVisitRecordCreate | CompleteVisitRecordCreate,
+    Field(discriminator='form_type')
+]
 
 # 拜访记录查询请求模型
 class VisitRecordQueryRequest(BaseModel):

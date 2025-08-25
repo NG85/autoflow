@@ -10,8 +10,7 @@ from datetime import datetime, timedelta
 
 from app.api.routes.crm.models import (
     Account,
-    CompleteVisitRecordCreate,
-    SimpleVisitRecordCreate,
+    VisitRecordCreate,
     DailyReportRequest,
     DailyReportResponse,
     DailyReportStatistics,
@@ -115,7 +114,7 @@ async def get_filter_options(
 def create_visit_record(
     db_session: SessionDep,
     user: CurrentUserDep,
-    record: SimpleVisitRecordCreate | CompleteVisitRecordCreate,
+    record: VisitRecordCreate,
     force: bool = Body(False, example=False),
     feishu_auth_code: Optional[str] = Body(None, description="飞书授权码，用于换取访问令牌")
 ):
@@ -232,16 +231,16 @@ def create_visit_record(
         record.followup_record = result["followup_record"]
         record.followup_record_zh = result["followup_record_zh"]
         record.followup_record_en = result["followup_record_en"]
+        record.followup_quality_level_zh = result["followup_quality_level_zh"]
+        record.followup_quality_level_en = result["followup_quality_level_en"]
+        record.followup_quality_reason_zh = result["followup_quality_reason_zh"]
+        record.followup_quality_reason_en = result["followup_quality_reason_en"]
         record.next_steps = result["next_steps"]
         record.next_steps_zh = result["next_steps_zh"]
         record.next_steps_en = result["next_steps_en"]
-        record.followup_quality_level_zh = result["followup_quality_level_zh"]
-        record.followup_quality_reason_zh = result["followup_quality_reason_zh"]
-        record.followup_quality_level_en = result["followup_quality_level_en"]
-        record.followup_quality_reason_en = result["followup_quality_reason_en"]
         record.next_steps_quality_level_zh = result["next_steps_quality_level_zh"]
-        record.next_steps_quality_reason_zh = result["next_steps_quality_reason_zh"]
         record.next_steps_quality_level_en = result["next_steps_quality_level_en"]
+        record.next_steps_quality_reason_zh = result["next_steps_quality_reason_zh"]
         record.next_steps_quality_reason_en = result["next_steps_quality_reason_en"]
         
         # 构建返回数据
