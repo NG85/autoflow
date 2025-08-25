@@ -266,12 +266,18 @@ class VisitRecordRepo(BaseRepo):
 
         if request.followup_quality_level:
             query = query.where(
-                CRMSalesVisitRecord.followup_quality_level.in_(request.followup_quality_level)
+                or_(
+                    CRMSalesVisitRecord.followup_quality_level_zh.in_(request.followup_quality_level),
+                    CRMSalesVisitRecord.followup_quality_level_en.in_(request.followup_quality_level)
+                )
             )
 
         if request.next_steps_quality_level:
             query = query.where(
-                CRMSalesVisitRecord.next_steps_quality_level.in_(request.next_steps_quality_level)
+                or_(
+                    CRMSalesVisitRecord.next_steps_quality_level_zh.in_(request.next_steps_quality_level),
+                    CRMSalesVisitRecord.next_steps_quality_level_en.in_(request.next_steps_quality_level)
+                )
             )
 
         if request.visit_type:

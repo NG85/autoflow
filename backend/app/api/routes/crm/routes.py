@@ -1,5 +1,5 @@
 import logging
-from typing import List, Optional
+from typing import List, Literal, Optional
 from app.api.deps import CurrentUserDep, SessionDep
 from app.exceptions import InternalServerError
 from app.models.customer_document import CustomerDocument
@@ -211,7 +211,7 @@ def create_visit_record(
         
         # 根据表单类型处理数据
         from app.core.config import settings
-        form_type = settings.CRM_VISIT_RECORD_FORM_TYPE.value
+        form_type = record.form_type or settings.CRM_VISIT_RECORD_FORM_TYPE.value
 
         # 使用可靠的处理函数，分组处理任务
         from app.crm.save_engine import process_visit_record_content_reliable
@@ -387,6 +387,7 @@ def query_visit_records(
 def get_visit_record_filter_options(
     db_session: SessionDep,
     user: CurrentUserDep,
+    form_type: Optional[Literal["simple", "complete"]] = None,
 ):
     """
     获取拜访记录查询的过滤选项
@@ -394,8 +395,9 @@ def get_visit_record_filter_options(
     根据表单类型配置返回相应的字段
     """
     try:
-        from app.core.config import settings
-        form_type = settings.CRM_VISIT_RECORD_FORM_TYPE.value
+        if not form_type:
+            from app.core.config import settings
+            form_type = settings.CRM_VISIT_RECORD_FORM_TYPE.value
         
         # 通用字段：无论哪种类型都返回
         # 获取客户名称选项
