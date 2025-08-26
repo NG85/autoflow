@@ -176,7 +176,7 @@ class Settings(BaseSettings):
     
     # Ark LLM API
     ARK_API_KEY: str = "b1529268-82ea-407a-bd79-d01514a2ed60"
-    ARK_MODEL: str = "ep-20250708154518-7jpwm"
+    ARK_MODEL: str = "ep-20250826143121-cmfp8"
     ARK_API_URL: str = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
     
     COMPLIED_INTENT_ANALYSIS_PROGRAM_PATH: str | None = None

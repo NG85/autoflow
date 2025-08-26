@@ -178,6 +178,7 @@ class CrmViewRequest(BaseModel):
 class FieldMetadata(BaseModel):
     name: str
     display_name: str
+    display_name_en: Optional[str] = None  # 英文显示名称
     type: str
     fixed: bool = True
     filterable: bool = True

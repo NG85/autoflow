@@ -31,29 +31,29 @@ class ViewRegistry:
         # 定义字段来源
         self.field_sources = {
             "account_fields": {
-                "customer_name": "客户名称",
-                "industry": "客户行业",
-                "customer_level": "客户级别",
-                "person_in_charge": "客户负责人",
-                "unique_id": "客户唯一标识"
+                "customer_name": {"zh": "客户名称", "en": "Customer Name"},
+                "industry": {"zh": "客户行业", "en": "Industry"},
+                "customer_level": {"zh": "客户级别", "en": "Customer Level"},
+                "person_in_charge": {"zh": "客户负责人", "en": "Person in Charge"},
+                "unique_id": {"zh": "客户唯一标识", "en": "Unique ID"}
             },
             "opportunity_fields": {
-                "opportunity_name": "商机名称",
-                "opportunity_type": "商机类型",
-                "owner": "销售",
-                "estimated_acv": "预估ACV",
-                "opportunity_stage": "销售阶段",
-                "forecast_type": "预测类型",
-                "expected_closing_quarter": "预计成交季度",
-                "expected_closing_date": "预计成交日期",
-                "sl_pull_in": "SL Pull IN",
-                "owner_main_department": "部门",
-                "ppl_product_type": "PPL产品类型",
-                "opportunity_source": "商机来源",
-                "sales_order_archive_status": "销售订单归档状态",
-                "general_agent": "总代理",
-                "presales_owner": "售前负责人",
-                "unique_id": "商机唯一标识"
+                "opportunity_name": {"zh": "商机名称", "en": "Opportunity Name"},
+                "opportunity_type": {"zh": "商机类型", "en": "Opportunity Type"},
+                "owner": {"zh": "销售", "en": "Owner"},
+                "estimated_acv": {"zh": "预估ACV", "en": "Estimated ACV"},
+                "opportunity_stage": {"zh": "销售阶段", "en": "Opportunity Stage"},
+                "forecast_type": {"zh": "预测类型", "en": "Forecast Type"},
+                "expected_closing_quarter": {"zh": "预计成交季度", "en": "Expected Closing Quarter"},
+                "expected_closing_date": {"zh": "预计成交日期", "en": "Expected Closing Date"},
+                "sl_pull_in": {"zh": "SL Pull IN", "en": "SL Pull IN"},
+                "owner_main_department": {"zh": "部门", "en": "Department"},
+                "ppl_product_type": {"zh": "PPL产品类型", "en": "PPL Product Type"},
+                "opportunity_source": {"zh": "商机来源", "en": "Opportunity Source"},
+                "sales_order_archive_status": {"zh": "销售订单归档状态", "en": "Sales Order Archive Status"},
+                "general_agent": {"zh": "总代理", "en": "General Agent"},
+                "presales_owner": {"zh": "售前负责人", "en": "Presales Owner"},
+                "unique_id": {"zh": "商机唯一标识", "en": "Unique ID"}
             }
         }
         # 固定字段列表
@@ -103,25 +103,27 @@ class ViewRegistry:
     def register_standard_view_fields(self):
         """注册视图字段"""
         # 注册客户表字段
-        for field, display_name in self.field_sources["account_fields"].items():
+        for field, display_names in self.field_sources["account_fields"].items():
             self.register_field_metadata(FieldMetadata(
                 name=field,
-                display_name=display_name,
+                display_name=display_names["zh"],
+                display_name_en=display_names["en"],
                 type="string",
-                description=display_name,
+                description=display_names["zh"],
                 source="account",  # 标记字段来源
                 fixed=field in self.fixed_fields  # 只有指定的字段是固定的
             ))
         
         # 注册商机表字段
-        for field, display_name in self.field_sources["opportunity_fields"].items():
+        for field, display_names in self.field_sources["opportunity_fields"].items():
             # 特殊处理 estimated_acv 字段
             field_type = "integer" if field == "estimated_acv" else "string"
             self.register_field_metadata(FieldMetadata(
                 name=field,
-                display_name=display_name,
+                display_name=display_names["zh"],
+                display_name_en=display_names["en"],
                 type=field_type,
-                description=display_name,
+                description=display_names["zh"],
                 source="opportunity",  # 标记字段来源
                 fixed=field in self.fixed_fields  # 只有指定的字段是固定的
             ))
@@ -351,6 +353,7 @@ class CrmViewEngine:
                     options["enum_fields"][field] = {
                         "values": enum_values,
                         "display_name": field_metadata.display_name,
+                        "display_name_en": field_metadata.display_name_en or field_metadata.display_name,
                         "fixed": field_metadata.fixed
                     }
                 # 处理可搜索字段
@@ -358,6 +361,7 @@ class CrmViewEngine:
                     options["searchable_fields"].append({
                         "name": field,
                         "display_name": field_metadata.display_name,
+                        "display_name_en": field_metadata.display_name_en or field_metadata.display_name,
                         "fixed": field_metadata.fixed
                     })
                 # 处理动态枚举类型字段
@@ -385,6 +389,7 @@ class CrmViewEngine:
                     options["enum_fields"][field] = {
                         "values": sorted(field_values),
                         "display_name": field_metadata.display_name,
+                        "display_name_en": field_metadata.display_name_en or field_metadata.display_name,
                         "fixed": field_metadata.fixed
                     }
         
