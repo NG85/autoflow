@@ -142,27 +142,17 @@ def fill_sales_visit_record_fields(sales_visit_record):
     # 处理客户名称和合作伙伴
     account_name = sales_visit_record.get("account_name")
     partner_name = sales_visit_record.get("partner_name")
-    if not account_name:
-        if partner_name:
-            sales_visit_record["account_name"] = partner_name
-        else:
-            sales_visit_record["account_name"] = "--"
-    if not partner_name:
-        sales_visit_record["partner_name"] = "--"
-    # 协同参与人
-    if sales_visit_record.get("collaborative_participants") is None:
-        sales_visit_record["collaborative_participants"] = "--"
+    if not account_name and partner_name:
+        sales_visit_record["account_name"] = partner_name
     
     # 处理是否首次拜访字段
     is_first_visit = sales_visit_record.get("is_first_visit")
-    if is_first_visit is not None:
-        sales_visit_record["is_first_visit"] = "首次拜访" if is_first_visit else None
-        sales_visit_record["is_first_visit_en"] = "first visit" if is_first_visit else None
+    sales_visit_record["is_first_visit"] = "首次拜访" if is_first_visit else None
+    sales_visit_record["is_first_visit_en"] = "first visit" if is_first_visit else None
     
     # 处理是否call high字段
     is_call_high = sales_visit_record.get("is_call_high")
-    if is_call_high is not None:
-        sales_visit_record["is_call_high"] = "call high" if is_call_high else None
+    sales_visit_record["is_call_high"] = "call high" if is_call_high else None
     
     # 后向兼容：为旧字段赋值对应的中文值
     if sales_visit_record.get("followup_quality_level_zh") is not None:
@@ -184,8 +174,8 @@ def fill_sales_visit_record_fields(sales_visit_record):
     original_subject = sales_visit_record.get("subject")
     
     if original_subject is None or original_subject == "":
-        sales_visit_record["subject"] = "--"
-        sales_visit_record["subject_en"] = "--"
+        sales_visit_record["subject"] = None
+        sales_visit_record["subject_en"] = None
     else:
         # 尝试根据英文值查找枚举
         subject_enum = VisitSubject.from_english(original_subject)
@@ -203,11 +193,11 @@ def fill_sales_visit_record_fields(sales_visit_record):
             else:
                 # 原始值不在枚举中，保持原值
                 sales_visit_record["subject"] = original_subject
-                sales_visit_record["subject_en"] = "--"
+                sales_visit_record["subject_en"] = original_subject
 
     # 其他字段（排除特殊处理的字段）
     for k, v in sales_visit_record.items():
-        if v is None and k not in ["is_first_visit", "is_call_high"]:
+        if v is None and k not in ["is_first_visit", "is_first_visit_en", "is_call_high", "subject", "subject_en"]:
             sales_visit_record[k] = "--"
     return sales_visit_record
 
