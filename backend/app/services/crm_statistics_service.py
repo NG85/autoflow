@@ -173,9 +173,12 @@ class CRMStatisticsService:
                 'account_name': self._format_empty_value(assessment.account_name),
                 'opportunity_names': self._format_empty_value(self._format_opportunity_names(assessment.opportunity_names)),
                 'follow_up_note': self._format_empty_value(assessment.follow_up_note),
+                'follow_up_note_en': self._format_empty_value(assessment.follow_up_note_en),
                 'follow_up_next_step': self._format_empty_value(assessment.follow_up_next_step),
+                'follow_up_next_step_en': self._format_empty_value(assessment.follow_up_next_step_en),
                 'assessment_flag': self._convert_assessment_flag(assessment.assessment_flag),
                 'assessment_description': self._format_empty_value(assessment.assessment_description),
+                'assessment_description_en': self._format_empty_value(assessment.assessment_description_en),
                 'account_level': self._format_empty_value(assessment.account_level),
                 'sales_name': "",  # 这个字段将在上层填充
                 'department_name': "",  # 这个字段将在上层填充
