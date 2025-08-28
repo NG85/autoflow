@@ -1,6 +1,6 @@
 import logging
 from typing import Optional
-from app.api.deps import SuperUserDep
+from app.api.deps import CurrentSuperuserDep
 from fastapi import APIRouter, Body
 
 logger = logging.getLogger(__name__)
@@ -9,7 +9,7 @@ router = APIRouter()
 
 @router.post("/crm/daily-reports/trigger-task")
 def trigger_daily_statistics_task(
-    user: SuperUserDep,
+    user: CurrentSuperuserDep,
     target_date: Optional[str] = Body(None, description="目标日期，格式YYYY-MM-DD，不传则默认为昨天"),
     enable_feishu_push: Optional[bool] = Body(None, description="是否启用飞书推送，不传则使用系统配置")
 ):
@@ -81,7 +81,7 @@ def trigger_daily_statistics_task(
 
 @router.post("/crm/weekly-reports/trigger-task")
 def trigger_weekly_report_task(
-    user: SuperUserDep,
+    user: CurrentSuperuserDep,
     start_date: Optional[str] = Body(None, description="开始日期，格式YYYY-MM-DD，不传则默认为上周日"),
     end_date: Optional[str] = Body(None, description="结束日期，格式YYYY-MM-DD，不传则默认为本周六"),
     enable_feishu_push: Optional[bool] = Body(None, description="是否启用飞书推送，不传则使用系统配置")
@@ -159,7 +159,7 @@ def trigger_weekly_report_task(
 
 @router.post("/crm/writeback/trigger-task")
 def trigger_crm_writeback_task(
-    user: SuperUserDep,
+    user: CurrentSuperuserDep,
     start_date: Optional[str] = Body(None, description="开始日期，格式YYYY-MM-DD，不传则默认为上周日"),
     end_date: Optional[str] = Body(None, description="结束日期，格式YYYY-MM-DD，不传则默认为本周六")
 ):
@@ -239,7 +239,7 @@ def trigger_crm_writeback_task(
 @router.get("/crm/daily-reports/task-status/{task_id}")
 def get_task_status(
     task_id: str,
-    user: SuperUserDep,
+    user: CurrentSuperuserDep,
 ):
     """
     查询CRM日报统计任务的执行状态
