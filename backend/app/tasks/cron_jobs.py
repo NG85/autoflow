@@ -9,6 +9,7 @@ from app.models import DataSource, DataSourceType
 from app.repositories import knowledge_base_repo
 from app.services.crm_statistics_service import crm_statistics_service
 from app.services.platform_notification_service import platform_notification_service
+from app.services.crm_writeback_service import crm_writeback_service
 from app.tasks.knowledge_base import import_documents_from_kb_datasource
 
 logger = logging.getLogger(__name__)
@@ -298,6 +299,88 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None):
                 
     except Exception as e:
         logger.exception(f"CRM周报数据生成任务执行失败: {e}")
+        return {
+            "success": False,
+            "message": f"任务执行失败: {str(e)}",
+            "data": {}
+        }
+
+
+@app.task(bind=True, max_retries=3)
+def crm_visit_records_writeback(self, start_date_str=None, end_date_str=None):
+    """
+    CRM销售拜访记录数据回写任务
+    每周日下午2点执行，处理上周日到本周六的销售拜访记录数据
+    
+    Args:
+        start_date_str: 开始日期字符串，格式YYYY-MM-DD，不传则默认为上周日
+        end_date_str: 结束日期字符串，格式YYYY-MM-DD，不传则默认为本周六
+    
+    工作流程：
+    1. 计算上周日到本周六的日期范围
+    2. 从crm_sales_visit_records表查询该时间范围内的拜访记录
+    3. 按客户和商机分组处理拜访记录
+    4. 生成格式化的回写内容（包含记录人、跟进记录、下一步计划等关键信息）
+    5. 调用CRM回写API将内容回写到对应的客户或商机
+    """
+    try:
+        # 计算上周的日期范围
+        if start_date_str and end_date_str:
+            try:
+                start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+                end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
+                logger.info(f"开始执行CRM拜访记录回写任务，日期范围: {start_date} 到 {end_date}")
+            except ValueError:
+                logger.error(f"无效的日期格式: start_date={start_date_str}, end_date={end_date_str}")
+                return {
+                    "success": False,
+                    "message": "无效的日期格式",
+                    "data": {}
+                }
+        else:
+            # 默认处理上周日到本周六的数据
+            today = datetime.now().date()
+            # 计算上周日（今天往前推7天，然后找到最近的周日）
+            days_since_sunday = (today.weekday() + 1) % 7  # 0=周一，1=周二，...，6=周日
+            last_sunday = today - timedelta(days=days_since_sunday + 7)
+            this_saturday = last_sunday + timedelta(days=6)
+            
+            start_date = last_sunday
+            end_date = this_saturday
+            
+            logger.info(f"开始执行CRM拜访记录回写任务，默认日期范围: {start_date} 到 {end_date}")
+        
+        with Session(engine) as session:
+            # 执行拜访记录回写
+            result = crm_writeback_service.writeback_visit_records(
+                session=session,
+                start_date=start_date,
+                end_date=end_date
+            )
+            
+            if result["success"]:
+                logger.info(f"CRM拜访记录回写任务执行成功: {result['message']}")
+                return {
+                    "success": True,
+                    "start_date": start_date.isoformat(),
+                    "end_date": end_date.isoformat(),
+                    "processed_count": result.get("processed_count", 0),
+                    "writeback_count": result.get("writeback_count", 0),
+                    "success_count": result.get("success_count", 0),
+                    "failed_count": result.get("failed_count", 0),
+                    "message": result["message"]
+                }
+            else:
+                logger.error(f"CRM拜访记录回写任务执行失败: {result['message']}")
+                return {
+                    "success": False,
+                    "start_date": start_date.isoformat(),
+                    "end_date": end_date.isoformat(),
+                    "message": result["message"]
+                }
+                
+    except Exception as e:
+        logger.exception(f"CRM拜访记录回写任务执行失败: {e}")
         return {
             "success": False,
             "message": f"任务执行失败: {str(e)}",

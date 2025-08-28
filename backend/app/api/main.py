@@ -46,6 +46,7 @@ from app.api.admin_routes import (
     semantic_cache as admin_semantic_cache,
     langfuse as admin_langfuse,
     user as admin_user,
+    crm_task as admin_crm_task,
 )
 from app.api.admin_routes.evaluation import (
     evaluation_task as admin_evaluation_task,
@@ -92,6 +93,7 @@ api_router.include_router(admin_kb_chunk_router, tags=["admin/knowledge_base/chu
 api_router.include_router(admin_llm_router, tags=["admin/llm"])
 api_router.include_router(admin_embedding_model_router, tags=["admin/embedding_model"])
 api_router.include_router(admin_reranker_model_router, tags=["admin/reranker_model"])
+api_router.include_router(admin_crm_task.router, tags=["admin/crm_task"])
 api_router.include_router(admin_langfuse.router, tags=["admin/langfuse"])
 api_router.include_router(admin_legacy_retrieve.router, tags=["admin/retrieve_old"])
 api_router.include_router(admin_stats.router, tags=["admin/stats"])

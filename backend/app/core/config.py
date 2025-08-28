@@ -154,6 +154,11 @@ class Settings(BaseSettings):
     CRM_WEEKLY_REPORT_CRON: str = '0 11 * * 0'  # 每周日上午11点执行
     CRM_WEEKLY_REPORT_FEISHU_ENABLED: bool = True  # 是否启用飞书推送
     
+    # CRM writeback task configuration
+    CRM_WRITEBACK_ENABLED: bool = False
+    CRM_WRITEBACK_CRON: str = '0 14 * * 0'  # 每周日下午2点执行
+    CRM_WRITEBACK_API_URL: str = "http://auth:8018"  # CRM回写API地址
+    
     # Feishu Btable sync configuration
     ENABLE_FEISHU_BTABLE_SYNC: bool = False
     FEISHU_BTABLE_SYNC_CRON: str = '5 0 * * *'
@@ -176,7 +181,7 @@ class Settings(BaseSettings):
     
     # Ark LLM API
     ARK_API_KEY: str = "b1529268-82ea-407a-bd79-d01514a2ed60"
-    ARK_MODEL: str = "ep-20250826143121-cmfp8"
+    ARK_MODEL: str = "ep-20250827204153-628mw"
     ARK_API_URL: str = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
     
     COMPLIED_INTENT_ANALYSIS_PROGRAM_PATH: str | None = None

@@ -19,6 +19,7 @@ app.conf.update(
         # {"app.tasks.evaluate.*": {"queue": "evaluation"}},
         {"app.tasks.cron_jobs.generate_crm_daily_statistics": {"queue": "cron"}},
         {"app.tasks.cron_jobs.generate_crm_weekly_report": {"queue": "cron"}},
+        {"app.tasks.cron_jobs.crm_visit_records_writeback": {"queue": "cron"}},
         {"app.tasks.bitable_import.*": {"queue": "cron"}},
         {"*": {"queue": "default"}},
     ],
@@ -121,4 +122,28 @@ if settings.CRM_WEEKLY_REPORT_ENABLED:
     app.conf.beat_schedule['generate_crm_weekly_report'] = {
         'task': 'app.tasks.cron_jobs.generate_crm_weekly_report',
         'schedule': weekly_schedule,
+    }
+
+# CRM拜访记录回写任务
+if settings.CRM_WRITEBACK_ENABLED:
+    cron_expr = settings.CRM_WRITEBACK_CRON
+    # 解析crontab表达式
+    cron_fields = cron_expr.strip().split()
+    if len(cron_fields) == 5:
+        minute, hour, day_of_month, month_of_year, day_of_week = cron_fields
+        writeback_schedule = crontab(
+            minute=minute, 
+            hour=hour, 
+            day_of_month=day_of_month, 
+            month_of_year=month_of_year, 
+            day_of_week=day_of_week
+        )
+    else:
+        # 默认值：每周日下午2点
+        writeback_schedule = crontab(hour=14, minute=0, day_of_week=0)
+    
+    app.conf.beat_schedule = getattr(app.conf, 'beat_schedule', {})
+    app.conf.beat_schedule['crm_visit_records_writeback'] = {
+        'task': 'app.tasks.cron_jobs.crm_visit_records_writeback',
+        'schedule': writeback_schedule,
     }
