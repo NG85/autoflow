@@ -36,7 +36,7 @@ class CRMReportIndexRepo(BaseRepo):
             # 构建基础查询条件
             conditions = [
                 CRMReportIndex.report_type == report_type,
-                CRMReportIndex.report_calendar_type == 'Weekly',
+                CRMReportIndex.report_calendar_type == 'weekly',
                 CRMReportIndex.report_status == 'published',
                 CRMReportIndex.report_week_of_year == report_week_of_year,
                 CRMReportIndex.report_year == report_year
