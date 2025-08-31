@@ -1006,8 +1006,8 @@ class CRMStatisticsService:
                 avg_stats[key] = value
         
         # 获取报告信息
-        report_info_1 = self._get_weekly_report_info(session, 'review1', start_date, None)
-        report_info_5 = self._get_weekly_report_info(session, 'review5', start_date, None)
+        report_info_1 = self._get_weekly_report_info(session, 'review1', end_date, None)
+        report_info_5 = self._get_weekly_report_info(session, 'review5', end_date, None)
         
         # 获取销售四象限数据
         sales_quadrants = None
@@ -1090,11 +1090,13 @@ class CRMStatisticsService:
                 report = report_repo.get_weekly_report_by_department(
                     session, report_type, week_of_year, year, department_name
                 )
+                logger.info(f"部门级报告: {report}")
             else:
                 # 公司级报告
                 report = report_repo.get_weekly_report_by_company(
                     session, report_type, week_of_year, year
                 )
+                logger.info(f"公司级报告: {report}")
             
             if report and report.execution_id:
                 return {

@@ -34,6 +34,8 @@ class CRMReportIndexRepo(BaseRepo):
         """
         try:
             # 构建基础查询条件
+            logger.info(f"报告类型: {report_type}, 报告年份: {report_year}, 报告周数: {report_week_of_year}, 部门名称: {department_name}")
+            
             conditions = [
                 CRMReportIndex.report_type == report_type,
                 CRMReportIndex.report_calendar_type == 'weekly',
@@ -70,7 +72,7 @@ class CRMReportIndexRepo(BaseRepo):
         
         Args:
             session: 数据库会话
-            report_type: 报告类型，如review1s, review5s
+            report_type: 报告类型，如review1s, review5
             report_week_of_year: 报告年份中的第几周
             report_year: 报告年份
             department_name: 部门名称
@@ -92,7 +94,7 @@ class CRMReportIndexRepo(BaseRepo):
         
         Args:
             session: 数据库会话
-            report_type: 报告类型，如review1s, review5s
+            report_type: 报告类型，如review1, review5
             report_week_of_year: 报告年份中的第几周
             report_year: 报告年份
             
