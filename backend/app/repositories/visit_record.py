@@ -1,7 +1,7 @@
 from typing import Optional, List
-from datetime import datetime, date
+from datetime import datetime
 import logging
-from sqlmodel import Session, select, func, and_, or_, desc, asc, text, String
+from sqlmodel import Session, select, func, or_, desc, asc, String
 from fastapi_pagination import Params, Page
 from fastapi_pagination.ext.sqlmodel import paginate
 from uuid import UUID
@@ -15,27 +15,6 @@ from app.repositories.user_profile import UserProfileRepo
 
 logger = logging.getLogger(__name__)
 
-# 管理团队配置
-DEFAULT_EXTERNAL_EXTENDED_ADMINS = [
-    {
-        "name": "龙恒",
-        "email": "ls@pingcap.cn",
-        "open_id": "ou_adcaafc471d57fc6f9b209c05c0f5ce1",
-        "user_id": "01971c23-28be-70de-a08c-6e58e0911491"
-    },
-    {
-        "name": "林微",
-        "email": "wei.lin@pingcap.cn",
-        "open_id": "ou_edbdc2e3fc8eb411bbc49cc586629709",
-        "user_id": "0196d251-3fa0-71f8-91d3-9a03a412c954"
-    },
-    {
-        "name": "崔秋",
-        "email": "cuiqiu@pingcap.cn",
-        "open_id": "ou_718d03819e549537c4dc972154798a81",
-        "user_id": "019739bd-4be4-79a5-92d8-f2fb470b10c8"
-    },
-]
 
 
 def _convert_to_response(record: CRMSalesVisitRecord, customer_level: Optional[str] = None, department: Optional[str] = None) -> VisitRecordResponse:
@@ -68,14 +47,23 @@ def _convert_to_response(record: CRMSalesVisitRecord, customer_level: Optional[s
 class VisitRecordRepo(BaseRepo):
     model_cls = CRMSalesVisitRecord
 
-    def _is_admin_user(self, current_user_id: UUID) -> bool:
+    def _is_admin_user(self, current_user_id: UUID, session: Session) -> bool:
         """
-        检查当前用户是否为管理团队成员
+        检查当前用户是否为拜访记录的管理团队成员
+        基于用户profile中的notification_tags字段判断是否包含visit_record权限
         """
-        user_id_str = str(current_user_id)
-        for admin in DEFAULT_EXTERNAL_EXTENDED_ADMINS:
-            if admin.get("user_id") == user_id_str:
+        user_profile_repo = UserProfileRepo()
+        user_profile = user_profile_repo.get_by_user_id(session, current_user_id)
+        
+        if user_profile and user_profile.notification_tags:
+            # 检查notification_tags中是否包含visit_record权限
+            notification_tags = user_profile.get_notification_tags()
+            if "visit_record" in notification_tags:
+                logger.info(f"User {current_user_id} has visit_record permission in notification_tags: {notification_tags}")
                 return True
+        
+        # 如果没有找到用户档案或没有相应权限，返回False
+        logger.info(f"User {current_user_id} does not have visit_record permission")
         return False
 
     def _get_user_accessible_recorder_ids(self, session: Session, current_user_id: UUID) -> List[str]:
@@ -159,7 +147,7 @@ class VisitRecordRepo(BaseRepo):
         # 应用权限控制 - 用户只能查看自己及下属的拜访记录
         if current_user_id:
             # 检查是否为管理团队成员
-            if self._is_admin_user(current_user_id):
+            if self._is_admin_user(current_user_id, session):
                 logger.info(f"Admin user {current_user_id} detected, skipping access control")
                 # 管理团队成员可以查看所有记录
             else:
@@ -354,7 +342,7 @@ class VisitRecordRepo(BaseRepo):
         # 应用权限控制
         if current_user_id:
             # 检查是否为管理团队成员
-            if self._is_admin_user(current_user_id):
+            if self._is_admin_user(current_user_id, session):
                 logger.info(f"Admin user {current_user_id} detected, skipping access control")
                 # 管理团队成员可以查看所有记录
             else:

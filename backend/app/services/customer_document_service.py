@@ -1,13 +1,11 @@
 import logging
-import os
-from typing import Dict, Any, Optional, Tuple, List
+from typing import Dict, Any, Optional, List
 from uuid import UUID
 from sqlmodel import Session, select, or_
 from app.models.customer_document import CustomerDocument
 from app.repositories.customer_document import CustomerDocumentRepo
 from app.repositories.document_content import DocumentContentRepo
 from app.services.document_processing_service import DocumentProcessingService
-from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -326,7 +324,6 @@ class CustomerDocumentService:
         包括：
         1. is_superuser（系统超管）
         2. user_profiles中position=admin的人
-        3. DEFAULT_EXTERNAL_EXTENDED_ADMINS中定义的管理团队的人
         
         Args:
             db_session: 数据库会话
@@ -349,11 +346,5 @@ class CustomerDocumentService:
         
         if user_profile and user_profile.position == "admin":
             return True
-        
-        # 3. 检查DEFAULT_EXTERNAL_EXTENDED_ADMINS中定义的管理团队的人
-        from app.repositories.visit_record import DEFAULT_EXTERNAL_EXTENDED_ADMINS
-        for admin in DEFAULT_EXTERNAL_EXTENDED_ADMINS:
-            if admin.get("user_id") == str(user_id):
-                return True
         
         return False
