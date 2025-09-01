@@ -50,20 +50,20 @@ class VisitRecordRepo(BaseRepo):
     def _is_admin_user(self, current_user_id: UUID, session: Session) -> bool:
         """
         检查当前用户是否为拜访记录的管理团队成员
-        基于用户profile中的notification_tags字段判断是否包含visit_record权限
+        基于用户profile中的notification_tags字段判断是否包含list_visit_records权限
         """
         user_profile_repo = UserProfileRepo()
         user_profile = user_profile_repo.get_by_user_id(session, current_user_id)
         
         if user_profile and user_profile.notification_tags:
-            # 检查notification_tags中是否包含visit_record权限
+            # 检查notification_tags中是否包含list_visit_records权限
             notification_tags = user_profile.get_notification_tags()
-            if "visit_record" in notification_tags:
-                logger.info(f"User {current_user_id} has visit_record permission in notification_tags: {notification_tags}")
+            if "list_visit_records" in notification_tags:
+                logger.info(f"User {current_user_id} has list_visit_records permission in notification_tags: {notification_tags}")
                 return True
         
         # 如果没有找到用户档案或没有相应权限，返回False
-        logger.info(f"User {current_user_id} does not have visit_record permission")
+        logger.info(f"User {current_user_id} does not have list_visit_records permission")
         return False
 
     def _get_user_accessible_recorder_ids(self, session: Session, current_user_id: UUID) -> List[str]:
