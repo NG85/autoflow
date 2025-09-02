@@ -139,9 +139,10 @@ class Extractor(dspy.Module):
 
             # replace the entities with the covariates
             for entity in pred_graph.knowledge.entities:
-                for covariate in pred_covariates.covariates:
-                    if entity.name == covariate.name:
-                        entity.metadata = covariate.covariates
+                if pred_covariates.covariates is not None:
+                    for covariate in pred_covariates.covariates:
+                        if entity.name == covariate.name:
+                            entity.metadata = covariate.covariates
 
             return pred_graph
 
