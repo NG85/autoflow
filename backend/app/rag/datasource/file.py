@@ -35,7 +35,8 @@ class FileDataSource(BaseDataSource):
                 continue
             # handle customer uploads
             if upload.path.startswith(settings.STORAGE_PATH_PREFIX):
-                upload.path = upload.path[len(settings.STORAGE_PATH_PREFIX.rstrip('/')):]
+                # 从 "pingcap/data/customer-uploads/XXX.docx" 提取 "customer-uploads/XXX.docx"
+                upload.path = upload.path.replace(settings.STORAGE_TENANT + "/", "", 1)
                 if upload.path.startswith('/'):
                     upload.path = upload.path[1:]
 

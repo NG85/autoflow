@@ -107,7 +107,9 @@ class Settings(BaseSettings):
  
     # Storage configuration
     STORAGE_TYPE: StorageType = StorageType.MINIO
-    STORAGE_PATH_PREFIX: str = "data/customer-uploads/"
+    STORAGE_TENANT = "pingcap/data"
+    CUSTOMER_UPLOADS_FOLDER: str = "/customer-uploads/"
+    STORAGE_PATH_PREFIX: str = "pingcap/data/customer-uploads/"
     
     # TOS STS
     TOS_API_KEY: str = ""

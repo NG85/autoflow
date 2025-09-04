@@ -205,8 +205,8 @@ class DocumentProcessingService:
                 "message": "不支持的文件链接"
             }
         
-        # 处理文件路径 data/customer-uploads/XXX.docx -> /shared/data/customer-uploads/XXX.docx
-        full_document_url = document_url.replace('data', settings.LOCAL_FILE_STORAGE_PATH)
+        # 处理文件路径 {STORAGE_PATH_PREFIX}/XXX.docx -> /shared/data/customer-uploads/XXX.docx
+        full_document_url = document_url.replace(settings.STORAGE_PATH_PREFIX, settings.LOCAL_FILE_STORAGE_PATH)
         logger.info(f"Local file detected: {full_document_url}")
         
         try:
