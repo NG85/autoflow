@@ -204,10 +204,10 @@ class DocumentProcessingService:
                 "success": False,
                 "message": "不支持的文件链接"
             }
-        
-        # 处理文件路径 {STORAGE_PATH_PREFIX}/XXX.docx -> /shared/data/customer-uploads/XXX.docx
-        full_document_url = document_url.replace(settings.STORAGE_PATH_PREFIX, settings.LOCAL_FILE_STORAGE_PATH)
-        logger.info(f"Local file detected: {full_document_url}")
+        logger.info(f"Local file original url: {document_url}")
+        # 处理文件路径 pingcap/data/customer-uploads/XXX.docx -> /shared/data/customer-uploads/XXX.docx
+        full_document_url = document_url.replace(settings.STORAGE_TENANT, settings.LOCAL_FILE_STORAGE_PATH)
+        logger.info(f"Local file parsed url: {full_document_url}")
         
         try:
             # 获取文件内容
