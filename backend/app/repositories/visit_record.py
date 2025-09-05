@@ -32,7 +32,9 @@ def _convert_to_response(record: CRMSalesVisitRecord, customer_level: Optional[s
     if record.visit_communication_date:
         record_dict["visit_communication_date"] = record.visit_communication_date.isoformat()
     if record.last_modified_time:
-        record_dict["last_modified_time"] = record.last_modified_time.isoformat()
+        # 将UTC时间转换为本地时区字符串
+        from app.utils.date_utils import convert_utc_to_local_timezone
+        record_dict["last_modified_time"] = convert_utc_to_local_timezone(record.last_modified_time)
     
     # 使用处理后的字典创建VisitRecordResponse
     response = VisitRecordResponse.model_validate(record_dict)
