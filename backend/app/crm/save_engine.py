@@ -207,10 +207,14 @@ def fill_sales_visit_record_fields(sales_visit_record):
 def push_visit_record_message(sales_visit_record, visit_type, db_session=None, meeting_notes=None, saved_time=None):
     sales_visit_record = fill_sales_visit_record_fields(sales_visit_record)
     
-    # 添加last_modified_time字段（如果不存在）
-    if "last_modified_time" not in sales_visit_record:
-        # 优先使用实际保存的时间，否则使用当前时间
-        sales_visit_record["last_modified_time"] = saved_time or datetime.now()
+    # 处理时间字段：将saved_time转换为本地时区字符串
+    from app.utils.date_utils import convert_utc_to_local_timezone
+    
+    # 确定要使用的时间
+    time_to_use = saved_time or sales_visit_record.get("last_modified_time") or datetime.now()
+    
+    # 转换为本地时区字符串并保存到last_modified_time字段
+    sales_visit_record["last_modified_time"] = convert_utc_to_local_timezone(time_to_use)
     
     # 获取记录人信息
     recorder_id = sales_visit_record.get("recorder_id")

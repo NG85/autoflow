@@ -5,7 +5,6 @@ from app.platforms.notification_types import (
     NOTIFICATION_TYPE_VISIT_RECORD,
     NOTIFICATION_TYPE_WEEKLY_REPORT,
 )
-from app.utils.date_utils import convert_utc_to_local_timezone
 from sqlmodel import Session
 from app.repositories.user_profile import UserProfileRepo
 from app.platforms.constants import DEFAULT_INTERNAL_GROUP_CHATS, INTERNAL_APP_IDS, PLATFORM_FEISHU, PLATFORM_LARK
@@ -504,7 +503,7 @@ class PlatformNotificationService:
         
         # 准备基础消息内容
         base_template_vars = {
-            "visit_date": convert_utc_to_local_timezone(visit_record.get("last_modified_time")) if visit_record else "--",
+            "visit_date": visit_record.get("last_modified_time", "--") if visit_record else "--",
             "recorder": recorder_name or "--",
             "department": visit_record.get("department", "--") if visit_record else "--",
             "sales_visit_records": [visit_record] if visit_record else [],
