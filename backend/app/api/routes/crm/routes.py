@@ -189,7 +189,7 @@ def create_visit_record(
         if force:
             # 直接保存，不做AI判断
             try:
-                save_visit_record_to_crm_table(record, db_session)
+                record_id, saved_time = save_visit_record_to_crm_table(record, db_session)
                 db_session.commit()
                 # 推送飞书消息
                 record_data = record.model_dump()
@@ -201,7 +201,8 @@ def create_visit_record(
                     visit_type=record.visit_type,
                     sales_visit_record=record_data,
                     db_session=db_session,
-                    meeting_notes=None
+                    meeting_notes=None,
+                    saved_time=saved_time
                 )
                 return {"code": 0, "message": "success", "data": {}}
             except Exception as e:
@@ -271,7 +272,7 @@ def create_visit_record(
             return {"code": 400, "message": "failed", "data": data}
 
         try:
-            save_visit_record_to_crm_table(record, db_session)
+            record_id, saved_time = save_visit_record_to_crm_table(record, db_session)
             db_session.commit()
             # 推送飞书消息
             record_data = record.model_dump()
@@ -283,7 +284,8 @@ def create_visit_record(
                 visit_type=record.visit_type,
                 sales_visit_record=record_data,
                 db_session=db_session,
-                meeting_notes=None
+                meeting_notes=None,
+                saved_time=saved_time
             )
             return {"code": 0, "message": "success", "data": data}
         except Exception as e:

@@ -53,9 +53,10 @@ def save_visit_record_to_crm_table(record_schema: SimpleVisitRecordCreate | Comp
     db_session.execute(ondup_stmt)
     # 不在这里commit，由调用方控制事务
     
-    return record_id
+    # 返回record_id和实际保存的时间
+    return record_id, mapped['last_modified_time']
 
-def call_ark_llm(prompt):
+def call_ark_llm(prompt, temperature=0.3):
     api_key = settings.ARK_API_KEY
     model = settings.ARK_MODEL
     url = settings.ARK_API_URL
@@ -67,7 +68,8 @@ def call_ark_llm(prompt):
         "model": model,
         "messages": [
             {"role": "user", "content": prompt}
-        ]
+        ],
+        "temperature": temperature
     }
     resp = requests.post(url, headers=headers, json=data, timeout=30)
     resp.raise_for_status()
@@ -202,8 +204,13 @@ def fill_sales_visit_record_fields(sales_visit_record):
     return sales_visit_record
 
 
-def push_visit_record_message(sales_visit_record, visit_type, db_session=None, meeting_notes=None):
+def push_visit_record_message(sales_visit_record, visit_type, db_session=None, meeting_notes=None, saved_time=None):
     sales_visit_record = fill_sales_visit_record_fields(sales_visit_record)
+    
+    # 添加last_modified_time字段（如果不存在）
+    if "last_modified_time" not in sales_visit_record:
+        # 优先使用实际保存的时间，否则使用当前时间
+        sales_visit_record["last_modified_time"] = saved_time or datetime.now()
     
     # 获取记录人信息
     recorder_id = sales_visit_record.get("recorder_id")
@@ -282,7 +289,7 @@ def save_visit_record_with_content(
     """
     # ========== 第一阶段：核心数据库事务操作 ==========
     # 先保存拜访记录以获取 record_id
-    record_id = save_visit_record_to_crm_table(record, db_session)
+    record_id, saved_time = save_visit_record_to_crm_table(record, db_session)
     
     # 保存文档内容
     document_content_repo = DocumentContentRepo()
@@ -379,7 +386,8 @@ def save_visit_record_with_content(
             visit_type=record.visit_type,
             sales_visit_record=record_data,
             db_session=db_session,
-            meeting_notes=meeting_summary
+            meeting_notes=meeting_summary,
+            saved_time=saved_time
         )
     except Exception as e:
         logger.error(f"推送飞书消息失败: {e}")
