@@ -18,7 +18,10 @@ class CRMSalesVisitRecord(SQLModel, table=True):
     contact_name: Optional[str] = Field(nullable=True, max_length=255, description="客户名字")
     recorder: Optional[str] = Field(nullable=True, max_length=255, description="记录人")
     recorder_id: Optional[UUID] = Field(nullable=True, description="记录人ID")
-    collaborative_participants: Optional[str] = Field(nullable=True, max_length=255, description="协同参与人")
+    collaborative_participants: Optional[str] = Field(
+        sa_column=Column(Text, nullable=True), 
+        description="协同参与人，TEXT格式存储，支持JSON数组或字符串格式，向后兼容"
+    )
     visit_communication_date: Optional[date] = Field(nullable=True, description="拜访及沟通日期")
     counterpart_location: Optional[str] = Field(nullable=True, max_length=255, description="拜访地点")
     visit_communication_method: Optional[str] = Field(nullable=True, max_length=255, description="拜访及沟通方式")

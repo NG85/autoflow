@@ -492,6 +492,19 @@ class PlatformNotificationService:
             recorder_id=recorder_id
         )
         
+        # 新增：获取协同参与人的推送接收者
+        collaborative_recipients_by_platform = self._get_collaborative_participants_recipients(
+            db_session, visit_record
+        )
+        
+        # 合并两个接收者列表
+        if collaborative_recipients_by_platform:
+            for platform, recipients in collaborative_recipients_by_platform.items():
+                if platform in recipients_by_platform:
+                    recipients_by_platform[platform].extend(recipients)
+                else:
+                    recipients_by_platform[platform] = recipients
+        
         if not recipients_by_platform:
             logger.warning(f"No recipients found for recorder: name={recorder_name}, id={recorder_id}")
             return {
@@ -525,12 +538,16 @@ class PlatformNotificationService:
                     # 简易版表单模板
                     if recipient_type == "recorder":
                         return "AAqzQK6iUiK2k"  # 销售个人卡片：简易版
+                    elif recipient_type == "collaborative_participant":
+                        return "AAqzQK6iUiK2k"  # 协同参与人卡片：简易版
                     else:
                         return "AAqzQKvKzOW1z"  # leader和管理者卡片：简易版
                 else:
                     # 完整版表单模板
                     if recipient_type == "recorder":
                         return "AAqzzmP2uT85t"  # 销售个人卡片：完整版
+                    elif recipient_type == "collaborative_participant":
+                        return "AAqzzmP2uT85t"  # 协同参与人卡片：完整版
                     else:
                         return "AAqz0J0JSTciO"  # leader和管理者卡片：完整版
             else:
@@ -1083,6 +1100,109 @@ class PlatformNotificationService:
         except Exception as e:
             logger.error(f"Error getting user platform for notification: {e}")
             return None
+
+    def _get_collaborative_participants_recipients(
+        self, 
+        db_session: Session, 
+        visit_record: Dict[str, Any]
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        获取协同参与人的推送接收者，按平台分组
+        通过ask_id从user profile表查询platform和open_id
+        
+        Args:
+            db_session: 数据库会话
+            visit_record: 拜访记录数据
+            
+        Returns:
+            按平台分组的协同参与人接收者列表
+        """
+        if not visit_record or not visit_record.get("collaborative_participants"):
+            return {}
+        
+        collaborative_participants = visit_record.get("collaborative_participants", [])
+        
+        # 如果是字符串，尝试解析为JSON
+        if isinstance(collaborative_participants, str):
+            try:
+                import json
+                parsed = json.loads(collaborative_participants)
+                if isinstance(parsed, list):
+                    collaborative_participants = parsed
+                else:
+                    # 如果不是列表格式，无法推送
+                    logger.warning(f"Collaborative participants is not a list format: {collaborative_participants}")
+                    return {}
+            except (json.JSONDecodeError, TypeError):
+                # 如果不是JSON格式，无法推送
+                logger.warning(f"Failed to parse collaborative participants as JSON: {collaborative_participants}")
+                return {}
+        
+        if not isinstance(collaborative_participants, list):
+            logger.warning(f"Invalid collaborative_participants format: {collaborative_participants}")
+            return {}
+        
+        recipients_by_platform = {}
+        
+        for participant in collaborative_participants:
+            try:
+                # 验证协同参与人数据结构
+                if not isinstance(participant, dict):
+                    logger.warning(f"Invalid participant format: {participant}")
+                    continue
+                
+                name = participant.get("name")
+                ask_id = participant.get("ask_id")
+                
+                if not name:
+                    logger.warning(f"Missing name field in participant: {participant}")
+                    continue
+                
+                # 如果ask_id为空，表示非系统注册人员，不需要推送
+                if not ask_id:
+                    logger.info(f"Skipping external participant (no ask_id): {name}")
+                    continue
+                
+                # 通过ask_id从user profile表查询用户信息
+                user_profile = self.user_profile_repo.get_by_oauth_user_id(db_session, ask_id)
+                if not user_profile:
+                    logger.warning(f"No user profile found for ask_id: {ask_id}, name: {name}")
+                    continue
+                
+                # 获取用户的平台和open_id信息
+                platform = user_profile.platform
+                open_id = user_profile.open_id
+                
+                if not all([platform, open_id]):
+                    logger.warning(f"User profile missing platform or open_id for ask_id: {ask_id}, name: {name}")
+                    continue
+                
+                # 验证平台支持
+                if platform not in [PLATFORM_FEISHU, PLATFORM_LARK]:
+                    logger.warning(f"Unsupported platform for collaborative participant: {platform}")
+                    continue
+                
+                # 构建接收者信息
+                recipient = {
+                    "name": name,
+                    "open_id": open_id,
+                    "type": "collaborative_participant",  # 新增接收者类型
+                    "platform": platform,
+                    "receive_id_type": "open_id"
+                }
+                
+                # 按平台分组
+                if platform not in recipients_by_platform:
+                    recipients_by_platform[platform] = []
+                recipients_by_platform[platform].append(recipient)
+                
+                logger.info(f"Added collaborative participant {name} ({platform}) to recipients")
+                
+            except Exception as e:
+                logger.error(f"Error processing collaborative participant {participant}: {e}")
+                continue
+        
+        return recipients_by_platform
 
 
 # 创建默认的平台通知服务实例

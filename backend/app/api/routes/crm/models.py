@@ -1,7 +1,8 @@
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Annotated
+from typing import Any, Dict, List, Literal, Optional, Annotated, Union
 from datetime import date
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+import json
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
 from app.core.config import settings
 
@@ -217,6 +218,12 @@ class VisitRecordBase(BaseModel):
     parent_record: Optional[str] = None # 父记录
     remarks: Optional[str] = None # 备注
 
+# 协同参与人数据结构
+class CollaborativeParticipant(BaseModel):
+    """协同参与人信息"""
+    name: str = Field(description="协同参与人姓名")
+    ask_id: Optional[str] = Field(default=None, description="协同参与人ask_id，为空表示非系统注册人员")
+
 # 拜访记录创建请求模型
 # 完整版表单
 class CompleteVisitRecordCreate(VisitRecordBase):
@@ -226,7 +233,10 @@ class CompleteVisitRecordCreate(VisitRecordBase):
     contact_position: Optional[str] = None # 客户职位
     contact_name: Optional[str] = None # 客户名字
     visit_communication_method: Optional[str] = None # 拜访及沟通方式
-    collaborative_participants: Optional[str] = None # 协同参与人
+    collaborative_participants: Optional[Union[str, List[CollaborativeParticipant]]] = Field(
+        default=None, 
+        description="协同参与人，支持字符串格式（向后兼容）或结构化数组格式"
+    )
     
     # 备用字段
     customer_lead_source: Optional[str] = None # 客户/线索来源
@@ -235,6 +245,67 @@ class CompleteVisitRecordCreate(VisitRecordBase):
     visit_communication_location: Optional[str] = None # 拜访及沟通地点
     communication_duration: Optional[str] = None # 沟通时长
     expectation_achieved: Optional[str] = None # 是否达成预期
+    
+    @field_validator('collaborative_participants', mode='before')
+    @classmethod
+    def validate_collaborative_participants(cls, v):
+        """验证并标准化协同参与人字段"""
+        if v is None:
+            return None
+        
+        # 如果已经是列表，直接返回
+        if isinstance(v, list):
+            return v
+        
+        # 如果是字符串，尝试解析
+        if isinstance(v, str):
+            # 尝试解析为JSON
+            try:
+                parsed = json.loads(v)
+                if isinstance(parsed, list):
+                    return parsed
+            except (json.JSONDecodeError, TypeError):
+                pass
+            
+            # 如果不是JSON或解析失败，按原字符串处理
+            return v
+        
+        # 其他类型转换为字符串
+        return str(v)
+    
+    def get_collaborative_participants_list(self) -> List[CollaborativeParticipant]:
+        """获取协同参与人列表，自动解析各种格式"""
+        if not self.collaborative_participants:
+            return []
+        
+        # 如果已经是列表，直接返回
+        if isinstance(self.collaborative_participants, list):
+            return self.collaborative_participants
+        
+        # 如果是字符串，尝试解析
+        if isinstance(self.collaborative_participants, str):
+            try:
+                # 尝试解析为JSON
+                parsed = json.loads(self.collaborative_participants)
+                if isinstance(parsed, list):
+                    # 验证每个元素是否符合CollaborativeParticipant结构
+                    participants = []
+                    for item in parsed:
+                        if isinstance(item, dict):
+                            try:
+                                participant = CollaborativeParticipant(**item)
+                                participants.append(participant)
+                            except Exception:
+                                # 跳过无效的参与者数据
+                                continue
+                    return participants
+            except (json.JSONDecodeError, TypeError):
+                pass
+            
+            # 如果不是JSON格式，返回空列表（旧格式不支持推送）
+            return []
+        
+        return []
 
 # 简易版表单
 class SimpleVisitRecordCreate(VisitRecordBase):

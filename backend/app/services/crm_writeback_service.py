@@ -140,7 +140,40 @@ class CrmWritebackService:
                     content_parts.append(f"客户职位: {record.contact_position}")
             
             if record.collaborative_participants:
-                content_parts.append(f"协同参与人: {record.collaborative_participants}")
+                # 处理协同参与人数据，支持多种格式
+                participant_names = []
+                
+                if isinstance(record.collaborative_participants, str):
+                    # 如果是字符串，尝试解析为JSON
+                    try:
+                        import json
+                        parsed = json.loads(record.collaborative_participants)
+                        if isinstance(parsed, list):
+                            # JSON数组格式
+                            for participant in parsed:
+                                if isinstance(participant, dict) and participant.get("name"):
+                                    participant_names.append(participant["name"])
+                                else:
+                                    participant_names.append(str(participant))
+                        else:
+                            # 非数组格式，按原字符串处理
+                            participant_names.append(record.collaborative_participants)
+                    except (json.JSONDecodeError, TypeError):
+                        # 解析失败，按原字符串处理
+                        participant_names.append(record.collaborative_participants)
+                elif isinstance(record.collaborative_participants, list):
+                    # 已经是列表格式
+                    for participant in record.collaborative_participants:
+                        if isinstance(participant, dict) and participant.get("name"):
+                            participant_names.append(participant["name"])
+                        else:
+                            participant_names.append(str(participant))
+                else:
+                    # 其他格式，转换为字符串
+                    participant_names.append(str(record.collaborative_participants))
+                
+                if participant_names:
+                    content_parts.append(f"协同参与人: {', '.join(participant_names)}")
             
             content_parts.append("")
             
