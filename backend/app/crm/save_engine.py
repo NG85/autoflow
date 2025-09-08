@@ -559,12 +559,36 @@ def assess_quality_batch(followup_record_zh: str, followup_record_en: str, next_
     """
     result = {}
     
+    # 检查跟进记录是否为空
+    followup_empty = not followup_record_zh.strip() and not followup_record_en.strip()
+    
+    # 检查下一步计划是否为空
+    next_steps_empty = not next_steps_zh.strip() and not next_steps_en.strip()
+    
     # 第一步：评估跟进记录（中英双语）
-    followup_result = assess_followup_quality_bilingual(followup_record_zh, followup_record_en)
+    if followup_empty:
+        # 如果跟进记录为空，返回默认的不合格评估结果
+        followup_result = {
+            "followup_quality_level_zh": "不合格",
+            "followup_quality_reason_zh": "跟进记录内容为空，无法进行评估",
+            "followup_quality_level_en": "unqualified",
+            "followup_quality_reason_en": "Follow-up record is empty, cannot be assessed"
+        }
+    else:
+        followup_result = assess_followup_quality_bilingual(followup_record_zh, followup_record_en)
     result.update(followup_result)
     
     # 第二步：评估下一步计划（中英双语）
-    next_steps_result = assess_next_steps_quality_bilingual(next_steps_zh, next_steps_en)
+    if next_steps_empty:
+        # 如果下一步计划为空，返回默认的不合格评估结果
+        next_steps_result = {
+            "next_steps_quality_level_zh": "不合格",
+            "next_steps_quality_reason_zh": "下一步计划内容为空，无法进行评估",
+            "next_steps_quality_level_en": "unqualified",
+            "next_steps_quality_reason_en": "Next steps plan is empty, cannot be assessed"
+        }
+    else:
+        next_steps_result = assess_next_steps_quality_bilingual(next_steps_zh, next_steps_en)
     result.update(next_steps_result)
     
     return result
@@ -574,6 +598,15 @@ def assess_followup_quality_bilingual(followup_record_zh: str, followup_record_e
     """
     评估跟进记录质量（中英双语）
     """
+    # 检查内容是否为空
+    if not followup_record_zh.strip() and not followup_record_en.strip():
+        return {
+            "followup_quality_level_zh": "不合格",
+            "followup_quality_reason_zh": "跟进记录内容为空，无法进行评估",
+            "followup_quality_level_en": "unqualified",
+            "followup_quality_reason_en": "Follow-up record is empty, cannot be assessed"
+        }
+    
     prompt = f"""
 你是一位销售管理专家，在销售团队管理和客户关系推进方面经验丰富，擅长评估销售人员记录的"跟进记录"质量。请对以下内容进行评判，并输出如下结构：
 
@@ -654,6 +687,15 @@ def assess_next_steps_quality_bilingual(next_steps_zh: str, next_steps_en: str) 
     """
     评估下一步计划质量（中英双语）
     """
+    # 检查内容是否为空
+    if not next_steps_zh.strip() and not next_steps_en.strip():
+        return {
+            "next_steps_quality_level_zh": "不合格",
+            "next_steps_quality_reason_zh": "下一步计划内容为空，无法进行评估",
+            "next_steps_quality_level_en": "unqualified",
+            "next_steps_quality_reason_en": "Next steps plan is empty, cannot be assessed"
+        }
+    
     prompt = f"""
 你是一位销售管理专家，在销售团队管理和客户关系推进方面经验丰富，擅长评估销售人员记录的"下一步计划"质量。请对以下内容进行评判，并输出如下结构：
 
