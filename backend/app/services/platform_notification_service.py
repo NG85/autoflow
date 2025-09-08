@@ -7,6 +7,7 @@ from app.platforms.notification_types import (
 )
 from sqlmodel import Session
 from app.repositories.user_profile import UserProfileRepo
+from app.repositories.oauth_user import oauth_user_repo
 from app.platforms.constants import DEFAULT_INTERNAL_GROUP_CHATS, INTERNAL_APP_IDS, PLATFORM_FEISHU, PLATFORM_LARK
 from app.platforms.feishu.client import feishu_client
 from app.platforms.lark.client import lark_client
@@ -280,8 +281,34 @@ class PlatformNotificationService:
         
         # 2. 添加记录人
         recorder_open_id = recorder_profile.open_id
+        
+        # 如果profile没有open_id，尝试从OAuthUser表中查找
+        if not recorder_open_id:
+            oauth_user = None
+            
+            # 优先通过recorder_id (ask_id) 查找
+            if recorder_id:
+                oauth_user = oauth_user_repo.get_by_ask_id(db_session, recorder_id)
+            
+            # 如果通过recorder_id没找到，再尝试通过姓名查找
+            if not oauth_user and recorder_name:
+                oauth_user = oauth_user_repo.get_by_name(db_session, recorder_name)
+            
+            if oauth_user and oauth_user.open_id:
+                recorder_open_id = oauth_user.open_id
+                # 根据OAuthUser的channel设置platform
+                if oauth_user.channel in ['feishu', 'feishuBot']:
+                    platform = PLATFORM_FEISHU
+                elif oauth_user.channel in ['lark', 'larkBot']:
+                    platform = PLATFORM_LARK
+                else:
+                    platform = PLATFORM_FEISHU  # 默认使用飞书
+                logger.info(f"Found open_id for recorder from OAuthUser table: {recorder_open_id}, platform: {platform} (channel: {oauth_user.channel})")
+        
         if recorder_open_id:
-            platform = recorder_profile.platform or PLATFORM_FEISHU
+            # 如果没有从OAuthUser获取到platform，使用profile的platform或默认值
+            if 'platform' not in locals():
+                platform = recorder_profile.platform or PLATFORM_FEISHU
             # 只支持飞书和Lark平台
             if platform not in [PLATFORM_FEISHU, PLATFORM_LARK]:
                 logger.warning(f"Recorder platform {platform} not supported, skipping")
