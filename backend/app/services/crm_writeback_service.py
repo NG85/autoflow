@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from sqlmodel import Session, select
 from app.core.config import settings
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
+from app.utils.date_utils import convert_utc_to_local_timezone
 
 logger = logging.getLogger(__name__)
 
@@ -123,16 +124,14 @@ class CrmWritebackService:
         for record in sorted_records:
             # 拜访基本信息
             content_parts.append(f"拜访日期: {record.visit_communication_date}")
-            content_parts.append(f"记录人: {record.recorder or '未知'}")
+            
+            if record.last_modified_time:
+                formatted_time = convert_utc_to_local_timezone(record.last_modified_time)
+                if formatted_time != "--":
+                    content_parts.append(f"创建时间: {formatted_time}")
             
             if record.subject:
                 content_parts.append(f"拜访主题: {record.subject}")
-            
-            if record.visit_communication_method:
-                content_parts.append(f"拜访方式: {record.visit_communication_method}")
-            
-            if record.counterpart_location:
-                content_parts.append(f"拜访地点: {record.counterpart_location}")
             
             if record.contact_name:
                 content_parts.append(f"客户联系人: {record.contact_name}")
@@ -175,28 +174,22 @@ class CrmWritebackService:
                 if participant_names:
                     content_parts.append(f"协同参与人: {', '.join(participant_names)}")
             
-            content_parts.append("")
-            
             # 跟进记录
             if record.followup_record:
                 content_parts.append("跟进记录:")
                 content_parts.append(record.followup_record)
-                content_parts.append("")
             
             # 下一步计划
             if record.next_steps:
                 content_parts.append("下一步计划:")
                 content_parts.append(record.next_steps)
-                content_parts.append("")
             
             # 备注
             if record.remarks:
                 content_parts.append("备注:")
                 content_parts.append(record.remarks)
-                content_parts.append("")
             
             content_parts.append("---")
-            content_parts.append("")
         
         return "\n".join(content_parts)
     
@@ -232,22 +225,32 @@ class CrmWritebackService:
                 }
             
             logger.info(f"找到 {len(visit_records)} 条拜访记录，开始进行回写")
+            logger.info("回写优先级：商机 > 客户 > 合作伙伴")
             
-            # 按客户和商机分组
-            account_records = {}
+            # 按优先级分组：商机 > 客户 > 合作伙伴
             opportunity_records = {}
+            account_records = {}
+            partner_records = {}
             
             for record in visit_records:
-                # 如果有商机ID，按商机分组
+                # 优先级1：如果有商机ID，按商机分组
                 if record.opportunity_id:
                     if record.opportunity_id not in opportunity_records:
                         opportunity_records[record.opportunity_id] = []
                     opportunity_records[record.opportunity_id].append(record)
-                # 否则按客户分组
+                # 优先级2：如果没有商机但有客户ID，按客户分组
                 elif record.account_id:
                     if record.account_id not in account_records:
                         account_records[record.account_id] = []
                     account_records[record.account_id].append(record)
+                # 优先级3：如果既没有商机也没有客户，但有合作伙伴ID，按合作伙伴分组
+                elif record.partner_id:
+                    if record.partner_id not in partner_records:
+                        partner_records[record.partner_id] = []
+                    partner_records[record.partner_id].append(record)
+            
+            # 记录分组统计信息
+            logger.info(f"分组结果：商机 {len(opportunity_records)} 个，客户 {len(account_records)} 个，合作伙伴 {len(partner_records)} 个")
             
             # 准备批量回写请求
             writeback_requests = []
@@ -278,6 +281,19 @@ class CrmWritebackService:
                 })
                 processed_count += len(records)
                 logger.info(f"准备回写客户 {account_id}，包含 {len(records)} 条拜访记录")
+            
+            # 处理合作伙伴回写（合作伙伴和客户使用同一个API）
+            for partner_id, records in partner_records.items():
+                content = self.generate_visit_summary_content(records)
+                writeback_requests.append({
+                    "writebackType": "ACCOUNT",
+                    "uniqueId": partner_id,
+                    "content": content,
+                    "writeMode": "PREPEND",
+                    "operator": "system"
+                })
+                processed_count += len(records)
+                logger.info(f"准备回写合作伙伴 {partner_id}，包含 {len(records)} 条拜访记录")
             
             # 执行批量回写
             if writeback_requests:
