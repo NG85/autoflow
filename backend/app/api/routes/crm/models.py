@@ -195,6 +195,7 @@ class VisitRecordBase(BaseModel):
     opportunity_name: Optional[str] = None # 商机名称
     opportunity_id: Optional[str] = None # 商机ID
     partner_name: Optional[str] = None # 合作伙伴名称
+    partner_id: Optional[str] = None # 合作伙伴ID
     visit_communication_date: Optional[str] = None # 拜访及沟通日期
     recorder: Optional[str] = None # 记录人
     recorder_id: Optional[str] = None # 记录人ID    

@@ -63,6 +63,7 @@ FIELD_MAP = {
     '客户名称': 'account_name',
     '客户ID': 'account_id',
     '合作伙伴': 'partner_name',
+    '合作伙伴ID': 'partner_id',
     '商机名称': 'opportunity_name',
     '商机ID': 'opportunity_id',
     '客户/线索来源': 'customer_lead_source',
