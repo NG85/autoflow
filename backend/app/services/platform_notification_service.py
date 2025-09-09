@@ -542,12 +542,21 @@ class PlatformNotificationService:
             }
         
         # 准备基础消息内容
+        # 处理协同参与人参数，转换为用name拼接的文本
+        collaborative_participants_text = "--"
+        if visit_record and visit_record.get("collaborative_participants"):
+            from app.utils.participants_utils import format_collaborative_participants_names
+            collaborative_participants_text = format_collaborative_participants_names(
+                visit_record.get("collaborative_participants")
+            ) or "--"
+        
         base_template_vars = {
             "visit_date": visit_record.get("last_modified_time", "--") if visit_record else "--",
             "recorder": recorder_name or "--",
             "department": visit_record.get("department", "--") if visit_record else "--",
             "sales_visit_records": [visit_record] if visit_record else [],
-            "meeting_notes": meeting_notes
+            "meeting_notes": meeting_notes,
+            "collaborative_participants": collaborative_participants_text
         }
         
         # 根据拜访类型、接收者类型和平台确定模板ID
