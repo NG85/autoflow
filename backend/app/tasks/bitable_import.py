@@ -198,6 +198,20 @@ def parse_field_value(val, field_name=None):
                 return ','.join(str(i) for i in link_ids if i)
             return str(link_ids) if link_ids else ''
         return ''
+    if field_name == '协同参与人':
+        # 处理协同参与人字段，支持JSON数组和字符串格式
+        if isinstance(val, list):
+            # 如果是列表，转换为JSON字符串存储
+            import json
+            return json.dumps(val, ensure_ascii=False)
+        elif isinstance(val, str):
+            # 如果是字符串，直接返回（可能是旧格式或已经是JSON字符串）
+            return val
+        elif isinstance(val, dict):
+            # 如果是字典，转换为JSON字符串
+            import json
+            return json.dumps(val, ensure_ascii=False)
+        return str(val) if val else ''
     if isinstance(val, list):
         # 处理富文本/人员/多选等
         if val and isinstance(val[0], dict) and 'text' in val[0]:

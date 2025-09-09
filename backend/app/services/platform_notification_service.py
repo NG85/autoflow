@@ -1149,24 +1149,15 @@ class PlatformNotificationService:
         
         collaborative_participants = visit_record.get("collaborative_participants", [])
         
-        # 如果是字符串，尝试解析为JSON
-        if isinstance(collaborative_participants, str):
-            try:
-                import json
-                parsed = json.loads(collaborative_participants)
-                if isinstance(parsed, list):
-                    collaborative_participants = parsed
-                else:
-                    # 如果不是列表格式，无法推送
-                    logger.warning(f"Collaborative participants is not a list format: {collaborative_participants}")
-                    return {}
-            except (json.JSONDecodeError, TypeError):
-                # 如果不是JSON格式，无法推送
-                logger.warning(f"Failed to parse collaborative participants as JSON: {collaborative_participants}")
-                return {}
+        # 解析协同参与人数据
+        from app.utils.participants_utils import parse_collaborative_participants_list
+        try:
+            collaborative_participants = parse_collaborative_participants_list(collaborative_participants)
+        except Exception as e:
+            logger.warning(f"Failed to parse collaborative participants: {collaborative_participants}, error: {e}")
+            return {}
         
-        if not isinstance(collaborative_participants, list):
-            logger.warning(f"Invalid collaborative_participants format: {collaborative_participants}")
+        if not collaborative_participants:
             return {}
         
         recipients_by_platform = {}

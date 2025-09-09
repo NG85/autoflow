@@ -36,6 +36,10 @@ def _convert_to_response(record: CRMSalesVisitRecord, customer_level: Optional[s
         from app.utils.date_utils import convert_utc_to_local_timezone
         record_dict["last_modified_time"] = convert_utc_to_local_timezone(record.last_modified_time)
     
+    # 处理协同参与人字段 - 将JSON数组转换为拼接的name字符串
+    from app.utils.participants_utils import format_collaborative_participants_names
+    record_dict["collaborative_participants"] = format_collaborative_participants_names(record.collaborative_participants)
+    
     # 使用处理后的字典创建VisitRecordResponse
     response = VisitRecordResponse.model_validate(record_dict)
     
