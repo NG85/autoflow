@@ -347,6 +347,7 @@ class VisitRecordQueryRequest(BaseModel):
     # 排序 - 默认按拜访日期降序
     sort_by: str = "visit_communication_date"  # 排序字段
     sort_direction: str = "desc"  # 排序方向：asc/desc
+    language: Optional[str] = None # 语言，只在导出时生效
 
 # 拜访记录响应模型 - 直接继承CRMSalesVisitRecord，添加关联字段
 class VisitRecordResponse(CRMSalesVisitRecord):

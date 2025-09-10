@@ -1,9 +1,12 @@
 import logging
+import csv
+import io
 from typing import List, Literal, Optional
 from app.api.deps import CurrentUserDep, SessionDep
 from app.exceptions import InternalServerError
 from app.models.customer_document import CustomerDocument
 from fastapi import APIRouter, Body, HTTPException
+from fastapi.responses import StreamingResponse
 from app.crm.view_engine import CrmViewRequest, ViewType, CrmViewEngine, ViewRegistry
 from fastapi_pagination import Page
 from datetime import datetime, timedelta
@@ -378,6 +381,142 @@ def query_visit_records(
                 "pages": result.pages
             }
         }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(e)
+        raise InternalServerError()
+
+
+@router.post("/crm/visit_records/export")
+def export_visit_records_to_csv(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    request: VisitRecordQueryRequest,
+):
+    """
+    导出CRM拜访记录到CSV文件
+    支持条件查询和分页
+    根据当前用户的汇报关系限制数据访问权限
+    支持中英文版本导出
+    """
+    try:
+        # 设置较大的页面大小以获取更多数据，但限制最大导出数量
+        export_request = request.model_copy()
+        export_request.page_size = min(request.page_size, 10000)  # 限制最大导出10000条记录
+        
+        result = visit_record_repo.query_visit_records(
+            session=db_session,
+            request=export_request,
+            current_user_id=user.id
+        )
+        
+        # 创建CSV内容
+        output = io.StringIO()
+        writer = csv.writer(output)
+        
+        # 根据语言参数确定CSV头部和数据内容
+        language = request.language or "zh"  # 默认为中文
+        
+        if language == "en":
+            # 英文版CSV头部 - 只包含英文字段
+            headers = [
+                "Customer Level", "Account Name", "First Visit", "Call High",
+                "Partner Name", "Opportunity Name", "Follow-up Date", "Person in Charge", "Department",
+                "Contact Position", "Contact Name", "Collaborative Participants", "Follow-up Method",
+                "Follow-up Record", "AI Follow-up Record Quality Evaluation", "AI Follow-up Record Quality Evaluation Details", 
+                "Next Steps", "AI Next Steps Quality Evaluation", "AI Next Steps Quality Evaluation Details",
+                "Information Source", "Remarks", "Attachment", "Created Time"
+            ]
+        else:
+            # 中文版CSV头部（默认）- 只包含中文字段
+            headers = [
+                "客户分类", "客户名称", "是否首次拜访", "是否Call High",
+                "合作伙伴", "商机名称", "跟进日期", "负责销售", "所在团队",
+                "客户岗位", "客户名字", "协同参与人", "跟进方式",
+                "跟进记录", "AI对跟进记录质量评估", "AI对跟进记录质量评估详情",
+                "下一步计划", "AI对下一步计划质量评估", "AI对下一步计划质量评估详情",
+                "信息来源", "备注", "附件", "创建时间"
+            ]
+        
+        writer.writerow(headers)
+        
+        # 写入数据行
+        for item in result.items:
+            # 根据语言选择对应的字段值
+            is_en = language == "en"
+            
+            # 布尔值字段的本地化处理
+            first_visit_text = "Yes" if item.is_first_visit else "No" if item.is_first_visit is not None else ""
+            call_high_text = "Yes" if item.is_call_high else "No" if item.is_call_high is not None else ""
+            if not is_en:
+                first_visit_text = "是" if item.is_first_visit else "否" if item.is_first_visit is not None else ""
+                call_high_text = "是" if item.is_call_high else "否" if item.is_call_high is not None else ""
+            
+            # 多语言字段的本地化处理
+            followup_record = item.followup_record_en if is_en else item.followup_record_zh
+            followup_record = followup_record or item.followup_record or ""
+            
+            followup_quality_level = item.followup_quality_level_en if is_en else item.followup_quality_level_zh or ""
+            followup_quality_reason = item.followup_quality_reason_en if is_en else item.followup_quality_reason_zh or ""
+            
+            next_steps = item.next_steps_en if is_en else item.next_steps_zh
+            next_steps = next_steps or item.next_steps or ""
+            
+            next_steps_quality_level = item.next_steps_quality_level_en if is_en else item.next_steps_quality_level_zh or ""
+            next_steps_quality_reason = item.next_steps_quality_reason_en if is_en else item.next_steps_quality_reason_zh or ""
+            
+            # 构建数据行（中英版本字段顺序相同）
+            row = [
+                item.customer_level or "",
+                item.account_name or "",
+                first_visit_text,
+                call_high_text,
+                item.partner_name or "",
+                item.opportunity_name or "",
+                item.visit_communication_date or "",
+                item.recorder or "",
+                item.department or "",
+                item.contact_position or "",
+                item.contact_name or "",
+                item.collaborative_participants or "",
+                item.visit_communication_method or "",
+                followup_record,
+                followup_quality_level,
+                followup_quality_reason,
+                next_steps,
+                next_steps_quality_level,
+                next_steps_quality_reason,
+                item.visit_type or "",
+                item.remarks or "",
+                item.attachment or "",
+                item.last_modified_time or ""
+            ]
+            writer.writerow(row)
+        
+        # 准备文件下载
+        output.seek(0)
+        csv_content = output.getvalue()
+        output.close()
+        
+        # 生成文件名（包含语言标识）
+        current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+        language_suffix = "_en" if language == "en" else "_zh"
+        filename = f"visit_records_export{language_suffix}_{current_time}.csv"
+        
+        # 创建响应
+        def iter_csv():
+            yield csv_content.encode('utf-8-sig')  # 使用utf-8-sig编码以支持Excel正确显示中文
+        
+        return StreamingResponse(
+            iter_csv(),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}",
+                "Content-Type": "text/csv; charset=utf-8-sig"
+            }
+        )
+        
     except HTTPException:
         raise
     except Exception as e:
