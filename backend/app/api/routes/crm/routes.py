@@ -426,7 +426,7 @@ def export_visit_records_to_csv(
                 "Contact Position", "Contact Name", "Collaborative Participants", "Follow-up Method",
                 "Follow-up Record", "AI Follow-up Record Quality Evaluation", "AI Follow-up Record Quality Evaluation Details", 
                 "Next Steps", "AI Next Steps Quality Evaluation", "AI Next Steps Quality Evaluation Details",
-                "Information Source", "Remarks", "Attachment", "Created Time"
+                "Information Source", "Remarks", "Created Time"
             ]
         else:
             # 中文版CSV头部（默认）- 只包含中文字段
@@ -436,7 +436,7 @@ def export_visit_records_to_csv(
                 "客户岗位", "客户名字", "协同参与人", "跟进方式",
                 "跟进记录", "AI对跟进记录质量评估", "AI对跟进记录质量评估详情",
                 "下一步计划", "AI对下一步计划质量评估", "AI对下一步计划质量评估详情",
-                "信息来源", "备注", "附件", "创建时间"
+                "信息来源", "备注", "创建时间"
             ]
         
         writer.writerow(headers)
@@ -489,7 +489,6 @@ def export_visit_records_to_csv(
                 next_steps_quality_reason,
                 item.visit_type or "",
                 item.remarks or "",
-                item.attachment or "",
                 item.last_modified_time or ""
             ]
             writer.writerow(row)
