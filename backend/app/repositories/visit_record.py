@@ -5,6 +5,7 @@ from sqlmodel import Session, select, func, or_, desc, asc, String
 from fastapi_pagination import Params, Page
 from fastapi_pagination.ext.sqlmodel import paginate
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
 from app.models.crm_accounts import CRMAccount
@@ -14,6 +15,41 @@ from app.repositories.base_repo import BaseRepo
 from app.repositories.user_profile import UserProfileRepo
 
 logger = logging.getLogger(__name__)
+
+
+def _convert_beijing_date_to_utc_range(beijing_date_str: str, is_start: bool = True) -> Optional[datetime]:
+    """
+    将北京时间的日期字符串转换为UTC时间
+    
+    Args:
+        beijing_date_str: 北京时间的日期字符串，格式为 "YYYY-MM-DD"
+        is_start: True表示开始时间（00:00:00），False表示结束时间（23:59:59）
+        
+    Returns:
+        UTC时间对象，如果解析失败则返回None
+    """
+    try:
+        # 解析北京时间的日期
+        beijing_date = datetime.strptime(beijing_date_str, "%Y-%m-%d").date()
+        
+        # 根据is_start参数选择时间
+        if is_start:
+            # 开始时间：00:00:00
+            beijing_datetime = datetime.combine(beijing_date, datetime.min.time())
+        else:
+            # 结束时间：23:59:59
+            beijing_datetime = datetime.combine(beijing_date, datetime.max.time().replace(microsecond=0))
+        
+        # 转换为UTC时间
+        beijing_tz = ZoneInfo("Asia/Shanghai")
+        utc_tz = ZoneInfo("UTC")
+        beijing_datetime = beijing_datetime.replace(tzinfo=beijing_tz)
+        utc_datetime = beijing_datetime.astimezone(utc_tz)
+        
+        return utc_datetime
+    except ValueError:
+        logger.warning(f"Invalid date format: {beijing_date_str}")
+        return None
 
 
 
@@ -293,6 +329,17 @@ class VisitRecordRepo(BaseRepo):
             query = query.where(
                 CRMSalesVisitRecord.is_call_high == request.is_call_high
             )
+
+        # 处理创建时间筛选 - 将北京时间的日期转换为UTC时间范围
+        if request.last_modified_time_start:
+            utc_start_datetime = _convert_beijing_date_to_utc_range(request.last_modified_time_start, is_start=True)
+            if utc_start_datetime:
+                query = query.where(CRMSalesVisitRecord.last_modified_time >= utc_start_datetime)
+
+        if request.last_modified_time_end:
+            utc_end_datetime = _convert_beijing_date_to_utc_range(request.last_modified_time_end, is_start=False)
+            if utc_end_datetime:
+                query = query.where(CRMSalesVisitRecord.last_modified_time <= utc_end_datetime)
 
         # 应用排序 - 默认按拜访日期降序
         sort_field = getattr(CRMSalesVisitRecord, request.sort_by, CRMSalesVisitRecord.visit_communication_date)
