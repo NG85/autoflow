@@ -58,13 +58,55 @@ def parse_chat_messages(
 _EMBEDDING_CACHE:Dict[str, Dict[str, Any]] = {}
 _EMBEDDING_LOCK = threading.Lock()
 
-PROMPT_TYPE_MAPPING = {
+# Language detection function
+def detect_language(text: str) -> str:
+    """
+    Detect the language of the input text.
+    Returns 'en' for English, 'zh' for Chinese, defaults to 'en'.
+    """
+    import re
+    
+    # Count Chinese characters
+    chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
+    # Count English words (basic detection)
+    english_words = len(re.findall(r'[a-zA-Z]+', text))
+    
+    # If more Chinese characters than English words, consider it Chinese
+    if chinese_chars > english_words:
+        return 'zh'
+    elif english_words > 0:
+        return 'en'
+    else:
+        return 'en'  # Default to English
+
+# Multi-language prompt mappings
+PROMPT_TYPE_MAPPING_ZH = {
     "identity_full": default_prompt.IDENTITY_FULL_PROMPT,
     "identity_brief": default_prompt.IDENTITY_BRIEF_PROMPT,
     "capabilities": default_prompt.CAPABILITIES_PROMPT,
     "knowledge_base": default_prompt.KNOWLEDGE_BASE_PROMPT,
     "greeting": default_prompt.IDENTITY_BRIEF_PROMPT,
 }
+
+PROMPT_TYPE_MAPPING_EN = {
+    "identity_full": default_prompt.IDENTITY_FULL_PROMPT_EN,
+    "identity_brief": default_prompt.IDENTITY_BRIEF_PROMPT_EN,
+    "capabilities": default_prompt.CAPABILITIES_PROMPT_EN,
+    "knowledge_base": default_prompt.KNOWLEDGE_BASE_PROMPT_EN,
+    "greeting": default_prompt.IDENTITY_BRIEF_PROMPT_EN,
+}
+
+def get_prompt_by_language(identity_type: str, language: str) -> str:
+    """
+    Get the appropriate prompt based on identity type and language.
+    """
+    if language == 'en':
+        return PROMPT_TYPE_MAPPING_EN.get(identity_type, PROMPT_TYPE_MAPPING_EN["identity_brief"])
+    else:
+        return PROMPT_TYPE_MAPPING_ZH.get(identity_type, PROMPT_TYPE_MAPPING_ZH["identity_brief"])
+
+# Legacy mapping for backward compatibility
+PROMPT_TYPE_MAPPING = PROMPT_TYPE_MAPPING_ZH
 
 class ChatFlow:
     _trace_manager: LangfuseContextManager
@@ -298,6 +340,9 @@ class ChatFlow:
         # 0. Identity question detection and processing
         identity_type = self._detect_identity_question(self.user_question)
         if identity_type:
+            # Detect language of user question
+            user_language = detect_language(self.user_question)
+            
             yield ChatEvent(
                 event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
                 payload=ChatStreamMessagePayload(
@@ -305,8 +350,8 @@ class ChatFlow:
                     display=f"Routing to the {identity_type} flow",
                 ),
             )
-            logger.info(f"Detected identity question of type: {identity_type}")
-            identity_response = PROMPT_TYPE_MAPPING.get(identity_type)
+            logger.info(f"Detected identity question of type: {identity_type}, language: {user_language}")
+            identity_response = get_prompt_by_language(identity_type, user_language)
             
             with self._trace_manager.span(name="identity_response") as span:
                 span.end(output={"identity_type": identity_type, "response_length": len(identity_response)})
@@ -930,8 +975,10 @@ class ChatFlow:
         self._ensure_retrieve_flow_initialized()
         identity_type = self._detect_identity_question(self.user_question)
         if identity_type:
-            logger.info(f"Detected identity question of type: {identity_type}")
-            identity_response = PROMPT_TYPE_MAPPING.get(identity_type)
+            # Detect language of user question
+            user_language = detect_language(self.user_question)
+            logger.info(f"Detected identity question of type: {identity_type}, language: {user_language}")
+            identity_response = get_prompt_by_language(identity_type, user_language)
             
             with self._trace_manager.span(name="identity_response") as span:
                 span.end(output={"identity_type": identity_type, "response_length": len(identity_response)})
