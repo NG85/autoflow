@@ -173,28 +173,43 @@ class ChatRepo(BaseRepo):
         messages: List[ChatMessage]
     ) -> Tuple[Chat, List[ChatMessage]]:
         """Create chat and messages in a single transaction"""
-        with session.begin():
-            # Add chat record
-            session.add(chat)
-            session.flush()  # Generate ID but don't commit
-            
-            max_ordinal = self.get_max_message_ordinal(session, chat.id)
-            # Set message chat_id and add messages
-            for message in messages:
-                message.chat_id = chat.id
-                message.created_at = message.updated_at = datetime.now(UTC)
-                message.ordinal = max_ordinal + 1
-                max_ordinal += 1
-            
-            session.add_all(messages)
-            # The transaction will be committed automatically when it ends
+        # Add chat record
+        session.add(chat)
+        session.flush()  # Generate ID but don't commit
+        
+        max_ordinal = self.get_max_message_ordinal(session, chat.id)
+        # Convert LlamaIndex ChatMessage to app ChatMessage model and set properties
+        db_messages = []
+        for message in messages:
+            # Create new ChatMessage model instance
+            db_message = ChatMessage(
+                role=message.role,
+                content=message.content,
+                chat_id=chat.id,
+                user_id=chat.user_id,
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
+                ordinal=max_ordinal + 1,
+                sources=getattr(message, 'sources', []),
+                graph_data=getattr(message, 'graph_data', {}),
+                meta=getattr(message, 'meta', {}),
+                trace_url=getattr(message, 'trace_url', None),
+                is_best_answer=getattr(message, 'is_best_answer', False),
+                finished_at=getattr(message, 'finished_at', None),
+                post_verification_result_url=getattr(message, 'post_verification_result_url', None),
+            )
+            db_messages.append(db_message)
+            max_ordinal += 1
+        
+        session.add_all(db_messages)
+        # The transaction will be committed automatically by the session context manager
         
         # Refresh objects to get all database generated values
         session.refresh(chat)
-        for message in messages:
+        for message in db_messages:
             session.refresh(message)
         
-        return chat, messages
+        return chat, db_messages
 
         
     def find_recent_assistant_messages_by_goal(
