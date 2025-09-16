@@ -512,16 +512,22 @@ def generate_bilingual_content_batch(followup_record: str, next_steps: str) -> d
 5. 优先使用目标语言的表达习惯
 6. **重要：不要添加"跟进记录："或"下一步计划："等前缀，只翻译内容本身**
 7. **英文版本要求：在保持语意精准、不丢失信息的前提下，尽量使用精炼的表达，避免冗长句式**
+**输出要求：**
+1. 输出必须是纯JSON，不能包含任何前缀、后缀或解释性文字。
+2. 必须使用双引号（"），不能使用单引号。
+3. 不能有尾随逗号。
+4. 字符串中的引号必须正确转义。
+5. 输出必须能被标准JSON解析器直接解析。
 
-请输出严格的JSON格式：
+**示例：**
 {{
-  "followup_record_zh": "跟进记录的中文翻译",
-  "followup_record_en": "Follow-up record English translation",
-  "next_steps_zh": "下一步计划的中文翻译", 
-  "next_steps_en": "Next steps English translation"
+"followup_record_zh": "向客户介绍了产品功能，客户对自动化处理很感兴趣，询问了价格和部署时间",
+"followup_record_en": "Introduced product features to client, who showed interest in automation capabilities and inquired about pricing and deployment timeline",
+"next_steps_zh": "下周三前发送详细报价，安排技术演示",
+"next_steps_en": "Send detailed quote by next Wednesday and schedule technical demo"
 }}
 
-重要提示：
+**重要提示：**
 - 如果原始内容为空，对应的翻译也为空字符串
 - 优先使用目标语言的标点符号
 - 专业术语、品牌名称、产品名称等可以保持原文
@@ -537,10 +543,10 @@ def generate_bilingual_content_batch(followup_record: str, next_steps: str) -> d
         logger.info(f"Bilingual content result: {data}")
         
         return {
-            "followup_record_zh": data.get("followup_record_zh", ""),
-            "followup_record_en": data.get("followup_record_en", ""),
-            "next_steps_zh": data.get("next_steps_zh", ""),
-            "next_steps_en": data.get("next_steps_en", "")
+            "followup_record_zh": data.get("followup_record_zh", followup_record),
+            "followup_record_en": data.get("followup_record_en", followup_record),
+            "next_steps_zh": data.get("next_steps_zh", next_steps),
+            "next_steps_en": data.get("next_steps_en", next_steps)
         }
     except Exception as e:
         logger.warning(f"Failed to generate bilingual content batch: {e}")
@@ -616,16 +622,23 @@ def assess_followup_quality_bilingual(followup_record_zh: str, followup_record_e
 **跟进记录（英文）**：
 {followup_record_en or ""}
 
-请输出严格的JSON格式：
+**输出要求：**
+1. 输出必须是纯JSON，不能包含任何前缀、后缀或解释性文字。
+2. 必须使用双引号（"），不能使用单引号。
+3. 不能有尾随逗号。
+4. 字符串中的引号必须正确转义。
+5. 输出必须能被标准JSON解析器直接解析。
+
+**示例：**
 {{
-  "followup_quality_zh": {{
-    "level": "合格/不合格/优秀",
-    "reason": "质量评估原因"
-  }},
-  "followup_quality_en": {{
-    "level": "qualified/unqualified/excellent",
-    "reason": "Quality assessment reason"
-  }}
+    "followup_quality_zh": {{
+        "level": "合格",
+        "reason": "内容具体明确"
+    }},
+    "followup_quality_en": {{
+        "level": "qualified",
+        "reason": "Content is specific and clear"
+    }}
 }}
 
 **评判说明**：
@@ -644,7 +657,7 @@ def assess_followup_quality_bilingual(followup_record_zh: str, followup_record_e
    - 是否体现销售理解客户的需求？
    - 是否体现了真实的沟通交流过程？
 3. 专业性/洞察力（加分项）：
-   - 是否体现销售专业素养或客户洞察，如客户原话、内部动态、真实异议等。
+   - 是否体现销售专业素养或客户洞察，如客户的具体观点、内部动态、真实异议等。
 
 **评判标准**：
 1. **不合格**：满足以下任一条件
@@ -661,7 +674,7 @@ def assess_followup_quality_bilingual(followup_record_zh: str, followup_record_e
 
 3. **优秀**：在合格基础上，满足以下条件
    - 内容详实，过程描述非常具体，包含沟通细节
-   - 客户反馈具体明确，包含客户原话或具体观点
+   - 客户反馈具体明确，包含客户的具体观点、态度或关注点
    - 体现销售专业素养或深度客户洞察
    - 避免空泛华丽表述，内容真实可信，有实际价值
 
@@ -737,16 +750,23 @@ def assess_next_steps_quality_bilingual(next_steps_zh: str, next_steps_en: str) 
 **下一步计划（英文）**：
 {next_steps_en or ""}
 
-请输出严格的JSON格式：
+**输出要求**：
+1. 输出必须是纯JSON，不能包含任何前缀、后缀或解释性文字。
+2. 必须使用双引号（"），不能使用单引号。
+3. 不能有尾随逗号。
+4. 字符串中的引号必须正确转义。
+5. 输出必须能被标准JSON解析器直接解析。
+
+**示例：**
 {{
-  "next_steps_quality_zh": {{
-    "level": "合格/不合格/优秀",
-    "reason": "质量评估原因"
-  }},
-  "next_steps_quality_en": {{
-    "level": "qualified/unqualified/excellent",
-    "reason": "Quality assessment reason"
-  }}
+    "next_steps_quality_zh": {{
+        "level": "合格",
+        "reason": "计划具体明确"
+    }},
+    "next_steps_quality_en": {{
+        "level": "qualified",
+        "reason": "Plan is specific and clear"
+    }}
 }}
 
 **评判说明**：
