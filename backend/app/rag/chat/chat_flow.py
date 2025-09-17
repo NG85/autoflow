@@ -1480,6 +1480,7 @@ class ChatFlow:
         payload = {
             "account_name": self.user_question_args.get("account_name", ""),
             "account_id": self.user_question_args.get("account_id", ""),
+            "lang": self.user_question_args.get("lang", "zh"),
             "content": self.user_question,
             "tenant_id": settings.ALDEBARAN_TENANT_ID,
         }
