@@ -550,13 +550,20 @@ class PlatformNotificationService:
                 visit_record.get("collaborative_participants")
             ) or "--"
         
+        # 生成dynamic_fields作为独立的模板参数
+        dynamic_fields = []
+        if visit_record:
+            from app.crm.save_engine import generate_dynamic_fields_for_visit_record
+            dynamic_fields = generate_dynamic_fields_for_visit_record(visit_record)
+        
         base_template_vars = {
             "visit_date": visit_record.get("last_modified_time", "--") if visit_record else "--",
             "recorder": recorder_name or "--",
             "department": visit_record.get("department", "--") if visit_record else "--",
             "sales_visit_records": [visit_record] if visit_record else [],
             "meeting_notes": meeting_notes,
-            "collaborative_participants": collaborative_participants_text
+            "collaborative_participants": collaborative_participants_text,
+            "dynamic_fields": dynamic_fields  # 新增：动态字段数组参数
         }
         
         # 根据拜访类型、接收者类型和平台确定模板ID

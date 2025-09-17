@@ -140,7 +140,7 @@ Content to analyze:
         return followup_content, ""
 
 
-def fill_sales_visit_record_fields(sales_visit_record):
+def fill_sales_visit_record_fields(sales_visit_record, db_session):
     # 处理客户名称和合作伙伴
     account_name = sales_visit_record.get("account_name")
     partner_name = sales_visit_record.get("partner_name")
@@ -154,7 +154,42 @@ def fill_sales_visit_record_fields(sales_visit_record):
     
     # 处理是否call high字段
     is_call_high = sales_visit_record.get("is_call_high")
-    sales_visit_record["is_call_high"] = "call high" if is_call_high else None
+    sales_visit_record["is_call_high"] = "关键决策人拜访" if is_call_high else None
+    sales_visit_record["is_call_high_en"] = "call high" if is_call_high else None
+    
+    # 添加字段名映射，用于卡片展示
+    # 支持通过数据库配置动态配置字段名映射
+    from app.services.crm_config_service import get_crm_config_service
+    
+    # 默认字段名映射
+    default_field_mapping = {
+        "partner_title": "合作伙伴",
+        "opportunity_title": "商机名称", 
+        "account_title": "客户名称",
+        "partner_title_en": "Partner Name",
+        "opportunity_title_en": "Opportunity Name",
+        "account_title_en": "Customer Name"
+    }
+    
+    # 尝试从数据库获取自定义字段映射
+    field_title_mapping = default_field_mapping.copy()
+    
+    try:
+        config_service = get_crm_config_service(db_session)
+        db_field_mapping = config_service.get_field_mapping_config()
+        
+        if db_field_mapping:
+            field_title_mapping.update(db_field_mapping)
+            logger.info(f"使用数据库字段映射配置: {db_field_mapping}")
+        else:
+            logger.info("未找到数据库字段映射配置，使用默认配置")
+            
+    except Exception as e:
+        logger.warning(f"获取数据库字段映射配置失败，使用默认配置: {e}")
+    
+    # 将字段名映射添加到记录中
+    for field_key, field_label in field_title_mapping.items():
+        sales_visit_record[field_key] = field_label
     
     # 后向兼容：为旧字段赋值对应的中文值
     if sales_visit_record.get("followup_quality_level_zh") is not None:
@@ -197,65 +232,87 @@ def fill_sales_visit_record_fields(sales_visit_record):
                 sales_visit_record["subject"] = original_subject
                 sales_visit_record["subject_en"] = original_subject
 
-    # 其他字段（排除特殊处理的字段）
+    # 其他字段（排除特殊处理的字段和动态字段）
     for k, v in sales_visit_record.items():
-        if v is None and k not in ["is_first_visit", "is_first_visit_en", "is_call_high", "subject", "subject_en"]:
+        if v is None and k not in ["is_first_visit", "is_first_visit_en", "is_call_high", "is_call_high_en", "subject", "subject_en", "visit_start_time", "visit_end_time"]:
             sales_visit_record[k] = "--"
     return sales_visit_record
 
 
-def push_visit_record_message(sales_visit_record, visit_type, db_session=None, meeting_notes=None, saved_time=None):
-    sales_visit_record = fill_sales_visit_record_fields(sales_visit_record)
+def generate_dynamic_fields_for_visit_record(sales_visit_record):
+    """
+    为拜访记录生成动态字段数组
     
-    # 处理时间字段：将saved_time转换为本地时区字符串
-    from app.utils.date_utils import convert_utc_to_local_timezone
-    
-    # 确定要使用的时间
-    time_to_use = saved_time or sales_visit_record.get("last_modified_time") or datetime.now()
-    
-    # 转换为本地时区字符串并保存到last_modified_time字段
-    sales_visit_record["last_modified_time"] = convert_utc_to_local_timezone(time_to_use)
-    
-    # 获取记录人信息
-    recorder_id = sales_visit_record.get("recorder_id")
-    recorder_name = sales_visit_record.get("recorder")
-    
-    if not recorder_id and not recorder_name:
-        logger.warning("No recorder_id or recorder_name found in sales visit record")
-        return False
-    
-    # 去掉attachment字段，避免传输过大的base64编码数据
-    if "attachment" in sales_visit_record:
-        logger.info("Removing attachment field from visit record to avoid large base64 data transmission")
-        del sales_visit_record["attachment"]
-    
-    # 确保会议纪要不为空
-    if meeting_notes is None or meeting_notes == "":
-        meeting_notes = "--"
-    
-    # 如果没有传入db_session，则创建一个新的
-    should_close_session = False
-    if db_session is None:
-        db_session = get_db_session()
-        should_close_session = True
-    
+    Args:
+        sales_visit_record: 拜访记录数据
+        
+    Returns:
+        dynamic_fields数组
+    """
     try:
-        # 发送拜访记录通知
-        result = platform_notification_service.send_visit_record_notification(
-            db_session=db_session,
-            recorder_name=recorder_name,
-            recorder_id=recorder_id,
-            visit_record=sales_visit_record,
-            visit_type=visit_type,
-            meeting_notes=meeting_notes
-        )
+        from app.crm.dynamic_fields import generate_dynamic_fields_array
         
-        if result["success"]:
-            logger.info(f"Successfully pushed visit record notification: {result['message']}")
-        else:
-            logger.warning(f"Failed to push visit record notification: {result['message']}")
+        # 生成动态字段数组
+        dynamic_fields_array = generate_dynamic_fields_array(sales_visit_record)
+        logger.debug(f"生成动态字段数组: {dynamic_fields_array}")
+        return dynamic_fields_array
         
-        return result["success"]
+    except Exception as e:
+        logger.warning(f"生成动态字段数组失败: {e}")
+        return []
+
+
+def push_visit_record_message(sales_visit_record, visit_type, db_session=None, meeting_notes=None, saved_time=None):
+    try:
+        # 如果没有传入db_session，则创建一个新的
+        should_close_session = False
+        if db_session is None:
+            db_session = get_db_session()
+            should_close_session = True
+        
+        sales_visit_record = fill_sales_visit_record_fields(sales_visit_record, db_session)
+        
+        # 处理时间字段：将saved_time转换为本地时区字符串
+        from app.utils.date_utils import convert_utc_to_local_timezone
+        
+        # 确定要使用的时间
+        time_to_use = saved_time or sales_visit_record.get("last_modified_time") or datetime.now()
+        
+        # 转换为本地时区字符串并保存到last_modified_time字段
+        sales_visit_record["last_modified_time"] = convert_utc_to_local_timezone(time_to_use)
+        
+        # 获取记录人信息
+        recorder_id = sales_visit_record.get("recorder_id")
+        recorder_name = sales_visit_record.get("recorder")
+        
+        if not recorder_id and not recorder_name:
+            logger.warning("No recorder_id or recorder_name found in sales visit record")
+            return False
+        
+        # 去掉attachment字段，避免传输过大的base64编码数据
+        if "attachment" in sales_visit_record:
+            logger.info("Removing attachment field from visit record to avoid large base64 data transmission")
+            del sales_visit_record["attachment"]
+        
+        # 确保会议纪要不为空
+        if meeting_notes is None or meeting_notes == "":
+            meeting_notes = "--"
+            # 发送拜访记录通知
+            result = platform_notification_service.send_visit_record_notification(
+                db_session=db_session,
+                recorder_name=recorder_name,
+                recorder_id=recorder_id,
+                visit_record=sales_visit_record,
+                visit_type=visit_type,
+                meeting_notes=meeting_notes
+            )
+            
+            if result["success"]:
+                logger.info(f"Successfully pushed visit record notification: {result['message']}")
+            else:
+                logger.warning(f"Failed to push visit record notification: {result['message']}")
+            
+            return result["success"]
         
     except Exception as e:
         logger.error(f"Failed to push visit record message: {e}")
