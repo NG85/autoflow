@@ -17,8 +17,8 @@ depends_on = None
 
 
 def upgrade():
-    op.add_column('crm_sales_visit_records', sa.Column('visit_start_time', sa.DateTime(), nullable=True))
-    op.add_column('crm_sales_visit_records', sa.Column('visit_end_time', sa.DateTime(), nullable=True))
+    op.add_column('crm_sales_visit_records', sa.Column('visit_start_time', sa.String(19), nullable=True))
+    op.add_column('crm_sales_visit_records', sa.Column('visit_end_time', sa.String(19), nullable=True))
 
 def downgrade():
     op.drop_column('crm_sales_visit_records', 'visit_start_time')

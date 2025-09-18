@@ -51,15 +51,23 @@ def generate_dynamic_fields_array(visit_record: Dict[str, Any]) -> List[Dict[str
     
     # 只有当开始时间和结束时间都有值时才生成时间范围字段
     if visit_start_time and visit_end_time:
-        # 格式化开始时间
-        if hasattr(visit_start_time, 'strftime'):
-            start_time_str = visit_start_time.strftime("%H:%M:%S")
+        # 格式化开始时间 - 从字符串中提取时间部分
+        if isinstance(visit_start_time, str):
+            # 从 "2025-09-18 05:00:00" 中提取 "05:00:00"
+            try:
+                start_time_str = visit_start_time.split(' ')[1] if ' ' in visit_start_time else visit_start_time
+            except:
+                start_time_str = str(visit_start_time).strip()
         else:
             start_time_str = str(visit_start_time).strip()
         
-        # 格式化结束时间
-        if hasattr(visit_end_time, 'strftime'):
-            end_time_str = visit_end_time.strftime("%H:%M:%S")
+        # 格式化结束时间 - 从字符串中提取时间部分
+        if isinstance(visit_end_time, str):
+            # 从 "2025-09-18 08:00:00" 中提取 "08:00:00"
+            try:
+                end_time_str = visit_end_time.split(' ')[1] if ' ' in visit_end_time else visit_end_time
+            except:
+                end_time_str = str(visit_end_time).strip()
         else:
             end_time_str = str(visit_end_time).strip()
         
