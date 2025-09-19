@@ -1,4 +1,4 @@
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 from sqlmodel import Session, select
 from app.models.crm_system_configurations import CRMSystemConfiguration
 import logging
@@ -78,3 +78,48 @@ class CRMConfigService:
 def get_crm_config_service(db_session: Session) -> CRMConfigService:
     """获取CRM配置服务实例"""
     return CRMConfigService(db_session)
+
+
+def add_field_mapping_to_data(data: Dict[str, Any], db_session: Session, report_type: str = "报告") -> Dict[str, Any]:
+    """
+    为数据添加字段名映射，用于卡片展示
+    
+    Args:
+        data: 要添加字段映射的数据
+        db_session: 数据库会话
+        report_type: 报告类型，用于日志记录
+        
+    Returns:
+        添加了字段映射的数据
+    """
+    # 默认字段名映射
+    default_field_mapping = {
+        "partner_title": "合作伙伴",
+        "opportunity_title": "商机名称", 
+        "account_title": "最终客户",
+        "partner_title_en": "Partner",
+        "opportunity_title_en": "Opportunity",
+        "account_title_en": "End Customer"
+    }
+    
+    # 尝试从数据库获取自定义字段映射
+    field_title_mapping = default_field_mapping.copy()
+    
+    try:
+        config_service = get_crm_config_service(db_session)
+        db_field_mapping = config_service.get_field_mapping_config()
+        
+        if db_field_mapping:
+            field_title_mapping.update(db_field_mapping)
+            logger.info(f"{report_type}使用数据库字段映射配置: {db_field_mapping}")
+        else:
+            logger.info(f"{report_type}未找到数据库字段映射配置，使用默认配置")
+            
+    except Exception as e:
+        logger.warning(f"{report_type}获取数据库字段映射配置失败，使用默认配置: {e}")
+    
+    # 将字段名映射添加到数据中
+    for field_key, field_label in field_title_mapping.items():
+        data[field_key] = field_label
+    
+    return data

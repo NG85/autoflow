@@ -158,38 +158,8 @@ def fill_sales_visit_record_fields(sales_visit_record, db_session):
     sales_visit_record["is_call_high_en"] = "call high" if is_call_high else None
     
     # 添加字段名映射，用于卡片展示
-    # 支持通过数据库配置动态配置字段名映射
-    from app.services.crm_config_service import get_crm_config_service
-    
-    # 默认字段名映射
-    default_field_mapping = {
-        "partner_title": "合作伙伴",
-        "opportunity_title": "商机名称", 
-        "account_title": "客户名称",
-        "partner_title_en": "Partner Name",
-        "opportunity_title_en": "Opportunity Name",
-        "account_title_en": "Customer Name"
-    }
-    
-    # 尝试从数据库获取自定义字段映射
-    field_title_mapping = default_field_mapping.copy()
-    
-    try:
-        config_service = get_crm_config_service(db_session)
-        db_field_mapping = config_service.get_field_mapping_config()
-        
-        if db_field_mapping:
-            field_title_mapping.update(db_field_mapping)
-            logger.info(f"使用数据库字段映射配置: {db_field_mapping}")
-        else:
-            logger.info("未找到数据库字段映射配置，使用默认配置")
-            
-    except Exception as e:
-        logger.warning(f"获取数据库字段映射配置失败，使用默认配置: {e}")
-    
-    # 将字段名映射添加到记录中
-    for field_key, field_label in field_title_mapping.items():
-        sales_visit_record[field_key] = field_label
+    from app.services.crm_config_service import add_field_mapping_to_data
+    sales_visit_record = add_field_mapping_to_data(sales_visit_record, db_session, "拜访记录")
     
     # 后向兼容：为旧字段赋值对应的中文值
     if sales_visit_record.get("followup_quality_level_zh") is not None:
