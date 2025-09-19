@@ -2,8 +2,9 @@ from datetime import date, datetime
 from typing import Optional
 from uuid import UUID
 from sqlmodel import SQLModel, Field, Column, DateTime, Text, Index
+from app.models.crm_dynamic_fields import CRMDynamicFieldsMixin
 
-class CRMSalesVisitRecord(SQLModel, table=True):
+class CRMSalesVisitRecord(SQLModel, CRMDynamicFieldsMixin, table=True):
     __tablename__ = "crm_sales_visit_records"
 
     id: Optional[int] = Field(default=None, primary_key=True, description="主键ID（自增序列）")

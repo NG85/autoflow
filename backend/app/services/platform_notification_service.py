@@ -543,12 +543,20 @@ class PlatformNotificationService:
         
         # 准备基础消息内容
         # 处理协同参与人参数，转换为用name拼接的文本
-        collaborative_participants_text = "--"
-        if visit_record and visit_record.get("collaborative_participants"):
+        if visit_record:
             from app.utils.participants_utils import format_collaborative_participants_names
             collaborative_participants_text = format_collaborative_participants_names(
                 visit_record.get("collaborative_participants")
             ) or "--"
+            # 替换visit_record中的collaborative_participants字段为格式化后的文本
+            visit_record["collaborative_participants"] = collaborative_participants_text
+            logger.info(f"Replaced collaborative participants: {visit_record.get('collaborative_participants')} -> {collaborative_participants_text}")
+        
+        # 生成dynamic_fields作为独立的模板参数
+        dynamic_fields = []
+        if visit_record:
+            from app.crm.save_engine import generate_dynamic_fields_for_visit_record
+            dynamic_fields = generate_dynamic_fields_for_visit_record(visit_record)
         
         base_template_vars = {
             "visit_date": visit_record.get("last_modified_time", "--") if visit_record else "--",
@@ -556,7 +564,7 @@ class PlatformNotificationService:
             "department": visit_record.get("department", "--") if visit_record else "--",
             "sales_visit_records": [visit_record] if visit_record else [],
             "meeting_notes": meeting_notes,
-            "collaborative_participants": collaborative_participants_text
+            "dynamic_fields": dynamic_fields  # 新增：动态字段数组参数
         }
         
         # 根据拜访类型、接收者类型和平台确定模板ID
@@ -727,7 +735,7 @@ class PlatformNotificationService:
         
         # 准备CRM日报卡片消息内容
         template_id = "AAqzUJ4fpg5XQ"  # CRM日报卡片模板ID
-        template_vars = self._convert_daily_report_data_for_feishu(daily_report_data)
+        template_vars = self._convert_daily_report_data_for_feishu(db_session, daily_report_data)
         
         card_content = {
             "type": "template",
@@ -813,7 +821,7 @@ class PlatformNotificationService:
         
         # 准备部门日报卡片消息内容
         template_id = "AAqz3wUpXTF3g"  # 部门日报卡片模板ID
-        template_vars = self._convert_daily_report_data_for_feishu(department_report_data)
+        template_vars = self._convert_daily_report_data_for_feishu(db_session, department_report_data)
         # 确保日期字段是字符串格式
         if 'report_date' in template_vars and hasattr(template_vars['report_date'], 'isoformat'):
             template_vars['report_date'] = template_vars['report_date'].isoformat()
@@ -883,7 +891,7 @@ class PlatformNotificationService:
         
         # 准备公司日报卡片消息内容
         template_id = "AAqz3y0IwJLDp"  # 公司日报卡片模板ID
-        template_vars = self._convert_daily_report_data_for_feishu(company_report_data)
+        template_vars = self._convert_daily_report_data_for_feishu(db_session, company_report_data)
         # 确保日期字段是字符串格式
         if 'report_date' in template_vars and hasattr(template_vars['report_date'], 'isoformat'):
             template_vars['report_date'] = template_vars['report_date'].isoformat()
@@ -940,7 +948,7 @@ class PlatformNotificationService:
         
         # 准备部门周报卡片消息内容
         template_id = "AAqzdm8MsqNjD"  # 团队周报卡片模板ID
-        template_vars = self._convert_weekly_report_data_for_feishu(department_report_data)
+        template_vars = self._convert_weekly_report_data_for_feishu(db_session, department_report_data)
         
         card_content = {
             "type": "template",
@@ -1012,7 +1020,7 @@ class PlatformNotificationService:
         
         # 准备公司周报卡片消息内容
         template_id = "AAqzdMIhll3Et"  # 使用团队周报卡片模板ID
-        template_vars = self._convert_weekly_report_data_for_feishu(company_weekly_report_data)
+        template_vars = self._convert_weekly_report_data_for_feishu(db_session, company_weekly_report_data)
         
         card_content = {
             "type": "template",
@@ -1032,11 +1040,12 @@ class PlatformNotificationService:
             notification_type="company weekly report"
         )
     
-    def _convert_weekly_report_data_for_feishu(self, report_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _convert_weekly_report_data_for_feishu(self, db_session: Session, report_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         将周报数据转换为飞书卡片所需的格式（所有数值和日期转换为字符串）
         
         Args:
+            db_session: 数据库会话
             report_data: 原始周报数据
             
         Returns:
@@ -1060,13 +1069,18 @@ class PlatformNotificationService:
             elif hasattr(value, 'isoformat'):  # 处理date对象
                 converted_data[key] = value.isoformat()
         
+        # 添加字段名映射，用于卡片展示
+        from app.services.crm_config_service import add_field_mapping_to_data
+        converted_data = add_field_mapping_to_data(converted_data, db_session, "周报")
+        
         return converted_data
     
-    def _convert_daily_report_data_for_feishu(self, report_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _convert_daily_report_data_for_feishu(self, db_session: Session, report_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         将日报数据转换为飞书卡片所需的格式（所有数值和日期转换为字符串）
         
         Args:
+            db_session: 数据库会话
             report_data: 原始日报数据
             
         Returns:
@@ -1089,6 +1103,10 @@ class PlatformNotificationService:
                 converted_data[key] = str(value)
             elif hasattr(value, 'isoformat'):  # 处理date对象
                 converted_data[key] = value.isoformat()
+        
+        # 添加字段名映射，用于卡片展示
+        from app.services.crm_config_service import add_field_mapping_to_data
+        converted_data = add_field_mapping_to_data(converted_data, db_session, "日报")
         
         return converted_data
     

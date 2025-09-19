@@ -101,6 +101,8 @@ FIELD_MAP = {
     '拜访链接': 'visit_url',
     '拜访主题': 'subject',
     '跟进内容': 'followup_content',
+    '拜访开始时间': 'visit_start_time',
+    '拜访结束时间': 'visit_end_time',
 }
 
 CRM_FIELDS = list(FIELD_MAP.values()) + ['last_modified_time', 'record_id']
@@ -212,6 +214,15 @@ def parse_field_value(val, field_name=None):
             import json
             return json.dumps(val, ensure_ascii=False)
         return str(val) if val else ''
+    if field_name in ['拜访开始时间', '拜访结束时间']:
+        # 处理时间字段 - 直接存储为字符串
+        if isinstance(val, str):
+            # 直接返回字符串，不进行时区转换
+            return val
+        elif hasattr(val, 'strftime'):  # 检查是否是datetime类型
+            # 如果是datetime类型，格式化为字符串
+            return val.strftime('%Y-%m-%d %H:%M:%S')
+        return val
     if isinstance(val, list):
         # 处理富文本/人员/多选等
         if val and isinstance(val[0], dict) and 'text' in val[0]:

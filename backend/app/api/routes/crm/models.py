@@ -4,6 +4,7 @@ from datetime import date
 from pydantic import BaseModel, Field, field_validator
 import json
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
+from app.models.crm_dynamic_fields import CRMDynamicFieldsAPIMixin
 from app.core.config import settings
 
 # 定义响应模型
@@ -189,7 +190,7 @@ class FieldMetadata(BaseModel):
     default_value: Optional[Any] = None
 
 # 拜访记录公共字段（所有表单类型都包含）
-class VisitRecordBase(BaseModel):
+class VisitRecordBase(BaseModel, CRMDynamicFieldsAPIMixin):
     account_name: Optional[str] = None # 客户名称
     account_id: Optional[str] = None # 客户ID
     opportunity_name: Optional[str] = None # 商机名称
