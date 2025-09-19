@@ -183,7 +183,7 @@ class ChatRepo(BaseRepo):
         for message in messages:
             # Create new ChatMessage model instance
             db_message = ChatMessage(
-                role=message.role,
+                role=message.role.value if hasattr(message.role, 'value') else str(message.role),
                 content=message.content,
                 chat_id=chat.id,
                 user_id=chat.user_id,
@@ -192,7 +192,7 @@ class ChatRepo(BaseRepo):
                 ordinal=max_ordinal + 1,
                 sources=getattr(message, 'sources', []),
                 graph_data=getattr(message, 'graph_data', {}),
-                meta=getattr(message, 'meta', {}),
+                meta=getattr(message, 'additional_kwargs', {}) or getattr(message, 'meta', {}),
                 trace_url=getattr(message, 'trace_url', None),
                 is_best_answer=getattr(message, 'is_best_answer', False),
                 finished_at=getattr(message, 'finished_at', None),

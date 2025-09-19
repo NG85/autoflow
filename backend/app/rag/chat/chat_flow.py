@@ -1450,8 +1450,8 @@ class ChatFlow:
                 event_type=ChatEventType.DATA_PART,
                 payload=ChatStreamDataPayload(
                     chat=self.db_chat_obj,
-                    user_message=db_messages[-2],
-                    assistant_message=db_messages[-1],
+                    user_message=messages[-2],
+                    assistant_message=messages[-1],
                 ),
             )
         except Exception as e:
