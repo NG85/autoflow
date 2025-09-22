@@ -97,9 +97,13 @@ def add_field_mapping_to_data(data: Dict[str, Any], db_session: Session, report_
         "partner_title": "合作伙伴",
         "opportunity_title": "商机名称", 
         "account_title": "最终客户",
+        "followup_title": "跟进记录",
+        "next_steps_title": "下一步计划",
         "partner_title_en": "Partner",
         "opportunity_title_en": "Opportunity",
-        "account_title_en": "End Customer"
+        "account_title_en": "End Customer",
+        "followup_title_en": "Follow-up Record",
+        "next_steps_title_en": "Next Steps"
     }
     
     # 尝试从数据库获取自定义字段映射
