@@ -40,6 +40,11 @@ class VisitRecordFormType(str, enum.Enum):
     COMPLETE = "complete"  # 完整版表单
 
 
+class WritebackMode(str, enum.Enum):
+    CBG = "CBG"    # 内容回写模式
+    APAC = "APAC"  # 任务创建模式
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env", env_ignore_empty=True, extra="ignore"
@@ -160,6 +165,7 @@ class Settings(BaseSettings):
     CRM_WRITEBACK_ENABLED: bool = False
     CRM_WRITEBACK_CRON: str = '0 14 * * 0'  # 每周日下午2点执行
     CRM_WRITEBACK_API_URL: str = "http://auth:8018"  # CRM回写API地址
+    CRM_WRITEBACK_DEFAULT_MODE: WritebackMode = WritebackMode.CBG  # 默认回写模式
     
     # Feishu Btable sync configuration
     ENABLE_FEISHU_BTABLE_SYNC: bool = False

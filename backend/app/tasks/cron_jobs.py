@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timedelta
 from sqlmodel import Session
 
-from app.core.config import settings
+from app.core.config import settings, WritebackMode
 from app.core.db import engine
 from app.celery import app
 from app.models import DataSource, DataSourceType
@@ -319,7 +319,7 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None):
 
 
 @app.task(bind=True, max_retries=3)
-def crm_visit_records_writeback(self, start_date_str=None, end_date_str=None):
+def crm_visit_records_writeback(self, start_date_str=None, end_date_str=None, writeback_mode=None):
     """
     CRM销售拜访记录数据回写任务
     每周日下午2点执行，处理上周日到本周六的销售拜访记录数据
@@ -327,15 +327,31 @@ def crm_visit_records_writeback(self, start_date_str=None, end_date_str=None):
     Args:
         start_date_str: 开始日期字符串，格式YYYY-MM-DD，不传则默认为上周日
         end_date_str: 结束日期字符串，格式YYYY-MM-DD，不传则默认为本周六
+        writeback_mode: 回写模式，支持 "CBG"（内容回写）或 "APAC"（任务创建），不传则使用配置中的默认值
     
     工作流程：
     1. 计算上周日到本周六的日期范围
     2. 从crm_sales_visit_records表查询该时间范围内的拜访记录
-    3. 按客户和商机分组处理拜访记录
-    4. 生成格式化的回写内容（包含记录人、跟进记录、下一步计划等关键信息）
-    5. 调用CRM回写API将内容回写到对应的客户或商机
+    3. 根据回写模式选择处理方式：
+       - CBG模式：按客户和商机分组处理拜访记录，生成格式化的回写内容
+       - APAC模式：为每条拜访记录创建对应的任务
+    4. 调用相应的API进行回写或任务创建
     """
     try:
+        # 如果没有指定回写模式，使用配置中的默认值
+        if writeback_mode is None:
+            writeback_mode = settings.CRM_WRITEBACK_DEFAULT_MODE.value
+        
+        # 验证回写模式
+        valid_modes = [mode.value for mode in WritebackMode]
+        if writeback_mode not in valid_modes:
+            logger.error(f"无效的回写模式: {writeback_mode}，支持的模式: {valid_modes}")
+            return {
+                "success": False,
+                "message": f"无效的回写模式: {writeback_mode}，支持的模式: {valid_modes}",
+                "data": {}
+            }
+        
         # 计算上周的日期范围
         if start_date_str and end_date_str:
             try:
@@ -367,21 +383,30 @@ def crm_visit_records_writeback(self, start_date_str=None, end_date_str=None):
             result = crm_writeback_service.writeback_visit_records(
                 session=session,
                 start_date=start_date,
-                end_date=end_date
+                end_date=end_date,
+                writeback_mode=writeback_mode
             )
             
             if result["success"]:
                 logger.info(f"CRM拜访记录回写任务执行成功: {result['message']}")
-                return {
+                return_data = {
                     "success": True,
                     "start_date": start_date.isoformat(),
                     "end_date": end_date.isoformat(),
                     "processed_count": result.get("processed_count", 0),
-                    "writeback_count": result.get("writeback_count", 0),
-                    "success_count": result.get("success_count", 0),
-                    "failed_count": result.get("failed_count", 0),
+                    "writeback_mode": writeback_mode,
                     "message": result["message"]
                 }
+                
+                # 根据回写模式添加相应的统计信息
+                if writeback_mode == "APAC":
+                    return_data["task_count"] = result.get("task_count", 0)
+                else:
+                    return_data["writeback_count"] = result.get("writeback_count", 0)
+                    return_data["success_count"] = result.get("success_count", 0)
+                    return_data["failed_count"] = result.get("failed_count", 0)
+                
+                return return_data
             else:
                 logger.error(f"CRM拜访记录回写任务执行失败: {result['message']}")
                 return {
