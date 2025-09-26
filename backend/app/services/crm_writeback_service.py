@@ -111,7 +111,7 @@ class CrmWritebackClient:
         
         try:
             with httpx.Client() as client:
-                response = client.post(url, headers=self.headers, json=json.dumps(task_batch_request))
+                response = client.post(url, headers=self.headers, json=task_batch_request.model_dump())
                 response.raise_for_status()
                 return response.json()
         except httpx.RequestError as e:
