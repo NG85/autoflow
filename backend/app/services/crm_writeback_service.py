@@ -211,17 +211,21 @@ class CrmWritebackService:
             if not what_id:
                 continue
             
+            # 检查必填的拜访主题
+            if not record.subject:
+                logger.warning(f"跳过记录 ID {record.id}：缺少必填的拜访主题")
+                continue
+            
             # 生成任务主题
-            if record.subject:
-                subject = f"{record.subject}"
+            subject = record.subject
             
             # 生成进度记录（跟进记录）
-            progress = record.followup_record_en or record.followup_record
+            progress = record.followup_record_en or record.followup_record or ""
             if len(progress) > 255:
                 progress = progress[:252] + "..."
 
             # 生成风险与下一步
-            risk_and_next_step = record.next_steps_en or record.next_steps
+            risk_and_next_step = record.next_steps_en or record.next_steps or ""
             if len(risk_and_next_step) > 255:
                 risk_and_next_step = risk_and_next_step[:252] + "..."
             
