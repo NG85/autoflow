@@ -398,13 +398,10 @@ def crm_visit_records_writeback(self, start_date_str=None, end_date_str=None, wr
                     "message": result["message"]
                 }
                 
-                # 根据回写模式添加相应的统计信息
-                if writeback_mode == "APAC":
-                    return_data["task_count"] = result.get("task_count", 0)
-                else:
-                    return_data["writeback_count"] = result.get("writeback_count", 0)
-                    return_data["success_count"] = result.get("success_count", 0)
-                    return_data["failed_count"] = result.get("failed_count", 0)
+                # 添加回写的统计信息
+                return_data["writeback_count"] = result.get("writeback_count", 0)
+                return_data["success_count"] = result.get("success_count", 0)
+                return_data["failed_count"] = result.get("failed_count", 0)
                 
                 return return_data
             else:

@@ -112,10 +112,9 @@ class CrmWritebackClient:
         try:
             with httpx.Client() as client:
                 response = client.post(url, headers=self.headers, json=task_batch_request.model_dump())
-                if response.status_code != 200:
-                    logger.error(f"批量创建任务，返回: {response.text}")
+                logger.info(f"调用批量创建任务，返回: {response.text}")
                 response.raise_for_status()
-                return response.json()
+                return {"success": True, "data": response.json()}
         except httpx.RequestError as e:
             logger.error(f"批量创建任务失败: {e}")
             return {"success": False, "message": f"批量创建任务失败: {e}"}
@@ -309,7 +308,7 @@ class CrmWritebackService:
                         "success": True,
                         "message": "没有需要创建任务的拜访记录",
                         "processed_count": len(visit_records),
-                        "task_count": 0
+                        "writeback_count": 0
                     }
                 
                 # 创建批量任务请求
@@ -323,12 +322,17 @@ class CrmWritebackService:
                 
                 logger.info(f"批量任务创建完成: {len(task_requests)} 个任务")
                 
+                return_data = result.get("data", {})
+                created_tasks = return_data.get("created", [])
+                failed_tasks = return_data.get("failed", [])
                 return {
                     "success": result.get("success", False),
                     "message": f"成功处理 {len(visit_records)} 条拜访记录，创建 {len(task_requests)} 个任务",
                     "processed_count": len(visit_records),
-                    "task_count": len(task_requests),
-                    "result": result
+                    "writeback_count": len(task_requests),
+                    "success_count": len(created_tasks),
+                    "failed_count": len(failed_tasks),
+                    "results": return_data
                 }
             
             else:
