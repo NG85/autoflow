@@ -1,6 +1,7 @@
 import logging
 from typing import Optional
 from app.api.deps import CurrentSuperuserDep
+from app.core.config import settings, WritebackMode
 from fastapi import APIRouter, Body
 
 logger = logging.getLogger(__name__)
@@ -161,7 +162,8 @@ def trigger_weekly_report_task(
 def trigger_crm_writeback_task(
     user: CurrentSuperuserDep,
     start_date: Optional[str] = Body(None, description="开始日期，格式YYYY-MM-DD，不传则默认为上周日"),
-    end_date: Optional[str] = Body(None, description="结束日期，格式YYYY-MM-DD，不传则默认为本周六")
+    end_date: Optional[str] = Body(None, description="结束日期，格式YYYY-MM-DD，不传则默认为本周六"),
+    writeback_mode: Optional[str] = Body(None, description="回写模式，支持 'CBG'（内容回写）或 'APAC'（任务创建），不传则使用配置中的默认值")
 ):
     """
     手动触发CRM拜访记录回写任务
@@ -170,9 +172,10 @@ def trigger_crm_writeback_task(
     
     工作流程：
     1. 计算指定时间范围内的拜访记录
-    2. 按客户和商机分组处理拜访记录
-    3. 生成格式化的回写内容（包含记录人、跟进记录、下一步计划等关键信息）
-    4. 调用CRM回写API将内容回写到对应的客户或商机
+    2. 根据回写模式选择处理方式：
+       - CBG模式：按客户和商机分组处理拜访记录，生成格式化的回写内容
+       - APAC模式：为每条拜访记录创建对应的任务
+    3. 调用相应的API进行回写或任务创建
     """
     if not user.is_superuser:
         return {
@@ -207,12 +210,26 @@ def trigger_crm_writeback_task(
             parsed_start_date = last_sunday
             parsed_end_date = this_saturday
         
-        logger.info(f"用户 {user.id} 手动触发CRM拜访记录回写任务，日期范围: {parsed_start_date} 到 {parsed_end_date}")
+        logger.info(f"用户 {user.id} 手动触发CRM拜访记录回写任务，日期范围: {parsed_start_date} 到 {parsed_end_date}，回写模式: {writeback_mode}")
         
-        # 触发异步任务，传递日期参数
+        # 如果没有指定回写模式，使用配置中的默认值
+        if writeback_mode is None:
+            writeback_mode = settings.CRM_WRITEBACK_DEFAULT_MODE.value
+        
+        # 验证回写模式参数
+        valid_modes = [mode.value for mode in WritebackMode]
+        if writeback_mode not in valid_modes:
+            return {
+                "code": 400,
+                "message": f"无效的回写模式，支持的模式: {valid_modes}",
+                "data": {}
+            }
+        
+        # 触发异步任务，传递日期参数和回写模式
         task = crm_visit_records_writeback.delay(
             start_date_str=parsed_start_date.isoformat(),
-            end_date_str=parsed_end_date.isoformat()
+            end_date_str=parsed_end_date.isoformat(),
+            writeback_mode=writeback_mode
         )
         
         return {
@@ -222,8 +239,9 @@ def trigger_crm_writeback_task(
                 "task_id": task.id,
                 "start_date": parsed_start_date.isoformat(),
                 "end_date": parsed_end_date.isoformat(),
+                "writeback_mode": writeback_mode,
                 "status": "PENDING",
-                "description": f"已提交 {parsed_start_date} 到 {parsed_end_date} 的CRM拜访记录回写任务到队列，任务ID: {task.id}"
+                "description": f"已提交 {parsed_start_date} 到 {parsed_end_date} 的CRM拜访记录回写任务到队列，回写模式: {writeback_mode}，任务ID: {task.id}"
             }
         }
         
