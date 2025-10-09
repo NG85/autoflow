@@ -267,22 +267,23 @@ def push_visit_record_message(sales_visit_record, visit_type, db_session=None, m
         # 确保会议纪要不为空
         if meeting_notes is None or meeting_notes == "":
             meeting_notes = "--"
-            # 发送拜访记录通知
-            result = platform_notification_service.send_visit_record_notification(
-                db_session=db_session,
-                recorder_name=recorder_name,
-                recorder_id=recorder_id,
-                visit_record=sales_visit_record,
-                visit_type=visit_type,
-                meeting_notes=meeting_notes
-            )
-            
-            if result["success"]:
-                logger.info(f"Successfully pushed visit record notification: {result['message']}")
-            else:
-                logger.warning(f"Failed to push visit record notification: {result['message']}")
-            
-            return result["success"]
+
+        # 发送拜访记录通知
+        result = platform_notification_service.send_visit_record_notification(
+            db_session=db_session,
+            recorder_name=recorder_name,
+            recorder_id=recorder_id,
+            visit_record=sales_visit_record,
+            visit_type=visit_type,
+            meeting_notes=meeting_notes
+        )
+        
+        if result["success"]:
+            logger.info(f"Successfully pushed visit record notification: {result['message']}")
+        else:
+            logger.warning(f"Failed to push visit record notification: {result['message']}")
+        
+        return result["success"]
         
     except Exception as e:
         logger.error(f"Failed to push visit record message: {e}")
