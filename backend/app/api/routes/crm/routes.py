@@ -450,11 +450,12 @@ def export_visit_records_to_csv(
             # 生成基于关键字段的hash ID
             # 使用客户名称、跟进日期、负责销售等关键字段生成唯一ID
             key_fields = [
-                str(item.account_name or ""),
+                str(item.id or ""),
+                str(item.account_name or item.partner_name or item.opportunity_name or ""),
                 str(item.visit_communication_date or ""),
                 str(item.recorder or ""),
                 str(item.contact_name or ""),
-                str(item.opportunity_name or "")
+                str(item.last_modified_time or ""),
             ]
             key_string = "|".join(key_fields)
             record_id = hashlib.md5(key_string.encode('utf-8')).hexdigest()[:12]  # 取前12位作为ID
