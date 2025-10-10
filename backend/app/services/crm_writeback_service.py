@@ -110,11 +110,16 @@ class CrmWritebackClient:
         url = f"{self.base_url}/tasks/batch"
         
         try:
-            with httpx.Client() as client:
+            # 设置较长的超时时间来处理批量任务创建
+            timeout = httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0)  # 连接超时30秒，读取超时5分钟
+            with httpx.Client(timeout=timeout) as client:
                 response = client.post(url, headers=self.headers, json=task_batch_request.model_dump())
                 logger.info(f"调用批量创建任务，返回: {response.text}")
                 response.raise_for_status()
                 return {"success": True, "data": response.json()}
+        except httpx.TimeoutException as e:
+            logger.error(f"批量创建任务超时: {e}")
+            return {"success": False, "message": f"批量创建任务超时: {e}"}
         except httpx.RequestError as e:
             logger.error(f"批量创建任务失败: {e}")
             return {"success": False, "message": f"批量创建任务失败: {e}"}
