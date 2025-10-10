@@ -1,8 +1,9 @@
 import logging
 from datetime import datetime, timedelta
 from sqlmodel import Session
+import pytz
 
-from app.core.config import settings, WritebackMode
+from app.core.config import settings, WritebackMode, WritebackFrequency
 from app.core.db import engine
 from app.celery import app
 from app.models import DataSource, DataSourceType
@@ -322,15 +323,17 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None):
 def crm_visit_records_writeback(self, start_date_str=None, end_date_str=None, writeback_mode=None):
     """
     CRM销售拜访记录数据回写任务
-    每周日下午2点执行，处理上周日到本周六的销售拜访记录数据
+    根据配置的频率执行：weekly（每周日下午2点，处理上周日到本周六）或daily（每天执行，处理昨天）
     
     Args:
-        start_date_str: 开始日期字符串，格式YYYY-MM-DD，不传则默认为上周日
-        end_date_str: 结束日期字符串，格式YYYY-MM-DD，不传则默认为本周六
+        start_date_str: 开始日期字符串，格式YYYY-MM-DD，不传则根据频率配置自动计算
+        end_date_str: 结束日期字符串，格式YYYY-MM-DD，不传则根据频率配置自动计算
         writeback_mode: 回写模式，支持 "CBG"（内容回写）或 "APAC"（任务创建），不传则使用配置中的默认值
     
     工作流程：
-    1. 计算上周日到本周六的日期范围
+    1. 根据配置的频率计算日期范围：
+       - weekly：计算上周日到本周六的日期范围
+       - daily：计算昨天的日期范围
     2. 从crm_sales_visit_records表查询该时间范围内的拜访记录
     3. 根据回写模式选择处理方式：
        - CBG模式：按客户和商机分组处理拜访记录，生成格式化的回写内容
@@ -352,12 +355,12 @@ def crm_visit_records_writeback(self, start_date_str=None, end_date_str=None, wr
                 "data": {}
             }
         
-        # 计算上周的日期范围
+        # 计算日期范围
         if start_date_str and end_date_str:
             try:
                 start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
                 end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
-                logger.info(f"开始执行CRM拜访记录回写任务，日期范围: {start_date} 到 {end_date}")
+                logger.info(f"开始执行CRM拜访记录回写任务，指定日期范围: {start_date} 到 {end_date}")
             except ValueError:
                 logger.error(f"无效的日期格式: start_date={start_date_str}, end_date={end_date_str}")
                 return {
@@ -366,17 +369,27 @@ def crm_visit_records_writeback(self, start_date_str=None, end_date_str=None, wr
                     "data": {}
                 }
         else:
-            # 默认处理上周日到本周六的数据
-            today = datetime.now().date()
-            # 计算上周日（今天往前推7天，然后找到最近的周日）
-            days_since_sunday = (today.weekday() + 1) % 7  # 0=周一，1=周二，...，6=周日
-            last_sunday = today - timedelta(days=days_since_sunday + 7)
-            this_saturday = last_sunday + timedelta(days=6)
+            # 根据配置的频率自动计算日期范围
+            # 使用配置的时区获取当前日期，确保时区一致性
+            tz = pytz.timezone(settings.CRM_WRITEBACK_TIMEZONE)
+            today = datetime.now(tz).date()
+            frequency = settings.CRM_WRITEBACK_FREQUENCY
             
-            start_date = last_sunday
-            end_date = this_saturday
-            
-            logger.info(f"开始执行CRM拜访记录回写任务，默认日期范围: {start_date} 到 {end_date}")
+            if frequency == WritebackFrequency.DAILY:
+                # 按天回写：处理昨天的数据
+                start_date = today - timedelta(days=1)
+                end_date = start_date
+                logger.info(f"开始执行CRM拜访记录回写任务，按天模式，处理昨天: {start_date} (时区: {settings.CRM_WRITEBACK_TIMEZONE})")
+            else:  # WritebackFrequency.WEEKLY
+                # 按周回写：处理上周日到本周六的数据
+                # 计算上周日（今天往前推7天，然后找到最近的周日）
+                days_since_sunday = (today.weekday() + 1) % 7  # 0=周一，1=周二，...，6=周日
+                last_sunday = today - timedelta(days=days_since_sunday + 7)
+                this_saturday = last_sunday + timedelta(days=6)
+                
+                start_date = last_sunday
+                end_date = this_saturday
+                logger.info(f"开始执行CRM拜访记录回写任务，按周模式，处理上周日到本周六: {start_date} 到 {end_date} (时区: {settings.CRM_WRITEBACK_TIMEZONE})")
         
         with Session(engine) as session:
             # 执行拜访记录回写

@@ -1,6 +1,6 @@
 from celery import Celery
 from celery.schedules import crontab
-from app.core.config import settings
+from app.core.config import settings, WritebackFrequency
 
 
 app = Celery(
@@ -126,10 +126,12 @@ if settings.CRM_WEEKLY_REPORT_ENABLED:
 
 # CRM拜访记录回写任务
 if settings.CRM_WRITEBACK_ENABLED:
+    # 解析cron表达式
     cron_expr = settings.CRM_WRITEBACK_CRON
-    # 解析crontab表达式
     cron_fields = cron_expr.strip().split()
+    
     if len(cron_fields) == 5:
+        # 使用配置的cron表达式
         minute, hour, day_of_month, month_of_year, day_of_week = cron_fields
         writeback_schedule = crontab(
             minute=minute, 
@@ -139,8 +141,13 @@ if settings.CRM_WRITEBACK_ENABLED:
             day_of_week=day_of_week
         )
     else:
-        # 默认值：每周日下午2点
-        writeback_schedule = crontab(hour=14, minute=0, day_of_week=0)
+        # 根据频率配置使用默认值
+        if settings.CRM_WRITEBACK_FREQUENCY == WritebackFrequency.DAILY:
+            # 按天回写：每天下午2点
+            writeback_schedule = crontab(hour=14, minute=0)
+        else:  # weekly
+            # 按周回写：每周日下午2点
+            writeback_schedule = crontab(hour=14, minute=0, day_of_week=0)
     
     app.conf.beat_schedule = getattr(app.conf, 'beat_schedule', {})
     app.conf.beat_schedule['crm_visit_records_writeback'] = {
