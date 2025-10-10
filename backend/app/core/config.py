@@ -45,6 +45,11 @@ class WritebackMode(str, enum.Enum):
     APAC = "APAC"  # 任务创建模式
 
 
+class WritebackFrequency(str, enum.Enum):
+    WEEKLY = "weekly"  # 按周回写（默认回写上一周）
+    DAILY = "daily"    # 按天回写（默认回写昨天）
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env", env_ignore_empty=True, extra="ignore"
@@ -166,6 +171,8 @@ class Settings(BaseSettings):
     CRM_WRITEBACK_CRON: str = '0 14 * * 0'  # 每周日下午2点执行
     CRM_WRITEBACK_API_URL: str = "http://auth:8018"  # CRM回写API地址
     CRM_WRITEBACK_DEFAULT_MODE: WritebackMode = WritebackMode.CBG  # 默认回写模式
+    CRM_WRITEBACK_FREQUENCY: WritebackFrequency = WritebackFrequency.WEEKLY  # 回写频率：weekly（按周）或daily（按天）
+    CRM_WRITEBACK_TIMEZONE: str = "Asia/Shanghai"  # 回写任务使用的时区
     
     # Feishu Btable sync configuration
     ENABLE_FEISHU_BTABLE_SYNC: bool = False

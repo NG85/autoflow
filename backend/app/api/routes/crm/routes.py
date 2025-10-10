@@ -1,6 +1,7 @@
 import logging
 import csv
 import io
+import hashlib
 from typing import List, Literal, Optional
 from app.api.deps import CurrentUserDep, SessionDep
 from app.exceptions import InternalServerError
@@ -421,7 +422,7 @@ def export_visit_records_to_csv(
         if language == "en":
             # 英文版CSV头部 - 只包含英文字段
             headers = [
-                "Customer Level", "Account Name", "First Visit", "Call High",
+                "ID", "Customer Level", "Account Name", "First Visit", "Call High",
                 "Partner Name", "Opportunity Name", "Follow-up Date", "Person in Charge", "Department",
                 "Contact Position", "Contact Name", "Collaborative Participants", "Follow-up Method",
                 "Follow-up Record", "AI Follow-up Record Quality Evaluation", "AI Follow-up Record Quality Evaluation Details", 
@@ -431,7 +432,7 @@ def export_visit_records_to_csv(
         else:
             # 中文版CSV头部（默认）- 只包含中文字段
             headers = [
-                "客户分类", "客户名称", "是否首次拜访", "是否Call High",
+                "ID", "客户分类", "客户名称", "是否首次拜访", "是否Call High",
                 "合作伙伴", "商机名称", "跟进日期", "负责销售", "所在团队",
                 "客户岗位", "客户名字", "协同参与人", "跟进方式",
                 "跟进记录", "AI对跟进记录质量评估", "AI对跟进记录质量评估详情",
@@ -445,6 +446,19 @@ def export_visit_records_to_csv(
         for item in result.items:
             # 根据语言选择对应的字段值
             is_en = language == "en"
+            
+            # 生成基于关键字段的hash ID
+            # 使用客户名称、跟进日期、负责销售等关键字段生成唯一ID
+            key_fields = [
+                str(item.id or ""),
+                str(item.account_name or item.partner_name or item.opportunity_name or ""),
+                str(item.visit_communication_date or ""),
+                str(item.recorder or ""),
+                str(item.contact_name or ""),
+                str(item.last_modified_time or ""),
+            ]
+            key_string = "|".join(key_fields)
+            record_id = hashlib.md5(key_string.encode('utf-8')).hexdigest()[:12]  # 取前12位作为ID
             
             # 布尔值字段的本地化处理
             first_visit_text = "Yes" if item.is_first_visit else "No" if item.is_first_visit is not None else ""
@@ -466,8 +480,9 @@ def export_visit_records_to_csv(
             next_steps_quality_level = item.next_steps_quality_level_en if is_en else item.next_steps_quality_level_zh or ""
             next_steps_quality_reason = item.next_steps_quality_reason_en if is_en else item.next_steps_quality_reason_zh or ""
             
-            # 构建数据行（中英版本字段顺序相同）
+            # 构建数据行（中英版本字段顺序相同，ID列在最前面）
             row = [
+                record_id,
                 item.customer_level or "",
                 item.account_name or "",
                 first_visit_text,
