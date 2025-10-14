@@ -138,7 +138,19 @@ def create_visit_record(
                     return {"code": 400, "message": "记录人ID必须与当前用户ID一致", "data": {}}
             except ValueError:
                 return {"code": 400, "message": "记录人ID格式无效，应为有效的UUID", "data": {}}
-        record.recorder_id = str(user.id)
+        else:
+            logger.info(f"Fill in recorder id with current user id: {user.id}")
+            record.recorder_id = str(user.id)
+
+        if not record.recorder:
+            logger.info(f"Fill in recorder name with recorder id: {record.recorder_id}")
+            user_profile = UserProfileRepo().get_by_recorder_id(db_session, record.recorder_id)
+            logger.info(f"User profile: {user_profile}")
+            if user_profile:
+                record.recorder = user_profile.name
+                logger.info(f"Filled in recorder name: {user_profile.name}")
+            else:
+                logger.warning(f"Could not find user profile for recorder_id: {record.recorder_id}")
 
         # 根据拜访类型处理
         if record.visit_type == "link":
