@@ -3,10 +3,12 @@ import secrets
 from fastapi import APIRouter, HTTPException
 from fastapi_users.exceptions import UserAlreadyExists
 import logging
+from sqlmodel import select
 
 from app.api.deps import AsyncSessionDep, CurrentUserDep
 from app.auth.schemas import UserCreate, UserRead
 from app.auth.users import create_user
+from app.models import User
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +25,7 @@ async def register_user(
     session: AsyncSessionDep
 ):
     try:
-        user = await create_user(
+        new_user = await create_user(
             session,
             email=user.email,
             password=user.password or secrets.token_urlsafe(16),
@@ -31,10 +33,18 @@ async def register_user(
             is_verified=True,
             is_superuser=False,
         )
-        return {"status": "success", "message": "User registered successfully", "user_id": user.id}
+        return {"status": "success", "message": "User registered successfully", "user_id": str(new_user.id)}
     except UserAlreadyExists:
         logger.info(f"User with email {user.email} already exists, skipping registration")
-        return {"status": "success", "message": "User already exists, skipping registration", "user_id": ''}
+        # 查询已存在的用户并返回其id
+        result = await session.exec(select(User).where(User.email == user.email))
+        existing_user = result.first()
+        if existing_user:
+            return {"status": "success", "message": "User already exists, skipping registration", "user_id": str(existing_user.id)}
+        else:
+            # 理论上不应该到这里，但以防万一
+            logger.error(f"User with email {user.email} should exist but not found")
+            return {"status": "success", "message": "User already exists, skipping registration", "user_id": ''}
     except Exception as e:
         logger.error(f"Failed to register user: {e}")
         raise HTTPException(
