@@ -5,6 +5,7 @@ from app.platforms.lark.client import lark_client
 from app.platforms.constants import DEFAULT_INTERNAL_GROUP_CHATS, INTERNAL_APP_IDS
 from app.platforms.notification_types import NOTIFICATION_TYPE_REPORT_1, NOTIFICATION_TYPE_REPORT_5
 from app.repositories.user_profile import UserProfileRepo
+from app.platforms.dingtalk.client import dingtalk_client
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,8 @@ def push_weekly_reports(items, receivers, report_type, db_session, external=Fals
         token = feishu_client.get_tenant_access_token(external=external)
     elif platform == "lark":
         token = lark_client.get_tenant_access_token(external=external)
+    elif platform == "dingtalk":
+        token = dingtalk_client.get_tenant_access_token(external=external)
     else:
         logger.warning(f"不支持的platform: {platform}")
         return
@@ -93,6 +96,8 @@ def push_weekly_reports(items, receivers, report_type, db_session, external=Fals
             resp = feishu_client.send_message(receiver["open_id"], token, text, receive_id_type)
         elif platform == "lark":
             resp = lark_client.send_message(receiver["open_id"], token, text, receive_id_type)
+        elif platform == "dingtalk":
+            resp = dingtalk_client.send_message(receiver["open_id"], token, text, receive_id_type)
         else:
             logger.warning(f"不支持的platform: {platform}")
             return

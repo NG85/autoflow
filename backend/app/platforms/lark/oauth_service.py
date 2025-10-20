@@ -1,9 +1,9 @@
 from typing import Optional
 from app.core.config import settings
-from app.platforms.base.oauth_service import BaseOAuthService
+from app.platforms.base.lark_oauth_service import BaseLarkOAuthService
 
 
-class LarkOAuthService(BaseOAuthService):
+class LarkOAuthService(BaseLarkOAuthService):
     """Lark OAuth 授权服务（无状态）"""
     
     def __init__(self, app_id: Optional[str] = None, app_secret: Optional[str] = None):

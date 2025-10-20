@@ -1,6 +1,6 @@
 from typing import Optional
 from app.core.config import settings
-from app.platforms.base.client import BaseLarkClient
+from app.platforms.base.lark_client import BaseLarkClient
 
 
 class FeishuClient(BaseLarkClient):
@@ -15,14 +15,6 @@ class FeishuClient(BaseLarkClient):
     @property
     def base_url(self) -> str:
         return "https://open.feishu.cn/open-apis"
-    
-    @property
-    def auth_url(self) -> str:
-        return "https://open.feishu.cn/open-apis/authen/v1/index"
-    
-    @property
-    def token_url(self) -> str:
-        return f"{self.base_url}/auth/v3/tenant_access_token/internal/"
     
     @property
     def platform_name(self) -> str:
