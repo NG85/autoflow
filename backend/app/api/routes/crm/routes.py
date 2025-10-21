@@ -142,7 +142,7 @@ def create_visit_record(
             logger.info(f"Fill in recorder id with current user id: {user.id}")
             record.recorder_id = str(user.id)
 
-        if not record.recorder:
+        if not record.recorder or record.recorder == '未知用户':
             logger.info(f"Fill in recorder name with recorder id: {record.recorder_id}")
             user_profile = UserProfileRepo().get_by_recorder_id(db_session, record.recorder_id)
             logger.info(f"User profile: {user_profile}")
