@@ -1,21 +1,20 @@
 import logging
 from typing import Optional, Tuple
+from abc import abstractmethod
 import requests
 from urllib.parse import quote
-from abc import ABC, abstractmethod
-from app.utils.redis_client import redis_client
+from .base_oauth_service import BaseOAuthService
 
 logger = logging.getLogger(__name__)
 
 
-class BaseOAuthService(ABC):
-    """OAuth服务基类"""
+class BaseLarkOAuthService(BaseOAuthService):
+    """飞书/Lark OAuth服务基类"""
     
     def __init__(self, app_id: str, app_secret: str):
-        self.app_id = app_id
-        self.app_secret = app_secret
+        super().__init__(app_id, app_secret)
     
-    # 抽象方法
+    # 抽象方法 - Lark系列平台必须实现
     @property
     @abstractmethod
     def token_url(self) -> str:
@@ -34,18 +33,10 @@ class BaseOAuthService(ABC):
         """平台名称，用于Redis键前缀"""
         pass
     
-    # 具体方法（共享实现）
-    def get_access_token_from_redis(self, user_id: str, type: str) -> Optional[str]:
-        """从Redis获取访问令牌"""
-        return redis_client._get_access_token(self.platform_name, user_id, type)
-    
-    def store_access_token_to_redis(self, user_id: str, access_token: str, type: str, expires_in: int = 7200) -> bool:
-        """将访问令牌存储到Redis"""
-        return redis_client._set_access_token(self.platform_name, user_id, access_token, type, expires_in)
-    
+    # Lark系列特有的实现方法
     def generate_auth_url(self, scope: str, redirect_uri: Optional[str] = None, state: Optional[str] = None) -> str:
         """
-        生成授权URL
+        生成授权URL - Lark系列实现
         
         Args:
             scope: 授权范围，多个scope用空格分隔
@@ -69,14 +60,15 @@ class BaseOAuthService(ABC):
                 query_parts.append(f"{k}={quote(str(v))}")
         query_string = '&'.join(query_parts)
         return f"{self.auth_url}?{query_string}"
-     
+    
     def exchange_code_for_token(self, code: str, user_id: Optional[str] = None, type: str = None) -> Tuple[bool, str, Optional[str]]:
         """
-        使用授权码换取访问令牌
+        使用授权码换取访问令牌 - Lark系列实现
         
         Args:
             code: 授权码
             user_id: 用户ID，如果提供则会将token存储到Redis
+            type: token类型
             
         Returns:
             (success, message, access_token)
@@ -103,15 +95,15 @@ class BaseOAuthService(ABC):
                     if user_id and type:
                         self.store_access_token_to_redis(user_id, access_token, type, expires_in)
                     
-                    logger.info("Successfully exchanged code for access token")
+                    logger.info(f"Successfully exchanged code for {self.platform_name} access token")
                     return True, "授权成功", access_token
                 else:
-                    logger.error("No access token in response")
+                    logger.error(f"No access token in {self.platform_name} response")
                     return False, "获取访问令牌失败", None
             else:
-                logger.error(f"Failed to exchange code for token: {result}")
+                logger.error(f"Failed to exchange code for {self.platform_name} token: {result}")
                 return False, f"授权失败: {result.get('msg', 'Unknown error')}", None
                 
         except Exception as e:
-            logger.error(f"Error exchanging code for token: {e}")
+            logger.error(f"Error exchanging code for {self.platform_name} token: {e}")
             return False, f"网络错误: {str(e)}", None

@@ -1,50 +1,21 @@
-from abc import ABC, abstractmethod
 from typing import Optional, Tuple, Dict, Any
+from abc import abstractmethod
 import logging
 import requests
 import json
 import re
+from .base_client import BaseClient, UnsupportedDocumentTypeError, log_content_preview
 
 logger = logging.getLogger(__name__)
 
 
-# 自定义异常类
-class UnsupportedDocumentTypeError(Exception):
-    """不支持的文档类型异常"""
-    pass
-
-
-def log_content_preview(content: str, max_length: int = 100, prefix: str = "内容") -> str:
-    """
-    生成内容预览用于日志记录，避免日志过长
-    
-    Args:
-        content: 原始内容
-        max_length: 最大显示长度
-        prefix: 日志前缀
-        
-    Returns:
-        格式化的日志字符串
-    """
-    if not content:
-        return f"{prefix}: (空)"
-    
-    content_length = len(content)
-    if content_length <= max_length:
-        return f"{prefix}: {content}"
-    else:
-        preview = content[:max_length]
-        return f"{prefix}: {preview}... (总长度: {content_length})"
-
-
-class BaseLarkClient(ABC):
+class BaseLarkClient(BaseClient):
     """飞书/Lark客户端基类"""
     
     def __init__(self, app_id: str, app_secret: str):
-        self.app_id = app_id
-        self.app_secret = app_secret
+        super().__init__(app_id, app_secret)
 
-    # 抽象方法
+    # 抽象方法 - Lark系列平台必须实现
     @property
     @abstractmethod
     def base_url(self) -> str:
@@ -52,16 +23,12 @@ class BaseLarkClient(ABC):
         pass
     
     @property
-    @abstractmethod
     def auth_url(self) -> str:
-        """OAuth授权URL"""
-        pass
+        return f"{self.base_url}/authen/v1/index"
     
     @property
-    @abstractmethod
     def token_url(self) -> str:
-        """获取访问令牌的URL"""
-        pass
+        return f"{self.base_url}/auth/v3/tenant_access_token/internal/"
         
     @property
     @abstractmethod
@@ -69,9 +36,9 @@ class BaseLarkClient(ABC):
         """平台名称，用于日志和文档类型"""
         pass
     
-    # 具体方法（共享实现）
+    # Lark系列共享的实现方法
     def get_tenant_access_token(self, app_id: Optional[str] = None, app_secret: Optional[str] = None) -> str:
-        """获取tenant_access_token"""
+        """获取tenant_access_token - Lark系列实现"""
         url = self.token_url
         
         # 如果没有指定app_id，使用当前配置的应用ID
@@ -86,8 +53,23 @@ class BaseLarkClient(ABC):
         resp.raise_for_status()
         return resp.json()["tenant_access_token"]
     
+    def get_supported_document_types(self) -> set:
+        """Lark系列支持的文档类型"""
+        return {
+            'doc', 'docx',      # 飞书文档
+            'minutes',           # 飞书妙记
+            'wiki_node',        # 知识库节点
+        }
+    
+    def get_unsupported_document_types(self) -> set:
+        """Lark系列暂不支持但可识别的文档类型"""
+        return {
+            'sheet',            # 电子表格
+            'bitable',          # 多维表格
+        }
+    
     def parse_url(self, url: str) -> Tuple[Optional[str], Optional[str]]:
-        """解析URL，返回(url_type, token)"""
+        """解析URL，返回(url_type, token) - Lark系列实现"""
         # 新版文档
         m = re.match(r"https://[^/]+/docx/([a-zA-Z0-9]+)", url)
         if m:
@@ -115,43 +97,8 @@ class BaseLarkClient(ABC):
         # 其他类型
         return None, None
     
-    # 支持的文档类型
-    SUPPORTED_DOCUMENT_TYPES = {
-        'doc', 'docx',      # 飞书文档
-        'minutes',           # 飞书妙记
-        'wiki_node',        # 知识库节点
-    }
-
-    # 暂不支持但可识别的类型
-    UNSUPPORTED_DOCUMENT_TYPES = {
-        'sheet',            # 电子表格
-        'bitable',          # 多维表格
-    }
-
-    def check_document_type_support(self, url_type: str, url: str) -> None:
-        """
-        检查文档类型是否支持
-        
-        Args:
-            url_type: 解析出的文档类型
-            url: 原始URL
-            
-        Raises:
-            UnsupportedDocumentTypeError: 当文档类型不支持时抛出
-        """
-        if url_type in self.UNSUPPORTED_DOCUMENT_TYPES:
-            type_names = {
-                'sheet': '电子表格',
-                'bitable': '多维表格'
-            }
-            type_name = type_names.get(url_type, url_type)
-            raise UnsupportedDocumentTypeError(f"暂不支持{type_name}内容获取: {url}")
-        
-        if url_type not in self.SUPPORTED_DOCUMENT_TYPES:
-            raise UnsupportedDocumentTypeError(f"不支持的{self.platform_name}内容类型: {url_type}")
-
     def get_content_from_source_with_token(self, url: str, access_token: str) -> Tuple[Optional[str], Optional[str]]:
-        """从源获取内容"""
+        """从源获取内容 - Lark系列实现"""
         url_type, token = self.parse_url(url)
         if not url_type or not token:
             logger.error(f"无法解析URL: {url}")
@@ -202,6 +149,19 @@ class BaseLarkClient(ABC):
         except Exception as e:
             logger.error(f"获取{self.platform_name}内容失败: {e}")
             return None, None
+
+    def check_document_type_support(self, url_type: str, url: str) -> None:
+        """检查文档类型是否支持 - Lark系列重写"""
+        if url_type in self.get_unsupported_document_types():
+            type_names = {
+                'sheet': '电子表格',
+                'bitable': '多维表格'
+            }
+            type_name = type_names.get(url_type, url_type)
+            raise UnsupportedDocumentTypeError(f"暂不支持{type_name}内容获取: {url}")
+        
+        if url_type not in self.get_supported_document_types():
+            raise UnsupportedDocumentTypeError(f"不支持的{self.platform_name}内容类型: {url_type}")
     
     def _get_document_markdown(self, token: str, access_token: str) -> Optional[str]:
         """获取文档markdown格式内容"""

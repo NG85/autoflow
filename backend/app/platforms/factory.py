@@ -2,17 +2,18 @@ import logging
 from typing import Optional, Tuple
 from app.platforms.feishu.client import feishu_client
 from app.platforms.lark.client import lark_client
-from app.platforms.base.client import BaseLarkClient
+from app.platforms.dingtalk.client import dingtalk_client
+from app.platforms.base.base_client import BaseClient
 
 logger = logging.getLogger(__name__)
 
 
-def get_client_by_url(url: str) -> BaseLarkClient:
+def get_client_by_url(url: str) -> BaseClient:
     """
     根据URL获取对应的客户端实例
     
     Args:
-        url: 飞书或Lark的URL
+        url: 平台URL（飞书、Lark或钉钉）
         
     Returns:
         对应的客户端实例
@@ -21,6 +22,8 @@ def get_client_by_url(url: str) -> BaseLarkClient:
         return feishu_client
     elif 'larksuite.com' in url:
         return lark_client
+    elif 'dingtalk.com' in url:
+        return dingtalk_client
     else:
         logger.warning(f"无法识别URL类型: {url}")
         return None

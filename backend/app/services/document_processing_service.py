@@ -9,7 +9,7 @@ from app.platforms.utils.url_parser import (
 )
 from app.platforms.feishu.oauth_service import feishu_oauth_service
 from app.platforms.lark.oauth_service import lark_oauth_service
-from app.platforms.base.oauth_service import BaseOAuthService
+from app.platforms.base.base_oauth_service import BaseOAuthService
 from app.crm.file_processor import get_file_content_from_local_storage
 from app.core.config import settings
 from app.platforms.factory import get_client_by_url

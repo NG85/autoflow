@@ -8,9 +8,10 @@ from app.platforms.notification_types import (
 from sqlmodel import Session
 from app.repositories.user_profile import UserProfileRepo
 from app.repositories.oauth_user import oauth_user_repo
-from app.platforms.constants import DEFAULT_INTERNAL_GROUP_CHATS, INTERNAL_APP_IDS, PLATFORM_FEISHU, PLATFORM_LARK
+from app.platforms.constants import DEFAULT_INTERNAL_GROUP_CHATS, INTERNAL_APP_IDS, PLATFORM_DINGTALK, PLATFORM_FEISHU, PLATFORM_LARK
 from app.platforms.feishu.client import feishu_client
 from app.platforms.lark.client import lark_client
+from app.platforms.dingtalk.client import dingtalk_client
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,8 @@ class PlatformNotificationService:
             current_app_id = settings.FEISHU_APP_ID
         elif platform == PLATFORM_LARK:
             current_app_id = settings.LARK_APP_ID
+        elif platform == PLATFORM_DINGTALK:
+            current_app_id = settings.DINGTALK_APP_ID
         else:
             logger.warning(f"Unsupported platform: {platform}")
             return matching_groups
@@ -50,15 +53,19 @@ class PlatformNotificationService:
             return feishu_client.get_tenant_access_token()
         elif platform == PLATFORM_LARK:
             return lark_client.get_tenant_access_token()
+        elif platform == PLATFORM_DINGTALK:
+            return dingtalk_client.get_tenant_access_token()
         else:
             raise ValueError(f"Unsupported platform: {platform}")
     
-    def _send_message(self, open_id: str, token: str, content: Dict[str, Any], platform: str = PLATFORM_FEISHU, **kwargs) -> Dict[str, Any]:
+    def _send_message(self, open_id: str, token: str, content: Dict[str, Any], platform: str = PLATFORM_FEISHU, receive_id_type: str = "open_id", **kwargs) -> Dict[str, Any]:
         """发送消息到指定平台"""
         if platform == PLATFORM_FEISHU:
-            return feishu_client.send_message(open_id, token, content, **kwargs)
+            return feishu_client.send_message(open_id, token, content, receive_id_type, **kwargs)
         elif platform == PLATFORM_LARK:
-            return lark_client.send_message(open_id, token, content, **kwargs)
+            return lark_client.send_message(open_id, token, content, receive_id_type, **kwargs)
+        elif platform == PLATFORM_DINGTALK:
+            return dingtalk_client.send_message(open_id, token, content, receive_id_type, **kwargs)
         else:
             raise ValueError(f"Unsupported platform: {platform}")
     
@@ -87,7 +94,7 @@ class PlatformNotificationService:
     
     def _validate_platform_support(self, platform: str) -> bool:
         """验证平台是否支持"""
-        return platform in [PLATFORM_FEISHU, PLATFORM_LARK]
+        return platform in [PLATFORM_FEISHU, PLATFORM_LARK, PLATFORM_DINGTALK]
     
     def _create_failed_recipient_record(self, recipient: Dict[str, Any], platform: str, error: str) -> Dict[str, Any]:
         """创建失败接收者记录"""
@@ -310,7 +317,7 @@ class PlatformNotificationService:
             if 'platform' not in locals():
                 platform = recorder_profile.platform or PLATFORM_FEISHU
             # 只支持飞书和Lark平台
-            if platform not in [PLATFORM_FEISHU, PLATFORM_LARK]:
+            if platform not in [PLATFORM_FEISHU, PLATFORM_LARK, PLATFORM_DINGTALK]:
                 logger.warning(f"Recorder platform {platform} not supported, skipping")
             else:
                 if platform not in recipients_by_platform:
@@ -334,7 +341,7 @@ class PlatformNotificationService:
                 if manager_open_id:
                     platform = manager_profile.platform or PLATFORM_FEISHU
                     # 只支持飞书和Lark平台
-                    if platform not in [PLATFORM_FEISHU, PLATFORM_LARK]:
+                    if platform not in [PLATFORM_FEISHU, PLATFORM_LARK, PLATFORM_DINGTALK]:
                         logger.warning(f"Manager platform {platform} not supported, skipping")
                     else:
                         if platform not in recipients_by_platform:
@@ -358,7 +365,7 @@ class PlatformNotificationService:
                 if dept_manager_open_id:
                     platform = dept_manager.platform or PLATFORM_FEISHU
                     # 只支持飞书和Lark平台
-                    if platform not in [PLATFORM_FEISHU, PLATFORM_LARK]:
+                    if platform not in [PLATFORM_FEISHU, PLATFORM_LARK, PLATFORM_DINGTALK]:
                         logger.warning(f"Department manager platform {platform} not supported, skipping")
                     else:
                         if platform not in recipients_by_platform:
@@ -384,7 +391,7 @@ class PlatformNotificationService:
             matching_groups = self._get_matching_group_chats(recorder_profile.platform)
             platform = recorder_profile.platform or PLATFORM_FEISHU
             # 只支持飞书和Lark平台
-            if platform not in [PLATFORM_FEISHU, PLATFORM_LARK]:
+            if platform not in [PLATFORM_FEISHU, PLATFORM_LARK, PLATFORM_DINGTALK]:
                 logger.warning(f"Internal app platform {platform} not supported, skipping group chats")
             else:
                 if platform not in recipients_by_platform:
@@ -409,7 +416,7 @@ class PlatformNotificationService:
                 if receiver_open_id:
                     platform = receiver.platform or PLATFORM_FEISHU
                     # 只支持飞书和Lark平台
-                    if platform not in [PLATFORM_FEISHU, PLATFORM_LARK]:
+                    if platform not in [PLATFORM_FEISHU, PLATFORM_LARK, PLATFORM_DINGTALK]:
                         logger.warning(f"External receiver platform {platform} not supported, skipping")
                     else:
                         if platform not in recipients_by_platform:
@@ -570,32 +577,44 @@ class PlatformNotificationService:
         # 根据拜访类型、接收者类型和平台确定模板ID
         def get_template_id(recipient_type: str, platform: str, form_type: Optional[str] = None) -> str:
             # 验证平台支持
-            if platform not in [PLATFORM_FEISHU, PLATFORM_LARK]:
+            if platform not in [PLATFORM_FEISHU, PLATFORM_LARK, PLATFORM_DINGTALK]:
                 logger.warning(f"Unsupported platform: {platform}")
                 return None
             
-            if visit_type == "form":
-                # 检查是否为简易版表单
-                form_type = form_type or settings.CRM_VISIT_RECORD_FORM_TYPE.value
-                
-                if form_type == "simple":
-                    # 简易版表单模板
+            if platform == PLATFORM_DINGTALK:
+                if visit_type == "form":
+                    # 钉钉目前只支持完整版表单模板
                     if recipient_type == "recorder":
-                        return "AAqzQK6iUiK2k"  # 销售个人卡片：简易版
+                        return "68d00411-0144-4e3b-b14b-c5fcb834e5d4.schema"  # 销售个人卡片：完整版
                     elif recipient_type == "collaborative_participant":
-                        return "AAqzQK6iUiK2k"  # 协同参与人卡片：简易版
+                        return "68d00411-0144-4e3b-b14b-c5fcb834e5d4.schema"  # 协同参与人卡片：完整版
                     else:
-                        return "AAqzQKvKzOW1z"  # leader和管理者卡片：简易版
+                        return "feefcc55-fa5d-44f3-ba09-9e6fa595743b.schema"  # leader和管理者卡片：完整版
                 else:
-                    # 完整版表单模板
-                    if recipient_type == "recorder":
-                        return "AAqzzmP2uT85t"  # 销售个人卡片：完整版
-                    elif recipient_type == "collaborative_participant":
-                        return "AAqzzmP2uT85t"  # 协同参与人卡片：完整版
+                    return "dbff8619-db4c-49e4-930f-9fc1fc072049.schema"  # link类型使用通用卡片：会议纪要版
+            elif platform == PLATFORM_FEISHU or platform == PLATFORM_LARK:
+                if visit_type == "form":
+                    # 检查是否为简易版表单
+                    form_type = form_type or settings.CRM_VISIT_RECORD_FORM_TYPE.value
+                    
+                    if form_type == "simple":
+                        # 简易版表单模板
+                        if recipient_type == "recorder":
+                            return "AAqzQK6iUiK2k"  # 销售个人卡片：简易版
+                        elif recipient_type == "collaborative_participant":
+                            return "AAqzQK6iUiK2k"  # 协同参与人卡片：简易版
+                        else:
+                            return "AAqzQKvKzOW1z"  # leader和管理者卡片：简易版
                     else:
-                        return "AAqz0J0JSTciO"  # leader和管理者卡片：完整版
-            else:
-                return "AAqz0v4nx70HL"  # link类型使用通用卡片：会议纪要版
+                        # 完整版表单模板
+                        if recipient_type == "recorder":
+                            return "AAqzzmP2uT85t"  # 销售个人卡片：完整版
+                        elif recipient_type == "collaborative_participant":
+                            return "AAqzzmP2uT85t"  # 协同参与人卡片：完整版
+                        else:
+                            return "AAqz0J0JSTciO"  # leader和管理者卡片：完整版
+                else:
+                    return "AAqz0v4nx70HL"  # link类型使用通用卡片：会议纪要版
         
         # 逐个平台推送消息（因为需要根据接收者类型选择不同模板）
         total_success_count = 0
@@ -734,7 +753,10 @@ class PlatformNotificationService:
             }
         
         # 准备CRM日报卡片消息内容
-        template_id = "AAqzUJ4fpg5XQ"  # CRM日报卡片模板ID
+        if settings.NOTIFICATION_PLATFORM == PLATFORM_DINGTALK:
+            template_id = "6242ee3d-2df6-49b4-b7b9-5b9f15631d94.schema"  # CRM日报卡片模板ID
+        elif settings.NOTIFICATION_PLATFORM == PLATFORM_FEISHU or settings.NOTIFICATION_PLATFORM == PLATFORM_LARK:
+            template_id = "AAqzUJ4fpg5XQ"  # CRM日报卡片模板ID
         template_vars = self._convert_daily_report_data_for_feishu(db_session, daily_report_data)
         
         card_content = {
@@ -820,7 +842,10 @@ class PlatformNotificationService:
             }
         
         # 准备部门日报卡片消息内容
-        template_id = "AAqz3wUpXTF3g"  # 部门日报卡片模板ID
+        if settings.NOTIFICATION_PLATFORM == PLATFORM_DINGTALK:
+            template_id = "dd75140d-283e-4870-b985-cb46480e5dd3.schema"  # 部门日报卡片模板ID
+        elif settings.NOTIFICATION_PLATFORM == PLATFORM_FEISHU or settings.NOTIFICATION_PLATFORM == PLATFORM_LARK:
+            template_id = "AAqz3wUpXTF3g"  # 部门日报卡片模板ID
         template_vars = self._convert_daily_report_data_for_feishu(db_session, department_report_data)
         # 确保日期字段是字符串格式
         if 'report_date' in template_vars and hasattr(template_vars['report_date'], 'isoformat'):
@@ -890,7 +915,10 @@ class PlatformNotificationService:
             }
         
         # 准备公司日报卡片消息内容
-        template_id = "AAqz3y0IwJLDp"  # 公司日报卡片模板ID
+        if settings.NOTIFICATION_PLATFORM == PLATFORM_DINGTALK:
+            template_id = "10d7322d-5e50-4248-a549-fcbfaa89fd03.schema"  # 公司日报卡片模板ID
+        elif settings.NOTIFICATION_PLATFORM == PLATFORM_FEISHU or settings.NOTIFICATION_PLATFORM == PLATFORM_LARK:
+            template_id = "AAqz3y0IwJLDp"  # 公司日报卡片模板ID
         template_vars = self._convert_daily_report_data_for_feishu(db_session, company_report_data)
         # 确保日期字段是字符串格式
         if 'report_date' in template_vars and hasattr(template_vars['report_date'], 'isoformat'):

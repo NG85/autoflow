@@ -156,6 +156,8 @@ class Settings(BaseSettings):
     # CRM visit record form configuration
     CRM_VISIT_RECORD_FORM_TYPE: VisitRecordFormType = VisitRecordFormType.COMPLETE
     
+    NOTIFICATION_PLATFORM: str = "feishu"
+    
     # CRM daily report task configuration
     CRM_DAILY_REPORT_ENABLED: bool = False
     CRM_DAILY_REPORT_CRON: str = '30 8 * * *'  # 每天早上8:30执行
@@ -184,6 +186,11 @@ class Settings(BaseSettings):
     # Lark configuration
     LARK_APP_ID: str = 'cli_a8294dbbcdb8d02d'
     LARK_APP_SECRET: str = 'PonwmInSR6PzmRNKHzeNybdV0PDew8EY'
+    
+    # Dingtalk configuration
+    DINGTALK_APP_ID: str = 'dingiyzzmxq0riihvyo7'
+    DINGTALK_APP_SECRET: str = 'T-i3txM2le3thhaziAKEDCevRLqlTNM89dVkbW44-OMQ1nh5vgorlF5QfypphiCx'
+    DINGTALK_COPR_ID: str = 'ding2f8a51bf16e4fc5facaaa37764f94726'
     
     # Feishu send message configuration
     REVIEW_REPORT_HOST: str = "https://aptsell.pingcap.net"
