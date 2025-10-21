@@ -37,7 +37,7 @@ class CRMReportIndexRepo(BaseRepo):
             logger.info(f"报告类型: {report_type}, 报告年份: {report_year}, 报告周数: {report_week_of_year}, 部门名称: {department_name}")
             
             conditions = [
-                CRMReportIndex.report_type == report_type,
+                CRMReportIndex.report_type.in_([report_type, report_type + 's']),
                 CRMReportIndex.report_calendar_type == 'weekly',
                 CRMReportIndex.report_status == 'published',
                 CRMReportIndex.report_week_of_year == report_week_of_year,
