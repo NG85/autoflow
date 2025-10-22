@@ -267,6 +267,9 @@ def push_visit_record_message(sales_visit_record, visit_type, db_session=None, m
         # 确保会议纪要不为空
         if meeting_notes is None or meeting_notes == "":
             meeting_notes = "--"
+        # 如果配置了自定义字体大小token，则添加到会议纪要中，主要用于钉钉卡片中设置字体大小
+        if settings.CUSTOM_FONT_SIZE_TOKEN:
+            meeting_notes =f"<font sizeToken={settings.CUSTOM_FONT_SIZE_TOKEN}>{meeting_notes}</font>"
 
         # 发送拜访记录通知
         result = platform_notification_service.send_visit_record_notification(
