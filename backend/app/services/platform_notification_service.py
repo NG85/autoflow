@@ -754,9 +754,9 @@ class PlatformNotificationService:
         
         # 准备CRM日报卡片消息内容
         if settings.NOTIFICATION_PLATFORM == PLATFORM_DINGTALK:
-            template_id = "6242ee3d-2df6-49b4-b7b9-5b9f15631d94.schema"  # CRM日报卡片模板ID
+            template_id = "6242ee3d-2df6-49b4-b7b9-5b9f15631d94.schema"  # 个人日报卡片模板ID
         elif settings.NOTIFICATION_PLATFORM == PLATFORM_FEISHU or settings.NOTIFICATION_PLATFORM == PLATFORM_LARK:
-            template_id = "AAqzUJ4fpg5XQ"  # CRM日报卡片模板ID
+            template_id = "AAqzUJ4fpg5XQ"  # 个人日报卡片模板ID
         template_vars = self._convert_daily_report_data_for_feishu(db_session, daily_report_data)
         
         card_content = {
@@ -975,7 +975,10 @@ class PlatformNotificationService:
             }
         
         # 准备部门周报卡片消息内容
-        template_id = "AAqzdm8MsqNjD"  # 团队周报卡片模板ID
+        if settings.NOTIFICATION_PLATFORM == PLATFORM_DINGTALK:
+            template_id = "a870d934-e925-49dc-a4af-c6f3b79547fa.schema"  # 部门周报卡片模板ID
+        elif settings.NOTIFICATION_PLATFORM == PLATFORM_FEISHU or settings.NOTIFICATION_PLATFORM == PLATFORM_LARK:
+            template_id = "AAqz3wUpXTF3g"  # 部门周报卡片模板ID
         template_vars = self._convert_weekly_report_data_for_feishu(db_session, department_report_data)
         
         card_content = {
@@ -1047,7 +1050,10 @@ class PlatformNotificationService:
             }
         
         # 准备公司周报卡片消息内容
-        template_id = "AAqzdMIhll3Et"  # 使用团队周报卡片模板ID
+        if settings.NOTIFICATION_PLATFORM == PLATFORM_DINGTALK:
+            template_id = "ac07cfb0-d549-469f-92c8-814d7afa66f8.schema"  # 公司周报卡片模板ID
+        elif settings.NOTIFICATION_PLATFORM == PLATFORM_FEISHU or settings.NOTIFICATION_PLATFORM == PLATFORM_LARK:
+            template_id = "AAqzdMIhll3Et"  # 公司周报卡片模板ID
         template_vars = self._convert_weekly_report_data_for_feishu(db_session, company_weekly_report_data)
         
         card_content = {
