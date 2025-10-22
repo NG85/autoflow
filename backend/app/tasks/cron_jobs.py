@@ -158,7 +158,7 @@ def generate_crm_daily_statistics(self, target_date_str=None):
 
 
 @app.task(bind=True, max_retries=3)
-def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None):
+def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, report_type=None):
     """
     生成CRM周报数据并推送给团队leader
     每周日上午11点执行，处理上周日到本周六的销售周报数据
@@ -239,50 +239,52 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None):
                 department_failed_count = 0
                 company_success = False
                 
-                # 发送部门周报通知
-                for department_report in department_reports:
-                    try:
-                        # 发送部门周报通知给部门负责人
-                        result = platform_notification_service.send_weekly_report_notification(
-                            db_session=session,
-                            department_report_data=department_report
-                        )
-                        
-                        if result["success"]:
-                            department_success_count += 1
-                            logger.info(
-                                f"成功发送 {department_report.get('department_name', '未知部门')} 周报通知，"
-                                f"推送成功 {result['success_count']}/{result['recipients_count']} 次"
+                if not report_type or report_type == 'department':
+                    # 发送部门周报通知
+                    for department_report in department_reports:
+                        try:
+                            # 发送部门周报通知给部门负责人
+                            result = platform_notification_service.send_weekly_report_notification(
+                                db_session=session,
+                                department_report_data=department_report
                             )
-                        else:
+                            
+                            if result["success"]:
+                                department_success_count += 1
+                                logger.info(
+                                    f"成功发送 {department_report.get('department_name', '未知部门')} 周报通知，"
+                                    f"推送成功 {result['success_count']}/{result['recipients_count']} 次"
+                                )
+                            else:
+                                department_failed_count += 1
+                                logger.warning(f"部门周报通知发送失败: {result['message']}")
+                                
+                        except Exception as e:
                             department_failed_count += 1
-                            logger.warning(f"部门周报通知发送失败: {result['message']}")
-                            
-                    except Exception as e:
-                        department_failed_count += 1
-                        logger.error(f"发送部门周报通知时出错: {str(e)}")
+                            logger.error(f"发送部门周报通知时出错: {str(e)}")
                 
-                # 发送公司周报通知
-                if company_weekly_report:
-                    try:
-                        company_result = platform_notification_service.send_company_weekly_report_notification(
-                            db_session=session,
-                            company_weekly_report_data=company_weekly_report
-                        )
-                        
-                        if company_result["success"]:
-                            company_success = True
-                            logger.info(
-                                f"成功发送公司周报通知，"
-                                f"推送成功 {company_result['success_count']}/{company_result['recipients_count']} 次"
+                if not report_type or report_type == 'company':
+                    # 发送公司周报通知
+                    if company_weekly_report:
+                        try:
+                            company_result = platform_notification_service.send_company_weekly_report_notification(
+                                db_session=session,
+                                company_weekly_report_data=company_weekly_report
                             )
-                        else:
-                            logger.warning(f"公司周报通知发送失败: {company_result['message']}")
                             
-                    except Exception as e:
-                        logger.error(f"发送公司周报通知时出错: {str(e)}")
-                else:
-                    logger.warning(f"{start_date} 到 {end_date} 没有找到任何公司周报数据，跳过公司周报推送")
+                            if company_result["success"]:
+                                company_success = True
+                                logger.info(
+                                    f"成功发送公司周报通知，"
+                                    f"推送成功 {company_result['success_count']}/{company_result['recipients_count']} 次"
+                                )
+                            else:
+                                logger.warning(f"公司周报通知发送失败: {company_result['message']}")
+                                
+                        except Exception as e:
+                            logger.error(f"发送公司周报通知时出错: {str(e)}")
+                    else:
+                        logger.warning(f"{start_date} 到 {end_date} 没有找到任何公司周报数据，跳过公司周报推送")
                 
                 logger.info(f"CRM周报飞书通知发送完成: 部门周报成功 {department_success_count} 个，失败 {department_failed_count} 个，公司周报推送{'成功' if company_success else '失败'}")
                 
