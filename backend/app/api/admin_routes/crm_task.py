@@ -85,7 +85,8 @@ def trigger_weekly_report_task(
     user: CurrentSuperuserDep,
     start_date: Optional[str] = Body(None, description="开始日期，格式YYYY-MM-DD，不传则默认为上周日"),
     end_date: Optional[str] = Body(None, description="结束日期，格式YYYY-MM-DD，不传则默认为本周六"),
-    enable_feishu_push: Optional[bool] = Body(None, description="是否启用飞书推送，不传则使用系统配置")
+    enable_feishu_push: Optional[bool] = Body(None, description="是否启用飞书推送，不传则使用系统配置"),
+    report_type: Optional[str] = Body(None, description="报告类型，支持 'department'（部门周报）或 'company'（公司周报），不传则默认为所有")
 ):
     """
     手动触发CRM周报推送任务
@@ -134,7 +135,8 @@ def trigger_weekly_report_task(
         # 触发异步任务，传递日期参数
         task = generate_crm_weekly_report.delay(
             start_date_str=parsed_start_date.isoformat(),
-            end_date_str=parsed_end_date.isoformat()
+            end_date_str=parsed_end_date.isoformat(),
+            report_type=report_type
         )
         
         return {
