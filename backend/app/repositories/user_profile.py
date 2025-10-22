@@ -160,11 +160,19 @@ class UserProfileRepo(BaseRepo):
         db_session: Session, 
         notification_type: str
     ) -> list[UserProfile]:
-        """根据推送权限类型获取用户列表"""
-        query = select(UserProfile).where(
-            UserProfile.is_active == True,
-            UserProfile.open_id.is_not(None),
-            UserProfile.notification_tags.contains(notification_type)
-        )
+        """根据推送权限类型获取用户列表
         
-        return db_session.exec(query).all()
+        在应用层精确匹配，避免子字符串匹配问题
+        例如：notification_type='visit_record' 不会匹配到 'list_visit_records'
+        """
+        # 先查出所有有 open_id 和 notification_tags 的活跃用户
+        candidates = db_session.exec(
+            select(UserProfile).where(
+                UserProfile.is_active == True,
+                UserProfile.open_id.is_not(None),
+                UserProfile.notification_tags.is_not(None)
+            )
+        ).all()
+        
+        # 在应用层使用模型的 has_notification_permission 方法精确匹配
+        return [user for user in candidates if user.has_notification_permission(notification_type)]
