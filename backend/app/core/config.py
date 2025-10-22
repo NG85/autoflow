@@ -191,6 +191,7 @@ class Settings(BaseSettings):
     DINGTALK_APP_ID: str = 'dingiyzzmxq0riihvyo7'
     DINGTALK_APP_SECRET: str = 'T-i3txM2le3thhaziAKEDCevRLqlTNM89dVkbW44-OMQ1nh5vgorlF5QfypphiCx'
     DINGTALK_COPR_ID: str = 'ding2f8a51bf16e4fc5facaaa37764f94726'
+    CUSTOM_FONT_SIZE_TOKEN: str | None = None
     
     # Feishu send message configuration
     REVIEW_REPORT_HOST: str = "https://aptsell.pingcap.net"
