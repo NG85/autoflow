@@ -532,7 +532,7 @@ class DailyReportRequest(BaseModel):
 # 客户资料上传请求模型
 class CustomerDocumentUploadRequest(BaseModel):
     """客户资料上传请求"""
-    file_category: Literal["ABP", "CallHigh"] = Field(description="文件类别，如ABP、CallHigh等")
+    file_category: Literal["ABP", "CallHigh", "Other"] = Field(description="文件类别，如ABP、CallHigh、Other等")
     account_name: Optional[str] = Field(default=None, description="客户名称")
     account_id: Optional[str] = Field(default=None, description="客户ID")
     document_url: str = Field(description="文档链接")
