@@ -49,7 +49,7 @@ class CustomerDocumentService:
         result = self.document_processing_service.process_document_url(
             document_url=document_url,
             user_id=str(uploader_id),
-            feishu_auth_code=feishu_auth_code
+            auth_code=feishu_auth_code
         )
         
         # 如果处理失败，直接返回结果
