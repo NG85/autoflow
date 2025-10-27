@@ -978,7 +978,7 @@ class PlatformNotificationService:
         if settings.NOTIFICATION_PLATFORM == PLATFORM_DINGTALK:
             template_id = "a870d934-e925-49dc-a4af-c6f3b79547fa.schema"  # 部门周报卡片模板ID
         elif settings.NOTIFICATION_PLATFORM == PLATFORM_FEISHU or settings.NOTIFICATION_PLATFORM == PLATFORM_LARK:
-            template_id = "AAqz3wUpXTF3g"  # 部门周报卡片模板ID
+            template_id = "AAqzdm8MsqNjD"  # 部门周报卡片模板ID
         template_vars = self._convert_weekly_report_data_for_feishu(db_session, department_report_data)
         
         card_content = {
