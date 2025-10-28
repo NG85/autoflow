@@ -421,16 +421,15 @@ class CrmWritebackService:
 
         return visit_requests
     
-    def writeback_visit_records(self, session: Session, start_date: datetime.date, 
-                               end_date: datetime.date, writeback_mode: Optional[str] = None) -> Dict[str, Any]:
+    def _execute_writeback_logic(self, session: Session, visit_records: List[CRMSalesVisitRecord], 
+                                writeback_mode: Optional[str] = None) -> Dict[str, Any]:
         """
-        回写指定时间范围内的拜访记录
+        执行回写逻辑的核心方法
         
         Args:
             session: 数据库会话
-            start_date: 开始日期
-            end_date: 结束日期
-            writeback_mode: 回写模式，支持 "CBG"（内容回写）或 "APAC"（任务创建），不传则使用配置中的默认值
+            visit_records: 拜访记录列表
+            writeback_mode: 回写模式，支持 "CBG"（内容回写）或 "APAC"（任务创建）或 "OLM"（销售易回写），不传则使用配置中的默认值
         
         Returns:
             回写结果
@@ -450,27 +449,18 @@ class CrmWritebackService:
                 "writeback_count": 0
             }
         
+        if not visit_records:
+            logger.info("没有需要回写的拜访记录")
+            return {
+                "success": True,
+                "message": "没有需要回写的拜访记录",
+                "processed_count": 0,
+                "writeback_count": 0
+            }
+        
+        logger.info(f"开始回写 {len(visit_records)} 条拜访记录，回写模式: {writeback_mode}")
+        
         try:
-            # 查询指定时间范围内的拜访记录
-            stmt = select(CRMSalesVisitRecord).where(
-                CRMSalesVisitRecord.visit_communication_date >= start_date,
-                CRMSalesVisitRecord.visit_communication_date <= end_date
-            ).order_by(CRMSalesVisitRecord.visit_communication_date)
-            
-            visit_records = session.exec(stmt).all()
-            
-            if not visit_records:
-                logger.info(f"在 {start_date} 到 {end_date} 时间范围内没有找到拜访记录")
-                return {
-                    "success": True,
-                    "message": f"在 {start_date} 到 {end_date} 时间范围内没有找到拜访记录",
-                    "processed_count": 0,
-                    "writeback_count": 0
-                }
-            
-            logger.info(f"找到 {len(visit_records)} 条拜访记录，开始进行回写")
-            logger.info(f"回写模式: {writeback_mode}")
-            
             if writeback_mode == "APAC":
                 # 任务创建模式
                 logger.info("使用APAC任务创建模式")
@@ -609,7 +599,7 @@ class CrmWritebackService:
                         "processed_count": processed_count,
                         "writeback_count": 0
                     }
-                
+            
             elif writeback_mode == "OLM":
                 # OLM拜访记录回写模式
                 logger.info("使用OLM拜访记录回写模式")
@@ -640,7 +630,7 @@ class CrmWritebackService:
                         "message": f"成功处理 {len(visit_records)} 条拜访记录，回写 {len(visit_requests.visit_records)} 条OLM记录",
                         "processed_count": len(visit_records),
                         "writeback_count": len(visit_requests.visit_records),
-                        "success_count":  created_visits,
+                        "success_count": created_visits,
                         "failed_count": failed_visits,
                         "results": return_data
                     }
@@ -653,6 +643,109 @@ class CrmWritebackService:
                         "writeback_count": len(visit_requests.visit_records),
                         "results": return_data
                     }
+        except Exception as e:
+            logger.exception(f"回写拜访记录失败: {e}")
+            return {
+                "success": False,
+                "message": f"回写失败: {str(e)}",
+                "processed_count": 0,
+                "writeback_count": 0
+            }
+    
+    def writeback_visit_records_by_ids(self, session: Session, visit_record_ids: List[int], 
+                                     writeback_mode: Optional[str] = None) -> Dict[str, Any]:
+        """
+        根据ID列表回写指定的拜访记录
+        
+        Args:
+            session: 数据库会话
+            visit_record_ids: 拜访记录ID列表
+            writeback_mode: 回写模式，支持 "CBG"（内容回写）或 "APAC"（任务创建）或 "OLM"（销售易回写），不传则使用配置中的默认值
+        
+        Returns:
+            回写结果，包含找到的记录ID和缺失的记录ID
+        """
+        try:
+            # 查询指定的拜访记录
+            stmt = select(CRMSalesVisitRecord).where(CRMSalesVisitRecord.id.in_(visit_record_ids))
+            visit_records = session.exec(stmt).all()
+            
+            if not visit_records:
+                logger.info(f"未找到指定的拜访记录，请求的ID: {visit_record_ids}")
+                return {
+                    "success": False,
+                    "message": "未找到指定的拜访记录",
+                    "processed_count": 0,
+                    "writeback_count": 0,
+                    "requested_ids": visit_record_ids,
+                    "found_ids": [],
+                    "missing_ids": visit_record_ids
+                }
+            
+            found_ids = [record.id for record in visit_records]
+            missing_ids = [id for id in visit_record_ids if id not in found_ids]
+            
+            logger.info(f"找到 {len(visit_records)} 条拜访记录，缺失 {len(missing_ids)} 条")
+            
+            # 执行回写
+            result = self._execute_writeback_logic(session, visit_records, writeback_mode)
+            
+            # 添加ID信息到结果中
+            result["requested_ids"] = visit_record_ids
+            result["found_ids"] = found_ids
+            result["missing_ids"] = missing_ids
+            
+            return result
+            
+        except Exception as e:
+            logger.exception(f"根据ID回写拜访记录失败: {e}")
+            return {
+                "success": False,
+                "message": f"回写失败: {str(e)}",
+                "processed_count": 0,
+                "writeback_count": 0,
+                "requested_ids": visit_record_ids,
+                "found_ids": [],
+                "missing_ids": []
+            }
+    
+    def writeback_visit_records(self, session: Session, start_date: datetime.date, 
+                               end_date: datetime.date, writeback_mode: Optional[str] = None) -> Dict[str, Any]:
+        """
+        回写指定时间范围内的拜访记录
+        
+        Args:
+            session: 数据库会话
+            start_date: 开始日期
+            end_date: 结束日期
+            writeback_mode: 回写模式，支持 "CBG"（内容回写）或 "APAC"（任务创建）或 "OLM"（销售易回写），不传则使用配置中的默认值
+        
+        Returns:
+            回写结果
+        """
+        try:
+            # 查询指定时间范围内的拜访记录
+            stmt = select(CRMSalesVisitRecord).where(
+                CRMSalesVisitRecord.visit_communication_date >= start_date,
+                CRMSalesVisitRecord.visit_communication_date <= end_date
+            ).order_by(CRMSalesVisitRecord.visit_communication_date)
+            
+            visit_records = session.exec(stmt).all()
+            
+            if not visit_records:
+                logger.info(f"在 {start_date} 到 {end_date} 时间范围内没有找到拜访记录")
+                return {
+                    "success": True,
+                    "message": f"在 {start_date} 到 {end_date} 时间范围内没有找到拜访记录",
+                    "processed_count": 0,
+                    "writeback_count": 0
+                }
+            
+            logger.info(f"找到 {len(visit_records)} 条拜访记录，开始进行回写")
+            
+            # 复用核心回写逻辑
+            return self._execute_writeback_logic(session, visit_records, writeback_mode)
+            
         except Exception as e:
             logger.exception(f"回写拜访记录失败: {e}")
             return {

@@ -1,8 +1,10 @@
 import logging
-from typing import Optional
+from typing import Optional, List
 from app.api.deps import CurrentSuperuserDep
 from app.core.config import settings, WritebackMode
 from fastapi import APIRouter, Body
+from sqlmodel import Session
+from app.core.db import engine
 
 logger = logging.getLogger(__name__)
 
@@ -314,5 +316,95 @@ def get_task_status(
         return {
             "code": 500,
             "message": f"查询任务状态失败: {str(e)}",
+            "data": {}
+        }
+
+
+@router.post("/crm/writeback/by-ids")
+def trigger_crm_writeback_by_ids(
+    user: CurrentSuperuserDep,
+    visit_record_ids: List[int] = Body(..., description="拜访记录ID列表"),
+    writeback_mode: Optional[str] = Body(None, description="回写模式，支持 'CBG'（内容回写）、'APAC'（任务创建）或 'OLM'（销售易回写），不传则使用配置中的默认值")
+):
+    """
+    根据指定拜访记录ID进行CRM回写
+    
+    工作流程：
+    1. 根据ID列表查询拜访记录
+    2. 验证记录是否存在
+    3. 根据回写模式选择处理方式
+    4. 调用相应的API进行回写
+    """
+    if not user.is_superuser:
+        return {
+            "code": 403,
+            "message": "权限不足，只有超级管理员可以触发此任务",
+            "data": {}
+        }
+
+    try:
+        from app.services.crm_writeback_service import crm_writeback_service
+        
+        logger.info(f"用户 {user.id} 手动触发指定ID的CRM拜访记录回写任务，记录ID: {visit_record_ids}，回写模式: {writeback_mode}")
+        
+        # 如果没有指定回写模式，使用配置中的默认值
+        if writeback_mode is None:
+            writeback_mode = settings.CRM_WRITEBACK_DEFAULT_MODE.value
+        
+        # 验证回写模式参数
+        valid_modes = [mode.value for mode in WritebackMode]
+        if writeback_mode not in valid_modes:
+            return {
+                "code": 400,
+                "message": f"无效的回写模式，支持的模式: {valid_modes}",
+                "data": {}
+            }
+        
+        # 执行回写（包含查询逻辑）
+        with Session(engine) as session:
+            result = crm_writeback_service.writeback_visit_records_by_ids(
+                session=session,
+                visit_record_ids=visit_record_ids,
+                writeback_mode=writeback_mode
+            )
+            
+            # 根据回写结果确定响应状态
+            if result.get("success", False):
+                if result.get("missing_ids"):
+                    # 部分记录未找到
+                    return {
+                        "code": 0,
+                        "message": f"CRM拜访记录回写任务执行完成，但部分记录未找到",
+                        "data": {
+                            "writeback_mode": writeback_mode,
+                            "result": result
+                        }
+                    }
+                else:
+                    # 全部成功
+                    return {
+                        "code": 0,
+                        "message": "CRM拜访记录回写任务执行完成",
+                        "data": {
+                            "writeback_mode": writeback_mode,
+                            "result": result
+                        }
+                    }
+            else:
+                # 回写失败
+                return {
+                    "code": 500,
+                    "message": result.get("message", "回写失败"),
+                    "data": {
+                        "writeback_mode": writeback_mode,
+                        "result": result
+                    }
+                }
+        
+    except Exception as e:
+        logger.exception(f"执行指定ID的CRM拜访记录回写任务失败: {e}")
+        return {
+            "code": 500,
+            "message": f"执行回写任务失败: {str(e)}",
             "data": {}
         }
