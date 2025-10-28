@@ -1,7 +1,7 @@
 import httpx
 import logging
 from typing import List, Dict, Any, Optional
-from datetime import datetime, time
+from datetime import datetime, time, timezone, timedelta
 from sqlmodel import Session, select, text
 from app.core.config import settings, WritebackMode
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
@@ -386,6 +386,21 @@ class CrmWritebackService:
                 except Exception as e:
                     logger.warning(f"记录 ID {record.id}：查询用户信息失败: {e}")
             
+            # 创建时间：转换为北京时间（东八区）
+            created_at = None
+            if record.last_modified_time:
+                # 确保时间是UTC时间，然后转换为北京时间
+                if record.last_modified_time.tzinfo is None:
+                    # 如果没有时区信息，假设是UTC时间
+                    utc_time = record.last_modified_time.replace(tzinfo=timezone.utc)
+                else:
+                    utc_time = record.last_modified_time.astimezone(timezone.utc)
+                
+                # 转换为北京时间（UTC+8）
+                beijing_tz = timezone(timedelta(hours=8))
+                beijing_time = utc_time.astimezone(beijing_tz)
+                created_at = int(beijing_time.timestamp() * 1000)
+            
             # 构建请求
             visit_request = VisitRecordCreateRequest(
                 account=int(record.account_id) if record.account_id else int(record.partner_id),
@@ -397,7 +412,9 @@ class CrmWritebackService:
                 custom_item2=custom_item2,
                 custom_item6=custom_item6,
                 owner_id=owner_id,
-                source_record_id=str(record.recorder_id)
+                source_record_id=str(record.recorder_id),
+                created_by=owner_id,
+                created_at=created_at
             )
             
             visit_requests.visit_records.append(visit_request)

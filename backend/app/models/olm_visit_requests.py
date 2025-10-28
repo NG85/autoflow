@@ -13,6 +13,8 @@ class VisitRecordCreateRequest(BaseModel):
     custom_item6: Optional[int] = Field(None, alias="customItem6__c", description="是否新客户: 1=是, 2=否")
     owner_id: Optional[int] = Field(None, alias="ownerId", description="所有人ID")
     source_record_id: Optional[str] = Field(None, description="来源拜访记录ID (用于日志追溯)")
+    created_by: Optional[int] = Field(None, description="创建人ID")
+    created_at: Optional[int] = Field(None, description="创建时间 (毫秒时间戳)")
 
     class Config:
         allow_population_by_field_name = True
