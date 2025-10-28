@@ -366,7 +366,7 @@ class CrmWritebackService:
                         WHERE u.ask_id = :ask_id
                     """)
                     
-                    result = session.exec(sql_query, {"ask_id": ask_id_str}).first()
+                    result = session.exec(sql_query, params={"ask_id": ask_id_str}).first()
                     
                     if result:
                         fxiaoke_id, depart_id = result
@@ -397,7 +397,7 @@ class CrmWritebackService:
                 custom_item2=custom_item2,
                 custom_item6=custom_item6,
                 owner_id=owner_id,
-                source_record_id=str(record.id)
+                source_record_id=str(record.recorder_id)
             )
             
             visit_requests.visit_records.append(visit_request)
