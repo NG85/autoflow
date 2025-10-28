@@ -139,14 +139,11 @@ class CrmWritebackClient:
         """
         url = f"{self.base_url}/crm-xiaoshouyi/olm/batch"
         
-        try:
-            # 将Pydantic模型转换为字典
-            request_data = visit_requests.model_dump(by_alias=True, exclude_none=True)
-            
+        try:            
             # 设置较长的超时时间来处理批量拜访记录创建
             timeout = httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0)
             with httpx.Client(timeout=timeout) as client:
-                response = client.post(url, headers=self.headers, json=request_data)
+                response = client.post(url, headers=self.headers, json=visit_requests.model_dump())
                 logger.info(f"调用OLM批量创建拜访记录，返回: {response.text}")
                 response.raise_for_status()
                 return {"success": True, "data": response.json()}
@@ -415,7 +412,7 @@ class CrmWritebackService:
                 custom_item2=custom_item2,
                 custom_item6=custom_item6,
                 owner_id=owner_id,
-                source_record_id=str(record.recorder_id),
+                source_record_id=str(record.record_id or record.id),
                 created_by=owner_id,
                 created_at=created_at
             )
