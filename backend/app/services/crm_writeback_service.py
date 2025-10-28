@@ -139,14 +139,11 @@ class CrmWritebackClient:
         """
         url = f"{self.base_url}/crm-xiaoshouyi/olm/batch"
         
-        try:
-            # 将Pydantic模型转换为字典
-            request_data = visit_requests.model_dump(by_alias=True, exclude_none=True)
-            
+        try:            
             # 设置较长的超时时间来处理批量拜访记录创建
             timeout = httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0)
             with httpx.Client(timeout=timeout) as client:
-                response = client.post(url, headers=self.headers, json=request_data)
+                response = client.post(url, headers=self.headers, json=visit_requests.model_dump())
                 logger.info(f"调用OLM批量创建拜访记录，返回: {response.text}")
                 response.raise_for_status()
                 return {"success": True, "data": response.json()}
@@ -415,7 +412,7 @@ class CrmWritebackService:
                 custom_item2=custom_item2,
                 custom_item6=custom_item6,
                 owner_id=owner_id,
-                source_record_id=str(record.recorder_id),
+                source_record_id=str(record.record_id or record.id),
                 created_by=owner_id,
                 created_at=created_at
             )
@@ -632,28 +629,28 @@ class CrmWritebackService:
                 # 执行批量OLM拜访记录创建
                 result = self.client.batch_olm_visit_create(visit_requests)
                 
-                logger.info(f"批量OLM拜访记录创建完成: {len(visit_requests)} 条记录")
+                logger.info(f"批量OLM拜访记录创建完成: {len(visit_requests.visit_records)} 条记录")
                 
                 return_data = result.get("data", {})
                 if isinstance(return_data, dict):
-                    created_visits = return_data.get("created", [])
-                    failed_visits = return_data.get("failed", [])
+                    created_visits = return_data.get("created", 0)
+                    failed_visits = return_data.get("failed", 0)
                     return {
                         "success": result.get("success", False),
-                        "message": f"成功处理 {len(visit_records)} 条拜访记录，回写 {len(visit_requests)} 条OLM记录",
+                        "message": f"成功处理 {len(visit_records)} 条拜访记录，回写 {len(visit_requests.visit_records)} 条OLM记录",
                         "processed_count": len(visit_records),
-                        "writeback_count": len(visit_requests),
-                        "success_count": len(created_visits),
-                        "failed_count": len(failed_visits),
+                        "writeback_count": len(visit_requests.visit_records),
+                        "success_count":  created_visits,
+                        "failed_count": failed_visits,
                         "results": return_data
                     }
                 else:
                     # 如果返回格式不是预期的字典格式
                     return {
                         "success": result.get("success", False),
-                        "message": f"成功处理 {len(visit_records)} 条拜访记录，回写 {len(visit_requests)} 条OLM记录",
+                        "message": f"成功处理 {len(visit_records)} 条拜访记录，回写 {len(visit_requests.visit_records)} 条OLM记录",
                         "processed_count": len(visit_records),
-                        "writeback_count": len(visit_requests),
+                        "writeback_count": len(visit_requests.visit_records),
                         "results": return_data
                     }
         except Exception as e:
