@@ -1,12 +1,12 @@
 import httpx
-import json
 import logging
 from typing import List, Dict, Any, Optional
-from datetime import datetime, timedelta
-from sqlmodel import Session, select
+from datetime import datetime, time
+from sqlmodel import Session, select, text
 from app.core.config import settings, WritebackMode
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
 from app.models.task_requests import TaskCreateRequest, TaskBatchCreateRequest
+from app.models.olm_visit_requests import VisitRecordBatchCreateRequest, VisitRecordCreateRequest
 from app.utils.date_utils import convert_utc_to_local_timezone
 
 logger = logging.getLogger(__name__)
@@ -47,7 +47,8 @@ class CrmWritebackClient:
         }
         
         try:
-            with httpx.Client() as client:
+            timeout = httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0)
+            with httpx.Client(timeout=timeout) as client:
                 response = client.post(url, headers=self.headers, json=payload)
                 response.raise_for_status()
                 return response.json()
@@ -68,7 +69,8 @@ class CrmWritebackClient:
         url = f"{self.base_url}/crm/writeback/batch"
         
         try:
-            with httpx.Client() as client:
+            timeout = httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0)
+            with httpx.Client(timeout=timeout) as client:
                 response = client.post(url, headers=self.headers, json=requests_list)
                 response.raise_for_status()
                 return response.json()
@@ -89,7 +91,8 @@ class CrmWritebackClient:
         url = f"{self.base_url}/crm/writeback/log/{log_id}"
         
         try:
-            with httpx.Client() as client:
+            timeout = httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0)
+            with httpx.Client(timeout=timeout) as client:
                 response = client.get(url)
                 response.raise_for_status()
                 return response.json()
@@ -123,6 +126,33 @@ class CrmWritebackClient:
         except httpx.RequestError as e:
             logger.error(f"批量创建任务失败: {e}")
             return {"success": False, "message": f"批量创建任务失败: {e}"}
+    
+    def batch_olm_visit_create(self, visit_requests: VisitRecordBatchCreateRequest) -> Dict[str, Any]:
+        """
+        批量创建OLM拜访记录
+        
+        Args:
+            visit_requests: 拜访记录创建请求列表
+        
+        Returns:
+            创建结果
+        """
+        url = f"{self.base_url}/crm-xiaoshouyi/olm/batch"
+        
+        try:
+            # 设置较长的超时时间来处理批量拜访记录创建
+            timeout = httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0)
+            with httpx.Client(timeout=timeout) as client:
+                response = client.post(url, headers=self.headers, json=visit_requests)
+                logger.info(f"调用OLM批量创建拜访记录，返回: {response.text}")
+                response.raise_for_status()
+                return {"success": True, "data": response.json()}
+        except httpx.TimeoutException as e:
+            logger.error(f"OLM批量创建拜访记录超时: {e}")
+            return {"success": False, "message": f"OLM批量创建拜访记录超时: {e}"}
+        except httpx.RequestError as e:
+            logger.error(f"OLM批量创建拜访记录失败: {e}")
+            return {"success": False, "message": f"OLM批量创建拜访记录失败: {e}"}
 
 
 class CrmWritebackService:
@@ -130,6 +160,33 @@ class CrmWritebackService:
     
     def __init__(self):
         self.client = CrmWritebackClient(settings.CRM_WRITEBACK_API_URL)
+    
+    def _parse_time_to_timestamp(self, date_value: datetime.date, time_str: str, record_id: int, time_label: str) -> Optional[int]:
+        """
+        解析时间字符串并与日期组合生成毫秒时间戳
+        
+        Args:
+            date_value: 日期值
+            time_str: 时间字符串，格式如 "HH:MM" 或 "HH:MM:SS"
+            record_id: 记录ID，用于日志记录
+            time_label: 时间标签（如"开始时间"、"结束时间"），用于日志记录
+        
+        Returns:
+            毫秒时间戳，解析失败返回None
+        """
+        try:
+            # 解析时间字符串，支持 "HH:MM" 或 "HH:MM:SS" 格式
+            time_parts = time_str.strip().split(":")
+            hour = int(time_parts[0])
+            minute = int(time_parts[1]) if len(time_parts) > 1 else 0
+            second = int(time_parts[2]) if len(time_parts) > 2 else 0
+            
+            time_obj = time(hour, minute, second)
+            datetime_obj = datetime.combine(date_value, time_obj)
+            return int(datetime_obj.timestamp() * 1000)
+        except (ValueError, AttributeError, IndexError) as e:
+            logger.warning(f"记录 ID {record_id}：无法解析{time_label} {time_str}: {e}")
+            return None
     
     def generate_visit_summary_content(self, visit_records: List[CRMSalesVisitRecord]) -> str:
         """
@@ -252,6 +309,101 @@ class CrmWritebackService:
         
         return task_requests
     
+    def generate_olm_visit_requests(self, session: Session, visit_records: List[CRMSalesVisitRecord]) -> VisitRecordBatchCreateRequest:
+        """
+        根据拜访记录生成OLM拜访记录创建请求列表
+        
+        Args:
+            session: 数据库会话
+            visit_records: 拜访记录列表
+        
+        Returns:
+            OLM拜访记录创建请求列表
+        """
+        visit_requests = VisitRecordBatchCreateRequest(visit_records=[])
+        
+        for record in visit_records:            
+            # 签到时间：拜访日期 + 开始时间
+            sign_in_date = self._parse_time_to_timestamp(
+                record.visit_communication_date, 
+                record.visit_start_time, 
+                record.id, 
+                "开始时间"
+            )
+            
+            # 签退时间：拜访日期 + 结束时间
+            sign_out_date = self._parse_time_to_timestamp(
+                record.visit_communication_date, 
+                record.visit_end_time, 
+                record.id, 
+                "结束时间"
+            )
+            
+            # 本次拜访目的（最多300个字符）：映射到跟进记录
+            followup = record.followup_record or record.followup_content
+            custom_item5 = followup[:300] if followup else None
+            
+            # 拜访事项及结果记录（最多300个字符）：映射到下一步计划
+            custom_item2 = record.next_steps[:300] if record.next_steps else None
+            
+            # 是否新客户：1=是, 2=否
+            custom_item6 = 1 if record.is_first_visit else 2
+            
+            # 所有人ID和部门ID（从user表查询fxiaoke_id，再从crm_user_olm表查询departId）
+            owner_id = None
+            dim_depart = None
+            if record.recorder_id:
+                try:
+                    # 将32位UUID转换为36位字符串（带连字符）
+                    # recorder_id是UUID对象，转成字符串会自动变成36位格式
+                    ask_id_str = str(record.recorder_id)
+                    
+                    # 使用原生SQL查询，一次性获取fxiaoke_id和departId
+                    sql_query = text("""
+                        SELECT u.fxiaoke_id, o.departId 
+                        FROM user u 
+                        LEFT JOIN olm.crm_user_olm o ON u.fxiaoke_id = o.id 
+                        WHERE u.ask_id = :ask_id
+                    """)
+                    
+                    result = session.exec(sql_query, {"ask_id": ask_id_str}).first()
+                    
+                    if result:
+                        fxiaoke_id, depart_id = result
+                        if fxiaoke_id:
+                            try:
+                                owner_id = int(fxiaoke_id)
+                                if depart_id:
+                                    dim_depart = int(depart_id)
+                                else:
+                                    logger.warning(f"记录 ID {record.id}：未找到fxiaoke_id {fxiaoke_id} 对应的部门信息")
+                            except (ValueError, TypeError) as e:
+                                logger.warning(f"记录 ID {record.id}：数据格式错误: fxiaoke_id={fxiaoke_id}, depart_id={depart_id}, 错误: {e}")
+                        else:
+                            logger.warning(f"记录 ID {record.id}：fxiaoke_id为空")
+                    else:
+                        logger.warning(f"记录 ID {record.id}：未找到recorder_id {ask_id_str} 对应的用户")
+                except Exception as e:
+                    logger.warning(f"记录 ID {record.id}：查询用户信息失败: {e}")
+            
+            # 构建请求
+            visit_request = VisitRecordCreateRequest(
+                account=int(record.account_id) if record.account_id else int(record.partner_id),
+                dim_depart=dim_depart,
+                custom_item3=record.visit_communication_method,
+                sign_in_date=sign_in_date,
+                sign_out_date=sign_out_date,
+                custom_item5=custom_item5,
+                custom_item2=custom_item2,
+                custom_item6=custom_item6,
+                owner_id=owner_id,
+                source_record_id=str(record.id)
+            )
+            
+            visit_requests.visit_records.append(visit_request)
+
+        return visit_requests
+    
     def writeback_visit_records(self, session: Session, start_date: datetime.date, 
                                end_date: datetime.date, writeback_mode: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -340,7 +492,7 @@ class CrmWritebackService:
                     "results": return_data
                 }
             
-            else:
+            elif writeback_mode == "CBG":
                 # CBG内容回写模式（原有逻辑）
                 logger.info("使用CBG内容回写模式")
                 logger.info("回写优先级：商机 > 客户 > 合作伙伴")
@@ -441,6 +593,49 @@ class CrmWritebackService:
                         "writeback_count": 0
                     }
                 
+            elif writeback_mode == "OLM":
+                # OLM拜访记录回写模式
+                logger.info("使用OLM拜访记录回写模式")
+                
+                # 生成OLM拜访记录请求
+                visit_requests = self.generate_olm_visit_requests(session, visit_records)
+                
+                if not visit_requests:
+                    logger.info("没有需要回写的OLM拜访记录")
+                    return {
+                        "success": True,
+                        "message": "没有需要回写的OLM拜访记录",
+                        "processed_count": len(visit_records),
+                        "writeback_count": 0
+                    }
+                
+                # 执行批量OLM拜访记录创建
+                result = self.client.batch_olm_visit_create(visit_requests)
+                
+                logger.info(f"批量OLM拜访记录创建完成: {len(visit_requests)} 条记录")
+                
+                return_data = result.get("data", {})
+                if isinstance(return_data, dict):
+                    created_visits = return_data.get("created", [])
+                    failed_visits = return_data.get("failed", [])
+                    return {
+                        "success": result.get("success", False),
+                        "message": f"成功处理 {len(visit_records)} 条拜访记录，回写 {len(visit_requests)} 条OLM记录",
+                        "processed_count": len(visit_records),
+                        "writeback_count": len(visit_requests),
+                        "success_count": len(created_visits),
+                        "failed_count": len(failed_visits),
+                        "results": return_data
+                    }
+                else:
+                    # 如果返回格式不是预期的字典格式
+                    return {
+                        "success": result.get("success", False),
+                        "message": f"成功处理 {len(visit_records)} 条拜访记录，回写 {len(visit_requests)} 条OLM记录",
+                        "processed_count": len(visit_records),
+                        "writeback_count": len(visit_requests),
+                        "results": return_data
+                    }
         except Exception as e:
             logger.exception(f"回写拜访记录失败: {e}")
             return {
