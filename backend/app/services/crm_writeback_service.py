@@ -666,8 +666,11 @@ class CrmWritebackService:
             回写结果，包含找到的记录ID和缺失的记录ID
         """
         try:
-            # 查询指定的拜访记录
-            stmt = select(CRMSalesVisitRecord).where(CRMSalesVisitRecord.id.in_(visit_record_ids))
+            # 查询指定的拜访记录，仅选择 visit_type 为 form 的记录
+            stmt = select(CRMSalesVisitRecord).where(
+                CRMSalesVisitRecord.id.in_(visit_record_ids),
+                CRMSalesVisitRecord.visit_type == "form"
+            )
             visit_records = session.exec(stmt).all()
             
             if not visit_records:
