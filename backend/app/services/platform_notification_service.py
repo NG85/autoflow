@@ -1365,7 +1365,7 @@ class PlatformNotificationService:
         
         # 准备销售任务卡片消息内容
         if settings.NOTIFICATION_PLATFORM == PLATFORM_DINGTALK:
-            template_id = "TBD"  # 钉钉卡片模板待定
+            template_id = "6e587206-a1fb-418f-9980-b67cd94d2e31.schema"  # 钉钉卡片模板ID
         elif settings.NOTIFICATION_PLATFORM == PLATFORM_FEISHU or settings.NOTIFICATION_PLATFORM == PLATFORM_LARK:
             template_id = "AAqhcf51plkp6"  # 飞书卡片模板ID
         

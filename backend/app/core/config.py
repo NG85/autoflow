@@ -179,13 +179,13 @@ class Settings(BaseSettings):
     
     # CRM sales task notification configuration
     CRM_SALES_TASK_ENABLED: bool = False
-    CRM_SALES_TASK_CRON: str = '0 10 * * 6'  # 每周六上午10点执行
+    CRM_SALES_TASK_CRON: str = '0 10 * * 0'  # 每周日上午10点执行
     CRM_SALES_TASK_FEISHU_ENABLED: bool = True  # 是否启用飞书推送
     CRM_SALES_TASK_PAGE_URL: str = "https://test.zhizhenzhihe.com/task/query"
     
     # Feishu Btable sync configuration
     ENABLE_FEISHU_BTABLE_SYNC: bool = False
-    FEISHU_BTABLE_SYNC_CRON: str = '5 0 * * *'
+    FEISHU_BTABLE_SYNC_CRON: str = '0 13 * * 0'  # 每周日中午1点执行
     FEISHU_BTABLE_URL: str = 'https://test-dbk58s1t6pur.feishu.cn/base/Hg7bb7FW4aLDkbsnoUic0ntUnZe?table=tbl6nDugEoAulPsu&view=vewuBKoUMz'
     FEISHU_APP_ID: str = 'cli_a808bc341680d00b'
     FEISHU_APP_SECRET: str = '9oGQcBaHRCfOB2Vy2AwtyGQxZUpPzjaa'
