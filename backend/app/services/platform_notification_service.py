@@ -1283,6 +1283,139 @@ class PlatformNotificationService:
         
         return recipients_by_platform
 
+    def get_recipients_for_sales_task(
+        self,
+        db_session: Session,
+        task_assignee_name: str = None,
+        task_assignee_id: str = None
+    ) -> List[Dict[str, Any]]:
+        """获取销售任务卡片推送的接收者 - 目前只推送给任务负责人"""
+        
+        recipients = []
+        
+        # 1. 查找任务负责人的档案
+        assignee_profile = None
+        
+        if task_assignee_id:
+            # 优先使用task_assignee_id查找
+            assignee_profile = self.user_profile_repo.get_by_recorder_id(db_session, task_assignee_id)
+            if assignee_profile:
+                logger.info(f"Found profile by task_assignee_id: {task_assignee_id} -> {assignee_profile.name}")
+        
+        if not assignee_profile and task_assignee_name:
+            # 如果task_assignee_id没找到，使用姓名查找
+            assignee_profile = self.user_profile_repo.get_by_name(db_session, task_assignee_name)
+            if assignee_profile:
+                logger.info(f"Found profile by name: {task_assignee_name} -> {assignee_profile.name}")
+        
+        if not assignee_profile:
+            logger.warning(f"No profile found for sales task assignee: name={task_assignee_name}, id={task_assignee_id}")
+            return recipients
+        
+        # 2. 只添加任务负责人本人
+        assignee_open_id = assignee_profile.open_id
+        if assignee_open_id:
+            recipients.append({
+                "open_id": assignee_open_id,
+                "name": assignee_profile.name or task_assignee_name or "Unknown",
+                "type": "task_assignee",
+                "department": assignee_profile.department,
+                "receive_id_type": "open_id",
+                "platform": assignee_profile.platform
+            })
+            logger.info(f"Found sales task assignee: {assignee_profile.name} ({assignee_profile.department}) with {assignee_profile.platform} open_id: {assignee_open_id}")
+        else:
+            logger.warning(f"Task assignee {task_assignee_name} (profile: {assignee_profile.name}) has no {assignee_profile.platform} open_id, cannot send sales task notification")
+        
+        return recipients
+
+    def send_sales_task_notification(
+        self,
+        db_session: Session,
+        task_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """发送销售任务卡片通知"""
+        
+        task_assignee_id = task_data.get("assignee_id")
+        task_assignee_name = task_data.get("assignee_name")
+        if not task_assignee_name and not task_assignee_id:
+            logger.warning("Sales task data missing assignee name and id")
+            return {
+                "success": False,
+                "message": "Missing assignee name and id in sales task data",
+                "recipients_count": 0,
+                "success_count": 0
+            }
+        
+        # 获取推送对象 - 销售任务只推送给任务负责人
+        recipients = self.get_recipients_for_sales_task(
+            db_session=db_session,
+            task_assignee_name=task_assignee_name,
+            task_assignee_id=task_assignee_id
+        )
+        
+        if not recipients:
+            logger.warning(f"No recipients found for sales task of {task_assignee_name}")
+            return {
+                "success": False,
+                "message": f"No recipients found for {task_assignee_name}",
+                "recipients_count": 0,
+                "success_count": 0
+            }
+        
+        # 准备销售任务卡片消息内容
+        if settings.NOTIFICATION_PLATFORM == PLATFORM_DINGTALK:
+            template_id = "TBD"  # 钉钉卡片模板待定
+        elif settings.NOTIFICATION_PLATFORM == PLATFORM_FEISHU or settings.NOTIFICATION_PLATFORM == PLATFORM_LARK:
+            template_id = "AAqhcf51plkp6"  # 飞书卡片模板ID
+        
+        # 构建模板变量
+        template_vars = self._convert_sales_task_data_for_feishu(db_session, task_data)
+        
+        card_content = {
+            "type": "template",
+            "data": {
+                "template_id": template_id,
+                "template_variable": template_vars
+            }
+        }
+        
+        # 按平台分组接收者
+        recipients_by_platform = self._group_recipients_by_platform(recipients)
+        
+        # 使用公共方法发送通知
+        return self._send_notifications_by_platform(
+            recipients_by_platform=recipients_by_platform,
+            card_content=card_content,
+            notification_type="sales task"
+        )
+
+    def _convert_sales_task_data_for_feishu(self, db_session: Session, task_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        将销售任务数据转换为飞书卡片所需的格式（所有数值和日期转换为字符串）
+        
+        Args:
+            db_session: 数据库会话
+            task_data: 原始销售任务数据
+            
+        Returns:
+            转换后的数据，所有数值和日期字段都转换为字符串
+        """
+        converted_data = task_data.copy()
+        
+        # 处理数值字段
+        for key, value in converted_data.items():
+            if isinstance(value, (int, float)):
+                converted_data[key] = str(value)
+            elif hasattr(value, 'isoformat'):  # 处理date对象
+                converted_data[key] = value.isoformat()
+        
+        # 添加字段名映射，用于卡片展示
+        from app.services.crm_config_service import add_field_mapping_to_data
+        converted_data = add_field_mapping_to_data(converted_data, db_session, "销售任务")
+        
+        return converted_data
+
 
 # 创建默认的平台通知服务实例
 platform_notification_service = PlatformNotificationService()

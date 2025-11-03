@@ -177,12 +177,18 @@ class Settings(BaseSettings):
     CRM_WRITEBACK_FREQUENCY: WritebackFrequency = WritebackFrequency.WEEKLY  # 回写频率：weekly（按周）或daily（按天）
     CRM_WRITEBACK_TIMEZONE: str = "Asia/Shanghai"  # 回写任务使用的时区
     
+    # CRM sales task notification configuration
+    CRM_SALES_TASK_ENABLED: bool = False
+    CRM_SALES_TASK_CRON: str = '0 10 * * 6'  # 每周六上午10点执行
+    CRM_SALES_TASK_FEISHU_ENABLED: bool = True  # 是否启用飞书推送
+    CRM_SALES_TASK_PAGE_URL: str = "https://test.zhizhenzhihe.com/task/query"
+    
     # Feishu Btable sync configuration
     ENABLE_FEISHU_BTABLE_SYNC: bool = False
     FEISHU_BTABLE_SYNC_CRON: str = '5 0 * * *'
-    FEISHU_BTABLE_URL: str = 'https://pingcap-cn.feishu.cn/wiki/VWfHwGabtiHStUk1GvkcQQcFnjf?table=tblUoj9PFg92NYS8&view=vewsyBbD7L'
-    FEISHU_APP_ID: str = 'cli_a74bce3ec73d901c'
-    FEISHU_APP_SECRET: str = '1xC7zUP6PQpUoOMJte8tddgPm5zaqfoW'
+    FEISHU_BTABLE_URL: str = 'https://test-dbk58s1t6pur.feishu.cn/base/Hg7bb7FW4aLDkbsnoUic0ntUnZe?table=tbl6nDugEoAulPsu&view=vewuBKoUMz'
+    FEISHU_APP_ID: str = 'cli_a808bc341680d00b'
+    FEISHU_APP_SECRET: str = '9oGQcBaHRCfOB2Vy2AwtyGQxZUpPzjaa'
     
     # Lark configuration
     LARK_APP_ID: str = 'cli_a8294dbbcdb8d02d'

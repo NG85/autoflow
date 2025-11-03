@@ -10,6 +10,34 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# 通用：根据Celery task_id查询任务状态
+def _get_celery_task_status_response(task_id: str) -> dict:
+    from app.celery import app
+    task_result = app.AsyncResult(task_id)
+    status = task_result.status
+    result = task_result.result
+    response_data = {
+        "task_id": task_id,
+        "status": status,
+    }
+    if status == "PENDING":
+        response_data["message"] = "任务正在等待执行"
+    elif status == "SUCCESS":
+        response_data["message"] = "任务执行成功"
+        response_data["result"] = result
+    elif status == "FAILURE":
+        response_data["message"] = "任务执行失败"
+        response_data["error"] = str(result) if result else "未知错误"
+    elif status == "RETRY":
+        response_data["message"] = "任务正在重试"
+    else:
+        response_data["message"] = f"任务状态: {status}"
+    return {
+        "code": 0,
+        "message": "success",
+        "data": response_data,
+    }
+
 @router.post("/crm/daily-reports/trigger-task")
 def trigger_daily_statistics_task(
     user: CurrentSuperuserDep,
@@ -258,66 +286,6 @@ def trigger_crm_writeback_task(
         }
 
 
-@router.get("/crm/daily-reports/task-status/{task_id}")
-def get_task_status(
-    task_id: str,
-    user: CurrentSuperuserDep,
-):
-    """
-    查询CRM日报统计任务的执行状态
-    
-    Args:
-        task_id: 任务ID（由trigger-task接口返回）
-        
-    Returns:
-        任务状态信息
-    """
-    if not user.is_superuser:
-        return {
-            "code": 403,
-            "message": "权限不足，只有超级管理员可以触发此任务",
-            "data": {}
-        }
-    try:
-        from app.celery import app
-        
-        # 获取任务状态
-        task_result = app.AsyncResult(task_id)
-        
-        status = task_result.status
-        result = task_result.result
-        
-        response_data = {
-            "task_id": task_id,
-            "status": status,
-        }
-        
-        if status == "PENDING":
-            response_data["message"] = "任务正在等待执行"
-        elif status == "SUCCESS":
-            response_data["message"] = "任务执行成功"
-            response_data["result"] = result
-        elif status == "FAILURE":
-            response_data["message"] = "任务执行失败"
-            response_data["error"] = str(result) if result else "未知错误"
-        elif status == "RETRY":
-            response_data["message"] = "任务正在重试"
-        else:
-            response_data["message"] = f"任务状态: {status}"
-        
-        return {
-            "code": 0,
-            "message": "success",
-            "data": response_data
-        }
-        
-    except Exception as e:
-        logger.exception(f"查询任务状态失败: {e}")
-        return {
-            "code": 500,
-            "message": f"查询任务状态失败: {str(e)}",
-            "data": {}
-        }
 
 
 @router.post("/crm/writeback/by-ids")
@@ -406,5 +374,200 @@ def trigger_crm_writeback_by_ids(
         return {
             "code": 500,
             "message": f"执行回写任务失败: {str(e)}",
+            "data": {}
+        }
+
+
+@router.post("/crm/sales-task/trigger-task")
+def trigger_sales_task_summary(
+    user: CurrentSuperuserDep,
+    start_date: Optional[str] = Body(None, description="筛选起始日期，格式YYYY-MM-DD，不传则默认为上周日"),
+    end_date: Optional[str] = Body(None, description="筛选结束日期，格式YYYY-MM-DD，不传则默认为本周六"),
+):
+    """
+    手动触发销售任务总结任务
+    
+    用于测试和调试，不依赖定时任务调度
+    如果不传入 start_date 和 end_date，默认使用上周日到本周六的数据范围
+    """
+    if not user.is_superuser:
+        return {
+            "code": 403,
+            "message": "权限不足，只有超级管理员可以触发此任务",
+            "data": {}
+        }
+    
+    try:
+        # 触发异步推送任务，支持可选时间段参数
+        from app.tasks.cron_jobs import send_sales_task_summary
+        from datetime import datetime, timedelta
+        
+        # 解析日期范围
+        if start_date and end_date:
+            try:
+                parsed_start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
+                parsed_end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
+            except ValueError:
+                return {
+                    "code": 400,
+                    "message": "日期格式错误，请使用YYYY-MM-DD格式",
+                    "data": {}
+                }
+        else:
+            # 默认处理上周日到本周六的数据
+            today = datetime.now().date()
+            # 计算上周日（今天往前推7天，然后找到最近的周日）
+            days_since_sunday = (today.weekday() + 1) % 7  # 0=周一，1=周二，...，6=周日
+            last_sunday = today - timedelta(days=days_since_sunday + 7)
+            this_saturday = last_sunday + timedelta(days=6)
+            
+            parsed_start_date = last_sunday
+            parsed_end_date = this_saturday
+
+        logger.info(f"用户 {user.id} 手动触发销售任务总结任务，日期范围: {parsed_start_date} 到 {parsed_end_date}")
+
+        task = send_sales_task_summary.delay(
+            start_date_str=parsed_start_date.isoformat(),
+            end_date_str=parsed_end_date.isoformat()
+        )
+        return {
+            "code": 0,
+            "message": "销售任务总结任务已触发",
+            "data": {
+                "task_id": task.id,
+                "status": "PENDING",
+                "start_date": parsed_start_date.isoformat(),
+                "end_date": parsed_end_date.isoformat(),
+                "description": f"已提交销售任务总结任务到队列，任务ID: {task.id}，日期范围: {parsed_start_date.isoformat()} 到 {parsed_end_date.isoformat()}"
+            }
+        }
+    except Exception as e:
+        logger.exception(f"触发销售任务总结任务失败: {e}")
+        return {
+            "code": 500,
+            "message": f"触发任务失败: {str(e)}",
+            "data": {}
+        }
+
+
+@router.post("/crm/bitable-writeback/trigger-task")
+def trigger_bitable_writeback_task(
+    user: CurrentSuperuserDep,
+    start_date: Optional[str] = Body(None, description="开始日期，格式YYYY-MM-DD，不传则根据CRM_WRITEBACK_FREQUENCY配置自动计算"),
+    end_date: Optional[str] = Body(None, description="结束日期，格式YYYY-MM-DD，不传则根据CRM_WRITEBACK_FREQUENCY配置自动计算")
+):
+    """
+    手动触发多维表格回写任务
+    
+    用于测试或手动执行CRM拜访记录写入到飞书/Lark多维表格的功能
+    
+    时间范围说明：
+    - 如果同时提供start_date和end_date，则使用指定的日期范围
+    - 如果都不提供，则根据settings.CRM_WRITEBACK_FREQUENCY配置自动计算：
+      - DAILY：处理昨天的数据
+      - WEEKLY：处理上周日到本周六的数据
+    
+    工作流程：
+    1. 根据日期范围从crm_sales_visit_records表查询拜访记录
+    2. 将数据转换为Feishu/Lark多维表格字段格式
+    3. 批量写入到多维表格
+    """
+    if not user.is_superuser:
+        return {
+            "code": 403,
+            "message": "权限不足，只有超级管理员可以触发此任务",
+            "data": {}
+        }
+
+    try:
+        from app.tasks.bitable_import import sync_bitable_visit_records
+        from datetime import datetime
+        
+        # 解析日期范围
+        parsed_start_date = None
+        parsed_end_date = None
+        
+        if start_date and end_date:
+            try:
+                parsed_start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
+                parsed_end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
+                
+                if parsed_start_date > parsed_end_date:
+                    return {
+                        "code": 400,
+                        "message": "开始日期不能晚于结束日期",
+                        "data": {}
+                    }
+            except ValueError:
+                return {
+                    "code": 400,
+                    "message": "日期格式错误，请使用YYYY-MM-DD格式",
+                    "data": {}
+                }
+        elif start_date or end_date:
+            return {
+                "code": 400,
+                "message": "开始日期和结束日期必须同时提供，或都不提供以使用配置的频率自动计算",
+                "data": {}
+            }
+        
+        logger.info(
+            f"用户 {user.id} 手动触发多维表格回写任务，"
+            f"日期范围: {parsed_start_date.isoformat() if parsed_start_date else '自动计算'} 到 {parsed_end_date.isoformat() if parsed_end_date else '自动计算'}"
+        )
+        
+        # 触发异步任务
+        if parsed_start_date and parsed_end_date:
+            task = sync_bitable_visit_records.delay(
+                start_date_str=parsed_start_date.isoformat(),
+                end_date_str=parsed_end_date.isoformat()
+            )
+            date_range_desc = f"{parsed_start_date.isoformat()} 到 {parsed_end_date.isoformat()}"
+        else:
+            task = sync_bitable_visit_records.delay()
+            date_range_desc = "根据配置自动计算"
+        
+        return {
+            "code": 0,
+            "message": "多维表格回写任务已触发",
+            "data": {
+                "task_id": task.id,
+                "start_date": parsed_start_date.isoformat() if parsed_start_date else None,
+                "end_date": parsed_end_date.isoformat() if parsed_end_date else None,
+                "status": "PENDING",
+                "description": f"已提交 {date_range_desc} 的多维表格回写任务到队列，任务ID: {task.id}"
+            }
+        }
+        
+    except Exception as e:
+        logger.exception(f"触发多维表格回写任务失败: {e}")
+        return {
+            "code": 500,
+            "message": f"触发任务失败: {str(e)}",
+            "data": {}
+        }
+
+
+@router.get("/crm/task-status/{task_id}")
+def get_any_task_status(
+    task_id: str,
+    user: CurrentSuperuserDep,
+):
+    """
+    通用：根据task_id查询任意Celery任务状态（统一入口）
+    """
+    if not user.is_superuser:
+        return {
+            "code": 403,
+            "message": "权限不足，只有超级管理员可以查询此任务",
+            "data": {}
+        }
+    try:
+        return _get_celery_task_status_response(task_id)
+    except Exception as e:
+        logger.exception(f"查询任务状态失败: {e}")
+        return {
+            "code": 500,
+            "message": f"查询任务状态失败: {str(e)}",
             "data": {}
         }

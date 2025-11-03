@@ -26,10 +26,10 @@ def parse_feishu_url(url):
     return url_type, token, table_id, view_id
 
 # 配置区
-FEISHU_URL = 'https://mi5p6bgsnf8.feishu.cn/wiki/W4T0wWrZoiRX8xkJVLTcZDE9ndf?table=tblMaG321UP9LO9j&view=vew2esc4q1'
+FEISHU_URL = 'https://test-dbk58s1t6pur.feishu.cn/base/Hg7bb7FW4aLDkbsnoUic0ntUnZe?table=tbl6nDugEoAulPsu&view=vewuBKoUMz'
 url_type, url_token, table_id, view_id = parse_feishu_url(FEISHU_URL)
-APP_ID = 'cli_a735685d1c39100e'
-APP_SECRET = 'EUIECISu75Ctk30VW3aFlqJGUInBQGzb'
+APP_ID = 'cli_a808bc341680d00b'
+APP_SECRET = '9oGQcBaHRCfOB2Vy2AwtyGQxZUpPzjaa'
 BITABLE_TOKEN = url_token
 BITABLE_TABLE_ID = table_id
 BITABLE_VIEW_ID = view_id

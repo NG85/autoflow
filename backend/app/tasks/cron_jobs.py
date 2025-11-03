@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, timedelta
+from enum import Enum
 from sqlmodel import Session
 import pytz
 
@@ -14,6 +15,21 @@ from app.services.crm_writeback_service import crm_writeback_service
 from app.tasks.knowledge_base import import_documents_from_kb_datasource
 
 logger = logging.getLogger(__name__)
+
+class TodoDataSourceType(str, Enum):
+    """TODO数据源类型枚举"""
+    MANUAL = "MANUAL"
+    AI_EXTRACTION = "AI_EXTRACTION"
+    PIPELINE_PLAYBOOK = "PIPELINE_PLAYBOOK"
+    
+    def display_name(self) -> str:
+        """转换为显示名称"""
+        display_names = {
+            TodoDataSourceType.MANUAL: "自创建",
+            TodoDataSourceType.AI_EXTRACTION: "AI抽取",
+            TodoDataSourceType.PIPELINE_PLAYBOOK: "销售打法",
+        }
+        return display_names.get(self, self.value)
 
 @app.task(bind=True, max_retries=3)
 def create_crm_daily_datasource(self):
@@ -77,7 +93,7 @@ def create_crm_daily_datasource(self):
         self.retry(exc=e, countdown=60)  # 1分钟后重试
 
 
-@app.task(bind=True, max_retries=3)
+@app.task(bind=True)
 def generate_crm_daily_statistics(self, target_date_str=None):
     """
     生成CRM销售日报完整数据并推送飞书通知
@@ -157,7 +173,7 @@ def generate_crm_daily_statistics(self, target_date_str=None):
 
 
 
-@app.task(bind=True, max_retries=3)
+@app.task(bind=True)
 def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, report_type=None):
     """
     生成CRM周报数据并推送给团队leader
@@ -321,7 +337,7 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
         }
 
 
-@app.task(bind=True, max_retries=3)
+@app.task(bind=True)
 def crm_visit_records_writeback(self, start_date_str=None, end_date_str=None, writeback_mode=None):
     """
     CRM销售拜访记录数据回写任务
@@ -435,3 +451,622 @@ def crm_visit_records_writeback(self, start_date_str=None, end_date_str=None, wr
             "message": f"任务执行失败: {str(e)}",
             "data": {}
         }
+
+@app.task(bind=True)
+def send_sales_task_summary(self, start_date_str=None, end_date_str=None):
+    """
+    销售任务总结推送任务
+    从crm_todos表获取数据，按负责人推送销售任务卡片（飞书/钉钉）。
+    
+    Args:
+        start_date_str: 开始日期字符串，格式YYYY-MM-DD，不传则默认为上周日
+        end_date_str: 结束日期字符串，格式YYYY-MM-DD，不传则默认为本周六
+    """
+    try:
+        logger.info("开始执行销售任务总结任务（数据源：crm_todos）")
+
+        # 计算上周的日期范围
+        if start_date_str and end_date_str:
+            try:
+                start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+                end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
+                logger.info(f"开始执行销售任务总结任务，日期范围: {start_date} 到 {end_date}")
+            except ValueError:
+                logger.error(f"无效的日期格式: start_date={start_date_str}, end_date={end_date_str}")
+                return {
+                    "success": False,
+                    "message": "无效的日期格式",
+                    "data": {}
+                }
+        else:
+            # 默认处理上周日到本周六的数据
+            today = datetime.now().date()
+            # 计算上周日（今天往前推7天，然后找到最近的周日）
+            days_since_sunday = (today.weekday() + 1) % 7  # 0=周一，1=周二，...，6=周日
+            last_sunday = today - timedelta(days=days_since_sunday + 7)
+            this_saturday = last_sunday + timedelta(days=6)
+            
+            start_date = last_sunday
+            end_date = this_saturday
+            logger.info(f"开始执行销售任务总结任务，默认处理上周日到本周六: {start_date} 到 {end_date}")
+        
+        with Session(engine) as session:            
+            # 读取crm_todos中需要推送的任务（按时间范围过滤，只查询due_date不为空的记录）
+            # 本周已完成的任务(任务状态为COMPLETED)
+            this_week_sales_tasks = _get_sales_tasks_from_crm_todos(session, start_date, end_date, status_list=["COMPLETED"])
+            
+            # 本周已取消的任务(任务状态为CANCELLED)
+            cancelled_by_assignee_count = _count_cancelled_tasks(session, start_date, end_date)
+            total_cancelled_count = sum(cancelled_by_assignee_count.values())
+            
+            # 下周待完成(任务状态为PENDING或IN_PROGRESS)
+            next_week_start_date = start_date + timedelta(days=7)
+            next_week_end_date = end_date + timedelta(days=7)
+            next_week_sales_tasks = _get_sales_tasks_from_crm_todos(session, next_week_start_date, next_week_end_date, status_list=["PENDING", "IN_PROGRESS"])
+            
+            # 截止到本周的所有未完成任务(任务状态为OVERDUE)
+            overdue_tasks = _get_sales_tasks_from_crm_todos(session, range_start=None, range_end=end_date, status_list=["PENDING", "IN_PROGRESS"])
+            
+            # 单独统计due_date为空的记录数量（与时间范围无关，只需要数量）
+            no_due_date_count = _count_no_due_date_tasks(session)
+            total_no_due_date = sum(no_due_date_count.values())
+            
+            if not this_week_sales_tasks and not next_week_sales_tasks:
+                logger.info("crm_todos 未找到需要推送的销售任务")
+                return {
+                    "success": True,
+                    "message": "没有需要推送的销售任务",
+                    "processed_count": 0,
+                    "success_count": 0,
+                    "failed_count": 0
+                }
+
+            logger.info(f"crm_todos 读取到本周已完成 {len(this_week_sales_tasks)} 条，下周待完成 {len(next_week_sales_tasks)} 条，截止到本周的全部逾期任务 {len(overdue_tasks)} 条，本周已取消 {total_cancelled_count} 条(涉及 {len(cancelled_by_assignee_count)} 个负责人)，due_date为空 {total_no_due_date} 条（涉及 {len(no_due_date_count)} 个负责人）")
+            
+            # 按负责人统计任务（本周和下周的任务都有due_date，due_date为空的单独统计）
+            analyze_results = _analyze_crm_todos(this_week_sales_tasks, next_week_sales_tasks, overdue_tasks, start_date, end_date, next_week_start_date, next_week_end_date, no_due_date_count, cancelled_by_assignee_count)
+            logger.info(f"分析结果: {len(analyze_results)} 个负责人的任务统计")
+            success_count = 0
+            failed_count = 0
+            failed_tasks = []
+
+            for task_data in analyze_results:
+                try:
+                    result = platform_notification_service.send_sales_task_notification(
+                        db_session=session,
+                        task_data=task_data
+                    )
+                    if result.get("success"):
+                        success_count += 1
+                        logger.info(
+                            f"成功推送销售任务给 {task_data.get('assignee_name')}，"
+                            f"推送成功 {result['success_count']}/{result['recipients_count']} 次"
+                        )
+                    else:
+                        failed_count += 1
+                        failed_tasks.append({
+                            "assignee_name": task_data.get("assignee_name"),
+                            "error": result.get("message", "未知错误")
+                        })
+                        logger.warning(f"销售任务推送失败: {result.get('message')}")
+                except Exception as e:
+                    failed_count += 1
+                    failed_tasks.append({
+                        "assignee_name": task_data.get("assignee_name"),
+                        "error": str(e)
+                    })
+                    logger.exception(f"推送销售任务时异常: {e}")
+
+            logger.info(
+                f"销售任务总结任务完成: 总数 {len(analyze_results)}，成功 {success_count}，失败 {failed_count}"
+            )
+
+            return {
+                "success": True,
+                "message": f"销售任务总结完成: 成功 {success_count} 个，失败 {failed_count} 个",
+                "processed_count": len(analyze_results),
+                "success_count": success_count,
+                "failed_count": failed_count,
+                "failed_tasks": failed_tasks,
+                "analysis_results": analyze_results
+            }
+    except Exception as e:
+        logger.exception(f"销售任务总结任务执行失败: {e}")
+        self.retry(exc=e, countdown=300)
+
+
+def _get_sales_tasks_from_crm_todos(
+    session: Session,
+    range_start: datetime | None = None,
+    range_end: datetime | None = None,
+    status_list: list[str] = [],
+) -> list[dict]:
+    """
+    从crm_todos表读取符合指定时间范围的销售任务，返回统一的task_data结构。
+
+    查询条件：
+    - 负责人存在（owner_name 或 owner_id）
+    - due_date 在指定的时间范围内（range_start 到 range_end）
+    
+    参数:
+        session: 数据库会话
+        range_start: 时间范围起始时间（包含）
+        range_end: 时间范围结束时间（包含）
+        status_list: 任务状态列表
+    返回:
+        符合时间范围的销售任务列表
+    """
+    from sqlalchemy import text
+
+    # 构建时间范围查询条件
+    sql_params = {}
+    time_conditions = []
+    
+    if range_start is not None:
+        time_conditions.append("due_date >= :range_start")
+        sql_params["range_start"] = range_start
+    
+    if range_end is not None:
+        time_conditions.append("due_date <= :range_end")
+        sql_params["range_end"] = range_end
+    
+    if time_conditions:
+        time_condition = " AND ".join(time_conditions)
+        # 如果有时间条件，添加 AND 前缀
+        time_condition_clause = f"AND {time_condition}"
+    else:
+        # 如果起止时间都为None，则不添加时间条件（查询所有记录）
+        time_condition_clause = ""
+    
+    # 构建状态列表查询条件
+    if status_list and len(status_list) > 0:
+        # 为每个状态创建占位符
+        status_placeholders = ", ".join([f":status_{i}" for i in range(len(status_list))])
+        status_condition = f"AND ai_status IN ({status_placeholders})"
+        # 添加状态参数
+        for i, status in enumerate(status_list):
+            sql_params[f"status_{i}"] = status
+    else:
+        status_condition = ""
+    
+    sql = text(
+        f"""
+        SELECT
+            title,
+            due_date,
+            ai_status,
+            owner_id,
+            owner_name,
+            opportunity_id,
+            opportunity_name,
+            account_id,
+            account_name,
+            data_source
+        FROM crm_todos
+        WHERE (owner_name IS NOT NULL OR owner_id IS NOT NULL)
+            AND data_source IS NOT NULL
+            AND due_date IS NOT NULL
+            {time_condition_clause}
+            {status_condition}
+        ORDER BY due_date ASC
+        """
+    )
+    rows = session.exec(sql, params=sql_params).fetchall()
+ 
+    tasks: list[dict] = []
+    for r in rows:
+        # 将Row映射为dict（sqlmodel返回Row）
+        row = dict(r._mapping) if hasattr(r, "_mapping") else dict(r)
+        tasks.append({
+            "assignee_name": row.get("owner_name"),
+            "assignee_id": row.get("owner_id"),
+            "task_name": row.get("title"),
+            "due_date": row.get("due_date").isoformat(),
+            "ai_status": row.get("ai_status"),
+            "account_id": row.get("account_id"),
+            "account_name": row.get("account_name"),
+            "opportunity_id": row.get("opportunity_id"),
+            "opportunity_name": row.get("opportunity_name"),
+            "data_source": row.get("data_source"),
+        })
+
+    return tasks
+
+
+def _get_assignee_key_and_name_from_data(owner_name: str | None, owner_id: str | None) -> tuple[str | None, str | None]:
+    """
+    获取负责人标识和名称（公共方法，处理JSON格式的assignee_name）
+    
+    owner_name: 负责人名称
+    owner_id: 负责人ID
+    
+    返回:
+        (assignee_key, assignee_name)
+        - assignee_key: 用于分组的标识
+        - assignee_name: 解析后的显示名称（如果是JSON则提取实际人名）
+    """
+        
+    # assignee_name 解析JSON格式（用于显示）
+    assignee_name = owner_name
+    if assignee_name:
+        try:
+            import json
+            parsed = json.loads(assignee_name)
+            if isinstance(parsed, list) and parsed and isinstance(parsed[0], str):
+                assignee_name = parsed[0]
+            elif isinstance(parsed, dict):
+                v = parsed.get("name")
+                if isinstance(v, str) and v.strip():
+                    assignee_name = v
+            elif isinstance(parsed, str) and parsed.strip():
+                assignee_name = parsed
+        except Exception:
+            # 非 JSON 字符串，保持原值
+            pass
+    
+    assignee_key = assignee_name or owner_name or owner_id
+    return assignee_key, assignee_name
+
+
+def _count_cancelled_tasks(session: Session, start_date: datetime, end_date: datetime) -> dict[str, int]:
+    """
+    统计crm_todos表中已取消的销售任务数量，按负责人分组。
+    
+    查询条件：
+    - 负责人存在（owner_name 或 owner_id）
+    - ai_status为CANCELLED
+    - due_date在指定的时间范围内（start_date 到 end_date）
+    返回:
+        按负责人分组的已取消任务数量字典，key为负责人标识（与_analyze_crm_todos中的处理逻辑一致）
+    """
+    from sqlalchemy import text
+    
+    # 先查询出所有记录，然后在Python中处理assignee_key，确保与_analyze_crm_todos中的逻辑一致
+    sql = text(
+        """
+        SELECT
+            owner_name,
+            owner_id
+        FROM crm_todos
+        WHERE (owner_name IS NOT NULL OR owner_id IS NOT NULL)
+            AND data_source IS NOT NULL
+            AND ai_status = 'CANCELLED'
+            AND due_date >= :start_date
+            AND due_date <= :end_date
+        """
+    )
+    rows = session.exec(sql, params={"start_date": start_date, "end_date": end_date}).fetchall()
+    
+    # 使用公共方法处理assignee_key
+    cancelled_count = {}
+    for r in rows:
+        assignee_key, _ = _get_assignee_key_and_name_from_data(r.owner_name, r.owner_id)
+        if assignee_key:
+            cancelled_count[assignee_key] = cancelled_count.get(assignee_key, 0) + 1
+
+    return cancelled_count
+
+
+def _count_no_due_date_tasks(session: Session) -> dict[str, int]:
+    """
+    统计crm_todos表中due_date为空的销售任务数量，按负责人分组。
+    
+    查询条件：
+    - 负责人存在（owner_name 或 owner_id）
+    - due_date IS NULL
+    - ai_status为PENDING或IN_PROGRESS
+    
+    返回:
+        按负责人分组的due_date为空的任务数量字典，key为负责人标识（与_analyze_crm_todos中的处理逻辑一致）
+    """
+    from sqlalchemy import text
+    
+    # 先查询出所有记录，然后在Python中处理assignee_key，确保与_analyze_crm_todos中的逻辑一致
+    sql = text(
+        """
+        SELECT
+            owner_name,
+            owner_id
+        FROM crm_todos
+        WHERE (owner_name IS NOT NULL OR owner_id IS NOT NULL)
+            AND data_source IS NOT NULL
+            AND ai_status IN ('PENDING', 'IN_PROGRESS')
+            AND due_date IS NULL
+        """
+    )
+    rows = session.exec(sql).fetchall()
+    
+    # 使用公共方法处理assignee_key
+    no_due_date_count = {}
+    for r in rows:
+        assignee_key, _ = _get_assignee_key_and_name_from_data(r.owner_name, r.owner_id)
+        if assignee_key:
+            no_due_date_count[assignee_key] = no_due_date_count.get(assignee_key, 0) + 1
+
+    return no_due_date_count
+
+
+def _analyze_crm_todos(
+    this_week_sales_tasks: list[dict],
+    next_week_sales_tasks: list[dict],
+    overdue_tasks: list[dict],
+    start_date: datetime,
+    end_date: datetime,
+    next_week_start_date: datetime,
+    next_week_end_date: datetime,
+    no_due_date_count: dict[str, int] | None = None,
+    total_cancelled_count: dict[str, int] | None = None
+) -> list[dict]:
+    """
+    对本周和下周的销售任务进行状态数量统计，按负责人（assignee）分组。
+    
+    统计内容：
+    1) 已完成数量（按 data_source 分组统计）- 来自本周已完成任务
+    2) 已逾期数量（按 data_source 分组统计）- 截止到本周的全部逾期任务
+    3) 下周待完成数量（按 data_source 分组统计）- 来自下周未完成任务
+    4) 已取消数量 - 来自本周已取消任务
+    5) due_date为空数量 - 来自全部due_date为空的任务
+
+    参数:
+        this_week_sales_tasks: 本周已完成的任务列表（已按时间范围筛选）
+        next_week_sales_tasks: 下周待完成任务列表（已按时间范围筛选）
+        overdue_tasks: 截止到本周的全部逾期任务列表（已按时间范围筛选）
+        start_date: 开始日期
+        end_date: 结束日期
+        next_week_start_date: 下周开始日期
+        next_week_end_date: 下周结束日期
+        no_due_date_count: due_date为空的任务数量
+        total_cancelled_count: 本周已取消的任务数量
+    返回:
+        按负责人分组的统计结果列表，每个元素包含：
+        - start_date, end_date, assignee_name
+        - statistics: 统计信息数组（包含各种计数）
+        - due_task_list: 本周未完成任务明细
+        - next_week_task_list: 下周未完成任务明细
+
+    注：
+    - "完成" 判定：本周内ai_status为COMPLETED的任务
+    - "逾期/未完成" 判定：截止到本周ai_status为PENDING或IN_PROGRESS的任务
+    - "取消" 判定：本周内ai_status为CANCELLED的任务
+    - "下周待完成" 判定：下周ai_status为PENDING或IN_PROGRESS的任务
+    """
+    from datetime import datetime
+    
+    # 按负责人分组
+    by_assignee: dict[str, dict] = {}
+    
+    def get_data_source_display_name(data_source: str | None) -> str:
+        """获取数据源的显示名称"""
+        if not data_source:
+            return "Unknown"
+        try:
+            # 尝试将字符串转换为枚举
+            source_type = TodoDataSourceType(data_source)
+            return source_type.display_name()
+        except (ValueError, TypeError):
+            # 如果不是有效的枚举值，返回原值
+            return data_source
+        
+    def _build_task_detail(task: dict, due_date: str | None) -> dict:
+        """构建任务详情"""
+        return {
+            "data_source": get_data_source_display_name(task.get("data_source")),
+            "account_name": task.get("account_name"),
+            "opportunity_name": task.get("opportunity_name"),
+            "title": task.get("task_name"),
+            "due_date": due_date,
+        }
+
+    # 处理本周任务：统计已完成和已取消
+    for task in this_week_sales_tasks:
+        assignee_key, assignee_name = _get_assignee_key_and_name_from_data(task.get("assignee_name"), task.get("assignee_id"))
+        if assignee_key not in by_assignee:
+            by_assignee[assignee_key] = {
+                "assignee_name": assignee_name,
+                "assignee_id": task.get("assignee_id"),
+                "completed": [],
+                "completed_by_source": {},
+                "overdue": [],
+                "overdue_by_source": {},
+                "cancelled": [],
+                "cancelled_by_source": {},
+                "next_week": [],
+                "next_week_by_source": {},
+            }
+
+        assignee_data = by_assignee[assignee_key]
+        
+        # 解析 due_date
+        due_date = task.get("due_date")
+        
+        # 判断任务状态（处理 ai_status 可能为 None 的情况）
+        status = (task.get("ai_status") or "Unknown").upper()
+        is_completed = status == "COMPLETED"
+        is_cancelled = status == "CANCELLED"
+        
+        # 构建任务详情
+        task_detail = _build_task_detail(task, due_date)
+        data_source = task.get("data_source") or "Unknown"
+        
+        # 分类统计本周任务（列表已按时间筛选，只需按状态统计）
+        if is_completed:
+            # 已完成任务
+            assignee_data["completed"].append(task_detail)
+            assignee_data["completed_by_source"][data_source] = assignee_data["completed_by_source"].get(data_source, 0) + 1
+        elif not is_cancelled:
+            # 未完成且未取消的任务 = 逾期任务（因为列表已按时间筛选）
+            # 注意：这里处理的任务已经过滤掉了due_date为空的记录
+            assignee_data["overdue"].append(task_detail)
+            assignee_data["overdue_by_source"][data_source] = assignee_data["overdue_by_source"].get(data_source, 0) + 1
+    
+    
+    # 处理截止到本周的全部逾期任务
+    for task in overdue_tasks:
+        assignee_key, assignee_name = _get_assignee_key_and_name_from_data(task.get("assignee_name"), task.get("assignee_id"))
+        if assignee_key not in by_assignee:
+            by_assignee[assignee_key] = {
+                "assignee_name": assignee_name,
+                "assignee_id": task.get("assignee_id"),
+                "completed": [],
+                "completed_by_source": {},
+                "overdue": [],
+                "overdue_by_source": {},
+                "cancelled": [],
+                "cancelled_by_source": {},
+                "next_week": [],
+                "next_week_by_source": {},
+            }
+
+        assignee_data = by_assignee[assignee_key]
+        
+        # 解析 due_date
+        due_date = task.get("due_date")
+                
+        # 构建任务详情
+        task_detail = _build_task_detail(task, due_date)
+        data_source = task.get("data_source") or "Unknown"
+        
+        # 未完成且未取消的任务 = 逾期任务（因为列表已按时间筛选）
+        # 注意：这里处理的任务已经过滤掉了due_date为空的记录
+        assignee_data["overdue"].append(task_detail)
+        assignee_data["overdue_by_source"][data_source] = assignee_data["overdue_by_source"].get(data_source, 0) + 1
+    
+    # 处理下周任务：统计下周待完成
+    for task in next_week_sales_tasks:
+        assignee_key, assignee_name = _get_assignee_key_and_name_from_data(task.get("assignee_name"), task.get("assignee_id"))
+        assignee_id = task.get("assignee_id")
+        
+        if not assignee_key:
+            continue  # 跳过没有负责人的任务
+        
+        if assignee_key not in by_assignee:
+            by_assignee[assignee_key] = {
+                "assignee_name": assignee_name,
+                "assignee_id": assignee_id,
+                "completed": [],
+                "completed_by_source": {},
+                "overdue": [],
+                "overdue_by_source": {},
+                "cancelled": [],
+                "cancelled_by_source": {},
+                "next_week": [],
+                "next_week_by_source": {},
+            }
+
+        assignee_data = by_assignee[assignee_key]
+        
+        # 解析 due_date
+        due_date = task.get("due_date")
+        
+        # 判断任务状态（处理 ai_status 可能为 None 的情况）
+        status = (task.get("ai_status") or "Unknown").upper()
+        is_completed = status == "COMPLETED"
+        is_cancelled = status == "CANCELLED"
+        
+        # 构建任务详情
+        task_detail = _build_task_detail(task, due_date)
+        data_source = task.get("data_source") or "Unknown"
+        
+        # 统计下周待完成任务（未完成且未取消的任务）
+        if not is_completed and not is_cancelled:
+            assignee_data["next_week"].append(task_detail)
+            assignee_data["next_week_by_source"][data_source] = assignee_data["next_week_by_source"].get(data_source, 0) + 1
+
+    # 整理结果，按负责人分组，按照指定格式输出
+    result_list = []
+    
+    # 格式化日期
+    start_date_str = start_date.date().isoformat() if isinstance(start_date, datetime) else str(start_date)
+    end_date_str = end_date.date().isoformat() if isinstance(end_date, datetime) else str(end_date)
+    next_week_start_date_str = next_week_start_date.date().isoformat() if isinstance(next_week_start_date, datetime) else str(next_week_start_date)
+    next_week_end_date_str = next_week_end_date.date().isoformat() if isinstance(next_week_end_date, datetime) else str(next_week_end_date)
+    
+    for assignee_key, assignee_data in by_assignee.items():
+        completed_count = len(assignee_data["completed"])
+        overdue_count = len(assignee_data["overdue"])
+        next_week_count = len(assignee_data["next_week"])
+        
+        # 构建统计信息，按照示例格式
+        # data_source 映射：src1, src2, src3 或其他
+        completed_by_source = assignee_data["completed_by_source"]
+        overdue_by_source = assignee_data["overdue_by_source"]
+        next_week_by_source = assignee_data["next_week_by_source"]
+        
+        # 统计 others：due_date 没有值的记录数量（从传入的统计中获取）
+        overdue_others = no_due_date_count.get(assignee_key, 0) if no_due_date_count else 0
+        
+        # 统计本周已取消的任务数量（从传入的统计中获取）
+        cancelled_count = total_cancelled_count.get(assignee_key, 0) if total_cancelled_count else 0
+        
+        statistics_item = {
+            "total_completed": str(completed_count),  # 本周已完成
+            "total_new_created": str(next_week_count),  # 下周待完成
+            "total_due_tasks": str(overdue_count),  # 本周未完成
+            "total_cancelled": str(cancelled_count),  # 本周已取消
+            "due_src1": str(overdue_by_source.get(TodoDataSourceType.PIPELINE_PLAYBOOK.value, 0)),
+            "due_src2": str(overdue_by_source.get(TodoDataSourceType.AI_EXTRACTION.value, 0)),
+            "due_src3": str(overdue_by_source.get(TodoDataSourceType.MANUAL.value, 0)),
+            "next_src1": str(next_week_by_source.get(TodoDataSourceType.PIPELINE_PLAYBOOK.value, 0)),
+            "next_src2": str(next_week_by_source.get(TodoDataSourceType.AI_EXTRACTION.value, 0)),
+            "next_src3": str(next_week_by_source.get(TodoDataSourceType.MANUAL.value, 0)),
+            "completed_src1": str(completed_by_source.get(TodoDataSourceType.PIPELINE_PLAYBOOK.value, 0)),
+            "completed_src2": str(completed_by_source.get(TodoDataSourceType.AI_EXTRACTION.value, 0)),
+            "completed_src3": str(completed_by_source.get(TodoDataSourceType.MANUAL.value, 0)),
+            "others": str(overdue_others),
+            "completed_query_url": f"{settings.CRM_SALES_TASK_PAGE_URL}?owner_name={assignee_data['assignee_name']}&due_date__gte={start_date_str}&due_date__lte={end_date_str}&ai_status=COMPLETED",
+            "due_task_query_url": f"{settings.CRM_SALES_TASK_PAGE_URL}?owner_name={assignee_data['assignee_name']}&due_date__gte={start_date_str}&due_date__lte={end_date_str}&ai_status=OVERDUE",
+            "cancelled_query_url": f"{settings.CRM_SALES_TASK_PAGE_URL}?owner_name={assignee_data['assignee_name']}&due_date__gte={start_date_str}&due_date__lte={end_date_str}&ai_status=CANCELLED",
+            "next_week_query_url": f"{settings.CRM_SALES_TASK_PAGE_URL}?owner_name={assignee_data['assignee_name']}&due_date__gte={next_week_start_date_str}&due_date__lte={next_week_end_date_str}",
+        }
+        
+        # 格式化任务明细的日期
+        def format_task_date(task):
+            """格式化任务日期为 YYYY-MM-DD"""
+            due_date_str = task.get("due_date")
+            if due_date_str:
+                try:
+                    if isinstance(due_date_str, str):
+                        # 如果是 ISO 格式，提取日期部分
+                        if "T" in due_date_str:
+                            return due_date_str.split("T")[0]
+                        return due_date_str[:10] if len(due_date_str) >= 10 else due_date_str
+                except:
+                    pass
+            return None
+        
+        # 构建任务明细
+        due_task_list = []
+        for task in sorted(assignee_data["overdue"], key=lambda x: x.get("due_date") or ""):
+            task_item = {
+                "data_source": get_data_source_display_name(task.get("data_source")),
+                "account_name": task.get("account_name"),
+                "opportunity_name": task.get("opportunity_name"),
+                "due_date": format_task_date(task),
+                "title": task.get("title")
+            }
+            due_task_list.append(task_item)
+        
+        next_week_task_list = []
+        for task in sorted(assignee_data["next_week"], key=lambda x: x.get("due_date") or ""):
+            task_item = {
+                "data_source": get_data_source_display_name(task.get("data_source")),
+                "account_name": task.get("account_name"),
+                "opportunity_name": task.get("opportunity_name"),
+                "due_date": format_task_date(task),
+                "title": task.get("title")
+            }
+            next_week_task_list.append(task_item)
+        
+        # 构建单个负责人的结果
+        result_item = {
+            "start_date": start_date_str,
+            "end_date": end_date_str,
+            "assignee_name": assignee_data["assignee_name"],
+            "statistics": [statistics_item],
+            "due_task_list": due_task_list,
+            "next_week_task_list": next_week_task_list
+        }
+        
+        result_list.append(result_item)
+    
+    return result_list
