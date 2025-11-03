@@ -20,6 +20,7 @@ app.conf.update(
         {"app.tasks.cron_jobs.generate_crm_daily_statistics": {"queue": "cron"}},
         {"app.tasks.cron_jobs.generate_crm_weekly_report": {"queue": "cron"}},
         {"app.tasks.cron_jobs.crm_visit_records_writeback": {"queue": "cron"}},
+        {"app.tasks.cron_jobs.send_sales_task_summary": {"queue": "cron"}},
         {"app.tasks.bitable_import.*": {"queue": "cron"}},
         {"*": {"queue": "default"}},
     ],
@@ -153,4 +154,28 @@ if settings.CRM_WRITEBACK_ENABLED:
     app.conf.beat_schedule['crm_visit_records_writeback'] = {
         'task': 'app.tasks.cron_jobs.crm_visit_records_writeback',
         'schedule': writeback_schedule,
+    }
+
+# CRM销售任务推送任务
+if settings.CRM_SALES_TASK_ENABLED:
+    cron_expr = settings.CRM_SALES_TASK_CRON
+    # 解析crontab表达式
+    cron_fields = cron_expr.strip().split()
+    if len(cron_fields) == 5:
+        minute, hour, day_of_month, month_of_year, day_of_week = cron_fields
+        sales_task_schedule = crontab(
+            minute=minute, 
+            hour=hour, 
+            day_of_month=day_of_month, 
+            month_of_year=month_of_year, 
+            day_of_week=day_of_week
+        )
+    else:
+        # 默认值：每周六上午10点
+        sales_task_schedule = crontab(hour=10, minute=0, day_of_week=6)
+    
+    app.conf.beat_schedule = getattr(app.conf, 'beat_schedule', {})
+    app.conf.beat_schedule['send_sales_task_summary'] = {
+        'task': 'app.tasks.cron_jobs.send_sales_task_summary',
+        'schedule': sales_task_schedule,
     }

@@ -4,7 +4,9 @@ URL解析工具
 
 import re
 from typing import Tuple, Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
+
+import requests
 
 
 class UnsupportedDocumentTypeError(Exception):
@@ -82,42 +84,49 @@ def check_document_type_support(url_type: str, url: str) -> None:
 
 def parse_bitable_url(url: str) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
     """
-    解析Bitable URL
-    
-    Args:
-        url: Bitable URL
-        
-    Returns:
-        (URL类型, URL令牌, 表格ID, 视图ID) 的元组
+    解析飞书多维表格/知识空间URL，返回(url_type, token, table_id, view_id)
+    url_type: 'base' or 'wiki'
     """
     if not url:
         return None, None, None, None
-    
-    # Bitable URL模式
-    bitable_pattern = r'https?://[^/]+/base/([a-zA-Z0-9]+)/([a-zA-Z0-9]+)/([a-zA-Z0-9]+)'
-    match = re.search(bitable_pattern, url)
-    
-    if match:
-        url_token = match.group(1)
-        table_id = match.group(2)
-        view_id = match.group(3)
-        return 'bitable', url_token, table_id, view_id
-    
-    return None, None, None, None
+    parsed = urlparse(url)
+    path_parts = parsed.path.strip('/').split('/')
+    url_type = None
+    token = None
+    for i, part in enumerate(path_parts):
+        if part in ('base', 'wiki') and i + 1 < len(path_parts):
+            url_type = part
+            token = path_parts[i + 1]
+            break
+    qs = parse_qs(parsed.query)
+    table_id = qs.get('table', [None])[0]
+    view_id = qs.get('view', [None])[0]
+    return url_type, token, table_id, view_id
 
 
-def resolve_bitable_app_token(url_token: str) -> str:
+def resolve_bitable_app_token(token, url_type, url_token) -> str:
     """
-    解析Bitable应用令牌
-    
-    Args:
-        url_token: URL令牌
-        
-    Returns:
-        应用令牌
+    根据url类型自动获取app_token：
+    - base/xxx 直接用xxx
+    - wiki/xxx 需GET https://open.feishu.cn/open-apis/wiki/v2/spaces/get_node?obj_type=wiki&token=xxx 拿obj_token
     """
-    # 这里可能需要根据实际情况实现
-    # 暂时返回URL令牌作为应用令牌
+    if not url_token:
+        return None
+    if url_type == 'wiki':
+        node_token = url_token
+        url = f"https://open.feishu.cn/open-apis/wiki/v2/spaces/get_node?obj_type=wiki&token={node_token}"
+        headers = {"Authorization": f"Bearer {token}"}
+        resp = requests.get(url, headers=headers)
+        if resp.status_code != 200:
+            print(resp.text)
+            return None
+        resp.raise_for_status()
+        data = resp.json().get("data", {})
+        obj_token = data.get("node", {}).get("obj_token")
+        if not obj_token:
+            raise ValueError(f"未能通过wiki node获取到obj_token: {resp.text}")
+        return obj_token
+    # base/直接用
     return url_token
 
 
