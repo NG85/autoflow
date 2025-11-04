@@ -41,9 +41,10 @@ class VisitRecordFormType(str, enum.Enum):
 
 
 class WritebackMode(str, enum.Enum):
-    CBG = "CBG"    # 纷享销客内容回写模式
-    APAC = "APAC"  # Salesforce任务创建模式
-    OLM = "OLM"    # 销售易拜访记录回写模式
+    CBG = "CBG"    # CBG模式：纷享销客内容回写模式
+    APAC = "APAC"  # APAC模式：Salesforce任务创建模式
+    OLM = "OLM"    # OLM模式：销售易拜访记录回写模式
+    CHAITIN = "CHAITIN"    # CHAITIN模式：长亭拜访记录回写模式
 
 
 class WritebackFrequency(str, enum.Enum):

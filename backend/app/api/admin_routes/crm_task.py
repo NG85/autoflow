@@ -195,7 +195,7 @@ def trigger_crm_writeback_task(
     user: CurrentSuperuserDep,
     start_date: Optional[str] = Body(None, description="开始日期，格式YYYY-MM-DD，不传则默认为上周日"),
     end_date: Optional[str] = Body(None, description="结束日期，格式YYYY-MM-DD，不传则默认为本周六"),
-    writeback_mode: Optional[str] = Body(None, description="回写模式，支持 'CBG'（内容回写）或 'APAC'（任务创建），不传则使用配置中的默认值")
+    writeback_mode: Optional[str] = Body(None, description="回写模式，不传则使用配置中的默认值")
 ):
     """
     手动触发CRM拜访记录回写任务
@@ -206,7 +206,9 @@ def trigger_crm_writeback_task(
     1. 计算指定时间范围内的拜访记录
     2. 根据回写模式选择处理方式：
        - CBG模式：按客户和商机分组处理拜访记录，生成格式化的回写内容
-       - APAC模式：为每条拜访记录创建对应的任务
+       - APAC模式：为每条拜访记录创建Salesforce的任务
+       - OLM模式：为每条拜访记录创建销售易的拜访记录
+       - CHAITIN模式：为每条拜访记录创建长亭的拜访记录
     3. 调用相应的API进行回写或任务创建
     """
     if not user.is_superuser:

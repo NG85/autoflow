@@ -1,7 +1,7 @@
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
-class VisitRecordCreateRequest(BaseModel):
+class OlmVisitRecordCreateRequest(BaseModel):
     """OLM拜访记录创建请求"""
     account: Optional[int] = Field(None, description="拜访客户ID (必填)")
     dim_depart: Optional[int] = Field(None, description="所属部门ID")
@@ -16,6 +16,16 @@ class VisitRecordCreateRequest(BaseModel):
     created_by: Optional[int] = Field(None, description="创建人ID")
     created_at: Optional[int] = Field(None, description="创建日期 (毫秒时间戳)")
 
-class VisitRecordBatchCreateRequest(BaseModel):
-    visit_records: List[VisitRecordCreateRequest]
+class OlmVisitRecordBatchCreateRequest(BaseModel):
+    visit_records: List[OlmVisitRecordCreateRequest]
+    partial_fail: bool = True
+
+class ChaitinVisitRecordCreateRequest(BaseModel):
+    """长亭拜访记录创建请求"""
+    company_id: Optional[int] = Field(None, description="拜访客户ID")
+    content: Optional[str] = Field(None, description="拜访内容")
+    username: Optional[str] = Field(None, description="长亭CRM用户名")
+
+class ChaitinVisitRecordBatchCreateRequest(BaseModel):
+    followup_records: List[ChaitinVisitRecordCreateRequest]
     partial_fail: bool = True
