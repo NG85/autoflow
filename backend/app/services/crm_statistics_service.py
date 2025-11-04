@@ -131,7 +131,7 @@ class CRMStatisticsService:
             
             complete_reports.append(complete_report)
             
-            logger.info(f"销售 {stats['sales_name']} 的完整日报数据已组装，包含 {len(assessment_details['first'])} 个首次评估，{len(assessment_details['multi'])} 个多次评估")
+            logger.info(f"销售 {stats['sales_name']} 的完整日报数据已组装，排除绿灯后，包含 {len(assessment_details['first'])} 个首次评估明细，{len(assessment_details['multi'])} 个多次评估明细")
         
         return complete_reports
     
