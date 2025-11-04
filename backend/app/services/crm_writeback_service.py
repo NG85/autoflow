@@ -476,8 +476,8 @@ class CrmWritebackService:
             
                 # 构建请求
                 visit_request = ChaitinVisitRecordCreateRequest(
-                    company_id=int(record.account_id) if record.account_id else int(record.partner_id),
-                    content=f"跟进记录：{record.followup_record}\n下一步计划：{record.next_steps}",
+                    company_id=record.account_id if record.account_id else record.partner_id,
+                    content=f"跟进记录：{record.followup_record_zh or record.followup_record}\n下一步计划：{record.next_steps_zh or record.next_steps}",
                     username=username
                 )
                 
