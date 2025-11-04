@@ -25,6 +25,8 @@ class ChaitinVisitRecordCreateRequest(BaseModel):
     company_id: Optional[int] = Field(None, description="拜访客户ID")
     content: Optional[str] = Field(None, description="拜访内容")
     username: Optional[str] = Field(None, description="长亭CRM用户名")
+    project_id: Optional[str] = Field(None, description="商机ID(可选)")
+    source_record_id: Optional[str] = Field(None, description="来源拜访记录ID")
 
 class ChaitinVisitRecordBatchCreateRequest(BaseModel):
     followup_records: List[ChaitinVisitRecordCreateRequest]
