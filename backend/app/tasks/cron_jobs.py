@@ -346,7 +346,7 @@ def crm_visit_records_writeback(self, start_date_str=None, end_date_str=None, wr
     Args:
         start_date_str: 开始日期字符串，格式YYYY-MM-DD，不传则根据频率配置自动计算
         end_date_str: 结束日期字符串，格式YYYY-MM-DD，不传则根据频率配置自动计算
-        writeback_mode: 回写模式，支持 "CBG"（内容回写）或 "APAC"（任务创建），不传则使用配置中的默认值
+        writeback_mode: 回写模式，不传则使用配置中的默认值
     
     工作流程：
     1. 根据配置的频率计算日期范围：
@@ -355,7 +355,9 @@ def crm_visit_records_writeback(self, start_date_str=None, end_date_str=None, wr
     2. 从crm_sales_visit_records表查询该时间范围内的拜访记录
     3. 根据回写模式选择处理方式：
        - CBG模式：按客户和商机分组处理拜访记录，生成格式化的回写内容
-       - APAC模式：为每条拜访记录创建对应的任务
+       - APAC模式：为每条拜访记录创建Salesforce的任务
+       - OLM模式：为每条拜访记录创建销售易的拜访记录
+       - CHAITIN模式：为每条拜访记录创建长亭的拜访记录
     4. 调用相应的API进行回写或任务创建
     """
     try:

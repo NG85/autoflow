@@ -6,7 +6,12 @@ from sqlmodel import Session, select, text
 from app.core.config import settings, WritebackMode
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
 from app.models.task_requests import TaskCreateRequest, TaskBatchCreateRequest
-from app.models.olm_visit_requests import VisitRecordBatchCreateRequest, VisitRecordCreateRequest
+from app.models.wb_visit_requests import (
+    ChaitinVisitRecordBatchCreateRequest, 
+    ChaitinVisitRecordCreateRequest, 
+    OlmVisitRecordBatchCreateRequest, 
+    OlmVisitRecordCreateRequest
+)
 from app.utils.date_utils import convert_utc_to_local_timezone
 
 logger = logging.getLogger(__name__)
@@ -78,28 +83,6 @@ class CrmWritebackClient:
             logger.error(f"批量请求失败: {e}")
             return [{"success": False, "message": f"批量请求失败: {e}"}]
     
-    def get_writeback_log(self, log_id: int) -> Dict[str, Any]:
-        """
-        查询回写日志
-        
-        Args:
-            log_id: 日志ID
-        
-        Returns:
-            日志详情
-        """
-        url = f"{self.base_url}/crm/writeback/log/{log_id}"
-        
-        try:
-            timeout = httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0)
-            with httpx.Client(timeout=timeout) as client:
-                response = client.get(url)
-                response.raise_for_status()
-                return response.json()
-        except httpx.RequestError as e:
-            logger.error(f"查询日志失败: {e}")
-            return {"success": False, "message": f"查询日志失败: {e}"}
-    
     def batch_task_create(self, task_batch_request: TaskBatchCreateRequest) -> Dict[str, Any]:
         """
         批量创建任务
@@ -127,7 +110,7 @@ class CrmWritebackClient:
             logger.error(f"批量创建任务失败: {e}")
             return {"success": False, "message": f"批量创建任务失败: {e}"}
     
-    def batch_olm_visit_create(self, visit_requests: VisitRecordBatchCreateRequest) -> Dict[str, Any]:
+    def batch_olm_visit_create(self, visit_requests: OlmVisitRecordBatchCreateRequest) -> Dict[str, Any]:
         """
         批量创建OLM拜访记录
         
@@ -154,6 +137,32 @@ class CrmWritebackClient:
             logger.error(f"OLM批量创建拜访记录失败: {e}")
             return {"success": False, "message": f"OLM批量创建拜访记录失败: {e}"}
 
+    def batch_chaitin_visit_create(self, visit_requests: ChaitinVisitRecordBatchCreateRequest) -> Dict[str, Any]:
+        """
+        批量创建长亭拜访记录
+        
+        Args:
+            visit_requests: 拜访记录创建请求列表
+        
+        Returns:
+            创建结果
+        """
+        url = f"{self.base_url}/crm-custom/chaitin/batch"
+        
+        try:
+            # 设置较长的超时时间来处理批量拜访记录创建
+            timeout = httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0)
+            with httpx.Client(timeout=timeout) as client:
+                response = client.post(url, headers=self.headers, json=visit_requests.model_dump())
+                logger.info(f"调用长亭批量创建拜访记录，返回: {response.text}")
+                response.raise_for_status()
+                return {"success": True, "data": response.json()}
+        except httpx.TimeoutException as e:
+            logger.error(f"长亭批量创建拜访记录超时: {e}")
+            return {"success": False, "message": f"长亭批量创建拜访记录超时: {e}"}
+        except httpx.RequestError as e:
+            logger.error(f"长亭批量创建拜访记录失败: {e}")
+            return {"success": False, "message": f"长亭批量创建拜访记录失败: {e}"}
 
 class CrmWritebackService:
     """CRM数据回写服务"""
@@ -309,7 +318,7 @@ class CrmWritebackService:
         
         return task_requests
     
-    def generate_olm_visit_requests(self, session: Session, visit_records: List[CRMSalesVisitRecord]) -> VisitRecordBatchCreateRequest:
+    def generate_olm_visit_requests(self, session: Session, visit_records: List[CRMSalesVisitRecord]) -> OlmVisitRecordBatchCreateRequest:
         """
         根据拜访记录生成OLM拜访记录创建请求列表
         
@@ -320,7 +329,7 @@ class CrmWritebackService:
         Returns:
             OLM拜访记录创建请求列表
         """
-        visit_requests = VisitRecordBatchCreateRequest(visit_records=[])
+        visit_requests = OlmVisitRecordBatchCreateRequest(visit_records=[])
         
         for record in visit_records:            
             # 签到时间：拜访日期 + 开始时间
@@ -402,7 +411,7 @@ class CrmWritebackService:
                 created_at = int(beijing_time.timestamp() * 1000)
             
             # 构建请求
-            visit_request = VisitRecordCreateRequest(
+            visit_request = OlmVisitRecordCreateRequest(
                 account=int(record.account_id) if record.account_id else int(record.partner_id),
                 dim_depart=dim_depart,
                 custom_item3=record.visit_communication_method,
@@ -418,6 +427,64 @@ class CrmWritebackService:
             )
             
             visit_requests.visit_records.append(visit_request)
+
+        return visit_requests
+    
+    
+    def generate_chaitin_visit_requests(self, session: Session, visit_records: List[CRMSalesVisitRecord]) -> ChaitinVisitRecordBatchCreateRequest:
+        """
+        根据拜访记录生成长亭拜访记录创建请求列表
+        
+        Args:
+            session: 数据库会话
+            visit_records: 拜访记录列表
+        
+        Returns:
+            长亭拜访记录创建请求列表
+        """
+        visit_requests = ChaitinVisitRecordBatchCreateRequest(followup_records=[])
+        
+        for record in visit_records:
+            
+            # 长亭CRM用户名（从user表查询fxiaoke_id，再从crm_user表查询长亭CRM用户名）
+            if record.recorder_id:
+                try:
+                    # 将32位UUID转换为36位字符串（带连字符）
+                    # recorder_id是UUID对象，转成字符串会自动变成36位格式
+                    ask_id_str = str(record.recorder_id)
+                    
+                    # 使用原生SQL查询，一次性获取fxiaoke_id和长亭CRM用户名
+                    sql_query = text("""
+                        SELECT u.fxiaoke_id, c.username
+                        FROM user u 
+                        LEFT JOIN chaitin.crm_user c ON u.fxiaoke_id = c.unique_id
+                        WHERE u.ask_id = :ask_id
+                    """)
+                    
+                    result = session.exec(sql_query, params={"ask_id": ask_id_str}).first()
+                    
+                    if result:
+                        fxiaoke_id, username = result
+                        if username:
+                            username = str(username)
+                        else:
+                            logger.warning(f"记录 ID {record.id}：未找到fxiaoke_id {fxiaoke_id} 对应的长亭CRM用户名")
+                    else:
+                        logger.warning(f"记录 ID {record.id}：未找到recorder_id {ask_id_str} 对应的长亭CRM用户名")
+                except Exception as e:
+                    logger.warning(f"记录 ID {record.id}：查询长亭CRM用户名失败: {e}")
+            
+                # 构建请求
+                visit_request = ChaitinVisitRecordCreateRequest(
+                    company_id=int(record.account_id) if record.account_id else int(record.partner_id),
+                    content=f"跟进记录：{record.followup_record}\n下一步计划：{record.next_steps}",
+                    username=username
+                )
+                
+                visit_requests.followup_records.append(visit_request)
+            else:
+                logger.warning(f"记录 ID {record.id}：没有有效的recorder_id，跳过长亭拜访记录回写")
+                continue
 
         return visit_requests
     
@@ -461,7 +528,7 @@ class CrmWritebackService:
         logger.info(f"开始回写 {len(visit_records)} 条拜访记录，回写模式: {writeback_mode}")
         
         try:
-            if writeback_mode == "APAC":
+            if writeback_mode == WritebackMode.APAC.value:
                 # 任务创建模式
                 logger.info("使用APAC任务创建模式")
                 task_requests = self.generate_task_requests(visit_records)
@@ -499,7 +566,7 @@ class CrmWritebackService:
                     "results": return_data
                 }
             
-            elif writeback_mode == "CBG":
+            elif writeback_mode == WritebackMode.CBG.value:
                 # CBG内容回写模式（原有逻辑）
                 logger.info("使用CBG内容回写模式")
                 logger.info("回写优先级：商机 > 客户 > 合作伙伴")
@@ -600,7 +667,7 @@ class CrmWritebackService:
                         "writeback_count": 0
                     }
             
-            elif writeback_mode == "OLM":
+            elif writeback_mode == WritebackMode.OLM.value:
                 # OLM拜访记录回写模式
                 logger.info("使用OLM拜访记录回写模式")
                 
@@ -639,6 +706,50 @@ class CrmWritebackService:
                     return {
                         "success": result.get("success", False),
                         "message": f"成功处理 {len(visit_records)} 条拜访记录，回写 {len(visit_requests.visit_records)} 条OLM记录",
+                        "processed_count": len(visit_records),
+                        "writeback_count": len(visit_requests.visit_records),
+                        "results": return_data
+                    }
+            
+            elif writeback_mode == WritebackMode.CHAITIN.value:
+                # CHAITIN拜访记录回写模式
+                logger.info("使用CHAITIN拜访记录回写模式")
+                
+                # 生成CHAITIN拜访记录请求
+                visit_requests = self.generate_chaitin_visit_requests(session, visit_records)
+                
+                if not visit_requests:
+                    logger.info("没有需要回写的CHAITIN拜访记录")
+                    return {
+                        "success": True,
+                        "message": "没有需要回写的CHAITIN拜访记录",
+                        "processed_count": len(visit_records),
+                        "writeback_count": 0
+                    }
+                
+                # 执行批量CHAITIN拜访记录创建
+                result = self.client.batch_chaitin_visit_create(visit_requests)
+                
+                logger.info(f"批量CHAITIN拜访记录创建完成: {len(visit_requests.visit_records)} 条记录")
+                
+                return_data = result.get("data", {})
+                if isinstance(return_data, dict):
+                    created_visits = return_data.get("created", 0)
+                    failed_visits = return_data.get("failed", 0)
+                    return {
+                        "success": result.get("success", False),
+                        "message": f"成功处理 {len(visit_records)} 条拜访记录，回写 {len(visit_requests.visit_records)} 条CHAITIN记录",
+                        "processed_count": len(visit_records),
+                        "writeback_count": len(visit_requests.visit_records),
+                        "success_count": created_visits,
+                        "failed_count": failed_visits,
+                        "results": return_data
+                    }
+                else:
+                    # 如果返回格式不是预期的字典格式
+                    return {
+                        "success": result.get("success", False),
+                        "message": f"成功处理 {len(visit_records)} 条拜访记录，回写 {len(visit_requests.visit_records)} 条CHAITIN记录",
                         "processed_count": len(visit_records),
                         "writeback_count": len(visit_requests.visit_records),
                         "results": return_data
@@ -715,13 +826,13 @@ class CrmWritebackService:
     def writeback_visit_records(self, session: Session, start_date: datetime.date, 
                                end_date: datetime.date, writeback_mode: Optional[str] = None) -> Dict[str, Any]:
         """
-        回写指定时间范围内的拜访记录
+        回写指定时间范围内的拜访记录，只回写拜访类型为form的拜访记录
         
         Args:
             session: 数据库会话
             start_date: 开始日期
             end_date: 结束日期
-            writeback_mode: 回写模式，支持 "CBG"（内容回写）或 "APAC"（任务创建）或 "OLM"（销售易回写），不传则使用配置中的默认值
+            writeback_mode: 回写模式，不传则使用配置中的默认值
         
         Returns:
             回写结果
@@ -729,6 +840,7 @@ class CrmWritebackService:
         try:
             # 查询指定时间范围内的拜访记录
             stmt = select(CRMSalesVisitRecord).where(
+                CRMSalesVisitRecord.visit_type == "form",
                 CRMSalesVisitRecord.visit_communication_date >= start_date,
                 CRMSalesVisitRecord.visit_communication_date <= end_date
             ).order_by(CRMSalesVisitRecord.visit_communication_date)
