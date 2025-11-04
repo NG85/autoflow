@@ -482,7 +482,9 @@ class CrmWritebackService:
             visit_request = ChaitinVisitRecordCreateRequest(
                 company_id=record.account_id if record.account_id else record.partner_id,
                 content=f"跟进记录：{record.followup_record_zh or record.followup_record}\n下一步计划：{record.next_steps_zh or record.next_steps}",
-                username=username
+                username=username,
+                project_id=record.opportunity_id,
+                source_record_id=str(record.record_id or record.id)
             )
             
             visit_requests.followup_records.append(visit_request)
