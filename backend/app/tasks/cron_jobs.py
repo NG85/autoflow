@@ -1016,9 +1016,9 @@ def _analyze_crm_todos(
             "completed_src3": str(completed_by_source.get(TodoDataSourceType.MANUAL.value, 0)),
             "others": str(overdue_others),
             "completed_query_url": f"{settings.CRM_SALES_TASK_PAGE_URL}?owner_name={assignee_data['assignee_name']}&due_date__gte={start_date_str}&due_date__lte={end_date_str}&ai_status=COMPLETED",
-            "due_task_query_url": f"{settings.CRM_SALES_TASK_PAGE_URL}?owner_name={assignee_data['assignee_name']}&due_date__gte={start_date_str}&due_date__lte={end_date_str}&ai_status=OVERDUE",
+            "due_task_query_url": f"{settings.CRM_SALES_TASK_PAGE_URL}?owner_name={assignee_data['assignee_name']}&due_date__lte={end_date_str}&is_overdue=True",
             "cancelled_query_url": f"{settings.CRM_SALES_TASK_PAGE_URL}?owner_name={assignee_data['assignee_name']}&due_date__gte={start_date_str}&due_date__lte={end_date_str}&ai_status=CANCELLED",
-            "next_week_query_url": f"{settings.CRM_SALES_TASK_PAGE_URL}?owner_name={assignee_data['assignee_name']}&due_date__gte={next_week_start_date_str}&due_date__lte={next_week_end_date_str}",
+            "next_week_query_url": f"{settings.CRM_SALES_TASK_PAGE_URL}?owner_name={assignee_data['assignee_name']}&due_date__gte={next_week_start_date_str}&due_date__lte={next_week_end_date_str}&ai_status=PENDING&ai_status=IN_PROGRESS",
         }
         
         # 格式化任务明细的日期
