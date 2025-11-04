@@ -473,19 +473,19 @@ class CrmWritebackService:
                         logger.warning(f"记录 ID {record.id}：未找到recorder_id {ask_id_str} 对应的长亭CRM用户名")
                 except Exception as e:
                     logger.warning(f"记录 ID {record.id}：查询长亭CRM用户名失败: {e}")
-            
-                # 构建请求
-                visit_request = ChaitinVisitRecordCreateRequest(
-                    company_id=record.account_id if record.account_id else record.partner_id,
-                    content=f"跟进记录：{record.followup_record_zh or record.followup_record}\n下一步计划：{record.next_steps_zh or record.next_steps}",
-                    username=username
-                )
-                
-                visit_requests.followup_records.append(visit_request)
-            else:
-                logger.warning(f"记录 ID {record.id}：没有有效的recorder_id，跳过长亭拜访记录回写")
-                continue
 
+            if not username:
+                logger.warning(f"记录 ID {record.id} 没有有效的长亭CRM用户名，跳过长亭拜访记录回写")
+                continue
+            
+            # 构建请求
+            visit_request = ChaitinVisitRecordCreateRequest(
+                company_id=record.account_id if record.account_id else record.partner_id,
+                content=f"跟进记录：{record.followup_record_zh or record.followup_record}\n下一步计划：{record.next_steps_zh or record.next_steps}",
+                username=username
+            )
+            
+            visit_requests.followup_records.append(visit_request)
         return visit_requests
     
     def _execute_writeback_logic(self, session: Session, visit_records: List[CRMSalesVisitRecord], 
