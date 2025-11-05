@@ -312,21 +312,26 @@ class CRMStatisticsService:
                 
                 logger.info(f"总计: {total_first_assessments} 个首次拜访评估，{total_multi_assessments} 个多次拜访评估")
                 
-                # 推送飞书卡片通知（如果启用）
+                # 推送个人日报（只在开关启用时发送卡片）
                 from app.core.config import settings
                 if settings.CRM_DAILY_REPORT_FEISHU_ENABLED:
-                    # 推送个人日报
                     self._send_daily_report_notifications(session, complete_reports)
-                    
-                    # 生成并推送部门日报
-                    self._generate_and_send_department_daily_reports(session, target_date)
-                    
-                    # 生成并推送公司日报
-                    self._generate_and_send_company_daily_report(session, target_date)
                 else:
-                    logger.info("CRM日报飞书推送功能已禁用，跳过推送")
+                    logger.info("CRM日报飞书推送功能已禁用，跳过个人日报卡片推送")
             else:
                 logger.warning(f"{target_date} 没有找到任何销售人员的日报数据")
+            
+            # 无论是否有数据，都生成并推送部门日报和公司日报
+            # 注意：这些方法内部会检查开关，并确保不会重复推送
+            logger.info(f"开始生成并推送部门日报和公司日报（sales_count={sales_count}）")
+            
+            # 生成并推送部门日报（计算逻辑始终执行，方法内部会检查开关）
+            self._generate_and_send_department_daily_reports(session, target_date)
+            
+            # 生成并推送公司日报（计算逻辑始终执行，方法内部会检查开关）
+            self._generate_and_send_company_daily_report(session, target_date)
+            
+            logger.info(f"部门日报和公司日报处理完成（sales_count={sales_count}）")
             
             return sales_count
             
@@ -405,25 +410,56 @@ class CRMStatisticsService:
     def _generate_and_send_department_daily_reports(self, session: Session, target_date: date) -> None:
         """
         生成并推送部门日报
+        即使部门没有数据，也会给负责人发送空数据的卡片通知
         
         Args:
             session: 数据库会话
             target_date: 目标日期
         """
+        from app.core.config import settings
+        from app.repositories.user_profile import UserProfileRepo
         
-        logger.info(f"开始生成并推送 {target_date} 的部门日报")
+        logger.info(f"[部门日报] 开始生成并推送 {target_date} 的部门日报")
         
-        # 生成部门汇总报告
-        department_reports = self.aggregate_department_reports(session, target_date)
+        # 获取有数据的部门报告
+        department_reports_with_data = self.aggregate_department_reports(session, target_date)
         
-        if not department_reports:
-            logger.warning(f"{target_date} 没有找到任何部门数据，跳过部门日报推送")
+        # 获取所有部门及其负责人
+        user_profile_repo = UserProfileRepo()
+        all_departments_with_managers = user_profile_repo.get_all_departments_with_managers(session)
+        
+        # 创建有数据的部门名称集合
+        departments_with_data = {report['department_name'] for report in department_reports_with_data}
+        
+        # 为没有数据的部门生成空数据的报告
+        department_reports_no_data = []
+        for department_name, manager in all_departments_with_managers.items():
+            # 只处理有负责人的部门
+            if manager and department_name not in departments_with_data:
+                empty_report = self._aggregate_single_department(
+                    department_name=department_name,
+                    sales_reports=[],  # 空列表表示没有数据
+                    target_date=target_date
+                )
+                department_reports_no_data.append(empty_report)
+                logger.info(f"为部门 {department_name} 生成空数据报告（无销售数据）")
+        
+        # 合并有数据和没数据的部门报告
+        all_department_reports = department_reports_with_data + department_reports_no_data
+        
+        if not all_department_reports:
+            logger.warning(f"{target_date} 没有找到任何部门，跳过部门日报推送")
+            return
+        
+        # 检查飞书推送开关（只在发送卡片时检查，不影响计算逻辑）
+        if not settings.CRM_DAILY_REPORT_FEISHU_ENABLED:
+            logger.info("CRM日报飞书推送功能已禁用，跳过部门日报卡片推送（但数据已生成）")
             return
         
         total_departments = 0
         successful_departments = 0
-        
-        for department_report in department_reports:
+
+        for department_report in all_department_reports:
             try:
                 # 发送部门日报飞书通知
                 result = platform_notification_service.send_department_report_notification(
@@ -435,8 +471,10 @@ class CRMStatisticsService:
                 
                 if result["success"]:
                     successful_departments += 1
+                    has_data = department_report['department_name'] in departments_with_data
+                    data_status = "有数据" if has_data else "无数据"
                     logger.info(
-                        f"成功为部门 {department_report['department_name']} 发送日报飞书通知，"
+                        f"成功为部门 {department_report['department_name']} ({data_status}) 发送日报飞书通知，"
                         f"推送给部门负责人 {result['success_count']}/{result['recipients_count']} 次"
                     )
                 else:
@@ -449,7 +487,8 @@ class CRMStatisticsService:
                 total_departments += 1
         
         logger.info(
-            f"CRM部门日报飞书通知发送完成: {successful_departments}/{total_departments} 个部门的通知发送成功"
+            f"CRM部门日报飞书通知发送完成: {successful_departments}/{total_departments} 个部门的通知发送成功 "
+            f"(有数据: {len(departments_with_data)}, 无数据: {len(department_reports_no_data)})"
         )
     
     def _generate_and_send_company_daily_report(self, session: Session, target_date: date) -> None:
@@ -460,14 +499,16 @@ class CRMStatisticsService:
             session: 数据库会话
             target_date: 目标日期
         """
+        from app.core.config import settings
         
-        logger.info(f"开始生成并推送 {target_date} 的公司日报")
+        logger.info(f"[公司日报] 开始生成并推送 {target_date} 的公司日报")
         
-        # 生成公司汇总报告
+        # 生成公司汇总报告（无论开关是否启用，都执行计算逻辑）
         company_report = self.aggregate_company_report(session, target_date)
         
-        if not company_report:
-            logger.warning(f"{target_date} 没有找到任何数据，跳过公司日报推送")
+        # 检查飞书推送开关（只在发送卡片时检查，不影响计算逻辑）
+        if not settings.CRM_DAILY_REPORT_FEISHU_ENABLED:
+            logger.info("CRM日报飞书推送功能已禁用，跳过公司日报卡片推送（但数据已生成）")
             return
         
         try:
@@ -622,7 +663,6 @@ class CRMStatisticsService:
         
         if not complete_reports:
             logger.warning(f"{target_date} 没有找到任何销售日报数据")
-            return None
         
         return self._aggregate_company_data(complete_reports, target_date)
     
