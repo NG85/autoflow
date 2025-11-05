@@ -1,6 +1,6 @@
 from typing import Optional, List, Dict, Any
 from uuid import UUID
-from sqlmodel import Session, select
+from sqlmodel import Session, select, distinct
 from app.models.user_profile import UserProfile
 from app.models.auth import User
 from app.models.oauth_user import OAuthUser
@@ -154,6 +154,36 @@ class UserProfileRepo(BaseRepo):
                 UserProfile.is_active == True
             )
         ).first()
+
+    def get_all_departments_with_managers(
+        self, 
+        db_session: Session
+    ) -> Dict[str, Optional[UserProfile]]:
+        """获取所有部门及其负责人
+        
+        Args:
+            db_session: 数据库会话
+            
+        Returns:
+            Dict[str, Optional[UserProfile]]: 字典，键是部门名称，值是部门负责人（如果没有负责人则为None）
+        """
+        # 获取所有不重复的部门名称（只考虑活跃用户）
+        departments = db_session.exec(
+            select(distinct(UserProfile.department))
+            .where(
+                UserProfile.department.is_not(None),
+                UserProfile.is_active == True
+            )
+            .order_by(UserProfile.department)
+        ).all()
+        
+        # 为每个部门查找负责人
+        result = {}
+        for department_name in departments:
+            manager = self.get_department_manager(db_session, department_name)
+            result[department_name] = manager
+        
+        return result
 
     def get_users_by_notification_permission(
         self, 

@@ -93,7 +93,7 @@ def create_crm_daily_datasource(self):
         self.retry(exc=e, countdown=60)  # 1分钟后重试
 
 
-@app.task(bind=True)
+@app.task(bind=True, max_retries=3)
 def generate_crm_daily_statistics(self, target_date_str=None):
     """
     生成CRM销售日报完整数据并推送飞书通知
@@ -106,11 +106,21 @@ def generate_crm_daily_statistics(self, target_date_str=None):
     1. 从crm_daily_account_statistics表查询每个销售的统计数据
     2. 通过correlation_id关联crm_account_assessment表获取评估详情
     3. 组合成完整的日报数据
-    4. 推送个人日报飞书卡片给每个销售人员本人
-    5. 按部门汇总数据生成部门日报
-    6. 推送部门日报飞书卡片给各部门负责人
-    7. 汇总公司级数据生成公司日报
-    8. 推送公司日报飞书卡片（内部环境推送到群聊，外部环境推送给管理员）
+    
+    推送逻辑（根据是否有数据）：
+    - 有数据时（sales_count > 0）：
+      * 推送个人日报飞书卡片给每个有数据的销售人员本人
+      * 按部门汇总数据生成部门日报（包括有数据和没数据的部门）
+      * 推送部门日报飞书卡片给各部门负责人
+      * 汇总公司级数据生成公司日报
+      * 推送公司日报飞书卡片（内部环境推送到群聊，外部环境推送给管理员）
+    
+    - 无数据时（sales_count == 0）：
+      * 个人日报：不推送（因为没有统计数据，说明当天没有销售活动）
+      * 部门日报：推送空数据的部门日报给所有有负责人的部门
+      * 公司日报：推送空数据的公司日报
+    
+    注意：所有推送都受CRM_DAILY_REPORT_FEISHU_ENABLED开关控制
     """
     try:
         # 解析目标日期
@@ -128,52 +138,32 @@ def generate_crm_daily_statistics(self, target_date_str=None):
         
         with Session(engine) as session:
             # 生成指定日期的完整日报数据
+            # - 个人日报：仅在 sales_count > 0 时推送
+            # - 部门日报和公司日报：无论 sales_count 是多少，都会推送（可能为空数据）
             sales_count = crm_statistics_service.generate_daily_statistics(session, target_date)
             
+            # 生成简化的返回信息（用于任务状态查询）
             if sales_count > 0:
                 logger.info(f"CRM日报数据生成完成，处理了 {sales_count} 个销售人员的数据")
-                from app.core.config import settings
-                feishu_status = "已推送" if settings.CRM_DAILY_REPORT_FEISHU_ENABLED else "已禁用"
-                
-                # 如果启用了飞书推送，统计部门数量
-                department_count = 0
-                if settings.CRM_DAILY_REPORT_FEISHU_ENABLED:
-                    try:
-                        department_reports = crm_statistics_service.aggregate_department_reports(session, target_date)
-                        department_count = len(department_reports)
-                    except Exception as e:
-                        logger.warning(f"统计部门数量失败: {e}")
-                
-                return {
-                    "success": True,
-                    "target_date": target_date.isoformat(),
-                    "sales_count": sales_count,
-                    "department_count": department_count,
-                    "company_report_generated": settings.CRM_DAILY_REPORT_FEISHU_ENABLED,
-                    "feishu_enabled": settings.CRM_DAILY_REPORT_FEISHU_ENABLED,
-                    "feishu_status": feishu_status,
-                    "message": f"成功处理了 {sales_count} 个销售人员的数据，{department_count} 个部门，生成公司日报，飞书推送: {feishu_status}"
-                }
+                message = f"成功处理了 {sales_count} 个销售人员的日报数据"
             else:
-                logger.warning(f"{target_date} 没有找到任何销售人员的数据，可能是节假日或数据未同步")
-                return {
-                    "success": True,
-                    "target_date": target_date.isoformat(),
-                    "sales_count": 0,
-                    "feishu_enabled": False,
-                    "feishu_status": "无数据",
-                    "message": "没有找到销售数据"
-                }
+                logger.warning(f"{target_date} 没有找到任何销售人员的数据，但部门日报和公司日报已在 generate_daily_statistics 中处理")
+                message = "没有找到销售数据，部门日报和公司日报已生成（可能为空数据）"
+            
+            # 返回简化的结果（用于任务状态查询 API）
+            return {
+                "target_date": target_date.isoformat(),
+                "sales_count": sales_count,
+                "message": message
+            }
             
     except Exception as e:
-        logger.error(f"CRM日报数据生成任务失败: {str(e)}")
+        logger.exception(f"CRM日报数据生成任务失败: {e}")
         # 使用Celery的重试机制
         self.retry(exc=e, countdown=300)  # 5分钟后重试
 
 
-
-
-@app.task(bind=True)
+@app.task(bind=True, max_retries=3)
 def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, report_type=None):
     """
     生成CRM周报数据并推送给团队leader
@@ -330,11 +320,8 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                 
     except Exception as e:
         logger.exception(f"CRM周报数据生成任务执行失败: {e}")
-        return {
-            "success": False,
-            "message": f"任务执行失败: {str(e)}",
-            "data": {}
-        }
+        # 使用Celery的重试机制
+        self.retry(exc=e, countdown=300)  # 5分钟后重试
 
 
 @app.task(bind=True)
