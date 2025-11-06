@@ -22,7 +22,7 @@ class OlmVisitRecordBatchCreateRequest(BaseModel):
 
 class ChaitinVisitRecordCreateRequest(BaseModel):
     """长亭拜访记录创建请求"""
-    company_id: Optional[int] = Field(None, description="拜访客户ID")
+    company_id: Optional[str] = Field(None, description="拜访客户ID")
     content: Optional[str] = Field(None, description="拜访内容")
     username: Optional[str] = Field(None, description="长亭CRM用户名")
     project_id: Optional[str] = Field(None, description="商机ID(可选)")
