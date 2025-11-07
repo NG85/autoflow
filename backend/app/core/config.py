@@ -187,7 +187,7 @@ class Settings(BaseSettings):
     # Feishu Btable sync configuration
     ENABLE_FEISHU_BTABLE_SYNC: bool = False
     FEISHU_BTABLE_SYNC_CRON: str = '0 13 * * 0'  # 每周日中午1点执行
-    FEISHU_BTABLE_URL: str = 'https://test-dbk58s1t6pur.feishu.cn/base/Hg7bb7FW4aLDkbsnoUic0ntUnZe?table=tbl6nDugEoAulPsu&view=vewuBKoUMz'
+    FEISHU_BTABLE_URL: str | None = None
     FEISHU_APP_ID: str = 'cli_a808bc341680d00b'
     FEISHU_APP_SECRET: str = '9oGQcBaHRCfOB2Vy2AwtyGQxZUpPzjaa'
     
