@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
 import requests
-from sqlalchemy import text, Table, MetaData
+from sqlalchemy import text
 from app.platforms.feishu.client import feishu_client
 from app.platforms.lark.client import lark_client
 from app.platforms.utils.url_parser import parse_bitable_url, resolve_bitable_app_token, get_platform_from_url
@@ -12,51 +12,52 @@ from app.core.db import engine
 from app.core.config import settings
 from app.celery import app
 import pytz
-from sqlalchemy.dialects.mysql import insert as mysql_insert
 
 logger = logging.getLogger(__name__)
 
 CRM_TABLE = 'crm_sales_visit_records'
 
-# 配置区
-FEISHU_URL = getattr(settings, 'FEISHU_BTABLE_URL', None)
-url_type, url_token, table_id, view_id = parse_bitable_url(FEISHU_URL) if FEISHU_URL else (None, None, None, None)
-
-# 根据URL自动检测平台
-def get_platform_and_config():
+def get_bitable_config():
     """
-    根据bitable URL获取平台和配置信息
+    从URL获取bitable配置信息（仅解析URL相关信息）
     
     Returns:
-        (platform, app_id, app_secret, client) 的元组
+        (platform, url_type, url_token, table_id, view_id) 的元组
     """
-    if not FEISHU_URL:
+    feishu_url = getattr(settings, 'FEISHU_BTABLE_URL', None)
+    if not feishu_url:
         logger.warning("FEISHU_BTABLE_URL 未配置")
-        return None, None, None, None
+        return None, None, None, None, None
     
-    platform = get_platform_from_url(FEISHU_URL)
+    # 解析URL获取表格信息
+    url_type, url_token, table_id, view_id = parse_bitable_url(feishu_url)
     
-    if platform == PLATFORM_FEISHU:
-        app_id = settings.FEISHU_APP_ID
-        app_secret = settings.FEISHU_APP_SECRET
-        client = feishu_client
-        logger.info(f"检测到飞书平台: {FEISHU_URL}")
-    elif platform == PLATFORM_LARK:
-        app_id = settings.LARK_APP_ID
-        app_secret = settings.LARK_APP_SECRET
-        client = lark_client
-        logger.info(f"检测到Lark平台: {FEISHU_URL}")
-    else:
-        logger.warning(f"无法识别平台，默认使用飞书: {FEISHU_URL}")
+    # 根据URL检测平台
+    platform = get_platform_from_url(feishu_url)
+    if not platform:
+        logger.warning(f"无法识别平台，默认使用飞书: {feishu_url}")
         platform = PLATFORM_FEISHU
-        app_id = settings.FEISHU_APP_ID
-        app_secret = settings.FEISHU_APP_SECRET
-        client = feishu_client
     
-    return platform, app_id, app_secret, client
+    logger.info(f"检测到{platform}平台: {feishu_url}")
+    return platform, url_type, url_token, table_id, view_id
 
-# 获取平台配置
-PLATFORM, APP_ID, APP_SECRET, CLIENT = get_platform_and_config()
+def get_platform_client(platform):
+    """
+    根据平台获取对应的client（client会自行读取匹配的settings）
+    
+    Args:
+        platform: 平台名称 (PLATFORM_FEISHU 或 PLATFORM_LARK)
+    
+    Returns:
+        client 实例
+    """
+    if platform == PLATFORM_FEISHU:
+        return feishu_client
+    elif platform == PLATFORM_LARK:
+        return lark_client
+    else:
+        # 默认使用飞书
+        return feishu_client
 
 
 # 字段映射关系（Feishu字段名 -> DB字段名）
@@ -246,81 +247,6 @@ def parse_field_value(val, field_name=None):
         return str(val)
     return val
 
-def get_local_max_mtime(session):
-    sql = f"SELECT MAX(UNIX_TIMESTAMP(last_modified_time) * 1000) FROM {CRM_TABLE} WHERE record_id LIKE 'rec%'"
-    result = session.execute(text(sql)).scalar()
-    return int(result) if result is not None else 0
-
-
-# @app.task(bind=True, max_retries=3)
-def sync_from_bitable_visit_records(self):
-    """
-    定时同步多维表格拜访记录到crm_sales_visit_records
-    支持飞书和Lark平台
-    """
-    try:
-        # 检查配置
-        if not PLATFORM or not APP_ID or not APP_SECRET or not CLIENT:
-            logger.error("平台配置不完整，无法同步")
-            return
-        
-        logger.info(f"开始同步{PLATFORM}多维表格拜访记录")
-        
-        # 获取访问令牌
-        token = CLIENT.get_tenant_access_token()
-        logger.info(f"获取到{PLATFORM}访问令牌: {token[:20]}...")
-        
-        # 解析应用令牌
-        app_token = resolve_bitable_app_token(token, url_type, url_token)
-        logger.info(f"应用令牌: {app_token}")
-        
-        # 获取本地最大修改时间
-        with Session(engine) as session:
-            local_max_mtime = get_local_max_mtime(session)
-        logger.info(f"本地最大last_modified_time: {local_max_mtime}")
-        
-        # 拉取数据（可全量或按区间）
-        records = fetch_bitable_records(token, app_token, table_id, view_id, platform=PLATFORM)
-        logger.info(f"本次全量拉取{len(records)}条记录")
-        
-        # 过滤增量记录
-        filtered = []
-        max_mtime = local_max_mtime
-        for rec in records:
-            mtime = rec.get("last_modified_time", 0)
-            if mtime and mtime > local_max_mtime:
-                filtered.append(rec)
-                if mtime > max_mtime:
-                    max_mtime = mtime
-        
-        logger.info(f"本次需同步增量记录: {len(filtered)}")
-        
-        if filtered:
-            upsert_visit_records(filtered)
-        else:
-            logger.info("无需同步记录")
-            
-    except Exception as e:
-        logger.error(f"同步{PLATFORM}多维表格拜访记录失败: {e}")
-        raise self.retry(exc=e, countdown=60)
-
-# 插入或更新记录
-def upsert_visit_records(records):
-    batch_time = datetime.now()
-    metadata = MetaData()
-    crm_table = Table(CRM_TABLE, metadata, autoload_with=engine)
-    with Session(engine) as session:
-        for rec in records:
-            mapped = map_fields(rec, batch_time=batch_time)
-            insert_stmt = mysql_insert(crm_table).values(**mapped)
-            update_stmt = {k: mapped[k] for k in mapped if k != 'record_id'}
-            if mapped.get('account_id') in (None, '', 'null'):
-                update_stmt['account_id'] = text('account_id')
-            ondup_stmt = insert_stmt.on_duplicate_key_update(**update_stmt)
-            session.execute(ondup_stmt)
-        session.commit()
-    logger.info(f"已写入/更新{len(records)}条拜访记录到{CRM_TABLE}")
-
 def map_fields(item, batch_time=None):
     fields = item.get('fields', {})
     mapped = {}
@@ -422,13 +348,13 @@ def batch_create_bitable_records(token: str, app_token: str, table_id: str, reco
     for i in range(0, len(records_fields), batch_size):
         chunk = records_fields[i:i + batch_size]
         body = {"records": [{"fields": f} for f in chunk]}
-        logger.info(f"批量创建{PLATFORM}多维表格拜访记录: {body}")
+        logger.info(f"批量创建多维表格拜访记录: {body}")
         resp = requests.post(url, headers=headers, json=body)
-        logger.info(f"批量创建{PLATFORM}多维表格拜访记录响应: {resp.text}")
+        logger.info(f"批量创建多维表格拜访记录响应: {resp.text}")
         resp.raise_for_status()
         resp_json = resp.json()
         if resp_json.get("code") != 0:
-            logger.error(f"批量创建{PLATFORM}多维表格拜访记录失败: {resp_json.get('msg')}")
+            logger.error(f"批量创建多维表格拜访记录失败: {resp_json.get('msg')}")
             return []
         data = resp_json.get("data", {})
         items = data.get("records") or []
@@ -448,8 +374,17 @@ def sync_bitable_visit_records(self, start_date_str: str | None = None, end_date
     返回创建后的 bitable record_id 列表。
     """
     try:
-        if not PLATFORM or not APP_ID or not APP_SECRET or not CLIENT:
-            logger.error("平台配置不完整，无法批量写入")
+        # 获取URL配置信息
+        platform, url_type, url_token, table_id, view_id = get_bitable_config()
+        
+        if not platform:
+            logger.error("无法获取平台配置，无法批量写入")
+            return []
+        
+        client = get_platform_client(platform)
+        
+        if not client:
+            logger.error("无法获取平台client，无法批量写入")
             return []
 
         # 计算日期范围
@@ -517,7 +452,7 @@ def sync_bitable_visit_records(self, start_date_str: str | None = None, end_date
             row_dict = dict(r._mapping) if hasattr(r, "_mapping") else dict(r)
             crm_rows.append(row_dict)
 
-        token = CLIENT.get_tenant_access_token()
+        token = client.get_tenant_access_token()
         app_token = resolve_bitable_app_token(token, url_type, url_token)
 
         records_fields = []
@@ -535,11 +470,11 @@ def sync_bitable_visit_records(self, start_date_str: str | None = None, end_date
             app_token=app_token,
             table_id=table_id,
             records_fields=records_fields,
-            platform=PLATFORM,
+            platform=platform,
         )
         logger.info(
-            f"已在{PLATFORM}多维表格批量创建记录: {len(record_ids)} 条，范围 {start_date} 到 {end_date}"
+            f"已在{platform}多维表格批量创建记录: {len(record_ids)} 条，范围 {start_date} 到 {end_date}"
         )
         return record_ids
     except Exception as e:
-        logger.error(f"批量写入{PLATFORM}多维表格拜访记录失败: {e}")
+        logger.error(f"批量写入多维表格拜访记录失败: {e}")
