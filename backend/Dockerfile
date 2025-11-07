@@ -26,15 +26,15 @@ COPY pyproject.toml uv.lock /app/
 RUN PYTHONDONTWRITEBYTECODE=1 uv sync --frozen
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Pre-download nltk data with mirror support.
-RUN python -c 'import nltk; \
-import os; \
-os.makedirs("/usr/local/lib/python3.11/site-packages/llama_index/core/_static/nltk_cache", exist_ok=True); \
-download_dir = "/usr/local/lib/python3.11/site-packages/llama_index/core/_static/nltk_cache"; \
-# Use Tsinghua NLTK mirror source directly.
-nltk.downloader._url = "https://mirrors.tuna.tsinghua.edu.cn/nltk_data/packages/"; \
-nltk.download("stopwords", download_dir=download_dir, quiet=True); \
-nltk.download("punkt", download_dir=download_dir, quiet=True);'
+# Copy pre-downloaded nltk data tar.gz and extract it.
+RUN mkdir -p /usr/local/lib/python3.11/site-packages/llama_index/core/_static/nltk_cache
+COPY nltk_data.tar.gz /tmp/nltk_data.tar.gz
+RUN cd /usr/local/lib/python3.11/site-packages/llama_index/core/_static/nltk_cache && \
+    mkdir -p corpora tokenizers && \
+    tar -xzf /tmp/nltk_data.tar.gz && \
+    mv stopwords corpora/ && \
+    mv punkt tokenizers/ && \
+    rm -f /tmp/nltk_data.tar.gz
 
 ENV PYTHONPATH=/app
 
