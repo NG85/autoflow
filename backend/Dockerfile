@@ -5,13 +5,14 @@ FROM docker.1ms.run/python:3.11-slim AS builder
 
 WORKDIR /app/
 
-RUN echo "deb http://mirrors.ivolces.com/debian/ trixie main non-free non-free-firmware contrib\n\
-    deb http://mirrors.ivolces.com/debian-security/ trixie-security main\n\
-    deb http://mirrors.ivolces.com/debian/ trixie-updates main non-free non-free-firmware contrib\n\
-    deb http://mirrors.ivolces.com/debian/ trixie-backports main non-free non-free-firmware contrib" \
-    > /etc/apt/sources.list && \
-        apt-get update && apt-get install -y gcc supervisor && \
-        rm -rf /var/lib/apt/lists/*
+RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/* && \
+    echo "deb http://mirrors.ivolces.com/debian/ trixie main non-free non-free-firmware contrib" > /etc/apt/sources.list && \
+    echo "deb http://mirrors.ivolces.com/debian-security/ trixie-security main" >> /etc/apt/sources.list && \
+    echo "deb http://mirrors.ivolces.com/debian/ trixie-updates main non-free non-free-firmware contrib" >> /etc/apt/sources.list && \
+    echo "deb http://mirrors.ivolces.com/debian/ trixie-backports main non-free non-free-firmware contrib" >> /etc/apt/sources.list && \
+    apt-get update && \
+    apt-get install -y gcc supervisor && \
+    rm -rf /var/lib/apt/lists/*
 
 # 安装 uv（使用国内镜像源）
 RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple uv
@@ -42,13 +43,14 @@ FROM docker.1ms.run/python:3.11-slim AS runtime
 
 WORKDIR /app/
 
-RUN echo "deb http://mirrors.ivolces.com/debian/ trixie main non-free non-free-firmware contrib\n\
-    deb http://mirrors.ivolces.com/debian-security/ trixie-security main\n\
-    deb http://mirrors.ivolces.com/debian/ trixie-updates main non-free non-free-firmware contrib\n\
-    deb http://mirrors.ivolces.com/debian/ trixie-backports main non-free non-free-firmware contrib" \
-    > /etc/apt/sources.list && \
-        apt-get update && apt-get install -y supervisor && \
-        rm -rf /var/lib/apt/lists/*
+RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/* && \
+    echo "deb http://mirrors.ivolces.com/debian/ trixie main non-free non-free-firmware contrib" > /etc/apt/sources.list && \
+    echo "deb http://mirrors.ivolces.com/debian-security/ trixie-security main" >> /etc/apt/sources.list && \
+    echo "deb http://mirrors.ivolces.com/debian/ trixie-updates main non-free non-free-firmware contrib" >> /etc/apt/sources.list && \
+    echo "deb http://mirrors.ivolces.com/debian/ trixie-backports main non-free non-free-firmware contrib" >> /etc/apt/sources.list && \
+    apt-get update && \
+    apt-get install -y supervisor && \
+    rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /usr/local/lib/python3.11/site-packages/llama_index/core/_static/nltk_cache /usr/local/lib/python3.11/site-packages/llama_index/core/_static/nltk_cache
