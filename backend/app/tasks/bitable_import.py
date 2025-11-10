@@ -332,10 +332,14 @@ def build_bitable_fields_from_crm_row(crm_row: dict) -> dict:
             return [{"name": str(v)}]
     
     for db_key, value in crm_row.items():
+        # 跳过attachment字段，回写时赋空值
+        if db_key == 'attachment':
+            continue
         # 单独处理recorder_department字段，映射到"部门"
         if db_key == 'recorder_department' and value not in (None, ""):
             feishu_fields["所在团队"] = value
             continue
+        
         # 处理其他字段
         if db_key in DB_TO_FEISHU_FIELD_MAP and value not in (None, ""):
             feishu_key = DB_TO_FEISHU_FIELD_MAP[db_key]

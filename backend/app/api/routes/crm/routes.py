@@ -513,7 +513,7 @@ def export_visit_records_to_csv(
             
             # 构建数据行（中英版本字段顺序相同，ID列在最前面）
             row = [
-                record_id,
+                item.record_id or record_id,
                 item.customer_level or "",
                 item.account_name or "",
                 first_visit_text,
