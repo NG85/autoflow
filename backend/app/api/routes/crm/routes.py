@@ -130,6 +130,11 @@ def create_visit_record(
         if not record.visit_type:
             record.visit_type = "form"
         
+        # 如果没有设置记录类型，默认为客户拜访
+        if not record.record_type:
+            from app.api.routes.crm.models import RecordType
+            record.record_type = RecordType.CUSTOMER_VISIT
+        
         # 确保记录人ID与当前用户ID一致
         if record.recorder_id:
             try:
@@ -439,7 +444,7 @@ def export_visit_records_to_csv(
                 "Contact Position", "Contact Name", "Collaborative Participants", "Follow-up Method",
                 "Follow-up Record", "AI Follow-up Record Quality Evaluation", "AI Follow-up Record Quality Evaluation Details", 
                 "Next Steps", "AI Next Steps Quality Evaluation", "AI Next Steps Quality Evaluation Details",
-                "Information Source", "Remarks", "Created Time"
+                "Record Type", "Information Source", "Remarks", "Created Time"
             ]
         else:
             # 中文版CSV头部（默认）- 只包含中文字段
@@ -449,7 +454,7 @@ def export_visit_records_to_csv(
                 "客户岗位", "客户名字", "协同参与人", "跟进方式",
                 "跟进记录", "AI对跟进记录质量评估", "AI对跟进记录质量评估详情",
                 "下一步计划", "AI对下一步计划质量评估", "AI对下一步计划质量评估详情",
-                "信息来源", "备注", "创建时间"
+                "记录类型", "信息来源", "备注", "创建时间"
             ]
         
         writer.writerow(headers)
@@ -492,6 +497,20 @@ def export_visit_records_to_csv(
             next_steps_quality_level = item.next_steps_quality_level_en if is_en else item.next_steps_quality_level_zh or ""
             next_steps_quality_reason = item.next_steps_quality_reason_en if is_en else item.next_steps_quality_reason_zh or ""
             
+            # 处理记录类型字段的多语言显示
+            from app.api.routes.crm.models import RecordType
+            record_type = ""
+            if item.record_type:
+                record_type_enum = RecordType.from_english(item.record_type)
+                if record_type_enum:
+                    record_type = record_type_enum.english if is_en else record_type_enum.chinese
+                else:
+                    record_type = item.record_type
+            else:
+                # 如果没有值，默认为客户拜访
+                default_record_type = RecordType.CUSTOMER_VISIT
+                record_type = default_record_type.english if is_en else default_record_type.chinese
+            
             # 构建数据行（中英版本字段顺序相同，ID列在最前面）
             row = [
                 record_id,
@@ -514,6 +533,7 @@ def export_visit_records_to_csv(
                 next_steps,
                 next_steps_quality_level,
                 next_steps_quality_reason,
+                record_type,
                 item.visit_type or "",
                 item.remarks or "",
                 item.last_modified_time or ""

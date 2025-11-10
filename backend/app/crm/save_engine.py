@@ -176,7 +176,7 @@ def fill_sales_visit_record_fields(sales_visit_record, db_session):
 
 
     # 处理subject和subject_en字段 - 利用VisitSubject枚举的中英文支持
-    from app.api.routes.crm.models import VisitSubject
+    from app.api.routes.crm.models import VisitSubject, RecordType
     
     original_subject = sales_visit_record.get("subject")
     
@@ -202,9 +202,36 @@ def fill_sales_visit_record_fields(sales_visit_record, db_session):
                 sales_visit_record["subject"] = original_subject
                 sales_visit_record["subject_en"] = original_subject
 
+    # 处理记录类型字段
+    original_record_type = sales_visit_record.get("record_type")
+    
+    if original_record_type is None or original_record_type == "":
+        # 如果没有值，默认为客户拜访
+        default_record_type = RecordType.CUSTOMER_VISIT
+        sales_visit_record["record_type"] = default_record_type.english
+        sales_visit_record["record_type_zh"] = default_record_type.chinese
+    else:
+        # 尝试根据英文值查找枚举
+        record_type_enum = RecordType.from_english(original_record_type)
+        if record_type_enum:
+            # 原始值是英文，设置record_type为英文，record_type_zh为中文
+            sales_visit_record["record_type"] = record_type_enum.english
+            sales_visit_record["record_type_zh"] = record_type_enum.chinese
+        else:
+            # 尝试根据中文值查找枚举
+            record_type_enum = RecordType.from_chinese(original_record_type)
+            if record_type_enum:
+                # 原始值是中文，设置record_type为英文，record_type_zh为中文
+                sales_visit_record["record_type"] = record_type_enum.english
+                sales_visit_record["record_type_zh"] = record_type_enum.chinese
+            else:
+                # 原始值不在枚举中，保持原值
+                sales_visit_record["record_type"] = original_record_type
+                sales_visit_record["record_type_zh"] = original_record_type
+
     # 其他字段（排除特殊处理的字段和动态字段）
     for k, v in sales_visit_record.items():
-        if v is None and k not in ["is_first_visit", "is_first_visit_en", "is_call_high", "is_call_high_en", "subject", "subject_en", "visit_start_time", "visit_end_time"]:
+        if v is None and k not in ["is_first_visit", "is_first_visit_en", "is_call_high", "is_call_high_en", "subject", "subject_en", "record_type", "record_type_zh", "visit_start_time", "visit_end_time"]:
             sales_visit_record[k] = "--"
     return sales_visit_record
 
