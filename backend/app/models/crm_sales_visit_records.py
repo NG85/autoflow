@@ -54,6 +54,7 @@ class CRMSalesVisitRecord(SQLModel, CRMDynamicFieldsMixin, table=True):
     visit_type: Optional[str] = Field(nullable=True, max_length=20, description="拜访类型：form(用户填报)、link(非结构化链接/文件)")
     visit_url: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="会议链接或文件URL")
     subject: Optional[str] = Field(nullable=True, max_length=50, description="拜访主题")
+    record_type: Optional[str] = Field(nullable=True, max_length=50, description="记录类型：Daily Sales Record、Customer Visit")
    
     __table_args__ = (
         Index("idx_account_name", "account_name"),

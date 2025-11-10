@@ -111,6 +111,7 @@ EXTRA_FIELD_MAP = {
     '跟进内容': 'followup_content',
     '拜访开始时间': 'visit_start_time',
     '拜访结束时间': 'visit_end_time',
+    '记录类型': 'record_type',
 }
 # 拼接字段映射字典
 FIELD_MAP = {**DISPLAY_FIELD_MAP, **EXTRA_FIELD_MAP}

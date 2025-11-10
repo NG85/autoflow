@@ -124,6 +124,48 @@ class SL_PULL_IN(str, Enum):
     YES = "是"
     OTHER = "其他"
 
+# 定义记录类型枚举
+class RecordType(str, Enum):
+    DAILY_SALES_RECORD = "Daily Sales Record"  # 日常销售记录
+    CUSTOMER_VISIT = "Customer Visit"  # 客户拜访
+    
+    @property
+    def english(self) -> str:
+        """获取英文值"""
+        return self.value
+    
+    @property
+    def chinese(self) -> str:
+        """获取中文值"""
+        chinese_map = {
+            "Daily Sales Record": "日常销售记录",
+            "Customer Visit": "客户拜访"
+        }
+        return chinese_map.get(self.value, self.value)
+    
+    @classmethod
+    def from_english(cls, english_value: str) -> Optional['RecordType']:
+        """根据英文值获取枚举"""
+        try:
+            return cls(english_value)
+        except ValueError:
+            return None
+    
+    @classmethod
+    def from_chinese(cls, chinese_value: str) -> Optional['RecordType']:
+        """根据中文值获取枚举"""
+        chinese_to_english = {
+            "日常销售记录": "Daily Sales Record",
+            "客户拜访": "Customer Visit"
+        }
+        english_value = chinese_to_english.get(chinese_value)
+        if english_value:
+            try:
+                return cls(english_value)
+            except ValueError:
+                return None
+        return None
+
 # 定义过滤操作符枚举
 class FilterOperator(str, Enum):
     EQ = "eq"           # 等于
@@ -219,6 +261,7 @@ class VisitRecordBase(BaseModel, CRMDynamicFieldsAPIMixin):
     attachment: Optional[str] = None # 附件
     parent_record: Optional[str] = None # 父记录
     remarks: Optional[str] = None # 备注
+    record_type: Optional[RecordType] = None # 记录类型
 
 # 协同参与人数据结构
 class CollaborativeParticipant(BaseModel):
@@ -342,6 +385,7 @@ class VisitRecordQueryRequest(BaseModel):
     next_steps_quality_level: Optional[List[str]] = None  # AI对下一步计划质量评估（多选）
     visit_type: Optional[List[str]] = None  # 信息来源（多选）
     subject: Optional[List[str]] = None  # 拜访主题（多选）
+    record_type: Optional[List[str]] = None  # 记录类型（多选）
     is_first_visit: Optional[bool] = None  # 是否首次拜访
     is_call_high: Optional[bool] = None  # 是否call high
     last_modified_time_start: Optional[str] = None  # 创建时间开始
