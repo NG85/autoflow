@@ -2,6 +2,7 @@ import logging
 from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
 import requests
+import json
 from sqlalchemy import text
 from app.platforms.feishu.client import feishu_client
 from app.platforms.lark.client import lark_client
@@ -307,6 +308,28 @@ def build_bitable_fields_from_crm_row(crm_row: dict) -> dict:
             return v
         except Exception:
             return None
+    def _format_person_field(v):
+        """
+        将协同参与人字段转换为Feishu Person类型所需的格式：[{"name": "xxx"}, ...]
+        """
+        if v is None or v == "":
+            return None
+        # 使用工具函数解析协同参与人列表
+        from app.utils.participants_utils import parse_collaborative_participants_list
+        try:
+            participants = parse_collaborative_participants_list(v)
+            if not participants:
+                return None
+            # 转换为Feishu Person类型所需的格式，只保留name字段
+            formatted = [{"name": p.get("name", "")} for p in participants if p.get("name")]
+            return formatted if formatted else None
+        except Exception as e:
+            logger.warning(f"解析协同参与人字段失败: {v}, 错误: {e}")
+            # 如果解析失败，尝试将值转换为字符串并作为name
+            if isinstance(v, str):
+                return [{"name": v}]
+            return [{"name": str(v)}]
+    
     for db_key, value in crm_row.items():
         # 单独处理recorder_department字段，映射到"部门"
         if db_key == 'recorder_department' and value not in (None, ""):
@@ -323,6 +346,11 @@ def build_bitable_fields_from_crm_row(crm_row: dict) -> dict:
                 feishu_fields[feishu_key] = "是" if value else "否"
             elif feishu_key == "信息来源":
                 feishu_fields[feishu_key] = "表单录入" if value == "form" else "会议录入"
+            elif feishu_key == "协同参与人（内部人员）":
+                # Person类型字段需要特殊处理，格式为对象列表
+                person_list = _format_person_field(value)
+                if person_list:
+                    feishu_fields[feishu_key] = person_list
             else:
                 feishu_fields[feishu_key] = value
     return feishu_fields
