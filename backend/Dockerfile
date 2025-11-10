@@ -11,7 +11,7 @@ RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/* && \
     echo "deb http://mirrors.ivolces.com/debian/ trixie-updates main non-free non-free-firmware contrib" >> /etc/apt/sources.list && \
     echo "deb http://mirrors.ivolces.com/debian/ trixie-backports main non-free non-free-firmware contrib" >> /etc/apt/sources.list && \
     apt-get update && \
-    apt-get install -y --no-install-recommends gcc supervisor && \
+    apt-get install -y --no-install-recommends gcc supervisor curl && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
