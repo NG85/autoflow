@@ -73,7 +73,7 @@ DISPLAY_FIELD_MAP = {
     '负责销售': 'recorder',
     '联系人职位': 'contact_position',
     '联系人姓名': 'contact_name',
-    '协同参与人（内部人员）': 'collaborative_participants',
+    '协同参与人': 'collaborative_participants',
     '拜访及沟通方式': 'visit_communication_method',
     '跟进记录': 'followup_record',
     'AI对跟进记录质量评估': 'followup_quality_level_zh',
@@ -211,7 +211,7 @@ def parse_field_value(val, field_name=None):
                 return ','.join(str(i) for i in link_ids if i)
             return str(link_ids) if link_ids else ''
         return ''
-    if field_name == '协同参与人（内部人员）':
+    if field_name == '协同参与人':
         # 处理协同参与人字段，支持JSON数组和字符串格式
         if isinstance(val, list):
             # 如果是列表，转换为JSON字符串存储
@@ -311,25 +311,21 @@ def build_bitable_fields_from_crm_row(crm_row: dict) -> dict:
             return None
     def _format_person_field(v):
         """
-        将协同参与人字段转换为Feishu Person类型所需的格式：[{"name": "xxx"}, ...]
+        将协同参与人字段转换为文本格式，用逗号分隔，只拼接name字段
         """
         if v is None or v == "":
             return None
-        # 使用工具函数解析协同参与人列表
-        from app.utils.participants_utils import parse_collaborative_participants_list
+        # 使用工具函数解析协同参与人列表并格式化为文本
+        from app.utils.participants_utils import format_collaborative_participants_names
         try:
-            participants = parse_collaborative_participants_list(v)
-            if not participants:
-                return None
-            # 转换为Feishu Person类型所需的格式，只保留name字段
-            formatted = [{"name": p.get("name", "")} for p in participants if p.get("name")]
+            formatted = format_collaborative_participants_names(v, separator=",")
             return formatted if formatted else None
         except Exception as e:
             logger.warning(f"解析协同参与人字段失败: {v}, 错误: {e}")
-            # 如果解析失败，尝试将值转换为字符串并作为name
+            # 如果解析失败，尝试将值转换为字符串
             if isinstance(v, str):
-                return [{"name": v}]
-            return [{"name": str(v)}]
+                return v
+            return str(v) if v else None
     
     for db_key, value in crm_row.items():
         # 跳过attachment字段，回写时赋空值
@@ -351,11 +347,11 @@ def build_bitable_fields_from_crm_row(crm_row: dict) -> dict:
                 feishu_fields[feishu_key] = "是" if value else "否"
             elif feishu_key == "信息来源":
                 feishu_fields[feishu_key] = "表单录入" if value == "form" else "会议录入"
-            elif feishu_key == "协同参与人（内部人员）":
-                # Person类型字段需要特殊处理，格式为对象列表
-                person_list = _format_person_field(value)
-                if person_list:
-                    feishu_fields[feishu_key] = person_list
+            elif feishu_key == "协同参与人":
+                # 文本类型字段，用逗号分隔
+                person_text = _format_person_field(value)
+                if person_text:
+                    feishu_fields[feishu_key] = person_text
             else:
                 feishu_fields[feishu_key] = value
     return feishu_fields
