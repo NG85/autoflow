@@ -204,7 +204,7 @@ def fill_sales_visit_record_fields(sales_visit_record, db_session):
 
     # 其他字段（排除特殊处理的字段和动态字段）
     for k, v in sales_visit_record.items():
-        if v is None and k not in ["is_first_visit", "is_first_visit_en", "is_call_high", "is_call_high_en", "subject", "subject_en", "visit_start_time", "visit_end_time"]:
+        if v is None and k not in ["is_first_visit", "is_first_visit_en", "is_call_high", "is_call_high_en", "subject", "subject_en", "visit_start_time", "visit_end_time", "record_type", "visit_purpose"]:
             sales_visit_record[k] = "--"
     return sales_visit_record
 

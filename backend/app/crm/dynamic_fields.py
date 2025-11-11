@@ -102,8 +102,8 @@ def generate_dynamic_fields_array(visit_record: Dict[str, Any]) -> List[Dict[str
             
         field_value = visit_record.get(field_key)
         
-        # 只有当字段值不为空时才添加到数组中
-        if field_value:
+        # 只有当字段值不为空且不为'--'时才添加到数组中
+        if field_value and str(field_value).strip() not in ('', '--', 'None'):
             # 特殊处理：record_type 字段需要转换为中英文显示
             if field_key == 'record_type':
                 from app.api.routes.crm.models import RecordType
@@ -139,7 +139,8 @@ def generate_dynamic_fields_array(visit_record: Dict[str, Any]) -> List[Dict[str
                     formatted_value = str(field_value).strip()
                     formatted_value_en = formatted_value
             
-            if formatted_value:
+            # 确保格式化后的值不为空且不为'--'
+            if formatted_value and str(formatted_value).strip() not in ('', '--', 'None'):
                 # 获取字段的中文和英文标签
                 field_label = field_label_map.get(field_key, field_key)
                 field_label_en = field_label_en_map.get(field_key, field_key)
