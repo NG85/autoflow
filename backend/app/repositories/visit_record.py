@@ -294,6 +294,11 @@ class VisitRecordRepo(BaseRepo):
                 CRMSalesVisitRecord.visit_communication_method.in_(request.visit_communication_method)
             )
 
+        if request.visit_purpose:
+            query = query.where(
+                CRMSalesVisitRecord.visit_purpose.in_(request.visit_purpose)
+            )
+
         if request.followup_quality_level:
             query = query.where(
                 or_(

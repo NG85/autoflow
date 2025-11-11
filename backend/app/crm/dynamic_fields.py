@@ -82,6 +82,18 @@ def generate_dynamic_fields_array(visit_record: Dict[str, Any]) -> List[Dict[str
             "value_en": time_range_value
         })
     
+    # 字段名到中文标签的映射
+    field_label_map = {
+        "visit_purpose": "拜访目的",
+        "record_type": "记录类型",
+    }
+    
+    # 字段名到英文标签的映射
+    field_label_en_map = {
+        "visit_purpose": "Visit Purpose",
+        "record_type": "Record Type",
+    }
+    
     # 处理其他动态字段（排除时间相关字段，因为已经组合处理了）
     for field_key in DYNAMIC_FIELDS:
         # 跳过时间字段，因为已经在上面的特殊处理中处理了
@@ -92,19 +104,53 @@ def generate_dynamic_fields_array(visit_record: Dict[str, Any]) -> List[Dict[str
         
         # 只有当字段值不为空时才添加到数组中
         if field_value:
-            # 处理datetime类型，格式化为字符串
-            if hasattr(field_value, 'strftime'):
-                # 如果是datetime对象，格式化为时间字符串
-                formatted_value = field_value.strftime("%H:%M:%S")
+            # 特殊处理：record_type 字段需要转换为中英文显示
+            if field_key == 'record_type':
+                from app.api.routes.crm.models import RecordType
+                # 处理枚举类型：如果是枚举对象，先获取其值
+                if hasattr(field_value, 'value'):
+                    # 如果是枚举对象，获取其值
+                    field_value_str = field_value.value
+                else:
+                    field_value_str = str(field_value)
+                
+                record_type_enum = RecordType.from_english(field_value_str)
+                if record_type_enum:
+                    formatted_value = record_type_enum.chinese
+                    formatted_value_en = record_type_enum.english
+                else:
+                    # 如果不是枚举值，尝试中文转换
+                    record_type_enum = RecordType.from_chinese(field_value_str)
+                    if record_type_enum:
+                        formatted_value = record_type_enum.chinese
+                        formatted_value_en = record_type_enum.english
+                    else:
+                        # 都不匹配，使用原值
+                        formatted_value = field_value_str.strip()
+                        formatted_value_en = formatted_value
             else:
-                # 如果是字符串，直接使用
-                formatted_value = str(field_value).strip()
+                # 处理datetime类型，格式化为字符串
+                if hasattr(field_value, 'strftime'):
+                    # 如果是datetime对象，格式化为时间字符串
+                    formatted_value = field_value.strftime("%H:%M:%S")
+                    formatted_value_en = formatted_value
+                else:
+                    # 如果是字符串，直接使用
+                    formatted_value = str(field_value).strip()
+                    formatted_value_en = formatted_value
             
             if formatted_value:
-                # 使用字段名作为标签（可以根据需要自定义）
+                # 获取字段的中文和英文标签
+                field_label = field_label_map.get(field_key, field_key)
+                field_label_en = field_label_en_map.get(field_key, field_key)
+                
+                # 添加到动态字段数组
+                # 注意：record_type 有中英文值转换，其他字段的 value_en 和 value 相同（都是原值）
                 dynamic_fields_array.append({
-                    "key": field_key,
-                    "value": formatted_value
+                    "key": field_label,
+                    "key_en": field_label_en,
+                    "value": formatted_value,
+                    "value_en": formatted_value_en
                 })
     
     return dynamic_fields_array
