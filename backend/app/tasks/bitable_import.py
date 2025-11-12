@@ -353,6 +353,17 @@ def build_bitable_fields_from_crm_row(crm_row: dict) -> dict:
                 person_text = _format_person_field(value)
                 if person_text:
                     feishu_fields[feishu_key] = person_text
+            elif feishu_key == "负责销售":
+                # 处理负责销售字段，使用recorder_open_id（通过JOIN查询获取），格式化为Person类型
+                recorder_open_id = crm_row.get('recorder_open_id')
+                if recorder_open_id:
+                    # 飞书Person类型字段格式：[{"id": "open_id"}]
+                    feishu_fields[feishu_key] = [{"id": recorder_open_id}]
+                else:
+                    # 如果找不到open_id，记录警告但不设置字段
+                    recorder = crm_row.get('recorder')
+                    record_id = crm_row.get('record_id')
+                    logger.warning(f"在处理记录{record_id}时，无法找到recorder={recorder}对应的open_id，跳过负责销售字段")
             else:
                 feishu_fields[feishu_key] = value
     return feishu_fields
@@ -462,9 +473,9 @@ def sync_bitable_visit_records(self, start_date_str: str | None = None, end_date
         with Session(engine) as session:
             # 构建字段列表（需要通过JOIN获取）
             cols = ", ".join([f"{CRM_TABLE}.{col}" for col in DISPLAY_FIELD_MAP.values()])
-            # 添加部门字段（通过JOIN获取）
+            # 添加部门字段和open_id（通过JOIN获取）
             sql = text(f"""
-                SELECT {cols}, up.department AS recorder_department
+                SELECT {cols}, up.department AS recorder_department, up.open_id AS recorder_open_id
                 FROM {CRM_TABLE}
                 LEFT JOIN user_profiles up ON up.user_id = {CRM_TABLE}.recorder_id
                 WHERE {CRM_TABLE}.last_modified_time BETWEEN :start AND :end
