@@ -130,11 +130,6 @@ def create_visit_record(
         if not record.visit_type:
             record.visit_type = "form"
         
-        # 如果没有设置记录类型，默认为客户拜访
-        if not record.record_type:
-            from app.api.routes.crm.models import RecordType
-            record.record_type = RecordType.CUSTOMER_VISIT
-        
         # 确保记录人ID与当前用户ID一致
         if record.recorder_id:
             try:
@@ -442,7 +437,7 @@ def export_visit_records_to_csv(
                 "ID", "Customer Level", "Account Name", "First Visit", "Call High",
                 "Partner Name", "Opportunity Name", "Follow-up Date", "Person in Charge", "Department",
                 "Contact Position", "Contact Name", "Collaborative Participants", "Follow-up Method",
-                "Follow-up Record", "AI Follow-up Record Quality Evaluation", "AI Follow-up Record Quality Evaluation Details", 
+                "Visit Purpose", "Follow-up Record", "AI Follow-up Record Quality Evaluation", "AI Follow-up Record Quality Evaluation Details", 
                 "Next Steps", "AI Next Steps Quality Evaluation", "AI Next Steps Quality Evaluation Details",
                 "Record Type", "Information Source", "Remarks", "Created Time"
             ]
@@ -452,7 +447,7 @@ def export_visit_records_to_csv(
                 "ID", "客户分类", "客户名称", "是否首次拜访", "是否Call High",
                 "合作伙伴", "商机名称", "跟进日期", "负责销售", "所在团队",
                 "客户岗位", "客户名字", "协同参与人", "跟进方式",
-                "跟进记录", "AI对跟进记录质量评估", "AI对跟进记录质量评估详情",
+                "拜访目的", "跟进记录", "AI对跟进记录质量评估", "AI对跟进记录质量评估详情",
                 "下一步计划", "AI对下一步计划质量评估", "AI对下一步计划质量评估详情",
                 "记录类型", "信息来源", "备注", "创建时间"
             ]
@@ -506,10 +501,6 @@ def export_visit_records_to_csv(
                     record_type = record_type_enum.english if is_en else record_type_enum.chinese
                 else:
                     record_type = item.record_type
-            else:
-                # 如果没有值，默认为客户拜访
-                default_record_type = RecordType.CUSTOMER_VISIT
-                record_type = default_record_type.english if is_en else default_record_type.chinese
             
             # 构建数据行（中英版本字段顺序相同，ID列在最前面）
             row = [
@@ -527,6 +518,7 @@ def export_visit_records_to_csv(
                 item.contact_name or "",
                 item.collaborative_participants or "",
                 item.visit_communication_method or "",
+                item.visit_purpose or "",
                 followup_record,
                 followup_quality_level,
                 followup_quality_reason,
@@ -678,6 +670,12 @@ def get_visit_record_filter_options(
                 .order_by(CRMSalesVisitRecord.visit_communication_method)
             ).all()
             
+            visit_purposes = db_session.exec(
+                select(distinct(CRMSalesVisitRecord.visit_purpose))
+                .where(CRMSalesVisitRecord.visit_purpose.is_not(None))
+                .order_by(CRMSalesVisitRecord.visit_purpose)
+            ).all()
+            
             visit_types = db_session.exec(
                 select(distinct(CRMSalesVisitRecord.visit_type))
                 .where(CRMSalesVisitRecord.visit_type.is_not(None))
@@ -686,6 +684,7 @@ def get_visit_record_filter_options(
             
             result_data.update({
                 "communication_methods": communication_methods,
+                "visit_purposes": visit_purposes,
                 "visit_types": visit_types,
             })
         

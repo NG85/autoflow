@@ -278,6 +278,7 @@ class CompleteVisitRecordCreate(VisitRecordBase):
     contact_position: Optional[str] = None # 客户职位
     contact_name: Optional[str] = None # 客户名字
     visit_communication_method: Optional[str] = None # 拜访及沟通方式
+    visit_purpose: Optional[str] = None # 拜访目的
     collaborative_participants: Optional[Union[str, List[CollaborativeParticipant]]] = Field(
         default=None, 
         description="协同参与人，支持字符串格式（向后兼容）或结构化数组格式"
@@ -381,6 +382,7 @@ class VisitRecordQueryRequest(BaseModel):
     recorder: Optional[List[str]] = None  # 记录人（多选）
     department: Optional[List[str]] = None  # 所在团队（多选）
     visit_communication_method: Optional[List[str]] = None  # 跟进方式（多选）
+    visit_purpose: Optional[List[str]] = None  # 拜访目的（多选）
     followup_quality_level: Optional[List[str]] = None  # AI对跟进记录质量评估（多选）
     next_steps_quality_level: Optional[List[str]] = None  # AI对下一步计划质量评估（多选）
     visit_type: Optional[List[str]] = None  # 信息来源（多选）

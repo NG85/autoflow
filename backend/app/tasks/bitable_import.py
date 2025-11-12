@@ -112,6 +112,7 @@ EXTRA_FIELD_MAP = {
     '拜访开始时间': 'visit_start_time',
     '拜访结束时间': 'visit_end_time',
     '记录类型': 'record_type',
+    '拜访目的': 'visit_purpose',
 }
 # 拼接字段映射字典
 FIELD_MAP = {**DISPLAY_FIELD_MAP, **EXTRA_FIELD_MAP}

@@ -27,6 +27,7 @@ class CRMSalesVisitRecord(SQLModel, CRMDynamicFieldsMixin, table=True):
     visit_communication_date: Optional[date] = Field(nullable=True, description="拜访及沟通日期")
     counterpart_location: Optional[str] = Field(nullable=True, max_length=255, description="拜访地点")
     visit_communication_method: Optional[str] = Field(nullable=True, max_length=255, description="拜访及沟通方式")
+    visit_purpose: Optional[str] = Field(nullable=True, max_length=255, description="拜访目的")
     communication_duration: Optional[str] = Field(nullable=True, max_length=255, description="沟通时长")
     expectation_achieved: Optional[str] = Field(nullable=True, max_length=255, description="是/否达成预期")
     followup_record: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="跟进记录")
