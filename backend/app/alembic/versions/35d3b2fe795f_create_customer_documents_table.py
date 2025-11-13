@@ -1,7 +1,7 @@
 """create_customer_documents_table
 
 Revision ID: 35d3b2fe795f
-Revises: 4e3d779a4137
+Revises: d1776949f5f5
 Create Date: 2025-08-12 11:15:56.658496
 
 """
@@ -13,7 +13,7 @@ from tidb_vector.sqlalchemy import VectorType
 
 # revision identifiers, used by Alembic.
 revision = '35d3b2fe795f'
-down_revision = '4e3d779a4137'
+down_revision = 'd1776949f5f5'
 branch_labels = None
 depends_on = None
 

@@ -261,7 +261,6 @@ class VisitRecordBase(BaseModel, CRMDynamicFieldsAPIMixin):
     attachment: Optional[str] = None # 附件
     parent_record: Optional[str] = None # 父记录
     remarks: Optional[str] = None # 备注
-    record_type: Optional[RecordType] = None # 记录类型
 
 # 协同参与人数据结构
 class CollaborativeParticipant(BaseModel):
@@ -273,6 +272,7 @@ class CollaborativeParticipant(BaseModel):
 # 完整版表单
 class CompleteVisitRecordCreate(VisitRecordBase):
     form_type: Literal["complete"] = "complete"  # 表单类型标识
+    record_type: Optional[RecordType] = None # 记录类型
     is_first_visit: Optional[bool] = None # 是否首次拜访
     is_call_high: Optional[bool] = None # 是否call high
     contact_position: Optional[str] = None # 客户职位
@@ -376,7 +376,8 @@ class VisitRecordQueryRequest(BaseModel):
     customer_level: Optional[List[str]] = None  # 客户等级（多选）
     account_id: Optional[List[str]] = None  # 客户ID（多选）
     account_name: Optional[List[str]] = None  # 客户名称（多选）
-    partner_name: Optional[List[str]] = None  # 合作伙伴（多选）
+    partner_id: Optional[List[str]] = None  # 合作伙伴ID（多选）
+    partner_name: Optional[List[str]] = None  # 合作伙伴名称（多选）
     visit_communication_date_start: Optional[str] = None  # 跟进日期开始
     visit_communication_date_end: Optional[str] = None  # 跟进日期结束
     recorder: Optional[List[str]] = None  # 记录人（多选）

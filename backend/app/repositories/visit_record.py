@@ -168,37 +168,21 @@ class VisitRecordRepo(BaseRepo):
             request.page_size = 20
         elif request.page_size > 100:  # 限制最大页面大小
             request.page_size = 100
-            
-        # 构建基础查询，关联客户表获取客户分类、关联用户档案表获取拜访人部门信息
-        query = (
-            select(
-                CRMSalesVisitRecord,
-                CRMAccount.customer_level,
-                UserProfile.department
-            )
-            .outerjoin(
-                CRMAccount,
-                CRMSalesVisitRecord.account_id == CRMAccount.unique_id
-            )
-            .outerjoin(
-                UserProfile,
-                func.replace(func.cast(CRMSalesVisitRecord.recorder_id, String), '-', '') == func.replace(UserProfile.oauth_user_id, '-', '')
-            )
-        )
-
-        # 应用权限控制 - 用户只能查看自己及下属的拜访记录
+        
+        # 先处理权限控制，获取可访问的recorder_ids
+        uuid_recorder_ids = None
+        is_admin = False
         if current_user_id:
             # 检查是否为管理团队成员
-            if self._is_admin_user(current_user_id, session):
+            is_admin = self._is_admin_user(current_user_id, session)
+            if is_admin:
                 logger.info(f"Admin user {current_user_id} detected, skipping access control")
-                # 管理团队成员可以查看所有记录
             else:
                 accessible_recorder_ids = self._get_user_accessible_recorder_ids(session, current_user_id)
                 if accessible_recorder_ids:
-                    # 根据recorder_id过滤 - 需要转换类型
+                    # 将字符串ID转换为UUID进行过滤
                     from uuid import UUID
                     try:
-                        # 将字符串ID转换为UUID进行过滤，同时处理去掉短横线的情况
                         uuid_recorder_ids = []
                         for rid in accessible_recorder_ids:
                             if rid:
@@ -210,7 +194,6 @@ class VisitRecordRepo(BaseRepo):
                                 else:
                                     # 标准UUID格式
                                     uuid_recorder_ids.append(UUID(rid))
-                        query = query.where(CRMSalesVisitRecord.recorder_id.in_(uuid_recorder_ids))
                     except ValueError as e:
                         logger.error(f"Invalid UUID format in accessible_recorder_ids: {e}")
                         # 如果转换失败，返回空结果
@@ -234,6 +217,24 @@ class VisitRecordRepo(BaseRepo):
         else:
             # 如果没有提供用户ID，记录警告但不限制访问（向后兼容）
             logger.warning("No current_user_id provided, skipping access control")
+            
+        # 构建基础查询，关联客户表获取客户分类
+        # 优化：先不JOIN UserProfile，避免使用函数导致索引失效
+        # 部门信息通过子查询或后续查询获取
+        query = (
+            select(
+                CRMSalesVisitRecord,
+                CRMAccount.customer_level
+            )
+            .outerjoin(
+                CRMAccount,
+                CRMSalesVisitRecord.account_id == CRMAccount.unique_id
+            )
+        )
+        
+        # 应用权限控制过滤 - 在JOIN之前先过滤，提高性能
+        if not is_admin and uuid_recorder_ids:
+            query = query.where(CRMSalesVisitRecord.recorder_id.in_(uuid_recorder_ids))
 
         # 应用过滤条件
         if request.customer_level:
@@ -247,22 +248,22 @@ class VisitRecordRepo(BaseRepo):
             )
 
         if request.account_name:
-            # 对客户名称进行模糊检索，支持多选
-            account_name_conditions = []
-            for account_name in request.account_name:
-                account_name_conditions.append(
-                    CRMSalesVisitRecord.account_name.ilike(f"%{account_name}%")
-                )
-            query = query.where(or_(*account_name_conditions))
+            # 客户名称完全匹配，支持多选
+            # 性能优化：使用精确匹配（可以使用索引），比模糊匹配性能更好
+            query = query.where(
+                CRMSalesVisitRecord.account_name.in_(request.account_name)
+            )
 
+        if request.partner_id:
+            query = query.where(
+                CRMSalesVisitRecord.partner_id.in_(request.partner_id)
+            )
         if request.partner_name:
-            # 对合作伙伴进行模糊检索，支持多选
-            partner_conditions = []
-            for partner in request.partner_name:
-                partner_conditions.append(
-                    CRMSalesVisitRecord.partner_name.ilike(f"%{partner}%")
-                )
-            query = query.where(or_(*partner_conditions))
+            # 合作伙伴名称完全匹配，支持多选
+            # 性能优化：使用精确匹配（可以使用索引），比模糊匹配性能更好
+            query = query.where(
+                CRMSalesVisitRecord.partner_name.in_(request.partner_name)
+            )
 
         if request.visit_communication_date_start:
             try:
@@ -284,10 +285,66 @@ class VisitRecordRepo(BaseRepo):
             )
 
         # 使用拜访人的department字段作为所在团队
+        # 优化：先查询符合条件的recorder_ids，然后过滤
         if request.department:
-            query = query.where(
-                UserProfile.department.in_(request.department)
-            )
+            # 先查询符合条件的UserProfile，获取对应的oauth_user_id列表
+            department_user_profiles = session.exec(
+                select(UserProfile.oauth_user_id).where(
+                    UserProfile.department.in_(request.department)
+                )
+            ).all()
+            
+            if department_user_profiles:
+                # 将oauth_user_id转换为UUID格式的recorder_id
+                department_recorder_ids = []
+                for oauth_id in department_user_profiles:
+                    if oauth_id:
+                        try:
+                            from uuid import UUID
+                            # 处理可能没有短横线的UUID
+                            if len(oauth_id) == 32:
+                                formatted_uuid = f"{oauth_id[:8]}-{oauth_id[8:12]}-{oauth_id[12:16]}-{oauth_id[16:20]}-{oauth_id[20:32]}"
+                                department_recorder_ids.append(UUID(formatted_uuid))
+                            else:
+                                department_recorder_ids.append(UUID(oauth_id))
+                        except ValueError:
+                            continue
+                
+                if department_recorder_ids:
+                    # 如果已经有权限过滤，需要取交集
+                    if not is_admin and uuid_recorder_ids:
+                        # 取交集
+                        department_recorder_ids = [rid for rid in department_recorder_ids if rid in uuid_recorder_ids]
+                    
+                    if department_recorder_ids:
+                        query = query.where(CRMSalesVisitRecord.recorder_id.in_(department_recorder_ids))
+                    else:
+                        # 没有匹配的记录，返回空结果
+                        return Page(
+                            items=[],
+                            total=0,
+                            page=request.page,
+                            size=request.page_size,
+                            pages=0
+                        )
+                else:
+                    # 没有有效的recorder_id，返回空结果
+                    return Page(
+                        items=[],
+                        total=0,
+                        page=request.page,
+                        size=request.page_size,
+                        pages=0
+                    )
+            else:
+                # 没有匹配的部门用户，返回空结果
+                return Page(
+                    items=[],
+                    total=0,
+                    page=request.page,
+                    size=request.page_size,
+                    pages=0
+                )
 
         if request.visit_communication_method:
             query = query.where(
@@ -362,9 +419,46 @@ class VisitRecordRepo(BaseRepo):
         params = Params(page=request.page, size=request.page_size)
         result = paginate(session, query, params)
 
+        # 优化：批量获取部门信息，避免N+1查询
+        # 收集所有需要查询的recorder_id（UUID格式）
+        recorder_ids = set()
+        for record, customer_level in result.items:
+            if record.recorder_id:
+                recorder_ids.add(record.recorder_id)
+        
+        # 批量查询部门信息 - 一次性查询所有匹配的UserProfile
+        # oauth_user_id 是带短横线的标准 UUID 字符串格式，可以直接与 recorder_id 转换后的字符串匹配
+        department_map = {}
+        if recorder_ids:
+            # 将 UUID 转换为字符串列表（带短横线），直接使用 IN 查询
+            # 这样可以使用索引，性能更好
+            recorder_id_strs = [str(rid) for rid in recorder_ids]
+            
+            # 批量查询所有匹配的UserProfile
+            user_profiles = session.exec(
+                select(UserProfile.oauth_user_id, UserProfile.department).where(
+                    UserProfile.oauth_user_id.in_(recorder_id_strs)
+                )
+            ).all()
+            
+            # 构建映射：将 oauth_user_id 字符串转换回 UUID 作为 key
+            for oauth_user_id, department in user_profiles:
+                if oauth_user_id:
+                    try:
+                        from uuid import UUID
+                        # oauth_user_id 已经是标准 UUID 字符串格式，直接转换
+                        recorder_uuid = UUID(oauth_user_id)
+                        if recorder_uuid in recorder_ids:
+                            department_map[recorder_uuid] = department
+                    except ValueError:
+                        # 如果转换失败，跳过
+                        continue
+
         # 转换结果格式 - 复用现有模型
-        items = [_convert_to_response(record, customer_level, department) 
-                for record, customer_level, department in result.items]
+        items = []
+        for record, customer_level in result.items:
+            department = department_map.get(record.recorder_id) if record.recorder_id else None
+            items.append(_convert_to_response(record, customer_level, department))
 
         # 返回自定义分页结果
         return Page(
@@ -397,7 +491,7 @@ class VisitRecordRepo(BaseRepo):
             )
             .outerjoin(
                 UserProfile,
-                func.replace(func.cast(CRMSalesVisitRecord.recorder_id, String), '-', '') == func.replace(UserProfile.oauth_user_id, '-', '')
+                func.cast(CRMSalesVisitRecord.recorder_id, String) == UserProfile.oauth_user_id
             )
             .where(CRMSalesVisitRecord.id == record_id)
         )
