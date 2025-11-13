@@ -15,15 +15,19 @@ RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/* && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-ENV UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
-
 # Setup supervisord.
 COPY supervisord.conf /usr/etc/supervisord.conf
+
+ENV UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
+ENV UV_CACHE_DIR=/root/.cache/uv
+ENV PYTHONDONTWRITEBYTECODE=1
 
 # Install dependencies.
 COPY pyproject.toml uv.lock /app/
 
-RUN PYTHONDONTWRITEBYTECODE=1 uv sync --frozen
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen
+
 ENV PATH="/app/.venv/bin:$PATH"
 
 # Copy pre-downloaded nltk data tar.gz and extract it.

@@ -1,7 +1,7 @@
 """add subject to visit record
 
 Revision ID: 9f1430bc28cf
-Revises: 6a22c062ecee
+Revises: 38c7810cf06c
 Create Date: 2025-08-21 11:48:55.594703
 
 """
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = '9f1430bc28cf'
-down_revision = '6a22c062ecee'
+down_revision = '38c7810cf06c'
 branch_labels = None
 depends_on = None
 
