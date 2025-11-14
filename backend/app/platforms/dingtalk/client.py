@@ -491,5 +491,97 @@ class DingTalkClient(BaseClient):
             logger.error(f"发送钉钉交互式卡片异常: {e}")
             return {"errcode": -1, "errmsg": str(e)}
 
+    def query_conference_info_by_room_code(
+        self,
+        room_code: str,
+        access_token: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        根据会议号查询会议信息，获取会议ID
+        
+        API文档：https://open.dingtalk.com/document/development/api-queryconferenceinfobyroomcode
+        API端点：GET /v1.0/conference/roomCodes/{roomCode}/infos
+        
+        Args:
+            room_code: 会议号
+            access_token: 访问令牌
+
+        Returns:
+            会议信息，包含conferenceId等字段
+        """
+        api_url = f"{self.base_url}/v1.0/conference/roomCodes/{room_code}/infos"
+        headers = {
+            "x-acs-dingtalk-access-token": access_token,
+            "Content-Type": "application/json"
+        }        
+        
+        try:
+            resp = requests.get(api_url, headers=headers)
+            logger.info(f"通过会议号获取会议信息响应: {resp.text}")
+            resp.raise_for_status()
+            
+            result = resp.json()
+            logger.info(f"成功通过会议号获取会议信息: roomCode={room_code}")
+            return result
+        except Exception as e:
+            logger.error(f"通过会议号获取会议信息异常: {e}")
+            return None
+    
+    def query_cloud_recording_text(
+        self,
+        conference_id: str,
+        union_id: str,
+        access_token: str,
+        start_time: Optional[int] = None,
+        direction: Optional[str] = "0",
+        max_results: Optional[int] = 2000,
+        next_token: Optional[int] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        查询会议录制的文本信息
+        
+        API文档：https://open.dingtalk.com/document/development/queries-the-text-information-about-cloud-recording
+        API端点：GET /v1.0/conference/videoConferences/{conferenceId}/cloudRecords/getTexts
+        
+        Args:
+            conference_id: 会议ID（从query_conference_info_by_room_code获取）
+            union_id: 会议发起人的unionId
+            access_token: 访问令牌
+            start_time: 开始时间戳（可选，Long类型）
+            direction: 查询方式，0（时间由小到大）或1（时间由大到小），默认0
+            max_results: 单次查询条数，最大2000
+            next_token: 分页令牌，第一次查询时为空，后续查询时为上一次查询的next_token
+            
+        Returns:
+            会议录制的文本信息
+        """
+        api_url = f"{self.base_url}/v1.0/conference/videoConferences/{conference_id}/cloudRecords/getTexts"
+        headers = {
+            "x-acs-dingtalk-access-token": access_token,
+            "Content-Type": "application/json"
+        }
+        
+        # 构建查询参数
+        params = {
+            "unionId": union_id,
+            "direction": direction,
+            "maxResults": max_results
+        }
+        if start_time is not None:
+            params["startTime"] = start_time
+        if next_token is not None:
+            params["nextToken"] = next_token
+        
+        try:
+            resp = requests.get(api_url, headers=headers, params=params)
+            resp.raise_for_status()
+            
+            result = resp.json()
+            logger.info(f"成功查询会议录制文本信息: conferenceId={conference_id}, unionId={union_id}")
+            return result
+        except Exception as e:
+            logger.error(f"查询会议录制文本信息异常: {e}")
+            return None
+
 # 创建默认的钉钉客户端实例
 dingtalk_client = DingTalkClient()
