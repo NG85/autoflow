@@ -754,9 +754,9 @@ class PlatformNotificationService:
         
         # 准备CRM日报卡片消息内容
         if settings.NOTIFICATION_PLATFORM == PLATFORM_DINGTALK:
-            template_id = "6242ee3d-2df6-49b4-b7b9-5b9f15631d94.schema"  # 个人日报卡片模板ID
+            template_id = "9171f5d1-9999-4519-a83f-35be80028d73.schema"  # 个人日报卡片模板ID
         elif settings.NOTIFICATION_PLATFORM == PLATFORM_FEISHU or settings.NOTIFICATION_PLATFORM == PLATFORM_LARK:
-            template_id = "AAqzUJ4fpg5XQ"  # 个人日报卡片模板ID
+            template_id = "AAqhIms9CqiM0"  # 个人日报卡片模板ID
         template_vars = self._convert_daily_report_data_for_feishu(db_session, daily_report_data)
         
         card_content = {
@@ -843,9 +843,9 @@ class PlatformNotificationService:
         
         # 准备部门日报卡片消息内容
         if settings.NOTIFICATION_PLATFORM == PLATFORM_DINGTALK:
-            template_id = "dd75140d-283e-4870-b985-cb46480e5dd3.schema"  # 部门日报卡片模板ID
+            template_id = "ccfa04e9-83b5-4452-be1d-cec95df248eb.schema"  # 部门日报卡片模板ID
         elif settings.NOTIFICATION_PLATFORM == PLATFORM_FEISHU or settings.NOTIFICATION_PLATFORM == PLATFORM_LARK:
-            template_id = "AAqz3wUpXTF3g"  # 部门日报卡片模板ID
+            template_id = "AAqhIiVb2eni4"  # 部门日报卡片模板ID
         template_vars = self._convert_daily_report_data_for_feishu(db_session, department_report_data)
         # 确保日期字段是字符串格式
         if 'report_date' in template_vars and hasattr(template_vars['report_date'], 'isoformat'):
@@ -916,9 +916,9 @@ class PlatformNotificationService:
         
         # 准备公司日报卡片消息内容
         if settings.NOTIFICATION_PLATFORM == PLATFORM_DINGTALK:
-            template_id = "10d7322d-5e50-4248-a549-fcbfaa89fd03.schema"  # 公司日报卡片模板ID
+            template_id = "aec4a9cd-ec8d-4d73-a7bb-432d28fd6c4c.schema"  # 公司日报卡片模板ID
         elif settings.NOTIFICATION_PLATFORM == PLATFORM_FEISHU or settings.NOTIFICATION_PLATFORM == PLATFORM_LARK:
-            template_id = "AAqz3y0IwJLDp"  # 公司日报卡片模板ID
+            template_id = "AAqhI1ryT5F7E"  # 公司日报卡片模板ID
         template_vars = self._convert_daily_report_data_for_feishu(db_session, company_report_data)
         # 确保日期字段是字符串格式
         if 'report_date' in template_vars and hasattr(template_vars['report_date'], 'isoformat'):
