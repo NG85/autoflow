@@ -696,7 +696,6 @@ class CRMStatisticsService:
             'department_name': department_name,
             'report_date': target_date,
             'statistics': [total_stats],  # 作为数组，包含所有统计字段（包括新增的首次和多次拜访红黄绿灯统计）
-            # 新增的首次和多次拜访红黄绿灯统计字段（整数类型，与个人日报保持一致）
             'visit_detail_page': f"{settings.VISIT_DETAIL_PAGE_URL}?start_date={target_date}&end_date={target_date}",
             'first_assessment': sorted_dept_first_assessments,
             'multi_assessment': sorted_dept_multi_assessments
@@ -797,7 +796,6 @@ class CRMStatisticsService:
         company_report = {
             'report_date': target_date,
             'statistics': [total_stats],  # 作为数组，包含所有统计字段（包括新增的首次和多次拜访红黄绿灯统计）
-            # 新增的首次和多次拜访红黄绿灯统计字段（整数类型，与个人日报保持一致）
             'visit_detail_page': f"{settings.VISIT_DETAIL_PAGE_URL}?start_date={target_date}&end_date={target_date}",
             'first_assessment': sorted_company_first_assessments,
             'multi_assessment': sorted_company_multi_assessments
