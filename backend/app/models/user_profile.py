@@ -1,22 +1,20 @@
 from typing import Optional
 from uuid import UUID
-from datetime import datetime
 from sqlmodel import (
     Field,
     SQLModel,
-    DateTime,
-    func,
     Relationship as SQLRelationship,
 )
-
-from app.models.base import UpdatableBaseModel
-
-
-class UserProfile(UpdatableBaseModel, table=True):
-    """用户档案表 - 存储用户的核心组织架构信息"""
+class UserProfile(SQLModel, table=True):
+    """
+    用户档案表 - 存储用户的核心组织架构信息
     
-    id: Optional[int] = Field(default=None, primary_key=True)
+    注意：此表在其他系统维护，本系统只能读取，不能进行写操作（INSERT/UPDATE/DELETE）
+    """
     
+    # 主键（只读，由其他系统维护）
+    id: Optional[int] = Field(default=None, primary_key=True, description="主键ID，由其他系统维护")
+        
     # 关联字段 - 支持多种用户来源
     user_id: Optional[UUID] = Field(foreign_key="users.id", nullable=True, description="关联系统用户表")
     oauth_user_id: Optional[str] = Field(max_length=255, nullable=True, description="关联OAuth用户表的ask_id")
@@ -73,17 +71,7 @@ class UserProfile(UpdatableBaseModel, table=True):
         if self.platform == platform:
             return self.open_id
         return None
-    
-    def set_platform_open_id(self, platform: str, open_id: str):
-        """
-        设置用户在指定平台的open_id
-        
-        Args:
-            platform: 平台名称
-            open_id: 平台用户标识
-        """
-        self.platform = platform
-        self.open_id = open_id
+
     
     def has_platform_access(self, platform: str) -> bool:
         """
@@ -130,16 +118,6 @@ class UserProfile(UpdatableBaseModel, table=True):
         # 使用逗号分隔的字符串格式
         return [tag.strip() for tag in self.notification_tags.split(',') if tag.strip()]
     
-    def set_notification_tags(self, tags: list[str]):
-        """
-        设置用户的推送权限标签列表
-        
-        Args:
-            tags: 推送权限标签列表
-        """
-        # 使用逗号分隔的字符串格式
-        self.notification_tags = ','.join(tags) if tags else None
-    
     def has_notification_permission(self, notification_type: str) -> bool:
         """
         检查用户是否有指定类型的推送权限
@@ -152,27 +130,3 @@ class UserProfile(UpdatableBaseModel, table=True):
         """
         tags = self.get_notification_tags()
         return notification_type in tags
-    
-    def add_notification_permission(self, notification_type: str):
-        """
-        为用户添加指定类型的推送权限
-        
-        Args:
-            notification_type: 推送类型
-        """
-        tags = self.get_notification_tags()
-        if notification_type not in tags:
-            tags.append(notification_type)
-            self.set_notification_tags(tags)
-    
-    def remove_notification_permission(self, notification_type: str):
-        """
-        移除用户的指定类型推送权限
-        
-        Args:
-            notification_type: 推送类型
-        """
-        tags = self.get_notification_tags()
-        if notification_type in tags:
-            tags.remove(notification_type)
-            self.set_notification_tags(tags)
