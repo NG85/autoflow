@@ -19,7 +19,7 @@ class UserProfile(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True, description="主键ID，由其他系统维护")
         
     # 关联字段 - 支持多种用户来源
-    user_id: Optional[UUID] = Field(foreign_key="users.id", nullable=True, description="关联系统用户表")
+    user_id: Optional[UUID] = Field(foreign_key="users.id", nullable=True, index=True, description="关联系统用户表")
     oauth_user_id: Optional[str] = Field(max_length=255, nullable=True, description="关联OAuth用户表的ask_id")
     
     # # 飞书相关字段

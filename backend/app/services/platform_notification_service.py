@@ -287,7 +287,7 @@ class PlatformNotificationService:
             logger.warning(f"Recorder {recorder_name} (profile: {recorder_profile.name}) has no oauth_user, cannot send notification")
             return recipients_by_platform
         
-        recorder_open_id = recorder_profile.oauth_user.open_id            
+        recorder_open_id = recorder_profile.oauth_user.open_id
         if recorder_open_id:
             # 如果没有从OAuthUser获取到platform，使用profile的platform或默认值
             if 'platform' not in locals():
