@@ -1,9 +1,7 @@
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 from uuid import UUID
 from sqlmodel import Session, select, distinct
 from app.models.user_profile import UserProfile
-from app.models.auth import User
-from app.models.oauth_user import OAuthUser
 from app.repositories.base_repo import BaseRepo
 
 
@@ -199,10 +197,12 @@ class UserProfileRepo(BaseRepo):
         candidates = db_session.exec(
             select(UserProfile).where(
                 UserProfile.is_active == True,
-                UserProfile.open_id.is_not(None),
+                UserProfile.oauth_user.open_id.is_not(None),
                 UserProfile.notification_tags.is_not(None)
             )
         ).all()
         
         # 在应用层使用模型的 has_notification_permission 方法精确匹配
         return [user for user in candidates if user.has_notification_permission(notification_type)]
+
+user_profile_repo = UserProfileRepo()
