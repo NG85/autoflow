@@ -291,9 +291,13 @@ class CrmViewEngine:
                         logger.info(f"No authorized items found for user {user_id}")
                         return {}
                     
-                    crm_type = CrmDataType("crm_opportunity")
                     if hasattr(self.model, "unique_id"):
-                        query = query.filter(self.model.unique_id.in_(authority.authorized_items[crm_type]))
+                        authorized_ids = authority.authorized_items.get(CrmDataType.OPPORTUNITY, set())
+                        if authorized_ids:
+                            query = query.filter(self.model.unique_id.in_(authorized_ids))
+                        else:
+                            # 如果没有授权项，返回空结果
+                            query = query.filter(False)
             except ValueError:
                 logger.warning(f"Invalid entity type")
                 return {}
