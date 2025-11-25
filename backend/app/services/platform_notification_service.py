@@ -355,7 +355,13 @@ class PlatformNotificationService:
                             })
         
         # 5. 根据应用ID判断推送类型
-        current_app_id = settings.FEISHU_APP_ID if recorder_profile.oauth_user.provider == PLATFORM_FEISHU else settings.LARK_APP_ID
+        current_app_id = None
+        if recorder_profile.oauth_user.provider == PLATFORM_FEISHU:
+            current_app_id = settings.FEISHU_APP_ID
+        elif recorder_profile.oauth_user.provider == PLATFORM_LARK:
+            current_app_id = settings.LARK_APP_ID
+        elif recorder_profile.oauth_user.provider == PLATFORM_DINGTALK:
+            current_app_id = settings.DINGTALK_APP_ID
         is_internal_app = current_app_id in INTERNAL_APP_IDS
         
         if is_internal_app:
