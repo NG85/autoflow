@@ -6,8 +6,7 @@ from app.platforms.notification_types import (
     NOTIFICATION_TYPE_WEEKLY_REPORT,
 )
 from sqlmodel import Session
-from app.repositories.user_profile import UserProfileRepo
-from app.repositories.oauth_user import oauth_user_repo
+from app.repositories.user_profile import user_profile_repo
 from app.platforms.constants import DEFAULT_INTERNAL_GROUP_CHATS, INTERNAL_APP_IDS, PLATFORM_DINGTALK, PLATFORM_FEISHU, PLATFORM_LARK
 from app.platforms.feishu.client import feishu_client
 from app.platforms.lark.client import lark_client
@@ -18,9 +17,6 @@ logger = logging.getLogger(__name__)
 
 class PlatformNotificationService:
     """多平台推送服务 - 基于用户档案进行消息推送，支持飞书和Lark"""
-    
-    def __init__(self):
-        self.user_profile_repo = UserProfileRepo()
     
     def _get_matching_group_chats(self, platform: str = PLATFORM_FEISHU) -> List[Dict[str, str]]:
         """获取当前应用匹配的群聊 - 仅限内部应用"""
@@ -276,46 +272,26 @@ class PlatformNotificationService:
         
         if recorder_id:
             # 优先使用recorder_id查找
-            recorder_profile = self.user_profile_repo.get_by_recorder_id(db_session, recorder_id)
+            recorder_profile = user_profile_repo.get_by_recorder_id(db_session, recorder_id)
         
         if not recorder_profile and recorder_name:
             # 如果recorder_id没找到，再尝试通过姓名查找
-            recorder_profile = self.user_profile_repo.get_by_name(db_session, recorder_name)
+            recorder_profile = user_profile_repo.get_by_name(db_session, recorder_name)
         
         if not recorder_profile:
             logger.warning(f"No profile found for recorder: name={recorder_name}, id={recorder_id}")
             return recipients_by_platform
         
         # 2. 添加记录人
-        recorder_open_id = recorder_profile.open_id
+        if not recorder_profile.oauth_user:
+            logger.warning(f"Recorder {recorder_name} (profile: {recorder_profile.name}) has no oauth_user, cannot send notification")
+            return recipients_by_platform
         
-        # 如果profile没有open_id，尝试从OAuthUser表中查找
-        if not recorder_open_id:
-            oauth_user = None
-            
-            # 优先通过recorder_id (ask_id) 查找
-            if recorder_id:
-                oauth_user = oauth_user_repo.get_by_ask_id(db_session, recorder_id)
-            
-            # 如果通过recorder_id没找到，再尝试通过姓名查找
-            if not oauth_user and recorder_name:
-                oauth_user = oauth_user_repo.get_by_name(db_session, recorder_name)
-            
-            if oauth_user and oauth_user.open_id:
-                recorder_open_id = oauth_user.open_id
-                # 根据OAuthUser的channel设置platform
-                if oauth_user.channel in ['feishu', 'feishuBot']:
-                    platform = PLATFORM_FEISHU
-                elif oauth_user.channel in ['lark', 'larkBot']:
-                    platform = PLATFORM_LARK
-                else:
-                    platform = PLATFORM_FEISHU  # 默认使用飞书
-                logger.info(f"Found open_id for recorder from OAuthUser table: {recorder_open_id}, platform: {platform} (channel: {oauth_user.channel})")
-        
+        recorder_open_id = recorder_profile.oauth_user.open_id
         if recorder_open_id:
             # 如果没有从OAuthUser获取到platform，使用profile的platform或默认值
             if 'platform' not in locals():
-                platform = recorder_profile.platform or PLATFORM_FEISHU
+                platform = recorder_profile.oauth_user.provider or PLATFORM_FEISHU
             # 只支持飞书和Lark平台
             if platform not in [PLATFORM_FEISHU, PLATFORM_LARK, PLATFORM_DINGTALK]:
                 logger.warning(f"Recorder platform {platform} not supported, skipping")
@@ -333,13 +309,13 @@ class PlatformNotificationService:
         
         # 3. 添加直属上级
         if recorder_profile.direct_manager_id:
-            manager_profile = self.user_profile_repo.get_by_oauth_user_id(
+            manager_profile = user_profile_repo.get_by_oauth_user_id(
                 db_session, recorder_profile.direct_manager_id
             )
             if manager_profile:
-                manager_open_id = manager_profile.open_id
+                manager_open_id = manager_profile.oauth_user.open_id
                 if manager_open_id:
-                    platform = manager_profile.platform or PLATFORM_FEISHU
+                    platform = manager_profile.oauth_user.provider or PLATFORM_FEISHU
                     # 只支持飞书和Lark平台
                     if platform not in [PLATFORM_FEISHU, PLATFORM_LARK, PLATFORM_DINGTALK]:
                         logger.warning(f"Manager platform {platform} not supported, skipping")
@@ -357,13 +333,13 @@ class PlatformNotificationService:
         
         # 4. 添加部门负责人
         if recorder_profile.department:
-            dept_manager = self.user_profile_repo.get_department_manager(
+            dept_manager = user_profile_repo.get_department_manager(
                 db_session, recorder_profile.department
             )
             if dept_manager:
-                dept_manager_open_id = dept_manager.open_id
+                dept_manager_open_id = dept_manager.oauth_user.open_id
                 if dept_manager_open_id:
-                    platform = dept_manager.platform or PLATFORM_FEISHU
+                    platform = dept_manager.oauth_user.provider or PLATFORM_FEISHU
                     # 只支持飞书和Lark平台
                     if platform not in [PLATFORM_FEISHU, PLATFORM_LARK, PLATFORM_DINGTALK]:
                         logger.warning(f"Department manager platform {platform} not supported, skipping")
@@ -383,13 +359,19 @@ class PlatformNotificationService:
                             })
         
         # 5. 根据应用ID判断推送类型
-        current_app_id = settings.FEISHU_APP_ID if recorder_profile.platform == PLATFORM_FEISHU else settings.LARK_APP_ID
+        current_app_id = None
+        if recorder_profile.oauth_user.provider == PLATFORM_FEISHU:
+            current_app_id = settings.FEISHU_APP_ID
+        elif recorder_profile.oauth_user.provider == PLATFORM_LARK:
+            current_app_id = settings.LARK_APP_ID
+        elif recorder_profile.oauth_user.provider == PLATFORM_DINGTALK:
+            current_app_id = settings.DINGTALK_APP_ID
         is_internal_app = current_app_id in INTERNAL_APP_IDS
         
         if is_internal_app:
             # 内部应用：添加群聊
-            matching_groups = self._get_matching_group_chats(recorder_profile.platform)
-            platform = recorder_profile.platform or PLATFORM_FEISHU
+            matching_groups = self._get_matching_group_chats(recorder_profile.oauth_user.provider)
+            platform = recorder_profile.oauth_user.provider or PLATFORM_FEISHU
             # 只支持飞书和Lark平台
             if platform not in [PLATFORM_FEISHU, PLATFORM_LARK, PLATFORM_DINGTALK]:
                 logger.warning(f"Internal app platform {platform} not supported, skipping group chats")
@@ -408,13 +390,13 @@ class PlatformNotificationService:
                     })
         else:
             # 外部应用：从profile中查询可以接收拜访记录的人员名单
-            visit_receivers = self.user_profile_repo.get_users_by_notification_permission(
+            visit_receivers = user_profile_repo.get_users_by_notification_permission(
                 db_session, NOTIFICATION_TYPE_VISIT_RECORD
             )
             for receiver in visit_receivers:
-                receiver_open_id = receiver.open_id
+                receiver_open_id = receiver.oauth_user.open_id
                 if receiver_open_id:
-                    platform = receiver.platform or PLATFORM_FEISHU
+                    platform = receiver.oauth_user.provider or PLATFORM_FEISHU
                     # 只支持飞书和Lark平台
                     if platform not in [PLATFORM_FEISHU, PLATFORM_LARK, PLATFORM_DINGTALK]:
                         logger.warning(f"External receiver platform {platform} not supported, skipping")
@@ -451,21 +433,21 @@ class PlatformNotificationService:
         
         if recorder_id:
             # 优先使用recorder_id查找
-            recorder_profile = self.user_profile_repo.get_by_recorder_id(db_session, recorder_id)
+            recorder_profile = user_profile_repo.get_by_recorder_id(db_session, recorder_id)
             if recorder_profile:
                 logger.info(f"Found profile by recorder_id: {recorder_id} -> {recorder_profile.name}")
         
         if not recorder_profile and recorder_name:
             # 如果recorder_id没找到，使用姓名和部门组合查找（更精确）
             if department_name:
-                recorder_profile = self.user_profile_repo.get_by_name_and_department(
+                recorder_profile = user_profile_repo.get_by_name_and_department(
                     db_session, recorder_name, department_name
                 )
                 if recorder_profile:
                     logger.info(f"Found profile by name+department: {recorder_name} in {department_name} -> {recorder_profile.name}")
             else:
                 # 如果没有部门信息，只按姓名查找
-                recorder_profile = self.user_profile_repo.get_by_name(db_session, recorder_name)
+                recorder_profile = user_profile_repo.get_by_name(db_session, recorder_name)
                 if recorder_profile:
                     logger.info(f"Found profile by name only: {recorder_name} -> {recorder_profile.name}")
         
@@ -474,7 +456,7 @@ class PlatformNotificationService:
             # 记录详细信息以便调试
             logger.warning(f"Available profiles with similar names:")
             try:
-                all_profiles = self.user_profile_repo.get_all_active_profiles(db_session)
+                all_profiles = user_profile_repo.get_all_active_profiles(db_session)
                 if recorder_name:
                     similar_names = [p.name for p in all_profiles if recorder_name == p.name]
                     if similar_names:
@@ -486,7 +468,7 @@ class PlatformNotificationService:
             return recipients
         
         # 2. 只添加记录人本人
-        recorder_open_id = recorder_profile.open_id
+        recorder_open_id = recorder_profile.oauth_user.open_id
         if recorder_open_id:
             recipients.append({
                 "open_id": recorder_open_id,
@@ -494,11 +476,11 @@ class PlatformNotificationService:
                 "type": "recorder",
                 "department": recorder_profile.department,
                 "receive_id_type": "open_id",
-                "platform": recorder_profile.platform
+                "platform": recorder_profile.oauth_user.provider
             })
-            logger.info(f"Found daily report recipient: {recorder_profile.name} ({recorder_profile.department}) with {recorder_profile.platform} open_id: {recorder_open_id}")
+            logger.info(f"Found daily report recipient: {recorder_profile.name} ({recorder_profile.department}) with {recorder_profile.oauth_user.provider} open_id: {recorder_open_id}")
         else:
-            logger.warning(f"Recorder {recorder_name} (profile: {recorder_profile.name}) has no {recorder_profile.platform} open_id, cannot send daily report")
+            logger.warning(f"Recorder {recorder_name} (profile: {recorder_profile.name}) has no {recorder_profile.oauth_user.provider} open_id, cannot send daily report")
         
         return recipients
     
@@ -754,9 +736,9 @@ class PlatformNotificationService:
         
         # 准备CRM日报卡片消息内容
         if settings.NOTIFICATION_PLATFORM == PLATFORM_DINGTALK:
-            template_id = "6242ee3d-2df6-49b4-b7b9-5b9f15631d94.schema"  # 个人日报卡片模板ID
+            template_id = "9171f5d1-9999-4519-a83f-35be80028d73.schema"  # 个人日报卡片模板ID
         elif settings.NOTIFICATION_PLATFORM == PLATFORM_FEISHU or settings.NOTIFICATION_PLATFORM == PLATFORM_LARK:
-            template_id = "AAqzUJ4fpg5XQ"  # 个人日报卡片模板ID
+            template_id = "AAqhIms9CqiM0"  # 个人日报卡片模板ID
         template_vars = self._convert_daily_report_data_for_feishu(db_session, daily_report_data)
         
         card_content = {
@@ -786,12 +768,12 @@ class PlatformNotificationService:
         recipients = []
         
         # 查找部门负责人
-        dept_manager = self.user_profile_repo.get_department_manager(
+        dept_manager = user_profile_repo.get_department_manager(
             db_session, department_name
         )
         
         if dept_manager:
-            dept_manager_open_id = dept_manager.open_id
+            dept_manager_open_id = dept_manager.oauth_user.open_id
             if dept_manager_open_id:
                 recipients.append({
                     "open_id": dept_manager_open_id,
@@ -799,11 +781,11 @@ class PlatformNotificationService:
                     "type": "department_manager",
                     "department": department_name,
                     "receive_id_type": "open_id",
-                    "platform": dept_manager.platform
+                    "platform": dept_manager.oauth_user.provider
                 })
-                logger.info(f"Found department manager for {department_name} on {dept_manager.platform}: {dept_manager.name}")
+                logger.info(f"Found department manager for {department_name} on {dept_manager.oauth_user.provider}: {dept_manager.name}")
             else:
-                logger.warning(f"Department manager {dept_manager.name} has no {dept_manager.platform} open_id")
+                logger.warning(f"Department manager {dept_manager.name} has no {dept_manager.oauth_user.provider} open_id")
         else:
             logger.warning(f"No department manager found for department: {department_name}")
         
@@ -843,9 +825,9 @@ class PlatformNotificationService:
         
         # 准备部门日报卡片消息内容
         if settings.NOTIFICATION_PLATFORM == PLATFORM_DINGTALK:
-            template_id = "dd75140d-283e-4870-b985-cb46480e5dd3.schema"  # 部门日报卡片模板ID
+            template_id = "ccfa04e9-83b5-4452-be1d-cec95df248eb.schema"  # 部门日报卡片模板ID
         elif settings.NOTIFICATION_PLATFORM == PLATFORM_FEISHU or settings.NOTIFICATION_PLATFORM == PLATFORM_LARK:
-            template_id = "AAqz3wUpXTF3g"  # 部门日报卡片模板ID
+            template_id = "AAqhIiVb2eni4"  # 部门日报卡片模板ID
         template_vars = self._convert_daily_report_data_for_feishu(db_session, department_report_data)
         # 确保日期字段是字符串格式
         if 'report_date' in template_vars and hasattr(template_vars['report_date'], 'isoformat'):
@@ -875,10 +857,10 @@ class PlatformNotificationService:
         recipients = []
         
         # 从profile中获取可以接收日报的人员
-        profiles = self.user_profile_repo.get_users_by_notification_permission(db_session, NOTIFICATION_TYPE_DAILY_REPORT)
+        profiles = user_profile_repo.get_users_by_notification_permission(db_session, NOTIFICATION_TYPE_DAILY_REPORT)
         
         for profile in profiles:
-            profile_open_id = profile.open_id
+            profile_open_id = profile.oauth_user.open_id
             if profile_open_id:
                 recipients.append({
                     "open_id": profile_open_id,
@@ -886,9 +868,9 @@ class PlatformNotificationService:
                     "type": "daily_report_recipient",
                     "department": profile.department or "管理团队",
                     "receive_id_type": "open_id",
-                    "platform": profile.platform
+                    "platform": profile.oauth_user.provider
                 })
-                logger.info(f"Added company report recipient: {profile.name} on {profile.platform}")
+                logger.info(f"Added company report recipient: {profile.name} on {profile.oauth_user.provider}")
         
         if not recipients:
             logger.warning(f"No recipients configured for company report")
@@ -916,9 +898,9 @@ class PlatformNotificationService:
         
         # 准备公司日报卡片消息内容
         if settings.NOTIFICATION_PLATFORM == PLATFORM_DINGTALK:
-            template_id = "10d7322d-5e50-4248-a549-fcbfaa89fd03.schema"  # 公司日报卡片模板ID
+            template_id = "aec4a9cd-ec8d-4d73-a7bb-432d28fd6c4c.schema"  # 公司日报卡片模板ID
         elif settings.NOTIFICATION_PLATFORM == PLATFORM_FEISHU or settings.NOTIFICATION_PLATFORM == PLATFORM_LARK:
-            template_id = "AAqz3y0IwJLDp"  # 公司日报卡片模板ID
+            template_id = "AAqhI1ryT5F7E"  # 公司日报卡片模板ID
         template_vars = self._convert_daily_report_data_for_feishu(db_session, company_report_data)
         # 确保日期字段是字符串格式
         if 'report_date' in template_vars and hasattr(template_vars['report_date'], 'isoformat'):
@@ -1008,12 +990,12 @@ class PlatformNotificationService:
         recipients = []
         
         # 从profile中获取可以接收周报的人员
-        profiles = self.user_profile_repo.get_users_by_notification_permission(
+        profiles = user_profile_repo.get_users_by_notification_permission(
             db_session, NOTIFICATION_TYPE_WEEKLY_REPORT
         )
         
         for profile in profiles:
-            profile_open_id = profile.open_id
+            profile_open_id = profile.oauth_user.open_id
             if profile_open_id:
                 recipients.append({
                     "open_id": profile_open_id,
@@ -1021,9 +1003,9 @@ class PlatformNotificationService:
                     "type": "weekly_report_recipient",
                     "department": profile.department or "管理团队",
                     "receive_id_type": "open_id",
-                    "platform": profile.platform
+                    "platform": profile.oauth_user.provider
                 })
-                logger.info(f"Added company weekly report recipient: {profile.name} on {profile.platform}")
+                logger.info(f"Added company weekly report recipient: {profile.name} on {profile.oauth_user.provider}")
         
         if not recipients:
             logger.warning(f"No recipients configured for company weekly report")
@@ -1166,19 +1148,19 @@ class PlatformNotificationService:
             recorder_profile = None
             
             if recorder_id:
-                recorder_profile = self.user_profile_repo.get_by_recorder_id(db_session, recorder_id)
+                recorder_profile = user_profile_repo.get_by_recorder_id(db_session, recorder_id)
                 if recorder_profile:
-                    logger.info(f"Found profile by recorder_id: {recorder_id} -> {recorder_profile.name} (platform: {recorder_profile.platform})")
+                    logger.info(f"Found profile by recorder_id: {recorder_id} -> {recorder_profile.name} (platform: {recorder_profile.oauth_user.provider})")
             
             # 2. 如果recorder_id没找到，再尝试通过姓名查找
             if not recorder_profile and recorder_name:
-                recorder_profile = self.user_profile_repo.get_by_name(db_session, recorder_name)
+                recorder_profile = user_profile_repo.get_by_name(db_session, recorder_name)
                 if recorder_profile:
-                    logger.info(f"Found profile by name: {recorder_name} -> {recorder_profile.name} (platform: {recorder_profile.platform})")
+                    logger.info(f"Found profile by name: {recorder_name} -> {recorder_profile.name} (platform: {recorder_profile.oauth_user.provider})")
             
             # 3. 获取用户的平台信息
-            if recorder_profile and recorder_profile.platform:
-                platform = recorder_profile.platform
+            if recorder_profile and recorder_profile.oauth_user.provider:
+                platform = recorder_profile.oauth_user.provider
                 logger.info(f"Using user's platform for notification: {platform}")
                 return platform
             else:
@@ -1243,14 +1225,14 @@ class PlatformNotificationService:
                     continue
                 
                 # 通过ask_id从user profile表查询用户信息
-                user_profile = self.user_profile_repo.get_by_oauth_user_id(db_session, ask_id)
+                user_profile = user_profile_repo.get_by_oauth_user_id(db_session, ask_id)
                 if not user_profile:
                     logger.warning(f"No user profile found for ask_id: {ask_id}, name: {name}")
                     continue
                 
                 # 获取用户的平台和open_id信息
-                platform = user_profile.platform
-                open_id = user_profile.open_id
+                platform = user_profile.oauth_user.provider
+                open_id = user_profile.oauth_user.open_id
                 
                 if not all([platform, open_id]):
                     logger.warning(f"User profile missing platform or open_id for ask_id: {ask_id}, name: {name}")
@@ -1298,13 +1280,13 @@ class PlatformNotificationService:
         
         if task_assignee_id:
             # 优先使用task_assignee_id查找
-            assignee_profile = self.user_profile_repo.get_by_recorder_id(db_session, task_assignee_id)
+            assignee_profile = user_profile_repo.get_by_recorder_id(db_session, task_assignee_id)
             if assignee_profile:
                 logger.info(f"Found profile by task_assignee_id: {task_assignee_id} -> {assignee_profile.name}")
         
         if not assignee_profile and task_assignee_name:
             # 如果task_assignee_id没找到，使用姓名查找
-            assignee_profile = self.user_profile_repo.get_by_name(db_session, task_assignee_name)
+            assignee_profile = user_profile_repo.get_by_name(db_session, task_assignee_name)
             if assignee_profile:
                 logger.info(f"Found profile by name: {task_assignee_name} -> {assignee_profile.name}")
         
@@ -1313,7 +1295,7 @@ class PlatformNotificationService:
             return recipients
         
         # 2. 只添加任务负责人本人
-        assignee_open_id = assignee_profile.open_id
+        assignee_open_id = assignee_profile.oauth_user.open_id
         if assignee_open_id:
             recipients.append({
                 "open_id": assignee_open_id,
@@ -1321,11 +1303,11 @@ class PlatformNotificationService:
                 "type": "task_assignee",
                 "department": assignee_profile.department,
                 "receive_id_type": "open_id",
-                "platform": assignee_profile.platform
+                "platform": assignee_profile.oauth_user.provider
             })
-            logger.info(f"Found sales task assignee: {assignee_profile.name} ({assignee_profile.department}) with {assignee_profile.platform} open_id: {assignee_open_id}")
+            logger.info(f"Found sales task assignee: {assignee_profile.name} ({assignee_profile.department}) with {assignee_profile.oauth_user.provider} open_id: {assignee_open_id}")
         else:
-            logger.warning(f"Task assignee {task_assignee_name} (profile: {assignee_profile.name}) has no {assignee_profile.platform} open_id, cannot send sales task notification")
+            logger.warning(f"Task assignee {task_assignee_name} (profile: {assignee_profile.name}) has no {assignee_profile.oauth_user.provider} open_id, cannot send sales task notification")
         
         return recipients
 

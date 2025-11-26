@@ -1,6 +1,7 @@
 import logging
 
 from typing import Optional
+from pydantic import deprecated
 from sqlmodel import Session, select
 from app.models.oauth_user import OAuthUser
 from app.repositories.base_repo import BaseRepo
@@ -8,7 +9,7 @@ from app.repositories.base_repo import BaseRepo
 
 logger = logging.getLogger(__name__)
 
-
+@deprecated("Use UserOAuthAccount instead")
 class OAuthUserRepo(BaseRepo):
     model_cls = OAuthUser
 
@@ -50,4 +51,4 @@ class OAuthUserRepo(BaseRepo):
 
 
 # 创建repository实例
-oauth_user_repo = OAuthUserRepo()
+# oauth_user_repo = OAuthUserRepo()

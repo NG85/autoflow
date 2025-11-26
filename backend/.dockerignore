@@ -26,3 +26,4 @@ pytest.ini
 local_embedding_reranker/
 .pre-commit-config.yaml
 .gitignore
+Dockerfile_local

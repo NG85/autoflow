@@ -92,6 +92,7 @@ class CRMStatisticsService:
         # 2. 为每个统计记录获取关联的评估详情
         complete_reports = []
         
+        from app.core.config import settings
         for stats in statistics_records:
             # 通过correlation_id获取评估详情（假设correlation_id就是unique_id）
             correlation_id = stats['unique_id']
@@ -103,10 +104,12 @@ class CRMStatisticsService:
             for assessment in assessment_details['first']:
                 assessment['sales_name'] = stats['sales_name']
                 assessment['department_name'] = stats['department_name']
+                assessment['account_visit_details'] = f"{settings.VISIT_DETAIL_PAGE_URL}?start_date={target_date}&end_date={target_date}&account_name={assessment['account_name']}"
             
             for assessment in assessment_details['multi']:
                 assessment['sales_name'] = stats['sales_name']
                 assessment['department_name'] = stats['department_name']
+                assessment['account_visit_details'] = f"{settings.VISIT_DETAIL_PAGE_URL}?start_date={target_date}&end_date={target_date}&account_name={assessment['account_name']}"
             
             # 对评估数据进行排序（红灯>黄灯-团队名称-销售名称）
             sorted_first_assessments = self._sort_assessments(assessment_details['first'])
@@ -118,11 +121,25 @@ class CRMStatisticsService:
             for assessment in sorted_multi_assessments:
                 assessment.pop('assessment_flag_raw', None)
             
-            # 组合完整数据
-            from app.core.config import settings
+            # 获取统计数据并转换为指定格式的键值对
+            statistics = assessment_details.get('statistics', {
+                "first": {"red": 0, "yellow": 0, "green": 0},
+                "multi": {"red": 0, "yellow": 0, "green": 0}
+            })
+            
+            # 添加新的统计字段（stats已包含部分统计数据）
+            stats_with_assessment = {
+                **stats,  # 包含部分统计数据
+                'first_visit_red_count': statistics.get('first', {}).get('red', 0),
+                'first_visit_yellow_count': statistics.get('first', {}).get('yellow', 0),
+                'first_visit_green_count': statistics.get('first', {}).get('green', 0),
+                'multi_visit_red_count': statistics.get('multi', {}).get('red', 0),
+                'multi_visit_yellow_count': statistics.get('multi', {}).get('yellow', 0),
+                'multi_visit_green_count': statistics.get('multi', {}).get('green', 0)
+            }
             
             complete_report = {
-                **stats,  # 包含所有统计数据
+                **stats_with_assessment,  # 包含所有统计数据（包括首次和多次拜访的红黄绿灯统计）
                 'first_assessment': sorted_first_assessments,
                 'multi_assessment': sorted_multi_assessments,
                 'visit_detail_page': f"{settings.VISIT_DETAIL_PAGE_URL}?start_date={target_date}&end_date={target_date}",
@@ -135,7 +152,7 @@ class CRMStatisticsService:
         
         return complete_reports
     
-    def get_assessment_by_correlation_id(self, session: Session, correlation_id: str) -> Dict[str, List]:
+    def get_assessment_by_correlation_id(self, session: Session, correlation_id: str) -> Dict[str, Any]:
         """
         通过correlation_id获取评估详情数据
         
@@ -144,58 +161,97 @@ class CRMStatisticsService:
             correlation_id: 关联ID
             
         Returns:
-            Dict: 包含first和multi两个键的评估详情列表
+            Dict: 包含first、multi和statistics三个键的字典
+                - first: 首次拜访评估详情列表（不包含绿灯）
+                - multi: 多次拜访评估详情列表（不包含绿灯）
+                - statistics: 统计数据字典，包含first和multi的红黄绿灯数量（包含绿灯）
         """
         logger.debug(f"通过correlation_id获取评估数据: {correlation_id}")
         
-        # 从crm_account_assessment表查询数据，过滤掉绿灯评估
+        # 优化：只查询一次，获取所有数据（包括绿灯）
         query = select(CRMAccountAssessment).where(
-            and_(
-                CRMAccountAssessment.correlation_id == correlation_id,
-                CRMAccountAssessment.assessment_flag != 'green'  # 过滤掉绿灯
-            )
+            CRMAccountAssessment.correlation_id == correlation_id
         )
         
-        assessment_records = session.exec(query).all()
+        all_assessment_records = session.exec(query).all()
         
-        if not assessment_records:
-            logger.debug(f"correlation_id {correlation_id} 没有找到非绿灯评估记录")
-            return {"first": [], "multi": []}
+        if not all_assessment_records:
+            logger.debug(f"correlation_id {correlation_id} 没有找到评估记录")
+            return {
+                "first": [],
+                "multi": [],
+                "statistics": {
+                    "first": {"red": 0, "yellow": 0, "green": 0},
+                    "multi": {"red": 0, "yellow": 0, "green": 0}
+                }
+            }
         
-        logger.debug(f"correlation_id {correlation_id} 找到 {len(assessment_records)} 条非绿灯评估记录")
-        
-        # 按首次/多次拜访分组
+        # 优化：一次遍历同时完成统计和列表构建
+        first_stats = {"red": 0, "yellow": 0, "green": 0}
+        multi_stats = {"red": 0, "yellow": 0, "green": 0}
         first_assessments = []
         multi_assessments = []
         
-        for assessment in assessment_records:
-            assessment_data = {
-                'account_name': self._format_empty_value(assessment.account_name),
-                'opportunity_names': self._format_empty_value(self._format_opportunity_names(assessment.opportunity_names)),
-                'follow_up_note': self._format_empty_value(assessment.follow_up_note),
-                'follow_up_note_en': self._format_empty_value(assessment.follow_up_note_en),
-                'follow_up_next_step': self._format_empty_value(assessment.follow_up_next_step),
-                'follow_up_next_step_en': self._format_empty_value(assessment.follow_up_next_step_en),
-                'assessment_flag': self._convert_assessment_flag(assessment.assessment_flag),
-                'assessment_description': self._format_empty_value(assessment.assessment_description),
-                'assessment_description_en': self._format_empty_value(assessment.assessment_description_en),
-                'account_level': self._format_empty_value(assessment.account_level),
-                'sales_name': "",  # 这个字段将在上层填充
-                'department_name': "",  # 这个字段将在上层填充
-                'assessment_flag_raw': assessment.assessment_flag or ""  # 保留原始标志用于排序
-            }
+        for assessment in all_assessment_records:
+            flag = (assessment.assessment_flag or "").lower()
+            is_first_visit = assessment.is_first_visit
             
-            if assessment.is_first_visit:
-                first_assessments.append(assessment_data)
+            # 统计所有记录（包括绿灯）
+            if is_first_visit:
+                if flag == "red":
+                    first_stats["red"] += 1
+                elif flag == "yellow":
+                    first_stats["yellow"] += 1
+                elif flag == "green":
+                    first_stats["green"] += 1
             else:
-                multi_assessments.append(assessment_data)
+                if flag == "red":
+                    multi_stats["red"] += 1
+                elif flag == "yellow":
+                    multi_stats["yellow"] += 1
+                elif flag == "green":
+                    multi_stats["green"] += 1
+            
+            # 构建列表（只包含非绿灯记录）
+            if flag != "green":
+                assessment_data = {
+                    'account_name': self._format_empty_value(assessment.account_name),
+                    'opportunity_names': self._format_empty_value(self._format_opportunity_names(assessment.opportunity_names)),
+                    'follow_up_note': self._format_empty_value(assessment.follow_up_note),
+                    'follow_up_note_en': self._format_empty_value(assessment.follow_up_note_en),
+                    'follow_up_next_step': self._format_empty_value(assessment.follow_up_next_step),
+                    'follow_up_next_step_en': self._format_empty_value(assessment.follow_up_next_step_en),
+                    'assessment_flag': self._convert_assessment_flag(assessment.assessment_flag),
+                    'assessment_description': self._format_empty_value(assessment.assessment_description),
+                    'assessment_description_en': self._format_empty_value(assessment.assessment_description_en),
+                    'account_level': self._format_empty_value(assessment.account_level),
+                    'sales_name': "",  # 这个字段将在上层填充
+                    'department_name': "",  # 这个字段将在上层填充
+                    'assessment_flag_raw': assessment.assessment_flag or ""  # 保留原始标志用于排序
+                }
+                
+                if is_first_visit:
+                    first_assessments.append(assessment_data)
+                else:
+                    multi_assessments.append(assessment_data)
+        
+        logger.debug(
+            f"correlation_id {correlation_id} 找到 {len(all_assessment_records)} 条评估记录（包含绿灯），"
+            f"首次拜访: 红{first_stats['red']} 黄{first_stats['yellow']} 绿{first_stats['green']}, "
+            f"多次拜访: 红{multi_stats['red']} 黄{multi_stats['yellow']} 绿{multi_stats['green']}, "
+            f"非绿灯记录: 首次{len(first_assessments)} 多次{len(multi_assessments)}"
+        )
         
         # 按照指定规则排序：红灯>黄灯-团队名称-销售名称
         # 注意：这里的排序会在上层填充sales_name和department_name后进行
         
         return {
             "first": first_assessments,
-            "multi": multi_assessments
+            "multi": multi_assessments,
+            "statistics": {
+                "first": first_stats,
+                "multi": multi_stats
+            }
         }
     
     def _format_opportunity_names(self, opportunity_names_json: str) -> str:
@@ -365,7 +421,13 @@ class CRMStatisticsService:
                     'partner_total_multi_visit': report.get('partner_total_multi_visit', 0),
                     'assessment_red_count': report.get('assessment_red_count', 0),
                     'assessment_yellow_count': report.get('assessment_yellow_count', 0),
-                    'assessment_green_count': report.get('assessment_green_count', 0)
+                    'assessment_green_count': report.get('assessment_green_count', 0),
+                    'first_visit_red_count': report.get('first_visit_red_count', 0),
+                    'first_visit_yellow_count': report.get('first_visit_yellow_count', 0),
+                    'first_visit_green_count': report.get('first_visit_green_count', 0),
+                    'multi_visit_red_count': report.get('multi_visit_red_count', 0),
+                    'multi_visit_yellow_count': report.get('multi_visit_yellow_count', 0),
+                    'multi_visit_green_count': report.get('multi_visit_green_count', 0)
                 }
                 
                 report_data = {
@@ -375,7 +437,6 @@ class CRMStatisticsService:
                     'report_date': report['report_date'].isoformat() if hasattr(report.get('report_date'), 'isoformat') else str(report.get('report_date')),
                     'statistics': [statistics_data],  # 将统计数据组织成数组
                     'visit_detail_page': report.get('visit_detail_page', ''),
-                    'account_list_page': report.get('account_list_page', ''),
                     'first_assessment': report.get('first_assessment', []),
                     'multi_assessment': report.get('multi_assessment', [])
                 }
@@ -594,7 +655,7 @@ class CRMStatisticsService:
         """
         from app.core.config import settings
         
-        # 汇总统计数据（直接加和）
+        # 汇总统计数据（直接加和，包含所有统计字段）
         total_stats = {
             'end_customer_total_follow_up': 0,
             'end_customer_total_first_visit': 0,
@@ -604,7 +665,13 @@ class CRMStatisticsService:
             'partner_total_multi_visit': 0,
             'assessment_red_count': 0,
             'assessment_yellow_count': 0,
-            'assessment_green_count': 0
+            'assessment_green_count': 0,
+            'first_visit_red_count': 0,
+            'first_visit_yellow_count': 0,
+            'first_visit_green_count': 0,
+            'multi_visit_red_count': 0,
+            'multi_visit_yellow_count': 0,
+            'multi_visit_green_count': 0
         }
         
         # 汇总评估数据（直接合并）
@@ -612,7 +679,7 @@ class CRMStatisticsService:
         all_multi_assessments = []
         
         for report in sales_reports:
-            # 累加统计数据
+            # 累加所有统计数据（包括新增的首次和多次拜访红黄绿灯统计）
             for key in total_stats.keys():
                 total_stats[key] += report.get(key, 0)
             
@@ -628,9 +695,8 @@ class CRMStatisticsService:
         department_report = {
             'department_name': department_name,
             'report_date': target_date,
-            'statistics': [total_stats],  # 作为数组，与个人日报保持一致
+            'statistics': [total_stats],  # 作为数组，包含所有统计字段（包括新增的首次和多次拜访红黄绿灯统计）
             'visit_detail_page': f"{settings.VISIT_DETAIL_PAGE_URL}?start_date={target_date}&end_date={target_date}",
-            'account_list_page': f"{settings.ACCOUNT_LIST_PAGE_URL}?department={department_name}",
             'first_assessment': sorted_dept_first_assessments,
             'multi_assessment': sorted_dept_multi_assessments
         }
@@ -679,7 +745,7 @@ class CRMStatisticsService:
         """
         from app.core.config import settings
         
-        # 汇总统计数据（直接加和）
+        # 汇总统计数据（直接加和，包含所有统计字段）
         total_stats = {
             'end_customer_total_follow_up': 0,
             'end_customer_total_first_visit': 0,
@@ -689,7 +755,13 @@ class CRMStatisticsService:
             'partner_total_multi_visit': 0,
             'assessment_red_count': 0,
             'assessment_yellow_count': 0,
-            'assessment_green_count': 0
+            'assessment_green_count': 0,
+            'first_visit_red_count': 0,
+            'first_visit_yellow_count': 0,
+            'first_visit_green_count': 0,
+            'multi_visit_red_count': 0,
+            'multi_visit_yellow_count': 0,
+            'multi_visit_green_count': 0
         }
         
         # 汇总评估数据（直接合并，但移除跟进记录字段）
@@ -697,7 +769,7 @@ class CRMStatisticsService:
         all_multi_assessments = []
         
         for report in sales_reports:
-            # 累加统计数据
+            # 累加所有统计数据（包括新增的首次和多次拜访红黄绿灯统计）
             for key in total_stats.keys():
                 total_stats[key] += report.get(key, 0)
             
@@ -720,12 +792,11 @@ class CRMStatisticsService:
         for assessment in sorted_company_multi_assessments:
             assessment.pop('assessment_flag_raw', None)
         
-        # 构造公司日报数据
+        # 构造公司日报数据（与个人日报和部门日报字段保持一致）
         company_report = {
             'report_date': target_date,
-            'statistics': [total_stats],  # 作为数组，与其他日报保持一致
+            'statistics': [total_stats],  # 作为数组，包含所有统计字段（包括新增的首次和多次拜访红黄绿灯统计）
             'visit_detail_page': f"{settings.VISIT_DETAIL_PAGE_URL}?start_date={target_date}&end_date={target_date}",
-            'account_list_page': settings.ACCOUNT_LIST_PAGE_URL,
             'first_assessment': sorted_company_first_assessments,
             'multi_assessment': sorted_company_multi_assessments
         }
