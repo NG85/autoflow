@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List, TYPE_CHECKING
 from uuid import UUID
 from sqlalchemy import JSON
 from sqlmodel import (
@@ -7,6 +7,9 @@ from sqlmodel import (
     Relationship as SQLRelationship,
 )
 from app.models.user_oauth_account import UserOAuthAccount
+
+if TYPE_CHECKING:
+    from app.models.auth import User
 
 class UserProfile(SQLModel, table=True):
     """
@@ -93,16 +96,54 @@ class UserProfile(SQLModel, table=True):
         },
     )
     
-    oauth_user: Optional["UserOAuthAccount"] = SQLRelationship(
+    # 一对多关系：一个用户可能有多个OAuth账号（不同平台）
+    # 注意：虽然设计上支持多账号，但实际业务场景中通常是 1 对 1（客户公司通常只使用一类 OAuth）
+    oauth_users: List["UserOAuthAccount"] = SQLRelationship(
         sa_relationship_kwargs={
-            "lazy": "joined",
-            "primaryjoin": "foreign(UserProfile.user_id) == UserOAuthAccount.user_id",
+            "lazy": "selectin",  # 使用selectin加载，支持多账号场景
+            "primaryjoin": "UserProfile.user_id == foreign(UserOAuthAccount.user_id)",
+            "back_populates": None,  # UserOAuthAccount 不需要反向关系
         },
     )
     __tablename__ = "user_profiles"
     
     class Config:
         orm_mode = True
+    
+    @property
+    def oauth_user(self) -> Optional["UserOAuthAccount"]:
+        """
+        获取用户的OAuth账号
+        
+        在实际业务场景中，通常是 1 对 1 关系（客户公司通常只使用一类 OAuth），
+        因此此属性返回唯一的 OAuth 账号。如果存在多个账号，返回第一个。
+        
+        注意：此属性主要用于向后兼容和简化 1 对 1 场景的使用。
+        如果需要支持多账号场景，请使用 oauth_users 列表或 get_oauth_account_by_platform() 方法。
+        
+        Returns:
+            用户的OAuth账号（在 1 对 1 场景下是唯一的账号），如果不存在返回None
+        """
+        if self.oauth_users:
+            return self.oauth_users[0]
+        return None
+    
+    def get_oauth_account_by_platform(self, platform: str) -> Optional["UserOAuthAccount"]:
+        """
+        根据平台获取对应的OAuth账号
+        
+        Args:
+            platform: 平台名称 (feishu/lark/dingtalk/wecom etc.)
+            
+        Returns:
+            对应平台的OAuth账号，如果不存在返回None
+        """
+        if not self.oauth_users:
+            return None
+        for oauth_account in self.oauth_users:
+            if oauth_account.provider == platform:
+                return oauth_account
+        return None
     
     def get_platform_open_id(self, platform: str) -> Optional[str]:
         """
@@ -114,8 +155,9 @@ class UserProfile(SQLModel, table=True):
         Returns:
             对应的open_id，如果不存在返回None
         """
-        if self.oauth_user and self.oauth_user.provider == platform:
-            return self.oauth_user.open_id
+        oauth_account = self.get_oauth_account_by_platform(platform)
+        if oauth_account:
+            return oauth_account.open_id
         return None
 
     
@@ -129,27 +171,41 @@ class UserProfile(SQLModel, table=True):
         Returns:
             是否有该平台的open_id
         """
-        return self.oauth_user and self.oauth_user.provider == platform and self.oauth_user.open_id is not None
+        oauth_account = self.get_oauth_account_by_platform(platform)
+        return bool(oauth_account and oauth_account.open_id is not None)
     
     def get_available_platforms(self) -> list[str]:
         """
         获取用户可用的平台列表
         
+        在实际业务场景中（1 对 1 关系），通常只返回一个平台。
+        此方法保留多账号场景的支持。
+        
         Returns:
-            用户有open_id的平台列表
+            用户有open_id的平台列表（在 1 对 1 场景下通常只有一个元素）
         """
-        if self.oauth_user and self.oauth_user.provider:
-            return [self.oauth_user.provider]
-        return []
+        if not self.oauth_users:
+            return []
+        platforms = []
+        for oauth_account in self.oauth_users:
+            if oauth_account.provider and oauth_account.open_id:
+                platforms.append(oauth_account.provider)
+        return platforms
     
     def get_current_platform(self) -> Optional[str]:
         """
         获取用户当前的平台
         
+        在实际业务场景中（1 对 1 关系），返回用户唯一的 OAuth 平台。
+        如果存在多个账号，返回第一个有 open_id 的平台。
+        
         Returns:
-            当前平台名称
+            当前平台名称，如果不存在返回None
         """
-        return self.oauth_user.provider if self.oauth_user else None
+        # 在 1 对 1 场景下，直接使用 oauth_user 属性更简洁
+        if self.oauth_user and self.oauth_user.provider and self.oauth_user.open_id:
+            return self.oauth_user.provider
+        return None
         
     def get_notification_tags(self) -> list[str]:
         """

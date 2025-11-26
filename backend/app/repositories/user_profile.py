@@ -2,6 +2,7 @@ from typing import Optional, List, Dict
 from uuid import UUID
 from sqlmodel import Session, select, distinct
 from app.models.user_profile import UserProfile
+from app.models.user_oauth_account import UserOAuthAccount
 from app.repositories.base_repo import BaseRepo
 
 
@@ -193,13 +194,17 @@ class UserProfileRepo(BaseRepo):
         在应用层精确匹配，避免子字符串匹配问题
         例如：notification_type='visit_record' 不会匹配到 'list_visit_records'
         """
-        # 先查出所有有 open_id 和 notification_tags 的活跃用户
+        # 使用 join 查询所有有 open_id 和 notification_tags 的活跃用户
+        # 由于一个用户可能有多个OAuth账号，使用 distinct 去重
         candidates = db_session.exec(
-            select(UserProfile).where(
+            select(UserProfile)
+            .join(UserOAuthAccount, UserProfile.user_id == UserOAuthAccount.user_id)
+            .where(
                 UserProfile.is_active == True,
-                UserProfile.oauth_user.open_id.is_not(None),
+                UserOAuthAccount.open_id.is_not(None),
                 UserProfile.notification_tags.is_not(None)
             )
+            .distinct()
         ).all()
         
         # 在应用层使用模型的 has_notification_permission 方法精确匹配
