@@ -47,6 +47,11 @@ def save_visit_record_to_crm_table(record_schema: SimpleVisitRecordCreate | Comp
     crm_table = Table(CRM_TABLE, metadata, autoload_with=db_session.bind)
     
     mapped = map_fields(item, batch_time=batch_time)
+    # 直接添加经纬度字段（不在FIELD_MAP中，需要单独处理）
+    if 'latitude' in fields:
+        mapped['latitude'] = fields['latitude']
+    if 'longitude' in fields:
+        mapped['longitude'] = fields['longitude']
     insert_stmt = mysql_insert(crm_table).values(**mapped)
     update_stmt = {k: mapped[k] for k in mapped if k != 'record_id'}
     if mapped.get('account_id') in (None, '', 'null'):
