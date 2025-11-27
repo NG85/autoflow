@@ -437,7 +437,8 @@ def export_visit_records_to_csv(
                 "ID", "Customer Level", "Account Name", "First Visit", "Call High",
                 "Partner Name", "Opportunity Name", "Follow-up Date", "Person in Charge", "Department",
                 "Contact Position", "Contact Name", "Collaborative Participants", "Follow-up Method",
-                "Visit Purpose", "Follow-up Record", "AI Follow-up Record Quality Evaluation", "AI Follow-up Record Quality Evaluation Details", 
+                "Visit Purpose", "Visit Location", "Latitude", "Longitude", "Follow-up Record", 
+                "AI Follow-up Record Quality Evaluation", "AI Follow-up Record Quality Evaluation Details", 
                 "Next Steps", "AI Next Steps Quality Evaluation", "AI Next Steps Quality Evaluation Details",
                 "Record Type", "Information Source", "Remarks", "Created Time"
             ]
@@ -447,7 +448,8 @@ def export_visit_records_to_csv(
                 "ID", "客户分类", "客户名称", "是否首次拜访", "是否Call High",
                 "合作伙伴", "商机名称", "跟进日期", "负责销售", "所在团队",
                 "客户岗位", "客户名字", "协同参与人", "跟进方式",
-                "拜访目的", "跟进记录", "AI对跟进记录质量评估", "AI对跟进记录质量评估详情",
+                "拜访目的", "拜访地点", "纬度", "经度", "跟进记录", 
+                "AI对跟进记录质量评估", "AI对跟进记录质量评估详情",
                 "下一步计划", "AI对下一步计划质量评估", "AI对下一步计划质量评估详情",
                 "记录类型", "信息来源", "备注", "创建时间"
             ]
@@ -519,6 +521,9 @@ def export_visit_records_to_csv(
                 item.collaborative_participants or "",
                 item.visit_communication_method or "",
                 item.visit_purpose or "",
+                item.counterpart_location or "",
+                item.latitude or "",
+                item.longitude or "",
                 followup_record,
                 followup_quality_level,
                 followup_quality_reason,

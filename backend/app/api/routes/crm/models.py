@@ -291,6 +291,26 @@ class CompleteVisitRecordCreate(VisitRecordBase):
     visit_communication_location: Optional[str] = None # 拜访及沟通地点
     communication_duration: Optional[str] = None # 沟通时长
     expectation_achieved: Optional[str] = None # 是否达成预期
+    latitude: Optional[float] = None # 纬度，范围 -90 到 90
+    longitude: Optional[float] = None # 经度，范围 -180 到 180
+    
+    @field_validator('latitude')
+    @classmethod
+    def validate_latitude(cls, v):
+        """验证纬度范围"""
+        if v is not None:
+            if not -90 <= v <= 90:
+                raise ValueError("纬度必须在 -90 到 90 之间")
+        return v
+    
+    @field_validator('longitude')
+    @classmethod
+    def validate_longitude(cls, v):
+        """验证经度范围"""
+        if v is not None:
+            if not -180 <= v <= 180:
+                raise ValueError("经度必须在 -180 到 180 之间")
+        return v
     
     @field_validator('collaborative_participants', mode='before')
     @classmethod
