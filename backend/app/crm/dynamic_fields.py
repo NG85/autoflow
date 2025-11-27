@@ -86,12 +86,14 @@ def generate_dynamic_fields_array(visit_record: Dict[str, Any]) -> List[Dict[str
     field_label_map = {
         "visit_purpose": "拜访目的",
         "record_type": "记录类型",
+        "counterpart_location": "拜访地点",
     }
     
     # 字段名到英文标签的映射
     field_label_en_map = {
         "visit_purpose": "Visit Purpose",
         "record_type": "Record Type",
+        "counterpart_location": "Visit Location",
     }
     
     # 处理其他动态字段（排除时间相关字段，因为已经组合处理了）
