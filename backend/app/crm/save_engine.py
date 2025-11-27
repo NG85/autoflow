@@ -14,9 +14,11 @@ from app.utils.uuid6 import uuid6
 logger = logging.getLogger(__name__)
 
 def _generate_record_id(record_type, now):
-    dt = now.strftime("%Y%m%d")
+    dt = now.strftime("%Y%m%d_%H%M%S")
+    # 使用毫秒（微秒的前3位）即可，配合随机部分足够保证唯一性
+    millisecond = f"{now.microsecond // 1000:03d}"  # 微秒转毫秒，范围 0-999
     rand = uuid6().hex[:8]
-    return f"{record_type}_{dt}_{rand}"
+    return f"{record_type}_{dt}_{millisecond}_{rand}"
 
 # 保存表单拜访记录到 crm_sales_visit_records
 def save_visit_record_to_crm_table(record_schema: SimpleVisitRecordCreate | CompleteVisitRecordCreate, db_session: SessionDep):
