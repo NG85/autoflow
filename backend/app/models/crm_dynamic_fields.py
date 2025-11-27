@@ -15,6 +15,7 @@ class CRMDynamicFieldsMixin:
     visit_purpose: Optional[str] = Field(default=None, description="拜访目的")
     visit_start_time: Optional[str] = Field(default=None, description="拜访开始时间")
     visit_end_time: Optional[str] = Field(default=None, description="拜访结束时间")
+    counterpart_location: Optional[str] = Field(default=None, description="拜访地点")
 
 
 class CRMDynamicFieldsAPIMixin:
@@ -25,3 +26,4 @@ class CRMDynamicFieldsAPIMixin:
     visit_purpose: Optional[str] = None  # 拜访目的
     visit_start_time: Optional[str] = None  # 拜访开始时间
     visit_end_time: Optional[str] = None  # 拜访结束时间
+    counterpart_location: Optional[str] = None  # 拜访地点
