@@ -1,6 +1,7 @@
 from typing import Optional, List, Dict
 from uuid import UUID
 from sqlmodel import Session, select, distinct
+from sqlalchemy.orm import selectinload
 from app.models.user_profile import UserProfile
 from app.models.user_oauth_account import UserOAuthAccount
 from app.repositories.base_repo import BaseRepo
@@ -11,12 +12,12 @@ class UserProfileRepo(BaseRepo):
 
     def get_by_user_id(self, db_session: Session, user_id: UUID) -> Optional[UserProfile]:
         """根据用户ID获取档案"""
-        query = select(UserProfile).where(UserProfile.user_id == user_id)
+        query = select(UserProfile).options(selectinload(UserProfile.oauth_users)).where(UserProfile.user_id == user_id)
         return db_session.exec(query).first()
 
     def get_by_oauth_user_id(self, db_session: Session, oauth_user_id: str) -> Optional[UserProfile]:
         """根据OAuth用户ID获取档案"""
-        query = select(UserProfile).where(UserProfile.oauth_user_id == oauth_user_id)
+        query = select(UserProfile).options(selectinload(UserProfile.oauth_users)).where(UserProfile.oauth_user_id == oauth_user_id)
         return db_session.exec(query).first()
 
     def get_by_recorder_id(self, db_session: Session, recorder_id: str) -> Optional[UserProfile]:
@@ -44,7 +45,9 @@ class UserProfileRepo(BaseRepo):
         
         try:
             profiles = db_session.exec(
-                select(UserProfile).where(
+                select(UserProfile)
+                .options(selectinload(UserProfile.oauth_users))
+                .where(
                     UserProfile.name == name,
                     UserProfile.is_active == True
                 )
@@ -71,7 +74,9 @@ class UserProfileRepo(BaseRepo):
             if department:
                 # 使用姓名和部门组合查找
                 profiles = db_session.exec(
-                    select(UserProfile).where(
+                    select(UserProfile)
+                    .options(selectinload(UserProfile.oauth_users))
+                    .where(
                         UserProfile.name == name,
                         UserProfile.department == department,
                         UserProfile.is_active == True
@@ -80,7 +85,9 @@ class UserProfileRepo(BaseRepo):
             else:
                 # 如果部门为空，只按姓名查找
                 profiles = db_session.exec(
-                    select(UserProfile).where(
+                    select(UserProfile)
+                    .options(selectinload(UserProfile.oauth_users))
+                    .where(
                         UserProfile.name == name,
                         UserProfile.is_active == True
                     )
@@ -98,7 +105,7 @@ class UserProfileRepo(BaseRepo):
     def get_all_active_profiles(self, db_session: Session) -> List[UserProfile]:
         """获取所有有效的用户档案"""
         return db_session.exec(
-            select(UserProfile).where(UserProfile.is_active == True)
+            select(UserProfile).options(selectinload(UserProfile.oauth_users)).where(UserProfile.is_active == True)
         ).all()
 
 
@@ -108,13 +115,15 @@ class UserProfileRepo(BaseRepo):
         department: str
     ) -> list[UserProfile]:
         """获取部门成员"""
-        query = select(UserProfile).where(UserProfile.department == department)
+        query = select(UserProfile).options(selectinload(UserProfile.oauth_users)).where(UserProfile.department == department)
         return db_session.exec(query).all()
 
     def get_subordinates(self, db_session: Session, manager_id: str) -> List[UserProfile]:
         """获取指定管理者的直接下属"""
         return db_session.exec(
-            select(UserProfile).where(
+            select(UserProfile)
+            .options(selectinload(UserProfile.oauth_users))
+            .where(
                 UserProfile.direct_manager_id == manager_id,
                 UserProfile.is_active == True
             )
@@ -147,7 +156,9 @@ class UserProfileRepo(BaseRepo):
     ) -> Optional[UserProfile]:
         """获取部门负责人（部门中没有直属上级的用户）"""
         return db_session.exec(
-            select(UserProfile).where(
+            select(UserProfile)
+            .options(selectinload(UserProfile.oauth_users))
+            .where(
                 UserProfile.department == department,
                 UserProfile.direct_manager_id.is_(None),  # 没有直属上级
                 UserProfile.is_active == True
@@ -198,6 +209,7 @@ class UserProfileRepo(BaseRepo):
         # 由于一个用户可能有多个OAuth账号，使用 distinct 去重
         candidates = db_session.exec(
             select(UserProfile)
+            .options(selectinload(UserProfile.oauth_users))
             .join(UserOAuthAccount, UserProfile.user_id == UserOAuthAccount.user_id)
             .where(
                 UserProfile.is_active == True,
