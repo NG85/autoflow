@@ -380,8 +380,7 @@ def query_visit_records(
         result = visit_record_repo.query_visit_records(
             session=db_session,
             request=request,
-            current_user_id=user.id,
-            max_page_size=100,  # 查询接口仍然限制单页最大100条
+            current_user_id=user.id
         )
         
         return {
@@ -415,20 +414,6 @@ def export_visit_records_to_csv(
     支持中英文版本导出
     """
     try:
-        # 设置较大的页面大小以获取更多数据，但限制最大导出数量
-        export_request = request.model_copy()
-        # 导出时固定从第1页开始，避免受前端当前页影响
-        export_request.page = 1
-        # 放宽单页大小上限，最多导出10000条
-        export_request.page_size = min(request.page_size, 10000)  # 限制最大导出10000条记录
-        
-        result = visit_record_repo.query_visit_records(
-            session=db_session,
-            request=export_request,
-            current_user_id=user.id,
-            max_page_size=10000,  # 导出接口允许最多10000条
-        )
-        
         # 创建CSV内容
         output = io.StringIO()
         writer = csv.writer(output)
@@ -461,8 +446,21 @@ def export_visit_records_to_csv(
         
         writer.writerow(headers)
         
-        # 写入数据行
-        for item in result.items:
+        # 使用分页查询循环获取所有数据
+        # 限制最大导出10000条记录
+        # 如果用户指定了page_size且大于0，则使用用户指定的值（但不超过10000）
+        # 否则默认导出最多10000条
+        if request.page_size and request.page_size > 0:
+            max_export_count = min(request.page_size, 10000)
+        else:
+            max_export_count = 10000
+        page_size = 100  # 每次查询100条（fastapi_pagination的限制）
+        current_page = 1
+        total_exported = 0
+        total_pages = 0
+        
+        # 辅助函数：将单个item转换为CSV行
+        def item_to_csv_row(item):
             # 根据语言选择对应的字段值
             is_en = language == "en"
             
@@ -510,7 +508,7 @@ def export_visit_records_to_csv(
                     record_type = item.record_type
             
             # 构建数据行（中英版本字段顺序相同，ID列在最前面）
-            row = [
+            return [
                 item.record_id or record_id,
                 item.customer_level or "",
                 item.account_name or "",
@@ -540,7 +538,45 @@ def export_visit_records_to_csv(
                 item.remarks or "",
                 item.last_modified_time or ""
             ]
-            writer.writerow(row)
+        
+        # 循环分页查询并写入数据
+        while total_exported < max_export_count:
+            # 查询当前页
+            export_request = request.model_copy()
+            export_request.page = current_page
+            export_request.page_size = page_size
+            
+            result = visit_record_repo.query_visit_records(
+                session=db_session,
+                request=export_request,
+                current_user_id=user.id
+            )
+            
+            # 第一次查询时，获取总数和总页数
+            if current_page == 1:
+                # 计算需要查询的总页数（不超过最大导出数量）
+                total_pages = min((max_export_count + page_size - 1) // page_size, result.pages)
+            
+            # 如果没有数据，退出循环
+            if not result.items:
+                break
+            
+            # 写入当前页的数据
+            for item in result.items:
+                if total_exported >= max_export_count:
+                    break
+                writer.writerow(item_to_csv_row(item))
+                total_exported += 1
+            
+            # 如果当前页数据不足一页，说明已经是最后一页
+            if len(result.items) < page_size:
+                break
+            
+            # 如果已经达到需要查询的总页数，退出循环
+            if current_page >= total_pages:
+                break
+            
+            current_page += 1
         
         # 准备文件下载
         output.seek(0)
