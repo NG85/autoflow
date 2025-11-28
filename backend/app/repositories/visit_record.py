@@ -156,6 +156,7 @@ class VisitRecordRepo(BaseRepo):
         session: Session,
         request: VisitRecordQueryRequest,
         current_user_id: Optional[UUID] = None,
+        max_page_size: int = 100,
     ) -> Page[VisitRecordResponse]:
         """
         查询拜访记录，支持条件过滤和分页
@@ -166,8 +167,8 @@ class VisitRecordRepo(BaseRepo):
             request.page = 1
         if request.page_size < 1:
             request.page_size = 20
-        elif request.page_size > 100:  # 限制最大页面大小
-            request.page_size = 100
+        elif request.page_size > max_page_size:  # 限制最大页面大小（可配置，默认100）
+            request.page_size = max_page_size
         
         # 先处理权限控制，获取可访问的recorder_ids
         uuid_recorder_ids = None
