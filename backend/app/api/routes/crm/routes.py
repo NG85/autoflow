@@ -380,7 +380,8 @@ def query_visit_records(
         result = visit_record_repo.query_visit_records(
             session=db_session,
             request=request,
-            current_user_id=user.id
+            current_user_id=user.id,
+            max_page_size=100,  # 查询接口仍然限制单页最大100条
         )
         
         return {
@@ -416,12 +417,16 @@ def export_visit_records_to_csv(
     try:
         # 设置较大的页面大小以获取更多数据，但限制最大导出数量
         export_request = request.model_copy()
+        # 导出时固定从第1页开始，避免受前端当前页影响
+        export_request.page = 1
+        # 放宽单页大小上限，最多导出10000条
         export_request.page_size = min(request.page_size, 10000)  # 限制最大导出10000条记录
         
         result = visit_record_repo.query_visit_records(
             session=db_session,
             request=export_request,
-            current_user_id=user.id
+            current_user_id=user.id,
+            max_page_size=10000,  # 导出接口允许最多10000条
         )
         
         # 创建CSV内容
