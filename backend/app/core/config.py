@@ -141,6 +141,9 @@ class Settings(BaseSettings):
     # CRM authority API
     CRM_AUTHORITY_API_URL: str = "http://auth:8018/crm/authority"
     
+    # OAuth base URL
+    OAUTH_BASE_URL: str = "http://auth:8018"
+    
     # Client Visit Guide Generation API
     ALDEBARAN_BASE_URL: str = "http://aldebaran:8000"
     ALDEBARAN_CVGG_URL: str = f"{ALDEBARAN_BASE_URL}/api/v1/previsit/create_v4"
