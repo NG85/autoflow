@@ -126,7 +126,7 @@ def generate_dynamic_fields_array(visit_record: Dict[str, Any]) -> List[Dict[str
     # 处理其他动态字段（排除时间相关字段，因为已经组合处理了）
     for field_key in DYNAMIC_FIELDS:
         # 跳过时间字段和地点字段，因为已经在上面的特殊处理中处理了
-        if field_key in ['visit_start_time', 'visit_end_time', 'location', 'taken_at']:
+        if field_key in ['visit_start_time', 'visit_end_time']:
             continue
             
         field_value = visit_record.get(field_key)
