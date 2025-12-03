@@ -239,8 +239,9 @@ class VisitAttachment(BaseModel):
     - 新版本：使用结构化 JSON，包含图片 URL、经纬度、地址与拍摄时间等信息
     """
     url: Optional[str] = Field(default=None, description="图片地址（如 S3 URL）")
-    latitude: Optional[str] = Field(default=None, description="图片识别出的纬度")
-    longitude: Optional[str] = Field(default=None, description="图片识别出的经度")
+    # 使用 float 类型以兼容数据库中的 DECIMAL 字段和前端传入的字符串（会自动转换）
+    latitude: Optional[float] = Field(default=None, description="图片识别出的纬度")
+    longitude: Optional[float] = Field(default=None, description="图片识别出的经度")
     location: Optional[str] = Field(default=None, description="图片识别出的地址信息")
     taken_at: Optional[str] = Field(default=None, description="图片拍摄或识别时间")
 
@@ -352,33 +353,13 @@ class CompleteVisitRecordCreate(VisitRecordBase):
     visit_communication_location: Optional[str] = None # 拜访及沟通地点
     communication_duration: Optional[str] = None # 沟通时长
     expectation_achieved: Optional[str] = None # 是否达成预期
-    latitude: Optional[float] = None # 纬度，范围 -90 到 90
-    longitude: Optional[float] = None # 经度，范围 -180 到 180
     
     # 动态字段
     record_type: Optional[RecordType] = None  # 记录类型
     visit_purpose: Optional[str] = None  # 拜访目的
     visit_start_time: Optional[str] = None  # 拜访开始时间
     visit_end_time: Optional[str] = None  # 拜访结束时间
-    
-    @field_validator('latitude')
-    @classmethod
-    def validate_latitude(cls, v):
-        """验证纬度范围"""
-        if v is not None:
-            if not -90 <= v <= 90:
-                raise ValueError("纬度必须在 -90 到 90 之间")
-        return v
-    
-    @field_validator('longitude')
-    @classmethod
-    def validate_longitude(cls, v):
-        """验证经度范围"""
-        if v is not None:
-            if not -180 <= v <= 180:
-                raise ValueError("经度必须在 -180 到 180 之间")
-        return v
-    
+
     @field_validator('collaborative_participants', mode='before')
     @classmethod
     def validate_collaborative_participants(cls, v):
@@ -486,38 +467,73 @@ class VisitRecordQueryRequest(BaseModel):
     sort_direction: str = "desc"  # 排序方向：asc/desc
     language: Optional[str] = None # 语言，只在导出时生效
 
-# 拜访记录响应模型 - 直接继承CRMSalesVisitRecord，添加关联字段
-class VisitRecordResponse(CRMSalesVisitRecord):
-    # 重写UUID字段为字符串类型
-    recorder_id: Optional[str] = None
-    
-    # 重写日期字段为字符串类型
-    visit_communication_date: Optional[str] = None
-    last_modified_time: Optional[str] = None
-    
+# 拜访记录响应模型 - 独立的API模型（不参与SQLModel映射）
+class VisitRecordResponse(BaseModel):
+    id: Optional[int] = Field(default=None, description="主键ID（自增序列）")
+    account_name: Optional[str] = Field(default=None, description="客户名称")
+    account_id: Optional[str] = Field(default=None, description="客户ID")
+    opportunity_name: Optional[str] = Field(default=None, description="商机名称")
+    opportunity_id: Optional[str] = Field(default=None, description="商机ID")
+    partner_name: Optional[str] = Field(default=None, description="合作伙伴")
+    partner_id: Optional[str] = Field(default=None, description="合作伙伴ID")
+    customer_lead_source: Optional[str] = Field(default=None, description="客户/线索来源")
+    visit_object_category: Optional[str] = Field(default=None, description="拜访对象类别")
+    contact_position: Optional[str] = Field(default=None, description="客户职位")
+    contact_name: Optional[str] = Field(default=None, description="客户名字")
+    recorder: Optional[str] = Field(default=None, description="记录人")
+    recorder_id: Optional[str] = Field(default=None, description="记录人ID")
+    collaborative_participants: Optional[str] = Field(
+        default=None,
+        description="协同参与人，TEXT格式存储，支持JSON数组或字符串格式，向后兼容"
+    )
+    visit_communication_date: Optional[str] = Field(default=None, description="拜访及沟通日期")
+    counterpart_location: Optional[str] = Field(default=None, description="拜访地点")
+    visit_communication_method: Optional[str] = Field(default=None, description="拜访及沟通方式")
+    visit_purpose: Optional[str] = Field(default=None, description="拜访目的")
+    communication_duration: Optional[str] = Field(default=None, description="沟通时长")
+    expectation_achieved: Optional[str] = Field(default=None, description="是/否达成预期")
+    followup_record: Optional[str] = Field(default=None, description="跟进记录")
+    followup_record_zh: Optional[str] = Field(default=None, description="跟进记录（中文版）")
+    followup_record_en: Optional[str] = Field(default=None, description="跟进记录（英文版）")
+    followup_content: Optional[str] = Field(default=None, description="跟进内容（简易版表单使用）")
+    followup_quality_level_zh: Optional[str] = Field(default=None, description="跟进记录等级（中文版）")
+    followup_quality_level_en: Optional[str] = Field(default=None, description="跟进记录等级（英文版）")
+    followup_quality_reason_zh: Optional[str] = Field(default=None, description="跟进记录评判依据")
+    followup_quality_reason_en: Optional[str] = Field(default=None, description="跟进记录评判依据（英文版）")
+    next_steps: Optional[str] = Field(default=None, description="下一步计划")
+    next_steps_zh: Optional[str] = Field(default=None, description="下一步计划（中文版）")
+    next_steps_en: Optional[str] = Field(default=None, description="下一步计划（英文版）")
+    next_steps_quality_level_zh: Optional[str] = Field(default=None, description="下一步计划等级")
+    next_steps_quality_level_en: Optional[str] = Field(default=None, description="下一步计划等级（英文版）")
+    next_steps_quality_reason_zh: Optional[str] = Field(default=None, description="下一步计划评判依据")
+    next_steps_quality_reason_en: Optional[str] = Field(default=None, description="下一步计划评判依据（英文版）")
+    attachment: Optional[str] = Field(default=None, description="原始附件字段（字符串或JSON）")
+    parent_record: Optional[str] = Field(default=None, description="父记录")
+    remarks: Optional[str] = Field(default=None, description="备注")
+    last_modified_time: Optional[str] = Field(default=None, description="最后修改时间")
+    record_id: Optional[str] = Field(default=None, description="记录id")
+    is_first_visit: Optional[bool] = Field(default=None, description="是否首次拜访")
+    is_call_high: Optional[bool] = Field(default=None, description="是否call high")
+    visit_type: Optional[str] = Field(default=None, description="拜访类型：form(用户填报)、link(非结构化链接/文件)")
+    visit_url: Optional[str] = Field(default=None, description="会议链接或文件URL")
+    subject: Optional[str] = Field(default=None, description="拜访主题")
+    record_type: Optional[str] = Field(default=None, description="记录类型：Daily Sales Record、Customer Visit")
+    visit_start_time: Optional[str] = Field(default=None, description="拜访开始时间")
+    visit_end_time: Optional[str] = Field(default=None, description="拜访结束时间")
+    latitude: Optional[float] = Field(default=None, description="纬度，范围 -90 到 90")
+    longitude: Optional[float] = Field(default=None, description="经度，范围 -180 到 180")
+
     # 关联字段 - 来自crm_accounts表
-    customer_level: Optional[str] = None  # 客户等级
+    customer_level: Optional[str] = Field(default=None, description="客户等级")
     
     # 关联字段 - 来自user_profiles表
-    department: Optional[str] = None  # 拜访人所在部门
+    department: Optional[str] = Field(default=None, description="拜访人所在部门")
 
-    @field_validator("attachment", mode="before")
-    @classmethod
-    def normalize_attachment_response(cls, v: Any) -> Any:
-        """
-        响应侧的兼容处理：
-        - None / "" -> None
-        - 字符串：base64 / URL / JSON 字符串
-        - dict：结构化 JSON
-        - VisitAttachment：直接返回
-        """
-        if v is None or v == "":
-            return None
-        return VisitAttachment.from_legacy_value(v)
 
     class Config:
-        # 允许从ORM模型创建
+        # 允许从ORM / dict 创建，并忽略多余字段
         from_attributes = True
+        extra = "ignore"
 
 # 拜访记录查询响应
 class VisitRecordQueryResponse(BaseModel):
