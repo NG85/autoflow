@@ -4,6 +4,7 @@ CRM动态字段定义
 
 from typing import List, Dict, Any
 from datetime import datetime
+import json
 from app.models.crm_dynamic_fields import CRMDynamicFieldsMixin
 
 
@@ -82,24 +83,50 @@ def generate_dynamic_fields_array(visit_record: Dict[str, Any]) -> List[Dict[str
             "value_en": time_range_value
         })
     
+    # 从附件中提取拜访地点信息，如果有则优先使用附件中的location字段
+    attachment = visit_record.get("attachment")
+    attachment_location = None
+    attachment_taken_at = None
+    if attachment:
+        try:
+            # 兼容多种格式：dict / JSON字符串
+            if isinstance(attachment, dict):
+                attachment_location = attachment.get("location") or None
+                attachment_taken_at = attachment.get("taken_at") or None
+            elif isinstance(attachment, str):
+                parsed = json.loads(attachment)
+                if isinstance(parsed, dict):
+                    attachment_location = parsed.get("location") or None
+                    attachment_taken_at = parsed.get("taken_at") or None
+        except Exception:
+            attachment_location = None
+            attachment_taken_at = None
+    if attachment_location:
+        # 将拜访地点字段重写为附件识别出的地址信息
+        visit_record["location"] = attachment_location
+    if attachment_taken_at:
+        visit_record["taken_at"] = attachment_taken_at
+
     # 字段名到中文标签的映射
     field_label_map = {
         "visit_purpose": "拜访目的",
         "record_type": "记录类型",
-        "counterpart_location": "拜访地点",
+        "location": "拜访地点",
+        "taken_at": "拍摄时间",
     }
     
     # 字段名到英文标签的映射
     field_label_en_map = {
         "visit_purpose": "Visit Purpose",
         "record_type": "Record Type",
-        "counterpart_location": "Visit Location",
+        "location": "Visit Location",
+        "taken_at": "Taken At",
     }
     
     # 处理其他动态字段（排除时间相关字段，因为已经组合处理了）
     for field_key in DYNAMIC_FIELDS:
-        # 跳过时间字段，因为已经在上面的特殊处理中处理了
-        if field_key in ['visit_start_time', 'visit_end_time']:
+        # 跳过时间字段和地点字段，因为已经在上面的特殊处理中处理了
+        if field_key in ['visit_start_time', 'visit_end_time', 'location', 'taken_at']:
             continue
             
         field_value = visit_record.get(field_key)
