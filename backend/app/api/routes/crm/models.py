@@ -4,7 +4,6 @@ from datetime import date
 from pydantic import BaseModel, Field, field_validator
 import json
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
-from app.models.crm_dynamic_fields import CRMDynamicFieldsAPIMixin
 from app.core.config import settings
 
 # 定义响应模型
@@ -231,8 +230,55 @@ class FieldMetadata(BaseModel):
     description: Optional[str] = None
     default_value: Optional[Any] = None
 
+# 拜访记录附件结构
+class VisitAttachment(BaseModel):
+    """
+    拜访记录附件信息
+    
+    - 旧版本：attachment 为 base64 字符串或 S3 URL
+    - 新版本：使用结构化 JSON，包含图片 URL、经纬度、地址与拍摄时间等信息
+    """
+    url: Optional[str] = Field(default=None, description="图片地址（如 S3 URL）")
+    latitude: Optional[str] = Field(default=None, description="图片识别出的纬度")
+    longitude: Optional[str] = Field(default=None, description="图片识别出的经度")
+    location: Optional[str] = Field(default=None, description="图片识别出的地址信息")
+    taken_at: Optional[str] = Field(default=None, description="图片拍摄或识别时间")
+
+    @classmethod
+    def from_legacy_value(cls, v: Any) -> "VisitAttachment":
+        """
+        兼容旧格式：
+        - 如果是字符串（base64 或 URL），则仅填充 url 字段
+        - 如果是 dict，则按字段强制转换
+        """
+        if v is None or v == "":
+            return cls()
+
+        if isinstance(v, cls):
+            return v
+
+        # 字符串：可能是 base64 / URL / 已经是 JSON 字符串
+        if isinstance(v, str):
+            # 优先尝试按 JSON 解析
+            try:
+                parsed = json.loads(v)
+                if isinstance(parsed, dict):
+                    return cls(**parsed)
+            except (json.JSONDecodeError, TypeError):
+                pass
+            # 否则当作 url 处理
+            return cls(url=v)
+
+        # 字典：直接按字段构造
+        if isinstance(v, dict):
+            return cls(**v)
+
+        # 其他类型兜底转成字符串放在 url 里
+        return cls(url=str(v))
+
+
 # 拜访记录公共字段（所有表单类型都包含）
-class VisitRecordBase(BaseModel, CRMDynamicFieldsAPIMixin):
+class VisitRecordBase(BaseModel):
     account_name: Optional[str] = None # 客户名称
     account_id: Optional[str] = None # 客户ID
     opportunity_name: Optional[str] = None # 商机名称
@@ -258,9 +304,26 @@ class VisitRecordBase(BaseModel, CRMDynamicFieldsAPIMixin):
     next_steps_quality_level_en: Optional[str] = None # 下一步计划质量等级（英文版）
     next_steps_quality_reason_zh: Optional[str] = None # 下一步计划质量原因（中文版）
     next_steps_quality_reason_en: Optional[str] = None # 下一步计划质量原因（英文版）
-    attachment: Optional[str] = None # 附件
+    attachment: Optional[VisitAttachment] = Field(
+        default=None,
+        description="附件信息，兼容旧字符串格式（base64 / URL）与新 JSON 结构"
+    )
     parent_record: Optional[str] = None # 父记录
     remarks: Optional[str] = None # 备注
+
+    @field_validator("attachment", mode="before")
+    @classmethod
+    def normalize_attachment(cls, v: Any) -> Any:
+        """
+        兼容多种入参格式：
+        - None / "" -> None
+        - 字符串：base64 / URL / JSON 字符串
+        - dict：结构化 JSON
+        - VisitAttachment：直接返回
+        """
+        if v is None or v == "":
+            return None
+        return VisitAttachment.from_legacy_value(v)
 
 # 协同参与人数据结构
 class CollaborativeParticipant(BaseModel):
@@ -272,13 +335,11 @@ class CollaborativeParticipant(BaseModel):
 # 完整版表单
 class CompleteVisitRecordCreate(VisitRecordBase):
     form_type: Literal["complete"] = "complete"  # 表单类型标识
-    record_type: Optional[RecordType] = None # 记录类型
     is_first_visit: Optional[bool] = None # 是否首次拜访
     is_call_high: Optional[bool] = None # 是否call high
     contact_position: Optional[str] = None # 客户职位
     contact_name: Optional[str] = None # 客户名字
     visit_communication_method: Optional[str] = None # 拜访及沟通方式
-    visit_purpose: Optional[str] = None # 拜访目的
     collaborative_participants: Optional[Union[str, List[CollaborativeParticipant]]] = Field(
         default=None, 
         description="协同参与人，支持字符串格式（向后兼容）或结构化数组格式"
@@ -293,6 +354,12 @@ class CompleteVisitRecordCreate(VisitRecordBase):
     expectation_achieved: Optional[str] = None # 是否达成预期
     latitude: Optional[float] = None # 纬度，范围 -90 到 90
     longitude: Optional[float] = None # 经度，范围 -180 到 180
+    
+    # 动态字段
+    record_type: Optional[RecordType] = None  # 记录类型
+    visit_purpose: Optional[str] = None  # 拜访目的
+    visit_start_time: Optional[str] = None  # 拜访开始时间
+    visit_end_time: Optional[str] = None  # 拜访结束时间
     
     @field_validator('latitude')
     @classmethod
@@ -433,7 +500,21 @@ class VisitRecordResponse(CRMSalesVisitRecord):
     
     # 关联字段 - 来自user_profiles表
     department: Optional[str] = None  # 拜访人所在部门
-    
+
+    @field_validator("attachment", mode="before")
+    @classmethod
+    def normalize_attachment_response(cls, v: Any) -> Any:
+        """
+        响应侧的兼容处理：
+        - None / "" -> None
+        - 字符串：base64 / URL / JSON 字符串
+        - dict：结构化 JSON
+        - VisitAttachment：直接返回
+        """
+        if v is None or v == "":
+            return None
+        return VisitAttachment.from_legacy_value(v)
+
     class Config:
         # 允许从ORM模型创建
         from_attributes = True
