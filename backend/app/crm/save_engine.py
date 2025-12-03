@@ -164,6 +164,20 @@ def fill_sales_visit_record_fields(sales_visit_record, db_session):
     sales_visit_record["is_call_high"] = "关键决策人拜访" if is_call_high else None
     sales_visit_record["is_call_high_en"] = "call high" if is_call_high else None
     
+    # 处理附件字段：避免将历史的 base64 大字段推送到通知中
+    attachment = sales_visit_record.get("attachment")
+    if attachment:
+        # 字符串（可能是base64 / URL / JSON字符串）一律不直接透传，推送里丢弃
+        if isinstance(attachment, str):
+            sales_visit_record["attachment"] = None
+        # 如果是 dict，仅保留轻量字段，去掉url字段
+        elif isinstance(attachment, dict):
+          sanitized = dict(attachment)
+          url_val = sanitized.get("url")
+          if isinstance(url_val, str) and not (url_val.startswith("http://") or url_val.startwith("https://")):
+              sanitized.pop("url", None)  # url 里如果不是链接（可能是base64）就删掉
+          sales_visit_record["attachment"] = sanitized
+    
     # 添加字段名映射，用于卡片展示
     from app.services.crm_config_service import add_field_mapping_to_data
     sales_visit_record = add_field_mapping_to_data(sales_visit_record, db_session, "拜访记录")
@@ -265,11 +279,6 @@ def push_visit_record_message(sales_visit_record, visit_type, db_session=None, m
         if not recorder_id and not recorder_name:
             logger.warning("No recorder_id or recorder_name found in sales visit record")
             return False
-        
-        # 去掉attachment字段，避免传输过大的base64编码数据
-        if "attachment" in sales_visit_record:
-            logger.info("Removing attachment field from visit record to avoid large base64 data transmission")
-            del sales_visit_record["attachment"]
         
         # 确保会议纪要不为空
         if meeting_notes is None or meeting_notes == "":
@@ -418,12 +427,7 @@ def save_visit_record_with_content(
     # ========== 第三阶段：推送飞书消息（不影响事务） ==========
     try:
         record_data = record.model_dump()
-        # 去掉attachment字段，避免传输过大的base64编码数据
-        if "attachment" in record_data:
-            logger.info("Removing attachment field from record data to avoid large base64 data transmission")
-            del record_data["attachment"]
-        
-        # 推送飞书消息
+        # 推送飞书消息（保留附件字段，附件中仅包含URL和少量结构化信息，避免大体积base64）
         push_visit_record_message(
             visit_type=record.visit_type,
             sales_visit_record=record_data,

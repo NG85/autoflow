@@ -197,13 +197,33 @@ def parse_field_value(val, field_name=None):
             return val.replace('-', '')[:32]  # 移除连字符并截取前32位
         return ''
     if field_name == '附件':
-        # 只取所有附件的 name
+        """
+        附件字段兼容多种来源：
+        - 从 Feishu 多维表格同步时：val 通常为 list[dict]，这里只提取所有附件的 name，保持原有行为
+        - 从表单 / 接口提交时：val 可能为
+            - str：base64 / URL / JSON 字符串，原样入库
+            - dict：结构化 JSON（例如包含 url/latitude/longitude/location/taken_at），序列化为 JSON 字符串入库
+        """
+        # 1）Feishu 多维表格：list[dict]，只取 name 列表
         if isinstance(val, list):
             names = [v.get('name', '') for v in val if isinstance(v, dict)]
             return ','.join(names) if names else ''
+
+        # 2）结构化 JSON：dict，序列化为 JSON 字符串
+        if isinstance(val, dict):
+            try:
+                import json
+                return json.dumps(val, ensure_ascii=False)
+            except Exception:
+                # 兜底：无法序列化时，转成字符串
+                return str(val)
+
+        # 3）字符串：base64 / URL / JSON 字符串，直接返回
         if isinstance(val, str):
             return val
-        return ''
+
+        # 4）其他类型兜底
+        return str(val) if val else ''
     if field_name == '父记录':
         # 只存 link_record_ids 的字符串
         if isinstance(val, dict):

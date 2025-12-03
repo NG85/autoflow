@@ -3,9 +3,8 @@ from typing import Optional
 from uuid import UUID
 from sqlmodel import SQLModel, Field, Column, DateTime, Text, Index
 from sqlalchemy import DECIMAL
-from app.models.crm_dynamic_fields import CRMDynamicFieldsMixin
 
-class CRMSalesVisitRecord(SQLModel, CRMDynamicFieldsMixin, table=True):
+class CRMSalesVisitRecord(SQLModel, table=True):
     __tablename__ = "crm_sales_visit_records"
 
     id: Optional[int] = Field(default=None, primary_key=True, description="主键ID（自增序列）")
@@ -57,6 +56,8 @@ class CRMSalesVisitRecord(SQLModel, CRMDynamicFieldsMixin, table=True):
     visit_url: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="会议链接或文件URL")
     subject: Optional[str] = Field(nullable=True, max_length=50, description="拜访主题")
     record_type: Optional[str] = Field(nullable=True, max_length=50, description="记录类型：Daily Sales Record、Customer Visit")
+    visit_start_time: Optional[str] = Field(nullable=True, max_length=19, description="拜访开始时间")
+    visit_end_time: Optional[str] = Field(nullable=True, max_length=19, description="拜访结束时间")
     latitude: Optional[float] = Field(sa_column=Column(DECIMAL(10, 7), nullable=True), description="纬度，范围 -90 到 90")
     longitude: Optional[float] = Field(sa_column=Column(DECIMAL(11, 7), nullable=True), description="经度，范围 -180 到 180")
    

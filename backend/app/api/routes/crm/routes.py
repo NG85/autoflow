@@ -207,12 +207,8 @@ def create_visit_record(
             try:
                 record_id, saved_time = save_visit_record_to_crm_table(record, db_session)
                 db_session.commit()
-                # 推送飞书消息
+                # 推送飞书消息（attachment 由下游统一做瘦身与解析）
                 record_data = record.model_dump()
-                # 去掉attachment字段，避免传输过大的base64编码数据
-                if "attachment" in record_data:
-                    del record_data["attachment"]
-                
                 push_visit_record_message(
                     visit_type=record.visit_type,
                     sales_visit_record=record_data,
@@ -290,12 +286,8 @@ def create_visit_record(
         try:
             record_id, saved_time = save_visit_record_to_crm_table(record, db_session)
             db_session.commit()
-            # 推送飞书消息
+            # 推送飞书消息（attachment 由下游统一做瘦身与解析）
             record_data = record.model_dump()
-            # 去掉attachment字段，避免传输过大的base64编码数据
-            if "attachment" in record_data:
-                del record_data["attachment"]
-            
             push_visit_record_message(
                 visit_type=record.visit_type,
                 sales_visit_record=record_data,
@@ -427,7 +419,7 @@ def export_visit_records_to_csv(
                 "ID", "Customer Level", "Account Name", "First Visit", "Call High",
                 "Partner Name", "Opportunity Name", "Follow-up Date", "Person in Charge", "Department",
                 "Contact Position", "Contact Name", "Collaborative Participants", "Follow-up Method",
-                "Visit Purpose", "Visit Location", "Latitude", "Longitude", "Follow-up Record", 
+                "Visit Purpose", "Attachment Location", "Attachment Latitude", "Attachment Longitude", "Attachment Taken At", "Follow-up Record", 
                 "AI Follow-up Record Quality Evaluation", "AI Follow-up Record Quality Evaluation Details", 
                 "Next Steps", "AI Next Steps Quality Evaluation", "AI Next Steps Quality Evaluation Details",
                 "Record Type", "Information Source", "Remarks", "Created Time"
@@ -438,7 +430,7 @@ def export_visit_records_to_csv(
                 "ID", "客户分类", "客户名称", "是否首次拜访", "是否Call High",
                 "合作伙伴", "商机名称", "跟进日期", "负责销售", "所在团队",
                 "客户岗位", "客户名字", "协同参与人", "跟进方式",
-                "拜访目的", "拜访地点", "纬度", "经度", "跟进记录", 
+                "拜访目的", "附件地点", "附件纬度", "附件经度", "附件拍摄时间", "跟进记录", 
                 "AI对跟进记录质量评估", "AI对跟进记录质量评估详情",
                 "下一步计划", "AI对下一步计划质量评估", "AI对下一步计划质量评估详情",
                 "记录类型", "信息来源", "备注", "创建时间"
@@ -507,6 +499,19 @@ def export_visit_records_to_csv(
                 else:
                     record_type = item.record_type
             
+            # 从附件中解析位置信息和经纬度
+            attachment = getattr(item, "attachment", None)
+            if attachment:
+                # 结构化附件（VisitAttachment）
+                location = getattr(attachment, "location", None) or ""
+                latitude = getattr(attachment, "latitude", None) or ""
+                longitude = getattr(attachment, "longitude", None) or ""
+                taken_at = getattr(attachment, "taken_at", None) or ""
+            else:
+                location = ""
+                latitude = ""
+                longitude = ""
+                taken_at = ""
             # 构建数据行（中英版本字段顺序相同，ID列在最前面）
             return [
                 item.record_id or record_id,
@@ -524,9 +529,10 @@ def export_visit_records_to_csv(
                 item.collaborative_participants or "",
                 item.visit_communication_method or "",
                 item.visit_purpose or "",
-                item.counterpart_location or "",
-                item.latitude or "",
-                item.longitude or "",
+                location,
+                latitude,
+                longitude,
+                taken_at,
                 followup_record,
                 followup_quality_level,
                 followup_quality_reason,
