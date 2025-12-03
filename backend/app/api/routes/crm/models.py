@@ -507,7 +507,7 @@ class VisitRecordResponse(BaseModel):
     next_steps_quality_level_en: Optional[str] = Field(default=None, description="下一步计划等级（英文版）")
     next_steps_quality_reason_zh: Optional[str] = Field(default=None, description="下一步计划评判依据")
     next_steps_quality_reason_en: Optional[str] = Field(default=None, description="下一步计划评判依据（英文版）")
-    attachment: Optional[str] = Field(default=None, description="原始附件字段（字符串或JSON）")
+    attachment: Optional[VisitAttachment] = Field(default=None, description="原始附件字段（字符串或JSON）")
     parent_record: Optional[str] = Field(default=None, description="父记录")
     remarks: Optional[str] = Field(default=None, description="备注")
     last_modified_time: Optional[str] = Field(default=None, description="最后修改时间")
