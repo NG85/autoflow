@@ -453,11 +453,19 @@ class PlatformNotificationService:
                 )
         
         # 4. 调用 OAuth 服务查询汇报链领导
-        base_user_id = oauth_account.user_id_in_platform or oauth_account.open_id
+        # 使用系统用户ID（user_id），而不是OAuth平台的用户ID
+        base_user_id = None
+        if recorder_profile.user_id:
+            # 将UUID转换为字符串
+            base_user_id = str(recorder_profile.user_id)
+        elif oauth_account.user_id:
+            # 如果profile没有user_id，尝试从oauth_account获取
+            base_user_id = str(oauth_account.user_id)
+        
         if not base_user_id:
             logger.warning(
                 f"Recorder {recorder_name} (profile: {recorder_profile.name}) "
-                f"has no user_id_in_platform or open_id for reporting-chain query"
+                f"has no system user_id for reporting-chain query"
             )
             return recipients_by_platform
         
