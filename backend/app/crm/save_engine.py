@@ -174,7 +174,7 @@ def fill_sales_visit_record_fields(sales_visit_record, db_session):
         elif isinstance(attachment, dict):
           sanitized = dict(attachment)
           url_val = sanitized.get("url")
-          if isinstance(url_val, str) and not (url_val.startswith("http://") or url_val.startwith("https://")):
+          if isinstance(url_val, str) and not (url_val.startswith(settings.STORAGE_PATH_PREFIX) or url_val.startswith("http://") or url_val.startwith("https://")):
               sanitized.pop("url", None)  # url 里如果不是链接（可能是base64）就删掉
           sales_visit_record["attachment"] = sanitized
     

@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
 from app.models.crm_accounts import CRMAccount
 from app.models.user_profile import UserProfile
-from app.api.routes.crm.models import VisitRecordQueryRequest, VisitRecordResponse
+from app.api.routes.crm.models import VisitAttachment, VisitRecordQueryRequest, VisitRecordResponse
 from app.repositories.base_repo import BaseRepo
 from app.repositories.user_profile import UserProfileRepo
 
@@ -76,6 +76,10 @@ def _convert_to_response(record: CRMSalesVisitRecord, customer_level: Optional[s
     from app.utils.participants_utils import format_collaborative_participants_names
     record_dict["collaborative_participants"] = format_collaborative_participants_names(record.collaborative_participants)
     
+    attachment = record_dict.get("attachment")
+    if attachment:
+        record_dict["attachment"] = VisitAttachment.from_legacy_value(attachment)
+
     # 使用处理后的字典创建VisitRecordResponse
     response = VisitRecordResponse.model_validate(record_dict)
     
