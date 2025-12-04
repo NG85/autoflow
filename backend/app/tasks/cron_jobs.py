@@ -1002,10 +1002,7 @@ def _analyze_crm_todos(
             "completed_src2": str(completed_by_source.get(TodoDataSourceType.AI_EXTRACTION.value, 0)),
             "completed_src3": str(completed_by_source.get(TodoDataSourceType.MANUAL.value, 0)),
             "others": str(overdue_others),
-            "completed_query_url": f"{settings.CRM_SALES_TASK_PAGE_URL}?owner_name={assignee_data['assignee_name']}&due_date__gte={start_date_str}&due_date__lte={end_date_str}&ai_status=COMPLETED",
-            "due_task_query_url": f"{settings.CRM_SALES_TASK_PAGE_URL}?owner_name={assignee_data['assignee_name']}&due_date__lte={end_date_str}&is_overdue=True",
-            "cancelled_query_url": f"{settings.CRM_SALES_TASK_PAGE_URL}?owner_name={assignee_data['assignee_name']}&due_date__gte={start_date_str}&due_date__lte={end_date_str}&ai_status=CANCELLED",
-            "next_week_query_url": f"{settings.CRM_SALES_TASK_PAGE_URL}?owner_name={assignee_data['assignee_name']}&due_date__gte={next_week_start_date_str}&due_date__lte={next_week_end_date_str}&ai_status=PENDING&ai_status=IN_PROGRESS",
+            "cancelled_query_url": f"{settings.CRM_SALES_TASK_PAGE_URL}?owner_name={assignee_data['assignee_name']}&due_date__gte={start_date_str}&due_date__lte={end_date_str}&ai_status=CANCELLED"
         }
         
         # 格式化任务明细的日期
@@ -1022,29 +1019,33 @@ def _analyze_crm_todos(
                 except:
                     pass
             return None
+
+        def build_unique_account_task_list(tasks):
+            """
+            从任务列表中构建仅包含唯一客户名称的任务明细列表。
+            目前只输出 account_name，如后续需要可在此处补充其他字段。
+            """
+            result = []
+            seen_accounts = set()
+            for task in sorted(tasks, key=lambda x: x.get("due_date") or ""):
+                account_name = task.get("account_name")
+                # 仅保留有客户名称且未出现过的记录
+                if not account_name or account_name in seen_accounts:
+                    continue
+                seen_accounts.add(account_name)
+                task_item = {
+                    # "data_source": get_data_source_display_name(task.get("data_source")),
+                    "account_name": account_name,
+                    # "opportunity_name": task.get("opportunity_name"),
+                    # "due_date": format_task_date(task),
+                    # "title": task.get("title")
+                }
+                result.append(task_item)
+            return result
         
-        # 构建任务明细
-        due_task_list = []
-        for task in sorted(assignee_data["overdue"], key=lambda x: x.get("due_date") or ""):
-            task_item = {
-                "data_source": get_data_source_display_name(task.get("data_source")),
-                "account_name": task.get("account_name"),
-                "opportunity_name": task.get("opportunity_name"),
-                "due_date": format_task_date(task),
-                "title": task.get("title")
-            }
-            due_task_list.append(task_item)
-        
-        next_week_task_list = []
-        for task in sorted(assignee_data["next_week"], key=lambda x: x.get("due_date") or ""):
-            task_item = {
-                "data_source": get_data_source_display_name(task.get("data_source")),
-                "account_name": task.get("account_name"),
-                "opportunity_name": task.get("opportunity_name"),
-                "due_date": format_task_date(task),
-                "title": task.get("title")
-            }
-            next_week_task_list.append(task_item)
+        # 构建任务明细（仅客户名称，且去重）
+        due_task_list = build_unique_account_task_list(assignee_data["overdue"])
+        next_week_task_list = build_unique_account_task_list(assignee_data["next_week"])
         
         # 构建单个负责人的结果
         result_item = {
@@ -1053,7 +1054,9 @@ def _analyze_crm_todos(
             "assignee_name": assignee_data["assignee_name"],
             "statistics": [statistics_item],
             "due_task_list": due_task_list,
-            "next_week_task_list": next_week_task_list
+            "next_week_task_list": next_week_task_list,
+            "due_task_query_url": f"{settings.CRM_SALES_TASK_PAGE_URL}?owner_name={assignee_data['assignee_name']}&due_date__lte={end_date_str}&is_overdue=True",
+            "next_week_query_url": f"{settings.CRM_SALES_TASK_PAGE_URL}?owner_name={assignee_data['assignee_name']}&due_date__gte={next_week_start_date_str}&due_date__lte={next_week_end_date_str}&ai_status=PENDING&ai_status=IN_PROGRESS",
         }
         
         result_list.append(result_item)
