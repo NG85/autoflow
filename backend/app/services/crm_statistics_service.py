@@ -764,7 +764,7 @@ class CRMStatisticsService:
             'multi_visit_green_count': 0
         }
         
-        # 汇总评估数据（直接合并，但移除跟进记录字段）
+        # 汇总评估数据（直接合并）
         all_first_assessments = []
         all_multi_assessments = []
         
@@ -773,14 +773,12 @@ class CRMStatisticsService:
             for key in total_stats.keys():
                 total_stats[key] += report.get(key, 0)
             
-            # 合并评估数据，但移除跟进字段
+            # 合并评估数据
             for assessment in report.get('first_assessment', []):
-                company_assessment = self._convert_to_company_assessment(assessment)
-                all_first_assessments.append(company_assessment)
+                all_first_assessments.append(assessment)
             
             for assessment in report.get('multi_assessment', []):
-                company_assessment = self._convert_to_company_assessment(assessment)
-                all_multi_assessments.append(company_assessment)
+                all_multi_assessments.append(assessment)
         
         # 对公司汇总后的评估数据重新排序
         sorted_company_first_assessments = self._sort_assessments(all_first_assessments)
