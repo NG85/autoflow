@@ -51,11 +51,10 @@ def trigger_daily_statistics_task(
     1. 从crm_daily_account_statistics表查询销售统计数据
     2. 通过correlation_id关联crm_account_assessment表获取评估详情
     3. 组合成完整的日报数据
-    4. 向每个销售人员本人推送个人日报飞书卡片
+    4. 推送日报卡片给销售人员本人、部门负责人和公司负责人
     
     注意：
     - 这是异步任务，会立即返回任务ID，可通过任务ID查询执行状态
-    - 个人日报只推送给销售人员本人，不会推送给上级或群聊
     """
     if not user.is_superuser:
         return {

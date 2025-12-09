@@ -256,7 +256,7 @@ class PlatformNotificationService:
     def _get_reporting_chain_leaders(
         self,
         base_user_id: str,
-        max_levels: int = 3,
+        max_levels: int = 2,
         include_leader_identity: bool = True,
     ) -> List[Dict[str, Any]]:
         """
@@ -265,7 +265,6 @@ class PlatformNotificationService:
         if not base_user_id:
             return []
 
-        # 复用现有的 OAuth/CRM 网关地址
         base_url = settings.OAUTH_BASE_URL.rstrip("/")
         url = f"{base_url}/permission/reporting-chain/query"
 
@@ -300,7 +299,6 @@ class PlatformNotificationService:
             platform = leader.get("platform")
             name = leader.get("name") or "Unknown"
             open_id = leader.get("openId") or leader.get("open_id")
-            crm_user_id = leader.get("crmUserId")
 
             if not platform:
                 logger.warning(f"Skip leader without platform: {leader}")
@@ -312,24 +310,26 @@ class PlatformNotificationService:
 
             simplified.append(
                 {
-                    "name": name,
-                    "platform": platform,
                     "open_id": open_id,
-                    "crm_user_id": crm_user_id,
-                    "raw": leader,
+                    "name": name or "Unknown",
+                    "type": "leader",
+                    "department": leader.get("department") or "部门团队",
+                    "receive_id_type": "open_id",
+                    "platform": platform,
                 }
             )
 
         return simplified
     
-    def _get_card_permission_receivers(self) -> List[Dict[str, Any]]:
+    def _get_card_permission_receivers(self, permission: str, role_codes: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         """
-        调用 OAuth 服务查询具有拜访记录卡片接收权限的用户列表
+        调用 OAuth 服务查询具有指定权限和角色代码的用户列表
         
         对应接口：
         POST /permission/users/by-permission
         {
-            "permission": "visit_record:card:receive",
+            "permission": permission,
+            "roleCodes": role_codes,
             "includeIdentity": true
         }
         """
@@ -337,7 +337,8 @@ class PlatformNotificationService:
         url = f"{base_url}/permission/users/by-permission"
 
         payload = {
-            "permission": "visit_record:card:receive",
+            "permission": permission,
+            "roleCodes": role_codes,
             "includeIdentity": True,
         }
 
@@ -427,15 +428,15 @@ class PlatformNotificationService:
             return recipients_by_platform
         
         # 3. 先添加记录人本人
-        platform = oauth_account.provider or PLATFORM_FEISHU
+        platform = oauth_account.provider
         if not self._validate_platform_support(platform):
             logger.warning(f"Recorder platform {platform} not supported, skipping recorder")
         else:
-            recorder_open_id = oauth_account.open_id or oauth_account.user_id_in_platform
+            recorder_open_id = oauth_account.open_id
             if not recorder_open_id:
                 logger.warning(
                     f"Recorder {recorder_name} (profile: {recorder_profile.name}) "
-                    f"has no open_id or user_id_in_platform, cannot send notification"
+                    f"has no open_id, cannot send notification"
                 )
             else:
                 if platform not in recipients_by_platform:
@@ -512,7 +513,7 @@ class PlatformNotificationService:
             )
         
         # 6. 添加具有“卡片接收权限”的高层用户，并与现有集合去重
-        card_receivers = self._get_card_permission_receivers()
+        card_receivers = self._get_card_permission_receivers("visit_record:card:receive", ["COMPANY_EXECUTIVE", "COMPANY_ADMIN"])
         for user in card_receivers:
             platform = user.get("platform")
             if not platform:
@@ -539,7 +540,7 @@ class PlatformNotificationService:
                 {
                     "open_id": open_id,
                     "name": user.get("name") or "Unknown",
-                    "type": "card_permission_user",
+                    "type": "executive_admin",
                     "department": user.get("department") or "公司",
                     "receive_id_type": "open_id",
                     "platform": platform,
