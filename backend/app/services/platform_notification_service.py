@@ -549,14 +549,14 @@ class PlatformNotificationService:
         
         return recipients_by_platform
     
-    def get_recipients_for_daily_report(
+    def get_recipients_for_sales_daily_report(
         self,
         db_session: Session,
         recorder_name: str = None,
         recorder_id: str = None,
         department_name: str = None
     ) -> List[Dict[str, Any]]:
-        """获取日报推送的接收者 - 只推送给销售本人"""
+        """获取销售个人日报推送的接收者 - 只推送给销售本人"""
         
         recipients = []
         
@@ -828,12 +828,12 @@ class PlatformNotificationService:
         logger.info(f"Visit record notification result: {result}")
         return result
     
-    def send_daily_report_notification(
+    def send_sales_daily_report_notification(
         self,
         db_session: Session,
         daily_report_data: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """发送CRM日报飞书卡片通知"""
+        """发送CRM销售个人日报飞书卡片通知"""
         
         recorder_id = daily_report_data.get("recorder_id")
         recorder_name = daily_report_data.get("recorder")
@@ -850,7 +850,7 @@ class PlatformNotificationService:
         department_name = daily_report_data.get("department_name")
         
         # 获取推送对象 - 个人日报只推送给销售本人
-        recipients = self.get_recipients_for_daily_report(
+        recipients = self.get_recipients_for_sales_daily_report(
             db_session=db_session,
             recorder_name=recorder_name,
             recorder_id=recorder_id,
@@ -858,19 +858,19 @@ class PlatformNotificationService:
         )
         
         if not recipients:
-            logger.warning(f"No recipients found for daily report of {recorder_name}")
+            logger.warning(f"No recipients found for sales daily report of {recorder_name}")
             return {
                 "success": False,
-                "message": f"No recipients found for {recorder_name}",
+                "message": f"No recipients found for sales daily report of {recorder_name}",
                 "recipients_count": 0,
                 "success_count": 0
             }
         
         # 准备CRM日报卡片消息内容
         if settings.NOTIFICATION_PLATFORM == PLATFORM_DINGTALK:
-            template_id = "9171f5d1-9999-4519-a83f-35be80028d73.schema"  # 个人日报卡片模板ID
+            template_id = "801a3e2c-33cc-474e-9474-c0f7cd394311.schema"  # 个人日报卡片模板ID
         elif settings.NOTIFICATION_PLATFORM == PLATFORM_FEISHU or settings.NOTIFICATION_PLATFORM == PLATFORM_LARK:
-            template_id = "AAqhIms9CqiM0"  # 个人日报卡片模板ID
+            template_id = "AAqX3POFl4934"  # 个人日报卡片模板ID
         template_vars = self._convert_daily_report_data_for_feishu(db_session, daily_report_data)
         
         card_content = {
@@ -888,15 +888,15 @@ class PlatformNotificationService:
         return self._send_notifications_by_platform(
             recipients_by_platform=recipients_by_platform,
             card_content=card_content,
-            notification_type="daily report"
+            notification_type="sales daily report"
         )
     
-    def get_recipients_for_department_report(
+    def get_recipients_for_department_report_from_profile(
         self,
         db_session: Session,
         department_name: str
     ) -> List[Dict[str, Any]]:
-        """获取部门日报推送的接收者"""
+        """获取部门日报/周报推送的接收者 - 从profile中获取部门负责人"""
         recipients = []
         
         # 查找部门负责人
@@ -923,10 +923,11 @@ class PlatformNotificationService:
         
         return recipients
     
-    def send_department_report_notification(
+    def send_department_daily_report_notification(
         self,
         db_session: Session,
-        department_report_data: Dict[str, Any]
+        department_report_data: Dict[str, Any],
+        recipients: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
         """发送部门日报飞书卡片通知"""
         
@@ -940,26 +941,27 @@ class PlatformNotificationService:
                 "success_count": 0
             }
         
-        # 获取推送对象 - 部门负责人
-        recipients = self.get_recipients_for_department_report(
-            db_session=db_session,
-            department_name=department_name
-        )
+        # 获取推送对象 - 如果未提供，则从profile中获取部门负责人(向后兼容)
+        if not recipients:
+            recipients = self.get_recipients_for_department_report_from_profile(
+                db_session=db_session,
+                department_name=department_name
+            )
         
         if not recipients:
-            logger.warning(f"No department manager found for department report of {department_name}")
+            logger.warning(f"No recipients found for department report of {department_name}")
             return {
                 "success": False,
-                "message": f"No department manager found for {department_name}",
+                "message": f"No recipients found for department report of {department_name}",
                 "recipients_count": 0,
                 "success_count": 0
             }
         
         # 准备部门日报卡片消息内容
         if settings.NOTIFICATION_PLATFORM == PLATFORM_DINGTALK:
-            template_id = "ccfa04e9-83b5-4452-be1d-cec95df248eb.schema"  # 部门日报卡片模板ID
+            template_id = "c8a179c5-aaae-48b0-97d6-75d4c7bdce30.schema"  # 部门日报卡片模板ID
         elif settings.NOTIFICATION_PLATFORM == PLATFORM_FEISHU or settings.NOTIFICATION_PLATFORM == PLATFORM_LARK:
-            template_id = "AAqhIiVb2eni4"  # 部门日报卡片模板ID
+            template_id = "AAqX3PiS5HUx4"  # 部门日报卡片模板ID
         template_vars = self._convert_daily_report_data_for_feishu(db_session, department_report_data)
         # 确保日期字段是字符串格式
         if 'report_date' in template_vars and hasattr(template_vars['report_date'], 'isoformat'):
@@ -983,33 +985,75 @@ class PlatformNotificationService:
             notification_type="department report"
         )
     
-    def get_recipients_for_company_report(self, db_session: Session) -> List[Dict[str, Any]]:
-        """获取公司日报推送的接收者"""
+    def get_recipients_for_company_daily_report(self, db_session: Session) -> List[Dict[str, Any]]:
+        """
+        获取公司日报推送的接收者
         
-        recipients = []
+        规则：
+        - 调用 OAuth 权限服务，查询拥有
+          permission = "daily_report:company:card:receive"
+          roleCodes = ["COMPANY_EXECUTIVE", "COMPANY_ADMIN"]
+          的高层/管理员作为接收人
+        - 如果未查询到，则从profile中获取可以接收公司日报的人员（向后兼容）
+        """
+        recipients: List[Dict[str, Any]] = []
         
-        # 从profile中获取可以接收日报的人员
-        profiles = user_profile_repo.get_users_by_notification_permission(db_session, NOTIFICATION_TYPE_DAILY_REPORT)
+        card_receivers = self._get_card_permission_receivers(
+            permission="daily_report:company:card:receive",
+            role_codes=["COMPANY_EXECUTIVE", "COMPANY_ADMIN"],
+        )
         
-        for profile in profiles:
-            profile_open_id = profile.oauth_user.open_id
-            if profile_open_id:
-                recipients.append({
-                    "open_id": profile_open_id,
-                    "name": profile.name,
-                    "type": "daily_report_recipient",
-                    "department": profile.department or "管理团队",
+        for user in card_receivers:
+            platform = user.get("platform")
+            open_id = user.get("open_id")
+            name = user.get("name") or "Unknown"
+            
+            if not platform or not open_id:
+                logger.warning(f"Skip company-report card-permission user without platform/open_id: {user}")
+                continue
+            
+            if not self._validate_platform_support(platform):
+                logger.warning(f"Company-report user platform {platform} not supported, skipping")
+                continue
+            
+            recipients.append(
+                {
+                    "open_id": open_id,
+                    "name": name,
+                    "type": "company_executive",
                     "receive_id_type": "open_id",
-                    "platform": profile.oauth_user.provider
-                })
-                logger.info(f"Added company report recipient: {profile.name} on {profile.oauth_user.provider}")
+                    "platform": platform,
+                }
+            )
+            logger.info(
+                f"Added company report recipient from card-permission: {name} "
+                f"on {platform}"
+            )
         
         if not recipients:
-            logger.warning(f"No recipients configured for company report")
+            logger.warning(
+                "No recipients found for company daily report via card-permission "
+                '(permission="daily_report:company:card:receive")'
+            )
+            
+            # 从profile中获取可以接收公司日报的人员（向后兼容）
+            profiles = user_profile_repo.get_users_by_notification_permission(db_session, NOTIFICATION_TYPE_DAILY_REPORT)
+            
+            for profile in profiles:
+                profile_open_id = profile.oauth_user.open_id
+                if profile_open_id:
+                    recipients.append({
+                        "open_id": profile_open_id,
+                        "name": profile.name,
+                        "type": "company_executive",
+                        "receive_id_type": "open_id",
+                        "platform": profile.oauth_user.provider
+                    })
+                    logger.info(f"Added company daily report recipient from profile: {profile.name} on {profile.oauth_user.provider}")
         
         return recipients
     
-    def send_company_report_notification(
+    def send_company_daily_report_notification(
         self,
         db_session: Session,
         company_report_data: Dict[str, Any]
@@ -1017,22 +1061,22 @@ class PlatformNotificationService:
         """发送公司日报飞书卡片通知"""
         
         # 获取推送对象 - 根据应用ID判断推送目标
-        recipients = self.get_recipients_for_company_report(db_session)
+        recipients = self.get_recipients_for_company_daily_report(db_session)
         
         if not recipients:
-            logger.warning(f"No recipients found for company report")
+            logger.warning(f"No recipients found for company daily report")
             return {
                 "success": False,
-                "message": f"No recipients found for company report",
+                "message": f"No recipients found for company daily report",
                 "recipients_count": 0,
                 "success_count": 0
             }
         
         # 准备公司日报卡片消息内容
         if settings.NOTIFICATION_PLATFORM == PLATFORM_DINGTALK:
-            template_id = "aec4a9cd-ec8d-4d73-a7bb-432d28fd6c4c.schema"  # 公司日报卡片模板ID
+            template_id = "9b888860-bb7f-4b3e-843a-bacacb954bc4.schema"  # 公司日报卡片模板ID
         elif settings.NOTIFICATION_PLATFORM == PLATFORM_FEISHU or settings.NOTIFICATION_PLATFORM == PLATFORM_LARK:
-            template_id = "AAqhI1ryT5F7E"  # 公司日报卡片模板ID
+            template_id = "AAqX3PU2Ss9aL"  # 公司日报卡片模板ID
         template_vars = self._convert_daily_report_data_for_feishu(db_session, company_report_data)
         # 确保日期字段是字符串格式
         if 'report_date' in template_vars and hasattr(template_vars['report_date'], 'isoformat'):
@@ -1053,7 +1097,7 @@ class PlatformNotificationService:
         return self._send_notifications_by_platform(
             recipients_by_platform=recipients_by_platform,
             card_content=card_content,
-            notification_type="company report"
+            notification_type="company daily report"
         )
     
     def send_weekly_report_notification(
@@ -1074,7 +1118,7 @@ class PlatformNotificationService:
             }
         
         # 获取推送对象 - 部门负责人
-        recipients = self.get_recipients_for_department_report(
+        recipients = self.get_recipients_for_department_report_from_profile(
             db_session=db_session,
             department_name=department_name,
         )
