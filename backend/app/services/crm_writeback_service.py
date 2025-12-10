@@ -825,35 +825,34 @@ class CrmWritebackService:
                 "missing_ids": []
             }
     
-    def writeback_visit_records(self, session: Session, start_date: datetime.date, 
-                               end_date: datetime.date, writeback_mode: Optional[str] = None) -> Dict[str, Any]:
+    def writeback_visit_records(self, session: Session, start_datetime: datetime, 
+                               end_datetime: datetime, writeback_mode: Optional[str] = None) -> Dict[str, Any]:
         """
-        回写指定时间范围内的拜访记录，只回写拜访类型为form的拜访记录
+        回写指定时间范围内的拜访记录（根据录入时间筛选）
         
         Args:
             session: 数据库会话
-            start_date: 开始日期
-            end_date: 结束日期
+            start_datetime: 开始时间（UTC时间）
+            end_datetime: 结束时间（UTC时间）
             writeback_mode: 回写模式，不传则使用配置中的默认值
         
         Returns:
             回写结果
         """
         try:
-            # 查询指定时间范围内的拜访记录
+            # 查询指定时间范围内的拜访记录（使用last_modified_time，即录入时间，UTC时间）
             stmt = select(CRMSalesVisitRecord).where(
-                CRMSalesVisitRecord.visit_type == "form",
-                CRMSalesVisitRecord.visit_communication_date >= start_date,
-                CRMSalesVisitRecord.visit_communication_date <= end_date
-            ).order_by(CRMSalesVisitRecord.visit_communication_date)
+                CRMSalesVisitRecord.last_modified_time >= start_datetime,
+                CRMSalesVisitRecord.last_modified_time <= end_datetime
+            ).order_by(CRMSalesVisitRecord.last_modified_time)
             
             visit_records = session.exec(stmt).all()
             
             if not visit_records:
-                logger.info(f"在 {start_date} 到 {end_date} 时间范围内没有找到拜访记录")
+                logger.info(f"在 {start_datetime} 到 {end_datetime} 时间范围内（UTC）没有找到拜访记录")
                 return {
                     "success": True,
-                    "message": f"在 {start_date} 到 {end_date} 时间范围内没有找到拜访记录",
+                    "message": f"在 {start_datetime} 到 {end_datetime} 时间范围内（UTC）没有找到拜访记录",
                     "processed_count": 0,
                     "writeback_count": 0
                 }

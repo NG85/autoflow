@@ -398,12 +398,28 @@ def crm_visit_records_writeback(self, start_date_str=None, end_date_str=None, wr
                 end_date = this_saturday
                 logger.info(f"开始执行CRM拜访记录回写任务，按周模式，处理上周日到本周六: {start_date} 到 {end_date} (时区: {settings.CRM_WRITEBACK_TIMEZONE})")
         
+        # 将本地时区的日期范围转换为UTC时间（数据库中last_modified_time是UTC时间）
+        writeback_tz = pytz.timezone(settings.CRM_WRITEBACK_TIMEZONE)
+        # 构建本地时区的开始和结束时间
+        start_local = datetime.combine(start_date, datetime.min.time())
+        end_local = datetime.combine(end_date, datetime.max.time())
+        # 添加时区信息并转换为UTC
+        start_local = writeback_tz.localize(start_local)
+        end_local = writeback_tz.localize(end_local)
+        start_dt_utc = start_local.astimezone(pytz.UTC)
+        end_dt_utc = end_local.astimezone(pytz.UTC)
+        # 移除时区信息（数据库中的datetime字段通常以naive UTC存储）
+        start_datetime = start_dt_utc.replace(tzinfo=None)
+        end_datetime = end_dt_utc.replace(tzinfo=None)
+        
+        logger.info(f"转换为UTC时间范围: {start_datetime} 到 {end_datetime} (UTC)")
+        
         with Session(engine) as session:
             # 执行拜访记录回写
             result = crm_writeback_service.writeback_visit_records(
                 session=session,
-                start_date=start_date,
-                end_date=end_date,
+                start_datetime=start_datetime,
+                end_datetime=end_datetime,
                 writeback_mode=writeback_mode
             )
             
