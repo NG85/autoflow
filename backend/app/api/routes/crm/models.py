@@ -446,6 +446,8 @@ class VisitRecordQueryRequest(BaseModel):
     account_name: Optional[List[str]] = None  # 客户名称（多选）
     partner_id: Optional[List[str]] = None  # 合作伙伴ID（多选）
     partner_name: Optional[List[str]] = None  # 合作伙伴名称（多选）
+    opportunity_id: Optional[List[str]] = None  # 商机ID（多选）
+    opportunity_name: Optional[List[str]] = None  # 商机名称（多选）
     visit_communication_date_start: Optional[str] = None  # 跟进日期开始
     visit_communication_date_end: Optional[str] = None  # 跟进日期结束
     recorder: Optional[List[str]] = None  # 记录人（多选）

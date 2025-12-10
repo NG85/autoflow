@@ -386,6 +386,16 @@ class VisitRecordRepo(BaseRepo):
                 CRMSalesVisitRecord.partner_name.in_(request.partner_name)
             )
 
+        if request.opportunity_id:
+            query = query.where(
+                CRMSalesVisitRecord.opportunity_id.in_(request.opportunity_id)
+            )
+
+        if request.opportunity_name:
+            query = query.where(
+                CRMSalesVisitRecord.opportunity_name.in_(request.opportunity_name)
+            )
+
         if request.visit_communication_date_start:
             try:
                 start_date = datetime.strptime(request.visit_communication_date_start, "%Y-%m-%d").date()
