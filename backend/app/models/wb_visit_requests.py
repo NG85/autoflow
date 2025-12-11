@@ -15,6 +15,8 @@ class OlmVisitRecordCreateRequest(BaseModel):
     source_record_id: Optional[str] = Field(None, description="来源拜访记录ID (用于日志追溯)")
     created_by: Optional[int] = Field(None, description="创建人ID")
     created_at: Optional[int] = Field(None, description="创建日期 (毫秒时间戳)")
+    sign_in_address: Optional[str] = Field(None, description="签到地址")
+    custom_item7: Optional[int] = Field(None, description="拜访拍照时间（毫秒时间戳）")
 
 class OlmVisitRecordBatchCreateRequest(BaseModel):
     visit_records: List[OlmVisitRecordCreateRequest]

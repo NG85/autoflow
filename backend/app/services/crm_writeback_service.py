@@ -13,6 +13,7 @@ from app.models.wb_visit_requests import (
     OlmVisitRecordCreateRequest
 )
 from app.utils.date_utils import convert_utc_to_local_timezone
+from app.api.routes.crm.models import VisitAttachment
 
 logger = logging.getLogger(__name__)
 
@@ -410,6 +411,30 @@ class CrmWritebackService:
                 beijing_time = utc_time.astimezone(beijing_tz)
                 created_at = int(beijing_time.timestamp() * 1000)
             
+            # 从attachment中解析签到地址和拜访拍照时间
+            sign_in_address = None
+            visit_photo_time = None
+            if record.attachment:
+                attachment = VisitAttachment.from_legacy_value(record.attachment)
+                sign_in_address = attachment.location or '暂无'
+                # taken_at字段是str类型的时间（大部分情况下是北京时间），需要转为毫秒时间戳
+                visit_photo_time = None
+                if attachment.taken_at:
+                    try:
+                        # 优先尝试完整格式(含时区)
+                        from dateutil import parser
+                        dt = parser.isoparse(attachment.taken_at)
+                        # 如果dt没有tzinfo，则假定为北京时间（东八区）
+                        if dt.tzinfo is None:
+                            from datetime import timezone, timedelta
+                            beijing_tz = timezone(timedelta(hours=8))
+                            dt = dt.replace(tzinfo=beijing_tz)
+                        # 转为unix毫秒时间戳
+                        visit_photo_time = int(dt.timestamp() * 1000)
+                    except Exception:
+                        # 解析失败则为None
+                        visit_photo_time = None
+            
             # 构建请求
             visit_request = OlmVisitRecordCreateRequest(
                 account=int(record.account_id) if record.account_id else int(record.partner_id),
@@ -423,7 +448,9 @@ class CrmWritebackService:
                 owner_id=owner_id,
                 source_record_id=str(record.record_id or record.id),
                 created_by=owner_id,
-                created_at=created_at
+                created_at=created_at,
+                sign_in_address=sign_in_address,
+                custom_item7=visit_photo_time
             )
             
             visit_requests.visit_records.append(visit_request)
