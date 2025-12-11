@@ -287,7 +287,7 @@ class PlatformNotificationService:
             logger.error(f"Invalid JSON from OAuth reporting-chain service: {e}")
             return []
 
-        if data.get("code") != 200:
+        if data.get("code") != 0:
             logger.error(f"OAuth reporting-chain service returned error: {data}")
             return []
 
@@ -355,7 +355,7 @@ class PlatformNotificationService:
             logger.error(f"Invalid JSON from OAuth users-by-permission service: {e}")
             return []
 
-        if data.get("code") != 200:
+        if data.get("code") != 0:
             logger.error(f"OAuth users-by-permission service returned error: {data}")
             return []
 
@@ -373,7 +373,7 @@ class PlatformNotificationService:
                 continue
 
             if not open_id:
-                logger.warning(f"Skip card-permission user without openId: {user}")
+                logger.warning(f"Skip card-permission user without open_id: {user}")
                 continue
 
             simplified.append(

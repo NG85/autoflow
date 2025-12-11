@@ -139,9 +139,9 @@ class CRMStatisticsService:
             CRMSalesVisitRecord.is_first_visit,
             UserProfile.department,
         ).outerjoin(
-                UserProfile,
-                CRMSalesVisitRecord.recorder_id == UserProfile.user_id
-            ).where(
+            UserProfile,
+            CRMSalesVisitRecord.recorder_id == UserProfile.user_id
+        ).where(
             CRMSalesVisitRecord.visit_communication_date == target_date,
             CRMSalesVisitRecord.recorder_id.isnot(None)
         )
@@ -755,7 +755,7 @@ class CRMStatisticsService:
                 total_first_assessments = sum(len(report['first_assessment']) for report in complete_reports)
                 total_multi_assessments = sum(len(report['multi_assessment']) for report in complete_reports)
                 
-                logger.info(f"总计: {total_first_assessments} 个销售个人首次拜访评估，{total_multi_assessments} 个销售个人多次拜访评估")
+                logger.info(f"总计（排除绿灯）: {total_first_assessments} 个销售个人首次拜访评估，{total_multi_assessments} 个销售个人多次拜访评估")
                 
                 # 推送个人日报（只在开关启用时发送卡片）
                 from app.core.config import settings
@@ -829,16 +829,16 @@ class CRMStatisticsService:
                 if result["success"]:
                     successful_notifications += 1
                     logger.info(
-                        f"成功为销售 {report['sales_name']} 发送个人日报飞书通知，"
+                        f"成功为销售 {report['recorder']} 发送个人日报飞书通知，"
                         f"推送给本人 {result['success_count']}/{result['recipients_count']} 次"
                     )
                 else:
                     logger.warning(
-                        f"销售 {report['sales_name']} 的日报飞书通知发送失败: {result['message']}"
+                        f"销售 {report['recorder']} 的日报飞书通知发送失败: {result['message']}"
                     )
                     
             except Exception as e:
-                logger.error(f"为销售 {report.get('sales_name', 'Unknown')} 发送飞书通知时出错: {str(e)}")
+                logger.error(f"为销售 {report.get('recorder', 'Unknown')} 发送飞书通知时出错: {str(e)}")
                 total_notifications += 1
         
         logger.info(
