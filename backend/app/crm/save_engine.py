@@ -10,6 +10,8 @@ from app.api.deps import CurrentUserDep, SessionDep
 from app.repositories.document_content import DocumentContentRepo
 from app.services.platform_notification_service import platform_notification_service
 from app.tasks.bitable_import import FIELD_MAP
+from app.tasks.document_qa import extract_and_save_document_qa
+from app.utils.ark_llm import call_ark_llm
 from app.utils.uuid6 import uuid6
 logger = logging.getLogger(__name__)
 
@@ -62,28 +64,6 @@ def save_visit_record_to_crm_table(record_schema: SimpleVisitRecordCreate | Comp
     
     # 返回record_id和实际保存的时间
     return record_id, mapped['last_modified_time']
-
-def call_ark_llm(prompt, temperature=0.3):
-    api_key = settings.ARK_API_KEY
-    model = settings.ARK_MODEL
-    url = settings.ARK_API_URL
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}"
-    }
-    data = {
-        "model": model,
-        "messages": [
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": temperature
-    }
-    resp = requests.post(url, headers=headers, json=data, timeout=30)
-    resp.raise_for_status()
-    result = resp.json()
-    # 兼容不同返回结构
-    return result["choices"][0]["message"]["content"] if "choices" in result else ""
-
 
 def extract_followup_record_and_next_steps(followup_content: str) -> tuple[str, str]:
     """
@@ -424,7 +404,15 @@ def save_visit_record_with_content(
             logger.error(f"更新会议纪要失败状态到数据库失败: {update_error}")
         # 不影响主流程，继续执行
     
-    # ========== 第三阶段：推送飞书消息（不影响事务） ==========
+    # ========== 第三阶段：异步触发文档问答对抽取任务（不影响主流程） ==========
+    try:
+        extract_and_save_document_qa.delay(document_content.id)
+        logger.info(f"已异步触发文档问答对抽取任务，文档ID: {document_content.id}")
+    except Exception as e:
+        logger.error(f"触发文档问答对抽取异步任务失败: {e}")
+        # 不影响主流程，继续执行
+    
+    # ========== 第四阶段：推送飞书消息（不影响事务） ==========
     try:
         record_data = record.model_dump()
         # 推送飞书消息（保留附件字段，附件中仅包含URL和少量结构化信息，避免大体积base64）

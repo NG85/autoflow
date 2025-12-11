@@ -22,6 +22,7 @@ app.conf.update(
         {"app.tasks.cron_jobs.crm_visit_records_writeback": {"queue": "cron"}},
         {"app.tasks.cron_jobs.send_sales_task_summary": {"queue": "cron"}},
         {"app.tasks.bitable_import.*": {"queue": "cron"}},
+        {"app.tasks.document_qa.*": {"queue": "llm"}},
         {"*": {"queue": "default"}},
     ],
     broker_connection_retry_on_startup=True,

@@ -193,8 +193,8 @@ def create_visit_record(
                 )
                 
                 # 提交事务
-                db_session.commit()                
-                return result_data                
+                db_session.commit()
+                return result_data
             except Exception as e:
                 # 如果保存失败，回滚事务
                 db_session.rollback()
