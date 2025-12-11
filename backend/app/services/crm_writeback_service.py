@@ -446,31 +446,40 @@ class CrmWritebackService:
         
         for record in visit_records:
             user_name = None
-            # 长亭CRM用户名（从user表查询fxiaoke_id，再从crm_user表查询长亭CRM用户名）
+            # 长亭CRM用户名（从user_profiles表查询crm_user_id，再从crm_user表查询长亭CRM用户名）
             if record.recorder_id:
                 try:
                     # 将32位UUID转换为36位字符串（带连字符）
                     # recorder_id是UUID对象，转成字符串会自动变成36位格式
                     ask_id_str = str(record.recorder_id)
                     
-                    # 使用原生SQL查询，一次性获取fxiaoke_id和长亭CRM用户名
+                    # 使用原生SQL查询，一次性获取crm_user_id和长亭CRM用户名
                     sql_query = text("""
-                        SELECT u.fxiaoke_id, c.user_name
-                        FROM user u 
-                        LEFT JOIN chaitin.crm_user c ON u.fxiaoke_id = c.unique_id
-                        WHERE u.ask_id = :ask_id
+                        SELECT up.crm_user_id, cu.user_name
+                        FROM user_profiles up
+                        LEFT JOIN crm_user cu ON up.crm_user_id = cu.unique_id
+                        WHERE up.oauth_user_id = :ask_id
                     """)
                     
                     result = session.exec(sql_query, params={"ask_id": ask_id_str}).first()
-                    
+                    if not result:
+                        # 从user表查询fxiaoke_id和长亭CRM用户名(向后兼容，后续user表会下线)
+                        sql_query = text("""
+                            SELECT u.fxiaoke_id as crm_user_id, cu.user_name
+                            FROM user u
+                            LEFT JOIN crm_user cu ON u.fxiaoke_id = cu.unique_id
+                            WHERE u.ask_id = :ask_id
+                        """)
+                        result = session.exec(sql_query, params={"ask_id": ask_id_str}).first()
+                        
                     if result:
-                        fxiaoke_id, user_name = result
+                        crm_user_id, user_name = result
                         if user_name:
                             user_name = str(user_name)
                         else:
-                            logger.warning(f"记录 ID {record.id}：未找到fxiaoke_id {fxiaoke_id} 对应的长亭CRM用户名")
+                            logger.warning(f"记录 ID {record.id}：未找到crm_user_id {crm_user_id} 对应的长亭CRM用户名")
                     else:
-                        logger.warning(f"记录 ID {record.id}：未找到recorder_id {ask_id_str} 对应的长亭CRM用户名")
+                        logger.warning(f"记录 ID {record.id}：未找到recorder_id {ask_id_str} 对应的用户")
                 except Exception as e:
                     logger.warning(f"记录 ID {record.id}：查询长亭CRM用户名失败: {e}")
 
