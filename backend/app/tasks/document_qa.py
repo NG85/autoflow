@@ -64,9 +64,15 @@ def _extract_qa_pairs_for_chunk(
     idx: int,
     total: int,
     visit_context: Optional[dict[str, str]] = None,
-) -> List[Dict[str, str]]:
+    max_retries: int = 3,
+) -> tuple[List[Dict[str, str]], bool]:
     """
     对单个片段调用 LLM 抽取问答对。
+    
+    返回:
+        (qa_pairs, ok)
+        - qa_pairs: 当前片段抽取出的问答对列表
+        - ok: 是否成功完成抽取（调用成功且JSON解析成功）
     """
     context_block = ""
     if visit_context:
@@ -134,13 +140,22 @@ def _extract_qa_pairs_for_chunk(
 【待分析片段内容】：
 {chunk}
 """
-    try:
-        result = call_ark_llm(prompt)
-        data = json.loads(result)
-        raw_pairs = data.get("qa_pairs", []) or []
-    except Exception as e:
-        logger.warning(f"Failed to extract document QA pairs for chunk {idx}/{total}: {e}")
-        return []
+    attempt = 0
+    while attempt < max_retries:
+        try:
+            result = call_ark_llm(prompt)
+            data = json.loads(result)
+            raw_pairs = data.get("qa_pairs", []) or []
+            break
+        except Exception as e:
+            attempt += 1
+            logger.warning(
+                f"Failed to extract document QA pairs for chunk {idx}/{total}, "
+                f"attempt {attempt}/{max_retries}: {e}"
+            )
+            if attempt >= max_retries:
+                # 达到最大重试次数，标记为失败
+                return [], False
 
     qa_pairs: List[Dict[str, str]] = []
     for item in raw_pairs:
@@ -153,14 +168,17 @@ def _extract_qa_pairs_for_chunk(
             continue
         qa_pairs.append({"question": question, "answer": answer})
 
-    return qa_pairs[:max_pairs]
+    logger.info(
+        f"分片问答抽取完成: chunk {idx}/{total}, 抽取到 {len(qa_pairs[:max_pairs])} 条问答"
+    )
+    return qa_pairs[:max_pairs], True
 
 
 def extract_document_qa_pairs(
     content: str,
     max_pairs: int = 30,
     visit_context: Optional[dict[str, str]] = None,
-) -> List[Dict[str, str]]:
+) -> tuple[List[Dict[str, str]], dict]:
     """
     从文档/会议内容中抽取问答对列表，支持对大文档进行切片处理。
     
@@ -174,6 +192,8 @@ def extract_document_qa_pairs(
     chunks = _split_content_into_chunks(content, max_chars=8000)
     total_chunks = len(chunks)
     all_pairs: List[Dict[str, str]] = []
+    success_chunks = 0
+    failed_chunks = 0
 
     # 为每个片段分配一个合理的上限，防止单个片段占满所有配额
     per_chunk_limit = max(1, max_pairs // total_chunks) if total_chunks > 1 else max_pairs
@@ -188,20 +208,38 @@ def extract_document_qa_pairs(
         if chunk_limit <= 0:
             break
 
-        pairs = _extract_qa_pairs_for_chunk(
+        pairs, ok = _extract_qa_pairs_for_chunk(
             chunk,
             max_pairs=chunk_limit,
             idx=idx,
             total=total_chunks,
             visit_context=visit_context,
         )
-        all_pairs.extend(pairs)
+        if ok:
+            success_chunks += 1
+            all_pairs.extend(pairs)
+        else:
+            failed_chunks += 1
 
     # 再次截断，保证不超过 max_pairs
-    return all_pairs[:max_pairs]
+    all_pairs = all_pairs[:max_pairs]
+
+    stats = {
+        "total_chunks": total_chunks,
+        "success_chunks": success_chunks,
+        "failed_chunks": failed_chunks,
+    }
+    logger.info(
+        "文档问答抽取分片统计: total_chunks=%s, success_chunks=%s, failed_chunks=%s, qa_pairs=%s",
+        total_chunks,
+        success_chunks,
+        failed_chunks,
+        len(all_pairs),
+    )
+    return all_pairs, stats
 
 
-@celery_app.task(bind=True, max_retries=5)
+@celery_app.task(bind=True, max_retries=3)
 def extract_and_save_document_qa(self, document_content_id: int) -> Dict[str, Any]:
     """
     异步任务：从文档内容中抽取问答对并保存到 document_contents 表。
@@ -264,8 +302,18 @@ def extract_and_save_document_qa(self, document_content_id: int) -> Dict[str, An
                 except Exception as e:
                     logger.warning(f"加载拜访记录背景信息失败: visit_record_id={visit_record_id}, error={e}")
 
-            qa_pairs: List[Dict[str, str]] = extract_document_qa_pairs(content, visit_context=visit_context)
-            status = "success" if qa_pairs else "failed"
+            qa_pairs, stats = extract_document_qa_pairs(content, visit_context=visit_context)
+            # 根据分片执行情况设置状态：
+            # - success: 有问答对，且所有分片都成功
+            # - partial: 有问答对，但存在分片抽取失败
+            # - failed: 没有任何问答对（包括全部分片失败或模型认为无问答）
+            if qa_pairs:
+                if stats.get("failed_chunks", 0) > 0:
+                    status = "partial"
+                else:
+                    status = "success"
+            else:
+                status = "failed"
             
             repo.update_qa_pairs(
                 session=session,
@@ -276,7 +324,11 @@ def extract_and_save_document_qa(self, document_content_id: int) -> Dict[str, An
             )
             
             logger.info(
-                f"异步问答对抽取完成，document_content_id={document_content_id}，数量={len(qa_pairs)}，状态={status}"
+                "异步问答对抽取完成: document_content_id=%s, qa_count=%s, status=%s, stats=%s",
+                document_content_id,
+                len(qa_pairs),
+                status,
+                stats,
             )
             return {
                 "success": True,

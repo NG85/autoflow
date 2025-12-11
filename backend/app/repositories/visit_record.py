@@ -167,7 +167,8 @@ class VisitRecordRepo(BaseRepo):
         """
         # 获取用户权限（如果未提供）
         if user_permissions is None:
-            user_permissions = self._get_user_permissions(current_user_id)
+            roles_and_permissions = self._get_user_roles_and_permissions(current_user_id)
+            user_permissions = roles_and_permissions.get("permissions", [])
         
         # 1. 先检查是否有 report51:company:view 权限
         if "report51:company:view" in user_permissions:
@@ -624,7 +625,7 @@ class VisitRecordRepo(BaseRepo):
                 UserProfile,
                 func.cast(CRMSalesVisitRecord.recorder_id, String) == UserProfile.oauth_user_id
             )
-            .where(CRMSalesVisitRecord.id == record_id)
+            .where(or_(CRMSalesVisitRecord.id == record_id, CRMSalesVisitRecord.record_id == record_id))
         )
 
         # 应用权限控制
