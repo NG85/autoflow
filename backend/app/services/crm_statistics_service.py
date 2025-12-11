@@ -283,10 +283,10 @@ class CRMStatisticsService:
             statistics_results.append(result)
         
         # 汇总日志输出公司级别的统计概览（可选）
-        total_first_accounts = sum(r['first_visit_account_count'] for r in statistics_results)
-        total_multi_accounts = sum(r['multi_visit_account_count'] for r in statistics_results)
-        total_first_partners = sum(r['first_visit_partner_count'] for r in statistics_results)
-        total_multi_partners = sum(r['multi_visit_partner_count'] for r in statistics_results)
+        total_first_accounts = sum(r['end_customer_total_first_visit'] for r in statistics_results)
+        total_multi_accounts = sum(r['end_customer_total_multi_visit'] for r in statistics_results)
+        total_first_partners = sum(r['partner_total_first_visit'] for r in statistics_results)
+        total_multi_partners = sum(r['partner_total_multi_visit'] for r in statistics_results)
         
         logger.info(f"找到 {len(statistics_results)} 个销售")
         logger.info(f"统计：首次拜访客户 {total_first_accounts} 个，多次跟进客户 {total_multi_accounts} 个")
