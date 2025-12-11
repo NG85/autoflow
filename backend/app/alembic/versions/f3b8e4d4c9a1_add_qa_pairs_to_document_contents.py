@@ -1,7 +1,7 @@
 """add_qa_pairs_to_document_contents
 
 Revision ID: f3b8e4d4c9a1
-Revises: 38c7810cf06c
+Revises: 0ea41d2c0ce7
 Create Date: 2025-12-11 10:00:00.000000
 
 """
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = "f3b8e4d4c9a1"
-down_revision = "38c7810cf06c"
+down_revision = "0ea41d2c0ce7"
 branch_labels = None
 depends_on = None
 
