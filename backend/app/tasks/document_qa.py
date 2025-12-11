@@ -4,7 +4,7 @@ from typing import List, Dict, Any, Optional
 
 from sqlmodel import Session
 
-from app.celery import app
+from app.celery import app as celery_app
 from app.core.db import engine
 from app.repositories.document_content import DocumentContentRepo
 from app.models.document_contents import DocumentContent
@@ -201,7 +201,7 @@ def extract_document_qa_pairs(
     return all_pairs[:max_pairs]
 
 
-@app.task(bind=True, max_retries=5)
+@celery_app.task(bind=True, max_retries=5)
 def extract_and_save_document_qa(self, document_content_id: int) -> Dict[str, Any]:
     """
     异步任务：从文档内容中抽取问答对并保存到 document_contents 表。

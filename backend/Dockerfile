@@ -3,6 +3,9 @@ FROM registry.cn-beijing.aliyuncs.com/aptsell/aptsell.autoflow-base
 
 WORKDIR /app/
 
+# Setup supervisord.
+COPY supervisord.conf /usr/etc/supervisord.conf
+
 ENV PYTHONPATH=/app
 
 COPY . /app/
