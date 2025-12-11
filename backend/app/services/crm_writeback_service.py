@@ -445,7 +445,7 @@ class CrmWritebackService:
         visit_requests = ChaitinVisitRecordBatchCreateRequest(followup_records=[])
         
         for record in visit_records:
-            
+            user_name = None
             # 长亭CRM用户名（从user表查询fxiaoke_id，再从crm_user表查询长亭CRM用户名）
             if record.recorder_id:
                 try:
@@ -455,7 +455,7 @@ class CrmWritebackService:
                     
                     # 使用原生SQL查询，一次性获取fxiaoke_id和长亭CRM用户名
                     sql_query = text("""
-                        SELECT u.fxiaoke_id, c.username
+                        SELECT u.fxiaoke_id, c.user_name
                         FROM user u 
                         LEFT JOIN chaitin.crm_user c ON u.fxiaoke_id = c.unique_id
                         WHERE u.ask_id = :ask_id
@@ -464,9 +464,9 @@ class CrmWritebackService:
                     result = session.exec(sql_query, params={"ask_id": ask_id_str}).first()
                     
                     if result:
-                        fxiaoke_id, username = result
-                        if username:
-                            username = str(username)
+                        fxiaoke_id, user_name = result
+                        if user_name:
+                            user_name = str(user_name)
                         else:
                             logger.warning(f"记录 ID {record.id}：未找到fxiaoke_id {fxiaoke_id} 对应的长亭CRM用户名")
                     else:
@@ -474,15 +474,15 @@ class CrmWritebackService:
                 except Exception as e:
                     logger.warning(f"记录 ID {record.id}：查询长亭CRM用户名失败: {e}")
 
-            if not username:
-                logger.warning(f"记录 ID {record.id} 没有有效的长亭CRM用户名，跳过长亭拜访记录回写")
+            if not user_name:
+                logger.warning(f"记录 ID {record.id} 没有有效的长亭CRM用户名，跳过回写")
                 continue
             
             # 构建请求
             visit_request = ChaitinVisitRecordCreateRequest(
                 company_id=record.account_id if record.account_id else record.partner_id,
                 content=f"跟进记录：{record.followup_record_zh or record.followup_record}\n下一步计划：{record.next_steps_zh or record.next_steps}",
-                username=username,
+                username=user_name,
                 project_id=record.opportunity_id,
                 source_record_id=str(record.record_id or record.id)
             )
