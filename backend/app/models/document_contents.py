@@ -1,8 +1,11 @@
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List, Dict, Any, TYPE_CHECKING
 from uuid import UUID
-from sqlmodel import SQLModel, Field, Column, Text, DateTime, func, Index, Relationship as SQLRelationship
+from sqlmodel import SQLModel, Field, Column, Text, DateTime, func, Index, Relationship as SQLRelationship, JSON
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .auth import User
 
 
 class DocumentContent(SQLModel, table=True):
@@ -31,6 +34,18 @@ class DocumentContent(SQLModel, table=True):
     # 会议纪要总结（LLM生成）
     meeting_summary: Optional[str] = Field(sa_column=Column(MEDIUMTEXT, nullable=True), description="会议纪要总结")
     summary_status: Optional[str] = Field(max_length=20, nullable=True, description="总结状态: success, failed")
+    
+    # 问答对抽取结果（LLM生成）
+    qa_pairs: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        sa_column=Column(JSON, nullable=True),
+        description="从文档内容中抽取的问答对列表"
+    )
+    qa_extract_status: Optional[str] = Field(
+        max_length=20,
+        nullable=True,
+        description="问答对抽取状态: success, failed"
+    )
     
     # 元数据
     title: Optional[str] = Field(max_length=500, nullable=True, description="文档标题")

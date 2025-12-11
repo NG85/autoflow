@@ -13,6 +13,7 @@ from app.models.wb_visit_requests import (
     OlmVisitRecordCreateRequest
 )
 from app.utils.date_utils import convert_utc_to_local_timezone
+from app.api.routes.crm.models import VisitAttachment
 
 logger = logging.getLogger(__name__)
 
@@ -410,6 +411,30 @@ class CrmWritebackService:
                 beijing_time = utc_time.astimezone(beijing_tz)
                 created_at = int(beijing_time.timestamp() * 1000)
             
+            # 从attachment中解析签到地址和拜访拍照时间
+            sign_in_address = None
+            visit_photo_time = None
+            if record.attachment:
+                attachment = VisitAttachment.from_legacy_value(record.attachment)
+                sign_in_address = attachment.location or '暂无'
+                # taken_at字段是str类型的时间（大部分情况下是北京时间），需要转为毫秒时间戳
+                visit_photo_time = None
+                if attachment.taken_at:
+                    try:
+                        # 优先尝试完整格式(含时区)
+                        from dateutil import parser
+                        dt = parser.isoparse(attachment.taken_at)
+                        # 如果dt没有tzinfo，则假定为北京时间（东八区）
+                        if dt.tzinfo is None:
+                            from datetime import timezone, timedelta
+                            beijing_tz = timezone(timedelta(hours=8))
+                            dt = dt.replace(tzinfo=beijing_tz)
+                        # 转为unix毫秒时间戳
+                        visit_photo_time = int(dt.timestamp() * 1000)
+                    except Exception:
+                        # 解析失败则为None
+                        visit_photo_time = None
+            
             # 构建请求
             visit_request = OlmVisitRecordCreateRequest(
                 account=int(record.account_id) if record.account_id else int(record.partner_id),
@@ -423,7 +448,9 @@ class CrmWritebackService:
                 owner_id=owner_id,
                 source_record_id=str(record.record_id or record.id),
                 created_by=owner_id,
-                created_at=created_at
+                created_at=created_at,
+                sign_in_address=sign_in_address,
+                custom_item7=visit_photo_time
             )
             
             visit_requests.visit_records.append(visit_request)
@@ -446,31 +473,40 @@ class CrmWritebackService:
         
         for record in visit_records:
             user_name = None
-            # 长亭CRM用户名（从user表查询fxiaoke_id，再从crm_user表查询长亭CRM用户名）
+            # 长亭CRM用户名（从user_profiles表查询crm_user_id，再从crm_user表查询长亭CRM用户名）
             if record.recorder_id:
                 try:
                     # 将32位UUID转换为36位字符串（带连字符）
                     # recorder_id是UUID对象，转成字符串会自动变成36位格式
                     ask_id_str = str(record.recorder_id)
                     
-                    # 使用原生SQL查询，一次性获取fxiaoke_id和长亭CRM用户名
+                    # 使用原生SQL查询，一次性获取crm_user_id和长亭CRM用户名
                     sql_query = text("""
-                        SELECT u.fxiaoke_id, c.user_name
-                        FROM user u 
-                        LEFT JOIN chaitin.crm_user c ON u.fxiaoke_id = c.unique_id
-                        WHERE u.ask_id = :ask_id
+                        SELECT up.crm_user_id, cu.user_name
+                        FROM user_profiles up
+                        LEFT JOIN crm_user cu ON up.crm_user_id = cu.unique_id
+                        WHERE up.oauth_user_id = :ask_id
                     """)
                     
                     result = session.exec(sql_query, params={"ask_id": ask_id_str}).first()
-                    
+                    if not result:
+                        # 从user表查询fxiaoke_id和长亭CRM用户名(向后兼容，后续user表会下线)
+                        sql_query = text("""
+                            SELECT u.fxiaoke_id as crm_user_id, cu.user_name
+                            FROM user u
+                            LEFT JOIN crm_user cu ON u.fxiaoke_id = cu.unique_id
+                            WHERE u.ask_id = :ask_id
+                        """)
+                        result = session.exec(sql_query, params={"ask_id": ask_id_str}).first()
+                        
                     if result:
-                        fxiaoke_id, user_name = result
+                        crm_user_id, user_name = result
                         if user_name:
                             user_name = str(user_name)
                         else:
-                            logger.warning(f"记录 ID {record.id}：未找到fxiaoke_id {fxiaoke_id} 对应的长亭CRM用户名")
+                            logger.warning(f"记录 ID {record.id}：未找到crm_user_id {crm_user_id} 对应的长亭CRM用户名")
                     else:
-                        logger.warning(f"记录 ID {record.id}：未找到recorder_id {ask_id_str} 对应的长亭CRM用户名")
+                        logger.warning(f"记录 ID {record.id}：未找到recorder_id {ask_id_str} 对应的用户")
                 except Exception as e:
                     logger.warning(f"记录 ID {record.id}：查询长亭CRM用户名失败: {e}")
 

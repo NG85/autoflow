@@ -1,18 +1,22 @@
-from typing import Optional, List
+from typing import Any, Dict, Optional, List
 from datetime import datetime
 import logging
+import requests
 from sqlmodel import Session, select, func, or_, desc, asc, String
 from fastapi_pagination import Params, Page
 from fastapi_pagination.ext.sqlmodel import paginate
 from uuid import UUID
 from zoneinfo import ZoneInfo
+from cachetools import TTLCache, cached
+from cachetools.keys import methodkey
 
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
 from app.models.crm_accounts import CRMAccount
 from app.models.user_profile import UserProfile
 from app.api.routes.crm.models import VisitAttachment, VisitRecordQueryRequest, VisitRecordResponse
 from app.repositories.base_repo import BaseRepo
-from app.repositories.user_profile import UserProfileRepo
+from app.repositories.user_profile import UserProfileRepo, user_profile_repo
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -93,11 +97,85 @@ def _convert_to_response(record: CRMSalesVisitRecord, customer_level: Optional[s
 class VisitRecordRepo(BaseRepo):
     model_cls = CRMSalesVisitRecord
 
-    def _is_admin_user(self, current_user_id: UUID, session: Session) -> bool:
+    @cached(cache=TTLCache(maxsize=100, ttl=60 * 10), key=methodkey)
+    def _get_user_roles_and_permissions(self, current_user_id: UUID) -> Dict[str, Any]:
+        """
+        获取用户的角色和权限列表（带缓存，TTL 10分钟）
+        
+        Args:
+            current_user_id: 用户ID
+            
+        Returns:
+            Dict[str, Any]: 角色和权限列表，如果获取失败返回空字典
+            {
+                "roles": List[str],
+                "permissions": List[str]
+            }
+        """
+        try:
+            base_url = settings.OAUTH_BASE_URL.rstrip("/")
+            url = f"{base_url}/permission/query"
+            
+            headers = {"Content-Type": "application/json"}
+            body = {
+                "user_id": str(current_user_id)
+            }
+            
+            response = requests.post(url, json=body, headers=headers, timeout=5)
+            response.raise_for_status()
+            
+            data = response.json()            
+            result = data.get("result", {})
+            return {
+                "roles": result.get("roles", []),
+                "permissions": result.get("permissions", [])
+            }
+        except Exception as e:
+            logger.error(f"Error querying user permissions: {e}")
+            return {
+                "roles": [],
+                "permissions": []
+            }
+    
+    def _check_user_permission(self, current_user_id: UUID, permission: str) -> bool:
+        """
+        检查用户是否具有指定权限
+        
+        Args:
+            current_user_id: 用户ID
+            permission: 权限名称，如 "report51:company:view" 或 "report51:dept:view"
+            
+        Returns:
+            bool: 是否具有该权限
+        """
+        roles_and_permissions = self._get_user_roles_and_permissions(current_user_id)
+        permissions = roles_and_permissions.get("permissions", [])
+        has_permission = permission in permissions
+        logger.info(f"User {current_user_id} permission check for {permission}: {has_permission}")
+        return has_permission
+    
+    def _is_admin_user(self, current_user_id: UUID, session: Session, user_permissions: Optional[List[str]] = None) -> bool:
         """
         检查当前用户是否为拜访记录的管理团队成员
         基于用户profile中的notification_tags字段判断是否包含list_visit_records权限
+        或者检查是否有 report51:company:view 权限
+        
+        Args:
+            current_user_id: 用户ID
+            session: 数据库会话
+            user_permissions: 可选的用户权限列表，如果提供则直接使用，避免重复查询
         """
+        # 获取用户权限（如果未提供）
+        if user_permissions is None:
+            roles_and_permissions = self._get_user_roles_and_permissions(current_user_id)
+            user_permissions = roles_and_permissions.get("permissions", [])
+        
+        # 1. 先检查是否有 report51:company:view 权限
+        if "report51:company:view" in user_permissions:
+            logger.info(f"User {current_user_id} has report51:company:view permission")
+            return True
+        
+        # 2. 检查 notification_tags 中的 list_visit_records 权限（向后兼容）
         user_profile_repo = UserProfileRepo()
         user_profile = user_profile_repo.get_by_user_id(session, current_user_id)
         
@@ -109,34 +187,67 @@ class VisitRecordRepo(BaseRepo):
                 return True
         
         # 如果没有找到用户档案或没有相应权限，返回False
-        logger.info(f"User {current_user_id} does not have list_visit_records permission")
+        logger.info(f"User {current_user_id} does not have admin permissions")
         return False
 
-    def _get_user_accessible_recorder_ids(self, session: Session, current_user_id: UUID) -> List[str]:
+    def _get_user_accessible_recorder_ids(self, session: Session, current_user_id: UUID, user_permissions: Optional[List[str]] = None) -> Optional[List[str]]:
         """
         获取当前用户可访问的记录人ID列表
-        包括：当前用户自己 + 所有汇报关系（递归获取所有下属） + 如果是部门负责人则包括全部门
-        """
-        user_profile_repo = UserProfileRepo()
         
-        # 1. 获取当前用户的档案
+        根据权限决定访问范围：
+        - report51:company:view: 返回 None（表示可以访问所有记录，由调用方处理）
+        - report51:dept:view: 返回本部门所有成员的 recorder_id
+        - 都没有: 返回当前用户自己 + 所有汇报关系（递归获取所有下属） + 如果是部门负责人则包括全部门
+        
+        Args:
+            session: 数据库会话
+            current_user_id: 当前用户ID
+            user_permissions: 可选的用户权限列表，如果提供则直接使用，避免重复查询
+        """
+        # 获取用户权限（如果未提供）
+        if user_permissions is None:
+            roles_and_permissions = self._get_user_roles_and_permissions(current_user_id)
+            user_permissions = roles_and_permissions.get("permissions", [])
+        
+        # 检查是否有公司级查看权限
+        if "report51:company:view" in user_permissions:
+            logger.info(f"User {current_user_id} has report51:company:view permission, can access all records")
+            return None  # None 表示可以访问所有记录
+                
+        # 获取当前用户的档案
         current_user_profile = user_profile_repo.get_by_user_id(session, current_user_id)
+        
+        if not current_user_profile:
+            logger.warning(f"No user profile found for user_id: {current_user_id}")
+            return []
         
         accessible_recorder_ids = []
         
-        if current_user_profile:
-            # 2. 添加当前用户自己（如果有recorder_id）
+        # 检查是否有部门级查看权限
+        has_dept_view = "report51:dept:view" in user_permissions
+        
+        if has_dept_view and current_user_profile.department:
+            # 如果有部门查看权限，返回本部门所有成员的 recorder_id
+            logger.info(f"User {current_user_id} has report51:dept:view permission for department {current_user_profile.department}, getting all department members")
+            department_members = user_profile_repo.get_department_members(session, current_user_profile.department)
+            for member in department_members:
+                if member.oauth_user_id:
+                    accessible_recorder_ids.append(member.oauth_user_id)
+            logger.info(f"Added {len(accessible_recorder_ids)} department members to accessible list")
+        else:
+            # 没有部门查看权限，使用原有逻辑：自己 + 汇报关系 + 部门负责人权限
+            # 1. 添加当前用户自己（如果有recorder_id）
             if current_user_profile.oauth_user_id:
                 accessible_recorder_ids.append(current_user_profile.oauth_user_id)
             
-            # 3. 递归获取所有汇报关系（包括直接下属和间接下属）
+            # 2. 递归获取所有汇报关系（包括直接下属和间接下属）
             if current_user_profile.oauth_user_id:
                 all_subordinates = user_profile_repo.get_all_subordinates_recursive(session, current_user_profile.oauth_user_id)
                 for subordinate in all_subordinates:
                     if subordinate.oauth_user_id:
                         accessible_recorder_ids.append(subordinate.oauth_user_id)
             
-            # 4. 如果是部门负责人（没有直属上级），获取全部门所有成员
+            # 3. 如果是部门负责人（没有直属上级），获取全部门所有成员
             if current_user_profile.department and not current_user_profile.direct_manager_id:
                 logger.info(f"User {current_user_id} is department manager for {current_user_profile.department}, getting all department members")
                 department_members = user_profile_repo.get_department_members(session, current_user_profile.department)
@@ -144,10 +255,6 @@ class VisitRecordRepo(BaseRepo):
                     if member.oauth_user_id and member.oauth_user_id not in accessible_recorder_ids:
                         accessible_recorder_ids.append(member.oauth_user_id)
                         logger.info(f"Added department member {member.name} ({member.oauth_user_id}) to accessible list")
-        else:
-            # 如果找不到用户档案，只允许查看自己的记录
-            # 这里需要根据实际情况调整，可能需要从其他表获取用户信息
-            logger.warning(f"No user profile found for user_id: {current_user_id}")
         
         # 去重
         accessible_recorder_ids = list(set(accessible_recorder_ids))
@@ -176,14 +283,25 @@ class VisitRecordRepo(BaseRepo):
         # 先处理权限控制，获取可访问的recorder_ids
         uuid_recorder_ids = None
         is_admin = False
+        user_permissions = None
         if current_user_id:
-            # 检查是否为管理团队成员
-            is_admin = self._is_admin_user(current_user_id, session)
+            # 先获取用户权限列表（一次查询，后续复用）
+            roles_and_permissions = self._get_user_roles_and_permissions(current_user_id)
+            user_permissions = roles_and_permissions.get("permissions", [])
+            
+            # 检查是否为管理团队成员（有 report51:company:view 权限或 list_visit_records 权限）
+            # 传递权限列表，避免重复查询
+            is_admin = self._is_admin_user(current_user_id, session, user_permissions)
             if is_admin:
                 logger.info(f"Admin user {current_user_id} detected, skipping access control")
             else:
-                accessible_recorder_ids = self._get_user_accessible_recorder_ids(session, current_user_id)
-                if accessible_recorder_ids:
+                # 传递权限列表，避免重复查询
+                accessible_recorder_ids = self._get_user_accessible_recorder_ids(session, current_user_id, user_permissions)
+                # 如果返回 None，表示有公司级查看权限，可以访问所有记录
+                if accessible_recorder_ids is None:
+                    logger.info(f"User {current_user_id} has company view permission, can access all records")
+                    is_admin = True
+                elif accessible_recorder_ids:
                     # 将字符串ID转换为UUID进行过滤
                     from uuid import UUID
                     try:
@@ -267,6 +385,16 @@ class VisitRecordRepo(BaseRepo):
             # 性能优化：使用精确匹配（可以使用索引），比模糊匹配性能更好
             query = query.where(
                 CRMSalesVisitRecord.partner_name.in_(request.partner_name)
+            )
+
+        if request.opportunity_id:
+            query = query.where(
+                CRMSalesVisitRecord.opportunity_id.in_(request.opportunity_id)
+            )
+
+        if request.opportunity_name:
+            query = query.where(
+                CRMSalesVisitRecord.opportunity_name.in_(request.opportunity_name)
             )
 
         if request.visit_communication_date_start:
@@ -497,7 +625,7 @@ class VisitRecordRepo(BaseRepo):
                 UserProfile,
                 func.cast(CRMSalesVisitRecord.recorder_id, String) == UserProfile.oauth_user_id
             )
-            .where(CRMSalesVisitRecord.id == record_id)
+            .where(or_(CRMSalesVisitRecord.id == record_id, CRMSalesVisitRecord.record_id == record_id))
         )
 
         # 应用权限控制

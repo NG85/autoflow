@@ -1,10 +1,11 @@
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from uuid import UUID
 from sqlmodel import Session, select
 from app.models.document_contents import DocumentContent
 from app.repositories.base_repo import BaseRepo
-from datetime import datetime
 
+import logging
+logger = logging.getLogger(__name__)
 
 class DocumentContentRepo(BaseRepo):
     """文档内容仓库"""
@@ -70,9 +71,33 @@ class DocumentContentRepo(BaseRepo):
             
             return document_content
         except Exception as e:
-            import logging
-            logger = logging.getLogger(__name__)
             logger.error(f"更新会议纪要总结失败: {e}")
+            return None
+    
+    def update_qa_pairs(
+        self,
+        session: Session,
+        document_content_id: int,
+        qa_pairs: List[Dict[str, Any]],
+        qa_status: str = "success",
+        auto_commit: bool = False
+    ) -> Optional[DocumentContent]:
+        """更新文档内容的问答对抽取结果"""
+        try:
+            document_content = session.get(DocumentContent, document_content_id)
+            if not document_content:
+                return None
+            
+            document_content.qa_pairs = qa_pairs
+            document_content.qa_extract_status = qa_status
+            
+            if auto_commit:
+                session.commit()
+                session.refresh(document_content)
+            
+            return document_content
+        except Exception as e:
+            logger.error(f"更新问答对抽取结果失败: {e}")
             return None
     
     def get_by_visit_record_id(

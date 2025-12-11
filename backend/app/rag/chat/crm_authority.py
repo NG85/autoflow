@@ -85,11 +85,8 @@ def get_user_crm_authority(user_id: UUID, crm_type: Optional[CrmDataType] = None
     authority = CRMAuthority()
             
     # Get API URL from configuration
-    auth_api_url = settings.CRM_AUTHORITY_API_URL
-    if not auth_api_url:
-        logger.error("CRM_AUTHORITY_API_URL is not configured")
-        return authority, None
-    
+    base_url = settings.OAUTH_BASE_URL.rstrip("/")
+    auth_api_url = f"{base_url}/crm/authority"
     try:
         # Build request body
         payload = {

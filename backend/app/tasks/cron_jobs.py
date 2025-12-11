@@ -96,31 +96,19 @@ def create_crm_daily_datasource(self):
 @app.task(bind=True, max_retries=3)
 def generate_crm_daily_statistics(self, target_date_str=None):
     """
-    生成CRM销售日报完整数据并推送飞书通知
-    每天早上8:30执行，处理前一天的销售日报数据
+    生成CRM销售/团队/公司日报完整数据并推送飞书通知
+    每天早上8:30执行，处理前一天的销售和团队日报数据
     
     Args:
         target_date_str: 目标日期字符串，格式YYYY-MM-DD，不传则默认为昨天
     
     工作流程：
-    1. 从crm_daily_account_statistics表查询每个销售的统计数据
-    2. 通过correlation_id关联crm_account_assessment表获取评估详情
-    3. 组合成完整的日报数据
+    1. 查询指定日期的拜访记录，按照销售人员分组，统计并生成完整的销售个人日报数据
+    2. 基于客户/商机评估信息，补充红黄绿灯统计与评估明细，推送销售个人日报飞书卡片给每个有数据的销售人员
+    3. 从 crm_department_daily_summary 表中读取部门级汇总数据，为所有有负责人的部门生成部门日报（无数据部门生成空日报）
+    4. 从 crm_department_daily_summary 表中读取公司级汇总数据，生成公司日报
+    5. 将部门日报和公司日报通过飞书卡片推送给对应的负责人 / 管理员
     
-    推送逻辑（根据是否有数据）：
-    - 有数据时（sales_count > 0）：
-      * 推送个人日报飞书卡片给每个有数据的销售人员本人
-      * 按部门汇总数据生成部门日报（包括有数据和没数据的部门）
-      * 推送部门日报飞书卡片给各部门负责人
-      * 汇总公司级数据生成公司日报
-      * 推送公司日报飞书卡片（内部环境推送到群聊，外部环境推送给管理员）
-    
-    - 无数据时（sales_count == 0）：
-      * 个人日报：不推送（因为没有统计数据，说明当天没有销售活动）
-      * 部门日报：推送空数据的部门日报给所有有负责人的部门
-      * 公司日报：推送空数据的公司日报
-    
-    注意：所有推送都受CRM_DAILY_REPORT_FEISHU_ENABLED开关控制
     """
     try:
         # 解析目标日期
@@ -137,18 +125,29 @@ def generate_crm_daily_statistics(self, target_date_str=None):
             logger.info(f"开始执行CRM日报数据生成任务，默认处理昨天: {target_date}")
         
         with Session(engine) as session:
-            # 生成指定日期的完整日报数据
-            # - 个人日报：仅在 sales_count > 0 时推送
-            # - 部门日报和公司日报：无论 sales_count 是多少，都会推送（可能为空数据）
-            sales_count = crm_statistics_service.generate_daily_statistics(session, target_date)
+            # 1. 生成并推送销售个人日报（仅在 sales_count > 0 时推送个人卡片）
+            sales_count = crm_statistics_service.generate_sales_daily_statistics(session, target_date)
             
-            # 生成简化的返回信息（用于任务状态查询）
+            # 2. 生成并推送团队（部门）日报
+            #    - 即使没有团队日报数据，也会为所有有负责人的部门生成空数据的团队日报
+            crm_statistics_service._generate_and_send_department_daily_reports(session, target_date)
+            
+            # 3. 生成并推送公司日报
+            #    - 基于 crm_department_daily_summary 中的公司级汇总数据
+            crm_statistics_service._generate_and_send_company_daily_report(session, target_date)
+            
+            # 4. 生成简化的返回信息（用于任务状态查询）
             if sales_count > 0:
-                logger.info(f"CRM日报数据生成完成，处理了 {sales_count} 个销售人员的数据")
-                message = f"成功处理了 {sales_count} 个销售人员的日报数据"
+                logger.info(
+                    f"CRM销售个人日报/部门日报/公司日报数据生成完成，"
+                    f"处理了 {sales_count} 个销售人员的个人日报数据"
+                )
+                message = f"成功处理了 {sales_count} 个销售人员的个人日报数据，并生成团队/公司日报"
             else:
-                logger.warning(f"{target_date} 没有找到任何销售人员的数据，但部门日报和公司日报已在 generate_daily_statistics 中处理")
-                message = "没有找到销售数据，部门日报和公司日报已生成（可能为空数据）"
+                logger.warning(
+                    f"{target_date} 没有找到任何销售人员的个人日报数据，但仍已生成团队/公司级空日报（如有部门/公司定义）"
+                )
+                message = "没有找到销售人员的个人日报数据，但已生成团队/公司级空日报"
             
             # 返回简化的结果（用于任务状态查询 API）
             return {

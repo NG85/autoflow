@@ -38,6 +38,7 @@ from app.services.crm_statistics_service import crm_statistics_service
 from app.models.crm_daily_account_statistics import CRMDailyAccountStatistics
 from app.repositories.user_profile import UserProfileRepo
 from app.repositories.visit_record import visit_record_repo
+from app.repositories.document_content import DocumentContentRepo
 from sqlmodel import select, or_, distinct, func
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
 from app.models.crm_accounts import CRMAccount
@@ -193,8 +194,8 @@ def create_visit_record(
                 )
                 
                 # 提交事务
-                db_session.commit()                
-                return result_data                
+                db_session.commit()
+                return result_data
             except Exception as e:
                 # 如果保存失败，回滚事务
                 db_session.rollback()
@@ -756,7 +757,7 @@ def get_visit_record_filter_options(
 def get_visit_record_by_id(
     db_session: SessionDep,
     user: CurrentUserDep,
-    record_id: int,
+    record_id: int | str,
 ):
     """
     根据ID获取单个拜访记录详情
@@ -772,10 +773,31 @@ def get_visit_record_by_id(
         if not record:
             raise HTTPException(status_code=404, detail="拜访记录不存在或无权限访问")
         
+        # 基础数据
+        data = record.model_dump()
+
+        # 如果是 link 类型的拜访记录，尝试返回从文档中抽取的问答对
+        try:
+            if getattr(record, "visit_type", None) == "link":
+                document_content_repo = DocumentContentRepo()
+                # visit_record_id 在 DocumentContent 中对应的是 CRM 表里的 record_id 字段
+                visit_record_id = getattr(record, "record_id", None)
+                if visit_record_id:
+                    document_content = document_content_repo.get_by_visit_record_id(
+                        session=db_session,
+                        visit_record_id=visit_record_id,
+                    )
+                    if document_content:
+                        data["document_qa_pairs"] = document_content.qa_pairs or []
+                        data["document_qa_extract_status"] = document_content.qa_extract_status or ""
+        except Exception as e:
+            # 问答对加载失败不影响主流程，只记录日志
+            logger.warning(f"加载文档问答对失败: record_id={record_id}, error={e}")
+        
         return {
             "code": 0,
             "message": "success",
-            "data": record.model_dump()
+            "data": data,
         }
     except HTTPException:
         raise
