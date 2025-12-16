@@ -426,7 +426,6 @@ class CrmWritebackService:
                         dt = parser.isoparse(attachment.taken_at)
                         # 如果dt没有tzinfo，则假定为北京时间（东八区）
                         if dt.tzinfo is None:
-                            from datetime import timezone, timedelta
                             beijing_tz = timezone(timedelta(hours=8))
                             dt = dt.replace(tzinfo=beijing_tz)
                         # 转为unix毫秒时间戳
