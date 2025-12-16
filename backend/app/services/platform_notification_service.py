@@ -1415,7 +1415,7 @@ class PlatformNotificationService:
                     continue
                 
                 # 验证平台支持
-                if platform not in [PLATFORM_FEISHU, PLATFORM_LARK]:
+                if platform not in [PLATFORM_FEISHU, PLATFORM_LARK, PLATFORM_DINGTALK]:
                     logger.warning(f"Unsupported platform for collaborative participant: {platform}")
                     continue
                 
