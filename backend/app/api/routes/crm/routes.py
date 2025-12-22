@@ -417,8 +417,8 @@ def export_visit_records_to_csv(
         if language == "en":
             # 英文版CSV头部 - 只包含英文字段
             headers = [
-                "ID", "Customer Level", "Account Name", "First Visit", "Call High",
-                "Partner Name", "Opportunity Name", "Follow-up Date", "Person in Charge", "Department",
+                "ID", "Customer Level", "Account Name", "Account ID", "First Visit", "Call High",
+                "Partner Name", "Partner ID", "Opportunity Name", "Opportunity ID", "Follow-up Date", "Person in Charge", "Department",
                 "Contact Position", "Contact Name", "Collaborative Participants", "Follow-up Method",
                 "Visit Purpose", "Attachment Location", "Attachment Latitude", "Attachment Longitude", "Attachment Taken At", "Follow-up Record", 
                 "AI Follow-up Record Quality Evaluation", "AI Follow-up Record Quality Evaluation Details", 
@@ -428,8 +428,8 @@ def export_visit_records_to_csv(
         else:
             # 中文版CSV头部（默认）- 只包含中文字段
             headers = [
-                "ID", "客户分类", "客户名称", "是否首次拜访", "是否Call High",
-                "合作伙伴", "商机名称", "跟进日期", "负责销售", "所在团队",
+                "ID", "客户分类", "客户名称", "客户ID", "是否首次拜访", "是否Call High",
+                "合作伙伴", "合作伙伴ID", "商机名称", "商机ID", "跟进日期", "负责销售", "所在团队",
                 "客户岗位", "客户名字", "协同参与人", "跟进方式",
                 "拜访目的", "附件地点", "附件纬度", "附件经度", "附件拍摄时间", "跟进记录", 
                 "AI对跟进记录质量评估", "AI对跟进记录质量评估详情",
@@ -518,10 +518,13 @@ def export_visit_records_to_csv(
                 item.record_id or record_id,
                 item.customer_level or "",
                 item.account_name or "",
+                item.account_id or "",
                 first_visit_text,
                 call_high_text,
                 item.partner_name or "",
+                item.partner_id or "",
                 item.opportunity_name or "",
+                item.opportunity_id or "",
                 item.visit_communication_date or "",
                 item.recorder or "",
                 item.department or "",
