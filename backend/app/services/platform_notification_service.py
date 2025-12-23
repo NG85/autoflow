@@ -1525,7 +1525,7 @@ class PlatformNotificationService:
         if settings.NOTIFICATION_PLATFORM == PLATFORM_DINGTALK:
             template_id = "6e587206-a1fb-418f-9980-b67cd94d2e31.schema"  # 钉钉卡片模板ID
         elif settings.NOTIFICATION_PLATFORM == PLATFORM_FEISHU or settings.NOTIFICATION_PLATFORM == PLATFORM_LARK:
-            template_id = "AAqhcf51plkp6"  # 飞书卡片模板ID
+            template_id = "AAqXTV4URg1ib"  # 飞书卡片模板ID
         
         # 构建模板变量
         template_vars = self._convert_sales_task_data_for_feishu(db_session, task_data)
