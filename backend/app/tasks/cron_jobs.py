@@ -528,8 +528,33 @@ def send_sales_task_summary(self, start_date_str=None, end_date_str=None):
             logger.info(f"crm_todos 读取到本周已完成 {len(this_week_sales_tasks)} 条，下周待完成 {len(next_week_sales_tasks)} 条，截止到本周的全部逾期任务 {len(overdue_tasks)} 条，本周已取消 {total_cancelled_count} 条(涉及 {len(cancelled_by_assignee_count)} 个负责人)，due_date为空 {total_no_due_date} 条（涉及 {len(no_due_date_count)} 个负责人）")
             
             # 按负责人统计任务（本周和下周的任务都有due_date，due_date为空的单独统计）
-            analyze_results = _analyze_crm_todos(this_week_sales_tasks, next_week_sales_tasks, overdue_tasks, start_date, end_date, next_week_start_date, next_week_end_date, no_due_date_count, cancelled_by_assignee_count)
+            analyze_results = _analyze_crm_todos(
+                this_week_sales_tasks,
+                next_week_sales_tasks,
+                overdue_tasks,
+                start_date,
+                end_date,
+                next_week_start_date,
+                next_week_end_date,
+                no_due_date_count,
+                cancelled_by_assignee_count,
+            )
             logger.info(f"分析结果: {len(analyze_results)} 个负责人的任务统计")
+
+            # 将个人周统计落库，供后续“按部门/公司汇总”接口查询
+            # 注意：若目标表尚未建好，不应影响原有推送主流程
+            try:
+                from app.services.crm_sales_task_statistics_service import crm_sales_task_statistics_service
+
+                persisted_rows = crm_sales_task_statistics_service.persist_weekly_user_metrics(
+                    session=session,
+                    analyze_results=analyze_results,
+                    week_start=start_date,
+                    week_end=end_date,
+                )
+                logger.info(f"已写入销售任务周指标 {persisted_rows} 行（用于部门/公司汇总）")
+            except Exception as e:
+                logger.exception(f"写入销售任务周指标失败（不影响推送主流程）: {e}")
             success_count = 0
             failed_count = 0
             failed_tasks = []
@@ -1067,9 +1092,17 @@ def _analyze_crm_todos(
             "start_date": start_date_str,
             "end_date": end_date_str,
             "assignee_name": assignee_data["assignee_name"],
+            "assignee_id": assignee_data.get("assignee_id"),
             "statistics": [statistics_item],
             "due_task_list": due_task_list,
             "next_week_task_list": next_week_task_list,
+            # 为后续“团队/公司汇总报表”提供更通用的按类型拆分口径（原始 data_source -> count）
+            # 注意：现有推送模板不依赖这些字段，新增字段对旧逻辑无破坏。
+            "completed_by_source": completed_by_source,
+            "overdue_by_source": overdue_by_source,
+            "next_week_by_source": next_week_by_source,
+            "cancelled_count": cancelled_count,
+            "no_due_date_count": overdue_others,
             "due_task_query_url": f"{settings.CRM_SALES_TASK_PAGE_URL}?owner_name={assignee_data['assignee_name']}&due_date__lte={end_date_str}&is_overdue=True",
             "next_week_query_url": f"{settings.CRM_SALES_TASK_PAGE_URL}?owner_name={assignee_data['assignee_name']}&due_date__gte={next_week_start_date_str}&due_date__lte={next_week_end_date_str}&ai_status=PENDING&ai_status=IN_PROGRESS",
         }

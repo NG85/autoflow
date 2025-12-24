@@ -1,0 +1,80 @@
+from __future__ import annotations
+
+from typing import Iterable
+
+from sqlmodel import Session, select
+
+from app.models.user_department_relation import UserDepartmentRelation
+from app.repositories.base_repo import BaseRepo
+
+
+class UserDepartmentRelationRepo(BaseRepo):
+    model_cls = UserDepartmentRelation
+
+    def get_primary_department_by_user_ids(
+        self,
+        db_session: Session,
+        user_ids: Iterable[str],
+    ) -> dict[str, str]:
+        """
+        批量获取用户主部门（按 user_id 分组）。
+
+        规则：
+        - 优先 is_primary=1 的记录
+        - 若没有主部门记录，则取第一条（按 id 升序）
+        """
+        ids = [x for x in (user_ids or []) if x]
+        if not ids:
+            return {}
+
+        rows = db_session.exec(
+            select(UserDepartmentRelation)
+            .where(UserDepartmentRelation.user_id.in_(ids))
+            .order_by(UserDepartmentRelation.user_id, UserDepartmentRelation.is_primary.desc(), UserDepartmentRelation.id)
+        ).all()
+
+        result: dict[str, str] = {}
+        for r in rows:
+            if not r.user_id or not r.department_id:
+                continue
+            if r.user_id not in result:
+                result[r.user_id] = r.department_id
+        return result
+
+    def get_primary_department_by_crm_user_ids(
+        self,
+        db_session: Session,
+        crm_user_ids: Iterable[str],
+    ) -> dict[str, str]:
+        """
+        批量获取用户主部门（按 crm_user_id 分组）。
+
+        规则：
+        - 优先 is_primary=1 的记录
+        - 若没有主部门记录，则取第一条（按 id 升序）
+        """
+        ids = [x for x in (crm_user_ids or []) if x]
+        if not ids:
+            return {}
+
+        rows = db_session.exec(
+            select(UserDepartmentRelation)
+            .where(UserDepartmentRelation.crm_user_id.in_(ids))
+            .order_by(
+                UserDepartmentRelation.crm_user_id,
+                UserDepartmentRelation.is_primary.desc(),
+                UserDepartmentRelation.id,
+            )
+        ).all()
+
+        result: dict[str, str] = {}
+        for r in rows:
+            if not r.crm_user_id or not r.department_id:
+                continue
+            if r.crm_user_id not in result:
+                result[r.crm_user_id] = r.department_id
+        return result
+
+
+user_department_relation_repo = UserDepartmentRelationRepo()
+

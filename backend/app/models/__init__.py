@@ -36,3 +36,5 @@ from .crm_sales_visit_records import CRMSalesVisitRecord
 from .crm_daily_account_statistics import CRMDailyAccountStatistics
 from .crm_account_assessment import CRMAccountAssessment
 from .document_contents import DocumentContent
+from .crm_todos_weekly_metrics import CRMTodosWeeklyMetrics
+from .user_department_relation import UserDepartmentRelation
