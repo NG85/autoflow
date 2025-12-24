@@ -516,16 +516,6 @@ def send_sales_task_summary(self, start_date_str=None, end_date_str=None):
             no_due_date_count = _count_no_due_date_tasks(session)
             total_no_due_date = sum(no_due_date_count.values())
             
-            if not this_week_sales_tasks and not next_week_sales_tasks:
-                logger.info("crm_todos 未找到需要推送的销售任务")
-                return {
-                    "success": True,
-                    "message": "没有需要推送的销售任务",
-                    "processed_count": 0,
-                    "success_count": 0,
-                    "failed_count": 0
-                }
-
             logger.info(f"crm_todos 读取到本周已完成 {len(this_week_sales_tasks)} 条，下周待完成 {len(next_week_sales_tasks)} 条，截止到本周的全部逾期任务 {len(overdue_tasks)} 条，本周已取消 {total_cancelled_count} 条(涉及 {len(cancelled_by_assignee_count)} 个负责人)，due_date为空 {total_no_due_date} 条（涉及 {len(no_due_date_count)} 个负责人）")
             
             # 按负责人统计任务（本周和下周的任务都有due_date，due_date为空的单独统计）
@@ -540,6 +530,64 @@ def send_sales_task_summary(self, start_date_str=None, end_date_str=None):
                 no_due_date_count,
                 cancelled_by_assignee_count,
             )
+            # 即使没有任何任务数据，也要推送“0任务”卡片（但只推送给统计周期内有 todo 的负责人）
+            if not analyze_results:
+                logger.info("crm_todos 本周无任务数据，构造 0 指标卡片用于推送")
+                # 兜底来源：本周已取消 + due_date 为空（这两类在无 due_date 任务时可能导致 analyze_results 为空）
+                assignee_keys = set(cancelled_by_assignee_count.keys()) | set(no_due_date_count.keys())
+                if not assignee_keys:
+                    logger.info("统计周期内没有任何 todo 负责人（含取消/无截止日期），无需推送 0 指标卡片")
+                else:
+                    start_date_str2 = start_date.isoformat()
+                    end_date_str2 = end_date.isoformat()
+                    next_week_start_date_str2 = next_week_start_date.isoformat()
+                    next_week_end_date_str2 = next_week_end_date.isoformat()
+
+                    analyze_results = []
+                    for assignee_key in assignee_keys:
+                        cancelled_cnt = int(cancelled_by_assignee_count.get(assignee_key, 0))
+                        no_due_cnt = int(no_due_date_count.get(assignee_key, 0))
+
+                        # assignee_key 可能是人名，也可能是 owner_id；两者都传入，push 侧会按 id 优先、name 兜底匹配
+                        assignee_name = assignee_key
+                        assignee_id = assignee_key
+
+                        statistics_item = {
+                            "total_completed": "0",
+                            "total_new_created": "0",
+                            "total_due_tasks": "0",
+                            "total_cancelled": str(cancelled_cnt),
+                            "due_src1": "0",
+                            "due_src2": "0",
+                            "due_src3": "0",
+                            "next_src1": "0",
+                            "next_src2": "0",
+                            "next_src3": "0",
+                            "completed_src1": "0",
+                            "completed_src2": "0",
+                            "completed_src3": "0",
+                            "others": str(no_due_cnt),
+                            "cancelled_query_url": f"{settings.CRM_SALES_TASK_PAGE_URL}?owner_name={assignee_name}&due_date__gte={start_date_str2}&due_date__lte={end_date_str2}&ai_status=CANCELLED",
+                        }
+
+                        analyze_results.append(
+                            {
+                                "start_date": start_date_str2,
+                                "end_date": end_date_str2,
+                                "assignee_name": assignee_name,
+                                "assignee_id": assignee_id,
+                                "statistics": [statistics_item],
+                                "due_task_list": [],
+                                "next_week_task_list": [],
+                                "completed_by_source": {},
+                                "overdue_by_source": {},
+                                "next_week_by_source": {},
+                                "cancelled_count": cancelled_cnt,
+                                "no_due_date_count": no_due_cnt,
+                                "due_task_query_url": f"{settings.CRM_SALES_TASK_PAGE_URL}?owner_name={assignee_name}&due_date__lte={end_date_str2}&is_overdue=True",
+                                "next_week_query_url": f"{settings.CRM_SALES_TASK_PAGE_URL}?owner_name={assignee_name}&due_date__gte={next_week_start_date_str2}&due_date__lte={next_week_end_date_str2}&ai_status=PENDING&ai_status=IN_PROGRESS",
+                            }
+                        )
             logger.info(f"分析结果: {len(analyze_results)} 个负责人的任务统计")
 
             # 将个人周统计落库，供后续“按部门/公司汇总”接口查询
