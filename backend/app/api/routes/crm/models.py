@@ -684,6 +684,35 @@ class WeeklyReportRequest(BaseModel):
     start_date: Optional[date] = Field(default=None, description="开始日期")
     end_date: Optional[date] = Field(default=None, description="结束日期")
 
+
+class SalesTaskWeeklySummaryRequest(BaseModel):
+    """销售任务周报汇总查询请求（按部门/公司）"""
+    department_id: Optional[str] = Field(default=None, description="部门ID，不传则查询所有部门")
+    start_date: Optional[date] = Field(default=None, description="开始日期（周起始）")
+    end_date: Optional[date] = Field(default=None, description="结束日期（周结束）")
+
+
+class SalesTaskWeeklyMetricItem(BaseModel):
+    """销售任务周报指标条目"""
+    metric: str = Field(description="指标类型：completed/overdue/next_week/cancelled/no_due_date")
+    data_source: str = Field(description="任务类型（data_source），或 '__ALL__'/''")
+    value: int = Field(description="指标数值")
+
+
+class DepartmentSalesTaskWeeklySummaryResponse(BaseModel):
+    """部门销售任务周报汇总"""
+    report_start_date: date = Field(description="报告开始日期（周起始）")
+    report_end_date: date = Field(description="报告结束日期（周结束）")
+    department_id: str = Field(description="部门ID")
+    metrics: List[SalesTaskWeeklyMetricItem] = Field(description="指标列表")
+
+
+class CompanySalesTaskWeeklySummaryResponse(BaseModel):
+    """公司销售任务周报汇总（全公司）"""
+    report_start_date: date = Field(description="报告开始日期（周起始）")
+    report_end_date: date = Field(description="报告结束日期（周结束）")
+    metrics: List[SalesTaskWeeklyMetricItem] = Field(description="指标列表")
+
 # 销售个人日报查询请求
 class DailyReportRequest(BaseModel):
     """销售个人日报查询请求"""

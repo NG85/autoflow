@@ -24,6 +24,9 @@ from app.api.routes.crm.models import (
     DepartmentWeeklyReportResponse,
     CompanyWeeklyReportResponse,
     WeeklyReportRequest,
+    SalesTaskWeeklySummaryRequest,
+    DepartmentSalesTaskWeeklySummaryResponse,
+    CompanySalesTaskWeeklySummaryResponse,
     CustomerDocumentUploadRequest,
 )
 from app.crm.save_engine import (
@@ -35,6 +38,7 @@ from app.api.routes.crm.models import VisitRecordQueryRequest
 from app.services.customer_document_service import CustomerDocumentService
 from app.services.document_processing_service import document_processing_service
 from app.services.crm_statistics_service import crm_statistics_service
+from app.services.crm_sales_task_statistics_service import crm_sales_task_statistics_service
 from app.models.crm_daily_account_statistics import CRMDailyAccountStatistics
 from app.repositories.user_profile import UserProfileRepo
 from app.repositories.visit_record import visit_record_repo
@@ -1214,6 +1218,86 @@ def get_company_weekly_report(
             status_code=500,
             detail=f"查询公司周报数据失败: {str(e)}"
         )
+
+
+@router.post(
+    "/crm/sales-task/department-weekly-summary",
+    response_model=List[DepartmentSalesTaskWeeklySummaryResponse],
+)
+def get_department_sales_task_weekly_summary(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    request: SalesTaskWeeklySummaryRequest,
+):
+    """
+    销售任务周报：按部门汇总（department_id）。
+
+    数据来源：crm_todos_weekly_metrics（由定时任务写入）
+    """
+    try:
+        if request.start_date and request.end_date:
+            week_start = request.start_date
+            week_end = request.end_date
+        else:
+            # 默认最近一周：与 send_sales_task_summary 口径一致（上周日到本周六）
+            today = datetime.now().date()
+            days_since_sunday = (today.weekday() + 1) % 7
+            week_start = today - timedelta(days=days_since_sunday + 7)
+            week_end = week_start + timedelta(days=6)
+
+        logger.info(f"用户 {user.id} 查询销售任务部门周报，范围: {week_start} 到 {week_end}")
+
+        reports = crm_sales_task_statistics_service.aggregate_department_weekly_summary(
+            session=db_session,
+            week_start=week_start,
+            week_end=week_end,
+            department_id=request.department_id,
+        )
+        return reports
+    except Exception as e:
+        logger.exception(f"查询销售任务部门周报失败: {e}")
+        raise InternalServerError()
+
+
+@router.post(
+    "/crm/sales-task/company-weekly-summary",
+    response_model=CompanySalesTaskWeeklySummaryResponse,
+)
+def get_company_sales_task_weekly_summary(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    request: SalesTaskWeeklySummaryRequest,
+):
+    """
+    销售任务周报：公司总计（全公司）。
+
+    数据来源：crm_todos_weekly_metrics（由定时任务写入）
+    """
+    try:
+        if request.start_date and request.end_date:
+            week_start = request.start_date
+            week_end = request.end_date
+        else:
+            today = datetime.now().date()
+            days_since_sunday = (today.weekday() + 1) % 7
+            week_start = today - timedelta(days=days_since_sunday + 7)
+            week_end = week_start + timedelta(days=6)
+
+        logger.info(f"用户 {user.id} 查询销售任务公司周报，范围: {week_start} 到 {week_end}")
+
+        report = crm_sales_task_statistics_service.aggregate_company_weekly_summary(
+            session=db_session,
+            week_start=week_start,
+            week_end=week_end,
+        )
+        if not report:
+            raise HTTPException(status_code=400, detail="未找到该周的销售任务周报数据")
+        return report
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"查询销售任务公司周报失败: {e}")
+        raise InternalServerError()
 
 
 @router.post("/crm/customer-document/upload")
