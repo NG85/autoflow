@@ -341,11 +341,11 @@ def crm_visit_records_writeback(self, start_date_str=None, end_date_str=None, wr
        - daily：计算昨天的日期范围
     2. 从crm_sales_visit_records表查询该时间范围内的拜访记录
     3. 根据回写模式选择处理方式：
-       - CBG模式：按客户和商机分组处理拜访记录，生成格式化的回写内容
+       - CBG模式：为每条拜访记录创建纷享销客的日常对象
        - APAC模式：为每条拜访记录创建Salesforce的任务
        - OLM模式：为每条拜访记录创建销售易的拜访记录
        - CHAITIN模式：为每条拜访记录创建长亭的拜访记录
-    4. 调用相应的API进行回写或任务创建
+    4. 调用相应的API进行回写或任务创建，并返回回写结果
     """
     try:
         # 如果没有指定回写模式，使用配置中的默认值
