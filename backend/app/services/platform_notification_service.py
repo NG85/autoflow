@@ -172,7 +172,9 @@ class PlatformNotificationService:
         self,
         recipients_by_platform: Dict[str, List[Dict[str, Any]]],
         card_content: Dict[str, Any] = None,
+        card_content_by_platform: Dict[str, Dict[str, Any]] | None = None,
         template_id: str = None,
+        template_id_by_platform: Dict[str, str] | None = None,
         template_vars: Dict[str, Any] = None,
         notification_type: str = "notification"
     ) -> Dict[str, Any]:
@@ -233,8 +235,19 @@ class PlatformNotificationService:
             
             # 发送消息到当前平台
             token = platform_tokens[platform]
+            platform_card_content = (
+                (card_content_by_platform or {}).get(platform) if card_content_by_platform else card_content
+            )
+            platform_template_id = (
+                (template_id_by_platform or {}).get(platform) if template_id_by_platform else template_id
+            )
             success_count, failed_recipients = self._send_messages_to_platform(
-                platform, platform_recipients, token, card_content, template_id, template_vars
+                platform,
+                platform_recipients,
+                token,
+                platform_card_content,
+                platform_template_id,
+                template_vars,
             )
             
             total_success_count += success_count
@@ -866,19 +879,12 @@ class PlatformNotificationService:
                 "success_count": 0
             }
         
-        # 准备CRM日报卡片消息内容
-        if settings.NOTIFICATION_PLATFORM == PLATFORM_DINGTALK:
-            template_id = "801a3e2c-33cc-474e-9474-c0f7cd394311.schema"  # 个人日报卡片模板ID
-        elif settings.NOTIFICATION_PLATFORM == PLATFORM_FEISHU or settings.NOTIFICATION_PLATFORM == PLATFORM_LARK:
-            template_id = "AAqX3POFl4934"  # 个人日报卡片模板ID
         template_vars = self._convert_daily_report_data_for_feishu(db_session, daily_report_data)
-        
-        card_content = {
-            "type": "template",
-            "data": {
-                "template_id": template_id,
-                "template_variable": template_vars
-            }
+        # 个人日报卡片模板
+        template_id_by_platform = {
+            PLATFORM_DINGTALK: "801a3e2c-33cc-474e-9474-c0f7cd394311.schema",
+            PLATFORM_FEISHU: "AAqX3POFl4934",
+            PLATFORM_LARK: "AAqX3POFl4934",
         }
         
         # 按平台分组接收者
@@ -887,7 +893,8 @@ class PlatformNotificationService:
         # 使用公共方法发送通知
         return self._send_notifications_by_platform(
             recipients_by_platform=recipients_by_platform,
-            card_content=card_content,
+            template_id_by_platform=template_id_by_platform,
+            template_vars=template_vars,
             notification_type="sales daily report"
         )
     
@@ -957,22 +964,15 @@ class PlatformNotificationService:
                 "success_count": 0
             }
         
-        # 准备部门日报卡片消息内容
-        if settings.NOTIFICATION_PLATFORM == PLATFORM_DINGTALK:
-            template_id = "c8a179c5-aaae-48b0-97d6-75d4c7bdce30.schema"  # 部门日报卡片模板ID
-        elif settings.NOTIFICATION_PLATFORM == PLATFORM_FEISHU or settings.NOTIFICATION_PLATFORM == PLATFORM_LARK:
-            template_id = "AAqX3PiS5HUx4"  # 部门日报卡片模板ID
         template_vars = self._convert_daily_report_data_for_feishu(db_session, department_report_data)
         # 确保日期字段是字符串格式
         if 'report_date' in template_vars and hasattr(template_vars['report_date'], 'isoformat'):
             template_vars['report_date'] = template_vars['report_date'].isoformat()
-        
-        card_content = {
-            "type": "template",
-            "data": {
-                "template_id": template_id,
-                "template_variable": template_vars
-            }
+        # 部门日报卡片模板
+        template_id_by_platform = {
+            PLATFORM_DINGTALK: "c8a179c5-aaae-48b0-97d6-75d4c7bdce30.schema",
+            PLATFORM_FEISHU: "AAqX3PiS5HUx4",
+            PLATFORM_LARK: "AAqX3PiS5HUx4",
         }
         
         # 按平台分组接收者
@@ -981,7 +981,8 @@ class PlatformNotificationService:
         # 使用公共方法发送通知
         return self._send_notifications_by_platform(
             recipients_by_platform=recipients_by_platform,
-            card_content=card_content,
+            template_id_by_platform=template_id_by_platform,
+            template_vars=template_vars,
             notification_type="department report"
         )
     
@@ -1072,22 +1073,15 @@ class PlatformNotificationService:
                 "success_count": 0
             }
         
-        # 准备公司日报卡片消息内容
-        if settings.NOTIFICATION_PLATFORM == PLATFORM_DINGTALK:
-            template_id = "9b888860-bb7f-4b3e-843a-bacacb954bc4.schema"  # 公司日报卡片模板ID
-        elif settings.NOTIFICATION_PLATFORM == PLATFORM_FEISHU or settings.NOTIFICATION_PLATFORM == PLATFORM_LARK:
-            template_id = "AAqX3PU2Ss9aL"  # 公司日报卡片模板ID
         template_vars = self._convert_daily_report_data_for_feishu(db_session, company_report_data)
         # 确保日期字段是字符串格式
         if 'report_date' in template_vars and hasattr(template_vars['report_date'], 'isoformat'):
             template_vars['report_date'] = template_vars['report_date'].isoformat()
-        
-        card_content = {
-            "type": "template",
-            "data": {
-                "template_id": template_id,
-                "template_variable": template_vars
-            }
+        # 公司日报卡片模板
+        template_id_by_platform = {
+            PLATFORM_DINGTALK: "9b888860-bb7f-4b3e-843a-bacacb954bc4.schema",
+            PLATFORM_FEISHU: "AAqX3PU2Ss9aL",
+            PLATFORM_LARK: "AAqX3PU2Ss9aL",
         }
         
         # 按平台分组接收者
@@ -1096,7 +1090,8 @@ class PlatformNotificationService:
         # 使用公共方法发送通知
         return self._send_notifications_by_platform(
             recipients_by_platform=recipients_by_platform,
-            card_content=card_content,
+            template_id_by_platform=template_id_by_platform,
+            template_vars=template_vars,
             notification_type="company daily report"
         )
     
@@ -1132,19 +1127,12 @@ class PlatformNotificationService:
                 "success_count": 0
             }
         
-        # 准备部门周报卡片消息内容
-        if settings.NOTIFICATION_PLATFORM == PLATFORM_DINGTALK:
-            template_id = "a870d934-e925-49dc-a4af-c6f3b79547fa.schema"  # 部门周报卡片模板ID
-        elif settings.NOTIFICATION_PLATFORM == PLATFORM_FEISHU or settings.NOTIFICATION_PLATFORM == PLATFORM_LARK:
-            template_id = "AAqzdm8MsqNjD"  # 部门周报卡片模板ID
         template_vars = self._convert_weekly_report_data_for_feishu(db_session, department_report_data)
-        
-        card_content = {
-            "type": "template",
-            "data": {
-                "template_id": template_id,
-                "template_variable": template_vars
-            }
+        # 部门周报卡片模板
+        template_id_by_platform = {
+            PLATFORM_DINGTALK: "a870d934-e925-49dc-a4af-c6f3b79547fa.schema",
+            PLATFORM_FEISHU: "AAqzdm8MsqNjD",
+            PLATFORM_LARK: "AAqzdm8MsqNjD",
         }
         
         # 按平台分组接收者
@@ -1153,7 +1141,8 @@ class PlatformNotificationService:
         # 使用公共方法发送通知
         return self._send_notifications_by_platform(
             recipients_by_platform=recipients_by_platform,
-            card_content=card_content,
+            template_id_by_platform=template_id_by_platform,
+            template_vars=template_vars,
             notification_type="weekly report"
         )
     
@@ -1207,19 +1196,12 @@ class PlatformNotificationService:
                 "success_count": 0
             }
         
-        # 准备公司周报卡片消息内容
-        if settings.NOTIFICATION_PLATFORM == PLATFORM_DINGTALK:
-            template_id = "ac07cfb0-d549-469f-92c8-814d7afa66f8.schema"  # 公司周报卡片模板ID
-        elif settings.NOTIFICATION_PLATFORM == PLATFORM_FEISHU or settings.NOTIFICATION_PLATFORM == PLATFORM_LARK:
-            template_id = "AAqzdMIhll3Et"  # 公司周报卡片模板ID
         template_vars = self._convert_weekly_report_data_for_feishu(db_session, company_weekly_report_data)
-        
-        card_content = {
-            "type": "template",
-            "data": {
-                "template_id": template_id,
-                "template_variable": template_vars
-            }
+        # 公司周报卡片模板
+        template_id_by_platform = {
+            PLATFORM_DINGTALK: "ac07cfb0-d549-469f-92c8-814d7afa66f8.schema",
+            PLATFORM_FEISHU: "AAqzdMIhll3Et",
+            PLATFORM_LARK: "AAqzdMIhll3Et",
         }
         
         # 按平台分组接收者
@@ -1228,7 +1210,8 @@ class PlatformNotificationService:
         # 使用公共方法发送通知
         return self._send_notifications_by_platform(
             recipients_by_platform=recipients_by_platform,
-            card_content=card_content,
+            template_id_by_platform=template_id_by_platform,
+            template_vars=template_vars,
             notification_type="company weekly report"
         )
     
@@ -1521,21 +1504,13 @@ class PlatformNotificationService:
                 "success_count": 0
             }
         
-        # 准备销售任务卡片消息内容
-        if settings.NOTIFICATION_PLATFORM == PLATFORM_DINGTALK:
-            template_id = "6e587206-a1fb-418f-9980-b67cd94d2e31.schema"  # 钉钉卡片模板ID
-        elif settings.NOTIFICATION_PLATFORM == PLATFORM_FEISHU or settings.NOTIFICATION_PLATFORM == PLATFORM_LARK:
-            template_id = "AAqXTV4URg1ib"  # 飞书卡片模板ID
-        
         # 构建模板变量
         template_vars = self._convert_sales_task_data_for_feishu(db_session, task_data)
-        
-        card_content = {
-            "type": "template",
-            "data": {
-                "template_id": template_id,
-                "template_variable": template_vars
-            }
+        # 销售任务卡片模板
+        template_id_by_platform = {
+            PLATFORM_DINGTALK: "6e587206-a1fb-418f-9980-b67cd94d2e31.schema",
+            PLATFORM_FEISHU: "AAqXTV4URg1ib",
+            PLATFORM_LARK: "AAqXTV4URg1ib",
         }
         
         # 按平台分组接收者
@@ -1544,7 +1519,8 @@ class PlatformNotificationService:
         # 使用公共方法发送通知
         return self._send_notifications_by_platform(
             recipients_by_platform=recipients_by_platform,
-            card_content=card_content,
+            template_id_by_platform=template_id_by_platform,
+            template_vars=template_vars,
             notification_type="sales task"
         )
 
