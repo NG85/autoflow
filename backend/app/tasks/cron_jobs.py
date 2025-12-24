@@ -12,6 +12,7 @@ from app.repositories import knowledge_base_repo
 from app.services.crm_statistics_service import crm_statistics_service
 from app.services.platform_notification_service import platform_notification_service
 from app.services.crm_writeback_service import crm_writeback_service
+from app.services.crm_sales_task_statistics_service import crm_sales_task_statistics_service
 from app.tasks.knowledge_base import import_documents_from_kb_datasource
 
 logger = logging.getLogger(__name__)
@@ -544,8 +545,6 @@ def send_sales_task_summary(self, start_date_str=None, end_date_str=None):
             # 将个人周统计落库，供后续“按部门/公司汇总”接口查询
             # 注意：若目标表尚未建好，不应影响原有推送主流程
             try:
-                from app.services.crm_sales_task_statistics_service import crm_sales_task_statistics_service
-
                 persisted_rows = crm_sales_task_statistics_service.persist_weekly_user_metrics(
                     session=session,
                     analyze_results=analyze_results,

@@ -133,7 +133,7 @@ class CRMSalesTaskStatisticsService:
         def add_row(assignee_id: str, department_id: str, metric: str, data_source: str, value: int) -> None:
             rows.append(
                 {
-                    "id": uuid7(),
+                    "id": uuid7().hex.replace("-", ""),
                     "week_start": week_start,
                     "week_end": week_end,
                     "assignee_id": assignee_id,
