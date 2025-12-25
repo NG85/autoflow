@@ -7,6 +7,9 @@ from app.core.config import settings, WritebackMode
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
 from app.models.task_requests import TaskCreateRequest, TaskBatchCreateRequest
 from app.models.wb_visit_requests import (
+    CbgVisitRecordBatchCreateRequest,
+    CbgVisitRecordCreateRequest,
+    CbgVisitRecordType,
     ChaitinVisitRecordBatchCreateRequest, 
     ChaitinVisitRecordCreateRequest, 
     OlmVisitRecordBatchCreateRequest, 
@@ -111,6 +114,33 @@ class CrmWritebackClient:
             logger.error(f"批量创建任务失败: {e}")
             return {"success": False, "message": f"批量创建任务失败: {e}"}
     
+    def batch_cbg_visit_create(self, visit_requests: CbgVisitRecordBatchCreateRequest) -> Dict[str, Any]:
+        """
+        批量创建CBG日常对象
+        
+        Args:
+            visit_requests: 日常对象创建请求列表
+        
+        Returns:
+            创建结果
+        """
+        url = f"{self.base_url}/crm-custom/pingcap-cbg/sale-record/batch"
+        
+        try:
+            # 设置较长的超时时间来处理批量日常对象创建
+            timeout = httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0)
+            with httpx.Client(timeout=timeout) as client:
+                response = client.post(url, headers=self.headers, json=visit_requests.model_dump())
+                logger.info(f"调用CBG批量创建日常对象，返回: {response.text}")
+                response.raise_for_status()
+                return {"success": True, "data": response.json()}
+        except httpx.TimeoutException as e:
+            logger.error(f"CBG批量创建日常对象超时: {e}")
+            return {"success": False, "message": f"CBG批量创建日常对象超时: {e}"}
+        except httpx.RequestError as e:
+            logger.error(f"CBG批量创建日常对象失败: {e}")
+            return {"success": False, "message": f"CBG批量创建日常对象失败: {e}"}
+    
     def batch_olm_visit_create(self, visit_requests: OlmVisitRecordBatchCreateRequest) -> Dict[str, Any]:
         """
         批量创建OLM拜访记录
@@ -198,64 +228,50 @@ class CrmWritebackService:
             logger.warning(f"记录 ID {record_id}：无法解析{time_label} {time_str}: {e}")
             return None
     
-    def generate_visit_summary_content(self, visit_records: List[CRMSalesVisitRecord]) -> str:
+    def generate_visit_summary_content(self, record: CRMSalesVisitRecord) -> str:
         """
         根据拜访记录生成回写内容
         
         Args:
-            visit_records: 拜访记录列表
+            record: 拜访记录
         
         Returns:
             格式化的回写内容
         """
-        if not visit_records:
-            return ""
-        
         content_parts = []
         
-        # 按拜访日期降序排序（最新的在前面）
-        sorted_records = sorted(visit_records, key=lambda x: x.visit_communication_date, reverse=True)
+        # 拜访基本信息
+        content_parts.append(f"拜访及沟通日期: {record.visit_communication_date}")
         
-        for record in sorted_records:
-            # 拜访基本信息
-            content_parts.append(f"拜访日期: {record.visit_communication_date}")
-            
-            if record.last_modified_time:
-                formatted_time = convert_utc_to_local_timezone(record.last_modified_time)
-                if formatted_time != "--":
-                    content_parts.append(f"创建时间: {formatted_time}")
-            
-            if record.subject:
-                content_parts.append(f"拜访主题: {record.subject}")
-            
-            if record.contact_name:
-                content_parts.append(f"客户联系人: {record.contact_name}")
-                if record.contact_position:
-                    content_parts.append(f"客户职位: {record.contact_position}")
-            
-            if record.collaborative_participants:
-                # 处理协同参与人数据，支持多种格式
-                from app.utils.participants_utils import format_collaborative_participants_names
-                participant_names_str = format_collaborative_participants_names(record.collaborative_participants)
-                if participant_names_str:
-                    content_parts.append(f"协同参与人: {participant_names_str}")
-            
-            # 跟进记录
-            if record.followup_record:
-                content_parts.append("跟进记录:")
-                content_parts.append(record.followup_record)
-            
-            # 下一步计划
-            if record.next_steps:
-                content_parts.append("下一步计划:")
-                content_parts.append(record.next_steps)
-            
-            # 备注
-            if record.remarks:
-                content_parts.append("备注:")
-                content_parts.append(record.remarks)
-            
-            content_parts.append("---")
+        # if record.last_modified_time:
+        #     formatted_time = convert_utc_to_local_timezone(record.last_modified_time)
+        #     if formatted_time != "--":
+        #         content_parts.append(f"创建时间: {formatted_time}")
+        
+        content_parts.append(f"联系人职位: {record.contact_position}")
+        content_parts.append(f"联系人姓名: {record.contact_name}")
+        
+        if record.collaborative_participants:
+            # 处理协同参与人数据，支持多种格式
+            from app.utils.participants_utils import format_collaborative_participants_names
+            participant_names_str = format_collaborative_participants_names(record.collaborative_participants)
+            if participant_names_str:
+                content_parts.append(f"协同参与人（内部人员）: {participant_names_str}")
+        
+        # 跟进记录
+        if record.followup_record:
+            content_parts.append("跟进记录:")
+            content_parts.append(record.followup_record)
+        
+        # 下一步计划
+        if record.next_steps:
+            content_parts.append("下一步计划:")
+            content_parts.append(record.next_steps)
+        
+        # 备注
+        if record.remarks:
+            content_parts.append("备注:")
+            content_parts.append(record.remarks)
         
         return "\n".join(content_parts)
     
@@ -318,6 +334,117 @@ class CrmWritebackService:
             task_requests.append(task_request)
         
         return task_requests
+
+    def _map_visit_method_to_cbg_record_type(self, visit_communication_method: Optional[str]) -> str:
+        """
+        将历史/现有「拜访方式」映射为 CBG「跟进类型」。
+
+        兼容口径：
+        - 历史数据：线下会议、线上会议、来我司拜访、饭局聚会 -> 常规拜访
+        - 历史数据：电话/录音、其他 -> 电话/微信跟进
+        """
+        method = (visit_communication_method or "").strip()
+
+        if method in {
+            # 历史数据
+            "电话/录音",
+            "其他",
+            # 新口径
+            CbgVisitRecordType.CUSTOMER_PHONE.value,
+        }:
+            return CbgVisitRecordType.CUSTOMER_PHONE.value
+
+        if method in {
+            # 历史数据
+            "线下会议",
+            "线上会议",
+            "来我司拜访",
+            "饭局聚会",
+            # 新口径
+            CbgVisitRecordType.CUSTOMER_VISIT.value,
+        }:
+            return CbgVisitRecordType.CUSTOMER_VISIT.value
+
+        # 默认兜底：常规拜访
+        return CbgVisitRecordType.CUSTOMER_VISIT.value
+    
+    def generate_cbg_visit_requests(self, session: Session, visit_records: List[CRMSalesVisitRecord]) -> CbgVisitRecordBatchCreateRequest:
+        """
+        根据拜访记录生成CBG日常对象创建请求列表
+        
+        Args:
+            session: 数据库会话
+            visit_records: 拜访记录列表
+        
+        Returns:
+            CBG日常对象创建请求列表
+        """
+        visit_requests = CbgVisitRecordBatchCreateRequest(records=[])
+        
+        for record in visit_records:
+            crm_user_id = None
+            if record.recorder_id:
+                try:
+                    # 将32位UUID转换为36位字符串（带连字符）
+                    # recorder_id是UUID对象，转成字符串会自动变成36位格式
+                    ask_id_str = str(record.recorder_id)
+                    
+                    # 从user_profiles表查询crm_user_id作为CRM用户ID
+                    sql_query = text("""
+                        SELECT crm_user_id FROM user_profiles WHERE oauth_user_id = :ask_id
+                    """)
+                    
+                    result = session.exec(sql_query, params={"ask_id": ask_id_str}).first()
+                    if not result:
+                        # 从user表查询fxiaoke_id作为CRM用户ID(向后兼容，后续user表会下线)
+                        sql_query = text("""
+                            SELECT fxiaoke_id as crm_user_id FROM user WHERE ask_id = :ask_id
+                        """)
+                        result = session.exec(sql_query, params={"ask_id": ask_id_str}).first()
+                        
+                    if result:
+                        # 单列查询，first() 返回 Row/tuple，直接取第 0 列即可
+                        crm_user_id = str(result[0]) if result[0] is not None else None
+                    else:
+                        logger.warning(f"记录 ID {record.id}：未找到recorder_id {ask_id_str} 对应的CRM用户ID")
+                except Exception as e:
+                    logger.warning(f"记录 ID {record.id}：查询CRM用户ID失败: {e}")
+            
+            if not crm_user_id:
+                logger.warning(
+                    f"记录 ID {record.id}：未找到recorder_id {ask_id_str} 对应的CRM用户ID，将使用系统管理员ID"
+                )
+            
+            record_type = self._map_visit_method_to_cbg_record_type(record.visit_communication_method)
+            
+            # 构建请求
+            def _norm_id(v: Optional[str]) -> Optional[str]:
+                if v is None:
+                    return None
+                s = str(v).strip()
+                return s if s else None
+
+            account_ids = [x for x in [_norm_id(record.account_id), _norm_id(record.partner_id)] if x is not None]
+            opportunity_ids = [x for x in [_norm_id(record.opportunity_id)] if x is not None]
+
+            # account_id / partner_id 业务上至少一个应有值；若都为空，跳过该记录避免创建无关联对象
+            if not account_ids and not opportunity_ids:
+                logger.warning(
+                    f"记录 ID {record.id}：account_id/partner_id 和 opportunity_id 均为空，跳过创建CBG日常对象"
+                )
+                continue
+            visit_request = CbgVisitRecordCreateRequest(
+                    record_type=record_type,
+                    content=self.generate_visit_summary_content(record),
+                    account_ids=account_ids,
+                    opportunity_ids=opportunity_ids,
+                    owner_user_id=crm_user_id,
+                    source_record_id=str(record.record_id or record.id),
+            )
+            
+            visit_requests.records.append(visit_request)
+            
+        return visit_requests
     
     def generate_olm_visit_requests(self, session: Session, visit_records: List[CRMSalesVisitRecord]) -> OlmVisitRecordBatchCreateRequest:
         """
@@ -533,7 +660,7 @@ class CrmWritebackService:
         Args:
             session: 数据库会话
             visit_records: 拜访记录列表
-            writeback_mode: 回写模式，支持 "CBG"（内容回写）或 "APAC"（任务创建）或 "OLM"（销售易回写），不传则使用配置中的默认值
+            writeback_mode: 回写模式，支持 "CBG"（纷享销客日常对象回写）或 "APAC"（Salesforce任务创建）或 "OLM"（销售易拜访记录回写）或 "CHAITIN"（长亭API回写），不传则使用配置中的默认值
         
         Returns:
             回写结果
@@ -604,105 +731,38 @@ class CrmWritebackService:
                 }
             
             elif writeback_mode == WritebackMode.CBG.value:
-                # CBG内容回写模式（原有逻辑）
-                logger.info("使用CBG内容回写模式")
-                logger.info("回写优先级：商机 > 客户 > 合作伙伴")
+                # CBG日常对象回写模式
+                logger.info("使用CBG日常对象回写模式")
                 
-                # 按优先级分组：商机 > 客户 > 合作伙伴
-                opportunity_records = {}
-                account_records = {}
-                partner_records = {}
+                # 生成CBG日常对象创建请求列表
+                visit_requests = self.generate_cbg_visit_requests(session, visit_records)
                 
-                for record in visit_records:
-                    # 优先级1：如果有商机ID，按商机分组
-                    if record.opportunity_id:
-                        if record.opportunity_id not in opportunity_records:
-                            opportunity_records[record.opportunity_id] = []
-                        opportunity_records[record.opportunity_id].append(record)
-                    # 优先级2：如果没有商机但有客户ID，按客户分组
-                    elif record.account_id:
-                        if record.account_id not in account_records:
-                            account_records[record.account_id] = []
-                        account_records[record.account_id].append(record)
-                    # 优先级3：如果既没有商机也没有客户，但有合作伙伴ID，按合作伙伴分组
-                    elif record.partner_id:
-                        if record.partner_id not in partner_records:
-                            partner_records[record.partner_id] = []
-                        partner_records[record.partner_id].append(record)
-                
-                # 记录分组统计信息
-                logger.info(f"分组结果：商机 {len(opportunity_records)} 个，客户 {len(account_records)} 个，合作伙伴 {len(partner_records)} 个")
-                
-                # 准备批量回写请求
-                writeback_requests = []
-                processed_count = 0
-                
-                # 处理商机回写
-                for opportunity_id, records in opportunity_records.items():
-                    content = self.generate_visit_summary_content(records)
-                    writeback_requests.append({
-                        "writebackType": "OPPORTUNITY",
-                        "uniqueId": opportunity_id,
-                        "content": content,
-                        "writeMode": "PREPEND",
-                        "operator": "system"
-                    })
-                    processed_count += len(records)
-                    logger.info(f"准备回写商机 {opportunity_id}，包含 {len(records)} 条拜访记录")
-                
-                # 处理客户回写
-                for account_id, records in account_records.items():
-                    content = self.generate_visit_summary_content(records)
-                    writeback_requests.append({
-                        "writebackType": "ACCOUNT",
-                        "uniqueId": account_id,
-                        "content": content,
-                        "writeMode": "PREPEND",
-                        "operator": "system"
-                    })
-                    processed_count += len(records)
-                    logger.info(f"准备回写客户 {account_id}，包含 {len(records)} 条拜访记录")
-                
-                # 处理合作伙伴回写（合作伙伴和客户使用同一个API）
-                for partner_id, records in partner_records.items():
-                    content = self.generate_visit_summary_content(records)
-                    writeback_requests.append({
-                        "writebackType": "ACCOUNT",
-                        "uniqueId": partner_id,
-                        "content": content,
-                        "writeMode": "PREPEND",
-                        "operator": "system"
-                    })
-                    processed_count += len(records)
-                    logger.info(f"准备回写合作伙伴 {partner_id}，包含 {len(records)} 条拜访记录")
-                
-                # 执行批量回写
-                if writeback_requests:
-                    results = self.client.batch_writeback(writeback_requests)
-                    
-                    # 统计成功和失败的数量
-                    success_count = sum(1 for result in results if result.get("success", False))
-                    failed_count = len(results) - success_count
-                    
-                    logger.info(f"批量回写完成: 成功 {success_count} 个，失败 {failed_count} 个")
-                    
+                if not visit_requests:
+                    logger.info("没有需要创建CBG日常对象的拜访记录")
                     return {
                         "success": True,
-                        "message": f"成功处理 {processed_count} 条拜访记录，回写 {len(writeback_requests)} 个对象",
-                        "processed_count": processed_count,
-                        "writeback_count": len(writeback_requests),
-                        "success_count": success_count,
-                        "failed_count": failed_count,
-                        "results": results
-                    }
-                else:
-                    logger.warning("没有需要回写的对象")
-                    return {
-                        "success": True,
-                        "message": "没有需要回写的对象",
-                        "processed_count": processed_count,
+                        "message": "没有需要创建CBG日常对象的拜访记录",
+                        "processed_count": len(visit_records),
                         "writeback_count": 0
                     }
+                
+                # 执行批量CBG日常对象创建
+                result = self.client.batch_cbg_visit_create(visit_requests)
+                
+                logger.info(f"批量CBG日常对象创建完成: {len(visit_requests.records)} 条记录")
+                
+                return_data = result.get("data", {})
+                created_visits = return_data.get("created", 0)
+                failed_visits = return_data.get("failed", 0)
+                return {
+                    "success": result.get("success", False),
+                    "message": f"成功处理 {len(visit_records)} 条拜访记录，创建 {len(visit_requests.records)} 个CBG日常对象",
+                    "processed_count": len(visit_records),
+                    "writeback_count": len(visit_requests.records),
+                    "success_count": created_visits,
+                    "failed_count": failed_visits,
+                    "results": return_data
+                }
             
             elif writeback_mode == WritebackMode.OLM.value:
                 # OLM拜访记录回写模式

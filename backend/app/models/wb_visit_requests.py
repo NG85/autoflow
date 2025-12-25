@@ -1,3 +1,4 @@
+import enum
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
@@ -33,3 +34,26 @@ class ChaitinVisitRecordCreateRequest(BaseModel):
 class ChaitinVisitRecordBatchCreateRequest(BaseModel):
     followup_records: List[ChaitinVisitRecordCreateRequest]
     partial_fail: bool = True
+
+class CbgVisitRecordCreateRequest(BaseModel):
+    """CBG日常对象创建请求"""
+    content: str = Field(..., description="记录内容")
+    record_type: str = Field(..., description="跟进类型名称")
+    account_ids: Optional[List[str]] = Field(None, description="关联客户ID列表")
+    opportunity_ids: Optional[List[str]] = Field(None, description="关联商机ID列表")
+    owner_user_id: Optional[str] = Field(None, description="负责人ID")
+    source_record_id: Optional[str] = Field(None, description="来源记录ID（用于日志追踪）")
+
+class CbgVisitRecordBatchCreateRequest(BaseModel):
+    records: List[CbgVisitRecordCreateRequest]
+
+class CbgVisitRecordType(str, enum.Enum):
+    """CBG日常对象跟进类型"""
+    CUSTOMER_PHONE = "电话/微信跟进"
+    CUSTOMER_VISIT = "常规拜访"
+    CUSTOMER_HIGH_LEVEL_VISIT = "高层拜访"
+    CUSTOMER_TECHNICAL = "技术交流"
+    CUSTOMER_RECENT_DYNAMIC = "最近动态"
+    CUSTOMER_FEEDBACK = "用户反馈"
+    CUSTOMER_RISK = "风险提示"
+    CUSTOMER_NEXT_PLAN = "下阶段计划"
