@@ -411,8 +411,8 @@ class CRMStatisticsService:
             logger.info(
                 f"销售 {stats['recorder']} 的完整日报数据已组装，"
                 f"所在团队 {stats['department']}，"
-                f"排除绿灯后，包含 {len(assessment_details['first'])} 个首次评估明细，"
-                f"{len(assessment_details['multi'])} 个多次评估明细"
+                f"首次评估明细（含绿灯） {len(assessment_details['first'])} 个，"
+                f"多次评估明细（不含绿灯） {len(assessment_details['multi'])} 个"
             )
         
         return complete_reports
@@ -427,7 +427,7 @@ class CRMStatisticsService:
             
         Returns:
             Dict: 包含first、multi和statistics三个键的字典
-                - first: 首次拜访评估详情列表（不包含绿灯）
+                - first: 首次拜访评估详情列表（包含绿灯）
                 - multi: 多次拜访评估详情列表（不包含绿灯）
                 - statistics: 统计数据字典，包含first和multi的红黄绿灯数量（包含绿灯）
         """
@@ -477,8 +477,8 @@ class CRMStatisticsService:
                 elif flag == "green":
                     multi_stats["green"] += 1
             
-            # 构建列表（只包含非绿灯记录）
-            if flag != "green":
+            # 明细口径：首次拜访包含绿灯；多次跟进排除绿灯
+            if is_first_visit or flag != "green":
                 assessment_data = {
                     'account_name': self._format_empty_value(assessment.account_name),
                     'opportunity_names': self._format_empty_value(self._format_opportunity_names(assessment.opportunity_names)),
@@ -504,7 +504,7 @@ class CRMStatisticsService:
             f"correlation_id {correlation_id} 找到 {len(all_assessment_records)} 条评估记录（包含绿灯），"
             f"首次拜访: 红{first_stats['red']} 黄{first_stats['yellow']} 绿{first_stats['green']}, "
             f"多次拜访: 红{multi_stats['red']} 黄{multi_stats['yellow']} 绿{multi_stats['green']}, "
-            f"非绿灯记录: 首次{len(first_assessments)} 多次{len(multi_assessments)}"
+            f"明细记录: 首次（含绿灯）{len(first_assessments)} 多次（不含绿灯）{len(multi_assessments)}"
         )
         
         # 按照指定规则排序：红灯>黄灯-团队名称-销售名称
@@ -530,7 +530,7 @@ class CRMStatisticsService:
         基于去重的商机列表和无商机客户列表，从客户商机评估表获取评估详情。
         
         评估数据划分为：
-        - first: 首次拜访评估详情列表（不包含绿灯）
+        - first: 首次拜访评估详情列表（包含绿灯）
         - multi: 多次跟进评估详情列表（不包含绿灯）
         - statistics: 统计数据字典，包含first和multi的红黄绿灯数量（包含绿灯）
         """
@@ -613,8 +613,8 @@ class CRMStatisticsService:
                 elif flag == "green":
                     multi_stats["green"] += 1
             
-            # 列表仅保留非绿灯记录
-            if flag != "green":
+            # 明细口径：首次拜访包含绿灯；多次跟进排除绿灯
+            if is_first_visit or flag != "green":
                 assessment_data: Dict[str, Any] = {
                     "account_name": self._format_empty_value(assessment.account_name),
                     "opportunity_name": self._format_empty_value(assessment.opportunity_name),
@@ -755,7 +755,10 @@ class CRMStatisticsService:
                 total_first_assessments = sum(len(report['first_assessment']) for report in complete_reports)
                 total_multi_assessments = sum(len(report['multi_assessment']) for report in complete_reports)
                 
-                logger.info(f"总计（排除绿灯）: {total_first_assessments} 个销售个人首次拜访评估，{total_multi_assessments} 个销售个人多次拜访评估")
+                logger.info(
+                    f"总计: {total_first_assessments} 个销售个人首次拜访评估（含绿灯），"
+                    f"{total_multi_assessments} 个销售个人多次拜访评估（不含绿灯）"
+                )
                 
                 # 推送个人日报（只在开关启用时发送卡片）
                 from app.core.config import settings
