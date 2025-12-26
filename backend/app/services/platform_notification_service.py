@@ -525,8 +525,8 @@ class PlatformNotificationService:
                 }
             )
         
-        # 6. 添加具有“卡片接收权限”的高层用户，并与现有集合去重
-        card_receivers = self._get_card_permission_receivers("visit_record:card:receive", ["COMPANY_EXECUTIVE", "COMPANY_ADMIN"])
+        # 6. 添加单独配置了“卡片接收权限”的用户（通常为公司高层或管理员），并与现有集合去重
+        card_receivers = self._get_card_permission_receivers("visit_record:card:receive")
         for user in card_receivers:
             platform = user.get("platform")
             if not platform:
@@ -993,15 +993,13 @@ class PlatformNotificationService:
         规则：
         - 调用 OAuth 权限服务，查询拥有
           permission = "daily_report:company:card:receive"
-          roleCodes = ["COMPANY_EXECUTIVE", "COMPANY_ADMIN"]
-          的高层/管理员作为接收人
+          的用户作为接收人
         - 如果未查询到，则从profile中获取可以接收公司日报的人员（向后兼容）
         """
         recipients: List[Dict[str, Any]] = []
         
         card_receivers = self._get_card_permission_receivers(
             permission="daily_report:company:card:receive",
-            role_codes=["COMPANY_EXECUTIVE", "COMPANY_ADMIN"],
         )
         
         for user in card_receivers:
