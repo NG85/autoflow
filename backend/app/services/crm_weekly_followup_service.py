@@ -277,8 +277,6 @@ class CRMWeeklyFollowupService:
         session: Session,
         week_start: date,
         week_end: date,
-        *,
-        use_llm: bool = True,
     ) -> Dict[str, Any]:
         """
         生成并写入：
@@ -485,25 +483,15 @@ class CRMWeeklyFollowupService:
             # LLM 生成
             progress = ""
             risks = ""
-            if use_llm:
-                prompt = self._build_entity_prompt(key, list(reversed(compressed)))  # 由早到晚
-                try:
-                    raw = call_ark_llm(prompt, temperature=0.2)
-                    parsed = self._parse_llm_json(raw)
-                    if parsed:
-                        progress = str(parsed.get("progress") or "").strip()
-                        risks = str(parsed.get("risks") or "").strip()
-                except Exception as e:
-                    logger.warning(f"LLM 生成失败，key={key}: {e}")
-
-            # 兜底
-            if not progress:
-                progress = "；".join([c["followup"] for c in compressed if c.get("followup")]) or "本周有拜访记录，但缺少有效跟进内容。"
-                progress = self._truncate(progress, 800)
-            if risks is None or risks == "":
-                # 若无风险输出，尝试从 next_steps 里抽取
-                risks = "；".join([c["next_steps"] for c in compressed if c.get("next_steps")]) or ""
-                risks = self._truncate(risks, 800)
+            prompt = self._build_entity_prompt(key, list(reversed(compressed)))  # 由早到晚
+            try:
+                raw = call_ark_llm(prompt, temperature=0.2)
+                parsed = self._parse_llm_json(raw)
+                if parsed:
+                    progress = str(parsed.get("progress") or "").strip()
+                    risks = str(parsed.get("risks") or "").strip()
+            except Exception as e:
+                logger.warning(f"LLM 生成失败，key={key}: {e}")
 
             # 组装实体行
             owner_user_id = owner_user_id_by_key.get(key)
@@ -563,8 +551,6 @@ class CRMWeeklyFollowupService:
             by_dept[e.department_name].append(e)
 
         def _llm_rollup_text(scope: str, dept: str, items: List[CRMWeeklyFollowupEntitySummary]) -> Optional[str]:
-            if not use_llm:
-                return ""
             try:
                 prompt = self._build_rollup_prompt(
                     week_start=week_start,

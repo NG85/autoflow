@@ -326,7 +326,7 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
 
 
 @app.task(bind=True, max_retries=3)
-def generate_crm_weekly_followup_summary(self, start_date_str=None, end_date_str=None, use_llm: bool | None = None):
+def generate_crm_weekly_followup_summary(self, start_date_str=None, end_date_str=None):
     """
     生成“周跟进总结”（公司/团队整体描述 + 明细列表），用于后台页面展示与人工评论。
     周区间口径：周日到周六，与现有周报一致。
@@ -334,12 +334,8 @@ def generate_crm_weekly_followup_summary(self, start_date_str=None, end_date_str
     Args:
         start_date_str: 开始日期 YYYY-MM-DD，不传默认上周日
         end_date_str: 结束日期 YYYY-MM-DD，不传默认本周六
-        use_llm: 是否使用 LLM 生成（不传默认 True）
     """
     try:
-        if use_llm is None:
-            use_llm = True
-
         # 计算日期范围
         if start_date_str and end_date_str:
             try:
@@ -363,7 +359,6 @@ def generate_crm_weekly_followup_summary(self, start_date_str=None, end_date_str
                 session=session,
                 week_start=start_date,
                 week_end=end_date,
-                use_llm=bool(use_llm),
             )
             return {"success": True, "message": "ok", "data": result}
 

@@ -842,7 +842,6 @@ class WeeklyFollowupWeeklyListOut(BaseModel):
 class WeeklyFollowupTriggerTaskIn(BaseModel):
     start_date: Optional[date] = None
     end_date: Optional[date] = None
-    use_llm: Optional[bool] = None
 
 
 class WeeklyFollowupTriggerTaskOut(BaseModel):
