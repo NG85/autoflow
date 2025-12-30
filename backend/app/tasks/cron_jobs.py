@@ -1,8 +1,13 @@
 import logging
 from datetime import datetime, timedelta
 from enum import Enum
-from sqlmodel import Session
+from sqlmodel import Session, select
 import pytz
+from zoneinfo import ZoneInfo
+from typing import Any, Optional
+
+import requests
+from urllib.parse import quote_plus
 
 from app.core.config import settings, WritebackMode, WritebackFrequency
 from app.core.db import engine
@@ -17,6 +22,69 @@ from app.services.crm_weekly_followup_service import crm_weekly_followup_service
 from app.tasks.knowledge_base import import_documents_from_kb_datasource
 
 logger = logging.getLogger(__name__)
+
+_BEIJING_TZ = ZoneInfo("Asia/Shanghai")
+
+
+def _beijing_today_date():
+    """获取北京时间的“今天”（date）。"""
+    return datetime.now(_BEIJING_TZ).date()
+
+
+def _aldebaran_fetch_weekly_report(
+    *,
+    report_year: int,
+    report_week_of_year: int,
+    department_name: Optional[str],
+    timeout_seconds: int = 30,
+) -> dict[str, Any]:
+    """
+    调用 Aldebaran 周报接口获取周报内容。
+
+    约定：
+    - 公司周报：department_name=None
+    - 部门周报：department_name=部门名
+    """
+    base_url = settings.ALDEBARAN_BASE_URL.rstrip("/")
+    url = f"{base_url}/api/v1/report/weekly"
+    payload = {
+        "tenant_id": 'PINGCAP',
+        "report_year": int(report_year),
+        "report_week_of_year": int(report_week_of_year),
+        "department": department_name,  # None -> null（公司周报）
+    }
+
+    logger.info(
+        "调用 Aldebaran 周报接口: %s, payload=%s",
+        url,
+        {
+            "tenant_id": payload["tenant_id"],
+            "report_year": payload["report_year"],
+            "report_week_of_year": payload["report_week_of_year"],
+            "department": payload["department"],
+        },
+    )
+
+    resp = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=timeout_seconds)
+    if resp.status_code != 200:
+        raise RuntimeError(f"Aldebaran weekly report http {resp.status_code}: {resp.text}")
+
+    data = resp.json()
+
+    if isinstance(data, dict) and data.get("status") == "success":
+        report_data = data.get("data")
+        if not isinstance(report_data, dict):
+            raise RuntimeError(f"Aldebaran weekly report missing data: {data}")
+        result = report_data
+    else:
+        raise RuntimeError(f"Aldebaran weekly report invalid json: {data}")
+
+    # 推送侧依赖 department_name 做接收者定位；兜底只依赖调用参数，不依赖接口返回
+    if department_name:
+        result.setdefault("department_name", department_name)
+
+    return result
+
 
 class TodoDataSourceType(str, Enum):
     """TODO数据源类型枚举"""
@@ -176,10 +244,9 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
     
     工作流程：
     1. 计算上周日到本周六的日期范围
-    2. 从crm_daily_account_statistics表查询该时间范围的统计数据
-    3. 按部门汇总数据生成部门周报
-    4. 推送部门周报飞书卡片给各部门负责人
-    5. 生成并推送公司周报给管理团队
+    2. 调用 Aldebaran 周报接口获取周报内容（公司周报：department=null；部门周报：department=部门名）
+    3. 推送部门周报飞书卡片给各部门负责人
+    4. 推送公司周报给管理团队
     """
     try:
         
@@ -198,7 +265,7 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                 }
         else:
             # 默认处理上周日到本周六的数据
-            today = datetime.now().date()
+            today = _beijing_today_date()
             # 计算上周日（今天往前推7天，然后找到最近的周日）
             days_since_sunday = (today.weekday() + 1) % 7  # 0=周一，1=周二，...，6=周日
             last_sunday = today - timedelta(days=days_since_sunday + 7)
@@ -207,38 +274,366 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
             start_date = last_sunday
             end_date = this_saturday
             logger.info(f"开始执行CRM周报数据生成任务，默认处理上周日到本周六: {start_date} 到 {end_date}")
+
+        # 周报接口的 year/week：按周日-周六口径，使用周六的 ISO week 作为该周的 week_of_year
+        iso_year, iso_week, _ = end_date.isocalendar()
+        report_year = int(iso_year)
+        report_week_of_year = int(iso_week)
         
         with Session(engine) as session:
-            # 生成指定日期范围的部门周报数据
-            department_reports = crm_statistics_service.aggregate_department_weekly_reports(
-                session=session,
-                start_date=start_date,
-                end_date=end_date
-            )
-            
-            if not department_reports:
-                logger.warning(f"{start_date} 到 {end_date} 没有找到任何周报数据")
+            # 从接口获取周报数据（公司 + 各部门），不再自行查询数据库做汇总统计
+            department_reports: list[dict[str, Any]] = []
+            company_weekly_report: Optional[dict[str, Any]] = None
+            from app.models.crm_weekly_followup_summary import CRMWeeklyFollowupSummary
+
+            def _join_names(val: Any) -> str:
+                if val is None:
+                    return ""
+                if isinstance(val, list):
+                    return "|".join([str(x) for x in val if x is not None and str(x) != ""])
+                return str(val)
+
+            def _to_float(v: Any, default: float = 0.0) -> float:
+                try:
+                    if v is None:
+                        return float(default)
+                    return float(v)
+                except Exception:
+                    return float(default)
+
+            def _fmt_rate(v: Any) -> str:
+                """rate 字段拼接 %（接口返回已是百分数，如 72.8）。"""
+                x = _to_float(v, 0.0)
+                s = f"{x:.2f}".rstrip("0").rstrip(".")
+                return f"{s}%"
+
+            def _fmt_amount_yuan_to_wanyuan(v: Any) -> str:
+                """amount 字段：元 -> 万元，并拼接 '万元' 后缀。"""
+                x = _to_float(v, 0.0) / 10000.0
+                s = f"{x:.2f}".rstrip("0").rstrip(".")
+                return f"{s}万元"
+
+            def _fmt_change(v: Any, direction: Any) -> str:
+                """change 字段：根据 direction=increase/decrease 拼接 +/- 前缀。"""
+                x = abs(_to_float(v, 0.0))
+                s = f"{x:.2f}".rstrip("0").rstrip(".")
+                if direction == "increase":
+                    return f"+{s}"
+                if direction == "decrease":
+                    return f"-{s}"
+                return s
+
+            def _rebuild_weekly_report_for_template(raw: Any, department: Optional[str]) -> dict[str, Any]:
+                """
+                将周报接口返回结构重组为模板变量结构
+                """
+                if not isinstance(raw, dict):
+                    # 极端兜底：返回空结构
+                    return _build_empty_department_weekly_report(department or "")
+
+                # performance_overview
+                perf_overview = raw.get("performance_overview") if isinstance(raw.get("performance_overview"), dict) else {}
+                quarterly = perf_overview.get("quarterly_achievement") if isinstance(perf_overview.get("quarterly_achievement"), dict) else {}
+                weekly_deals = perf_overview.get("weekly_closed_deals") if isinstance(perf_overview.get("weekly_closed_deals"), dict) else {}
+                weekly_summary = weekly_deals.get("summary") if isinstance(weekly_deals.get("summary"), dict) else {}
+                deals_formatted = weekly_deals.get("deals_formatted")
+
+                # performance_forecast
+                perf_forecast = raw.get("performance_forecast") if isinstance(raw.get("performance_forecast"), dict) else {}
+                forecast_metrics = perf_forecast.get("forecast_metrics") if isinstance(perf_forecast.get("forecast_metrics"), dict) else {}
+                closed = forecast_metrics.get("closed") if isinstance(forecast_metrics.get("closed"), dict) else {}
+                commit = forecast_metrics.get("commit") if isinstance(forecast_metrics.get("commit"), dict) else {}
+                upside = forecast_metrics.get("upside") if isinstance(forecast_metrics.get("upside"), dict) else {}
+
+                # opportunity_progress
+                opp = raw.get("opportunity_progress") if isinstance(raw.get("opportunity_progress"), dict) else {}
+                stage_changes = opp.get("stage_changes") if isinstance(opp.get("stage_changes"), dict) else {}
+                stage_progress_details_raw = stage_changes.get("stage_progress_details")
+
+                stage_progress_details: list[dict[str, Any]] = []
+                if isinstance(stage_progress_details_raw, list) and stage_progress_details_raw:
+                    for item in stage_progress_details_raw:
+                        if not isinstance(item, dict):
+                            continue
+                        stage_progress_details.append(
+                            {
+                                "stage_name": str(item.get("stage_name", "") or ""),
+                                "companies_count": str(item.get("companies_count", 0) or 0),
+                            }
+                        )
+                else:
+                    # 与空结构对齐：至少给一个占位
+                    stage_progress_details = [{"stage_name": "", "companies_count": "0"}]
+
+                # sales_process_evaluation
+                spe = raw.get("sales_process_evaluation") if isinstance(raw.get("sales_process_evaluation"), dict) else {}
+                task_stats = spe.get("task_statistics") if isinstance(spe.get("task_statistics"), dict) else {}
+                task_summary = task_stats.get("summary") if isinstance(task_stats.get("summary"), dict) else {}
+                overdue = task_stats.get("overdue_tasks") if isinstance(task_stats.get("overdue_tasks"), dict) else {}
+                process_eval = spe.get("process_evaluation") if isinstance(spe.get("process_evaluation"), dict) else {}
+                sales_quadrants = process_eval.get("sales_quadrants") if isinstance(process_eval.get("sales_quadrants"), dict) else {}
+
+                resolved_department = department or ""
+
                 return {
-                    "success": False,
-                    "message": f"{start_date} 到 {end_date} 没有找到任何周报数据",
-                    "data": {}
+                    "performance_overview": [
+                        {
+                            "achievement_amount": _fmt_amount_yuan_to_wanyuan(quarterly.get("achievement_amount", 0.0)),
+                            "completion_rate": _fmt_rate(quarterly.get("completion_rate", 0.0)),
+                            "new_closed_amount": _fmt_amount_yuan_to_wanyuan(weekly_summary.get("new_closed_amount", 0.0)),
+                            "customers_count": str(weekly_summary.get("customers_count", 0) or 0),
+                            "opportunities_count": str(weekly_summary.get("opportunities_count", 0) or 0),
+                            # deals_formatted 是已经处理好的字符串，可以直接使用
+                            "deals_formatted": deals_formatted,
+                        }
+                    ],
+                    "performance_forecast": [
+                        {
+                            "forecast_insight": str(perf_forecast.get("forecast_insight", "") or ""),
+                            "closed_amount": _fmt_amount_yuan_to_wanyuan(closed.get("amount", 0.0)),
+                            "closed_weekly_change": _fmt_change(closed.get("weekly_change", 0.0), closed.get("weekly_change_direction")),
+                            "commit_amount": _fmt_amount_yuan_to_wanyuan(commit.get("amount", 0.0)),
+                            "commit_weekly_change": _fmt_change(commit.get("weekly_change", 0.0), commit.get("weekly_change_direction")),
+                            "upside_amount": _fmt_amount_yuan_to_wanyuan(upside.get("amount", 0.0)),
+                            "upside_weekly_change": _fmt_change(upside.get("weekly_change", 0.0), upside.get("weekly_change_direction")),
+                        }
+                    ],
+                    "opportunity_progress": [
+                        {
+                            "weekly_new_opportunities_count": str(stage_changes.get("weekly_new_opportunities_count", 0) or 0),
+                            "total_opportunities_in_progress": str(stage_changes.get("total_opportunities_in_progress", 0) or 0),
+                        }
+                    ],
+                    "stage_progress_details": stage_progress_details,
+                    "sales_process_evaluation": [
+                        {
+                            "total_tasks": str(task_summary.get("total_tasks", 0) or 0),
+                            "completed_tasks": str(task_summary.get("completed_tasks", 0) or 0),
+                            "uncompleted_tasks": str(task_summary.get("uncompleted_tasks", 0) or 0),
+                            "cancelled_tasks": str(task_summary.get("cancelled_tasks", 0) or 0),
+                            "completion_rate": _fmt_rate(task_summary.get("completion_rate", 0.0)),
+                            "completion_rate_change": _fmt_change(
+                                task_summary.get("completion_rate_change", 0.0),
+                                task_summary.get("completion_rate_change_direction"),
+                            ),
+                            "overdue_tasks_count": str(overdue.get("count", 0) or 0),
+                            "overdue_tasks_affected_customers_count": str(overdue.get("affected_customers_count", 0) or 0),
+                            "overdue_tasks_overview": str(overdue.get("overview", "") or ""),
+                        }
+                    ],
+                    "sales_quadrants": [
+                        {
+                            "behavior_hh": _join_names(sales_quadrants.get("behavior_hh")),
+                            "behavior_hl": _join_names(sales_quadrants.get("behavior_hl")),
+                            "behavior_lh": _join_names(sales_quadrants.get("behavior_lh")),
+                            "behavior_ll": _join_names(sales_quadrants.get("behavior_ll")),
+                        }
+                    ],
+                    "department_name": resolved_department,
+                    "start_date": start_date,
+                    "end_date": end_date,
                 }
-            
-            logger.info(f"CRM部门周报数据生成完成，共 {len(department_reports)} 个部门")
-            
-            # 生成公司周报数据
-            company_weekly_report = crm_statistics_service.aggregate_company_weekly_report(
-                session=session,
-                start_date=start_date,
-                end_date=end_date
+
+            def _build_empty_department_weekly_report(department: str) -> dict[str, Any]:
+                """构造空周报（接口无数据/失败时兜底），用于仍然推送给部门负责人。"""
+                return {
+                    # 下面字段保持与模板变量结构一致，便于模板渲染
+                    "performance_overview": [
+                        {
+                            "achievement_amount": _fmt_amount_yuan_to_wanyuan(0.0),
+                            "completion_rate": _fmt_rate(0.0),
+                            "new_closed_amount": _fmt_amount_yuan_to_wanyuan(0.0),
+                            "customers_count": "0",
+                            "opportunities_count": "0",
+                            "deals_formatted": ""
+                        }
+                    ],
+                    "performance_forecast": [
+                        {
+                            "forecast_insight": "",
+                            "closed_amount": _fmt_amount_yuan_to_wanyuan(0.0),
+                            "closed_weekly_change": _fmt_change(0.0, "increase"),
+                            "commit_amount": _fmt_amount_yuan_to_wanyuan(0.0),
+                            "commit_weekly_change": _fmt_change(0.0, "increase"),
+                            "upside_amount": _fmt_amount_yuan_to_wanyuan(0.0),
+                            "upside_weekly_change": _fmt_change(0.0, "increase")
+                        }
+                    ],
+                    "opportunity_progress": [
+                        {
+                            "weekly_new_opportunities_count": "0",
+                            "total_opportunities_in_progress": "0"
+                        }
+                    ],
+                    "stage_progress_details": [
+                        {
+                            "stage_name": "",
+                            "companies_count": "0"
+                        }
+                    ],
+                    "sales_process_evaluation": [
+                        {
+                            "total_tasks": "0",
+                            "completed_tasks": "0",
+                            "uncompleted_tasks": "0",
+                            "cancelled_tasks": "0",
+                            "completion_rate": _fmt_rate(0.0),
+                            "completion_rate_change": _fmt_change(0.0, "increase"),
+                            "overdue_tasks_count": "0",
+                            "overdue_tasks_affected_customers_count": "0",
+                            "overdue_tasks_overview": ""
+                        }
+                    ],
+                    "sales_quadrants": [
+                        {
+                            "behavior_hh": "",
+                            "behavior_hl": "",
+                            "behavior_lh": "",
+                            "behavior_ll": ""
+                        }
+                    ],
+                    # 推送/模板常用的顶层兜底字段
+                    "department_name": department,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                }
+
+            # 1) 部门 & 负责人：参照日报逻辑，优先从 OAuth 服务获取（可覆盖“无数据部门也推送”）
+            departments_with_managers = crm_statistics_service._get_departments_with_managers_from_oauth()
+
+            # OAuth 异常兜底：回退到本地 profile 的部门负责人集合（至少不影响线上推送）
+            if not departments_with_managers:
+                from app.repositories.user_profile import user_profile_repo
+                dept_managers = user_profile_repo.get_all_departments_with_managers(session)
+                departments_with_managers = {}
+                for dept_name, manager in dept_managers.items():
+                    if dept_name and manager is not None:
+                        open_id = getattr(manager.oauth_user, "open_id", None)
+                        platform = getattr(manager.oauth_user, "provider", None)
+                        if open_id and platform:
+                            departments_with_managers[dept_name] = [{
+                                "open_id": open_id,
+                                "name": manager.name or manager.direct_manager_name or "",
+                                "type": "department_manager",
+                                "department": dept_name,
+                                "receive_id_type": "open_id",
+                                "platform": platform,
+                            }]
+
+            # 预取周跟进总结的 summary_content（避免每个部门单独查库）
+            dept_names = list(departments_with_managers.keys())
+            dept_weekly_followup_summary_by_dept: dict[str, str] = {}
+            if dept_names:
+                dept_summaries = session.exec(
+                    select(CRMWeeklyFollowupSummary).where(
+                        CRMWeeklyFollowupSummary.week_start == start_date,
+                        CRMWeeklyFollowupSummary.week_end == end_date,
+                        CRMWeeklyFollowupSummary.summary_type == "department",
+                        CRMWeeklyFollowupSummary.department_name.in_(dept_names),
+                    )
+                ).all()
+                dept_weekly_followup_summary_by_dept = {
+                    (s.department_name or ""): (s.summary_content or "") for s in dept_summaries
+                }
+
+            company_weekly_followup_summary: str = ""
+            company_summary = session.exec(
+                select(CRMWeeklyFollowupSummary).where(
+                    CRMWeeklyFollowupSummary.week_start == start_date,
+                    CRMWeeklyFollowupSummary.week_end == end_date,
+                    CRMWeeklyFollowupSummary.summary_type == "company",
+                    CRMWeeklyFollowupSummary.department_name == "",
+                )
+            ).first()
+            if company_summary:
+                company_weekly_followup_summary = company_summary.summary_content or ""
+
+            # 2) 逐部门获取周报：即使接口失败/无数据，也要推送空周报
+            if not report_type or report_type == "department":
+                for department_name, managers in departments_with_managers.items():
+                    if not managers:
+                        continue
+                    try:
+                        dept_report = _aldebaran_fetch_weekly_report(
+                            report_year=report_year,
+                            report_week_of_year=report_week_of_year,
+                            department_name=department_name,
+                        )
+                    except Exception as e:
+                        logger.warning(f"获取部门周报失败，改为推送空周报: department={department_name}, err={e}")
+                        dept_report = _build_empty_department_weekly_report(department_name)
+                    else:
+                        # 接口返回有数据时，重组结构以适配模板
+                        dept_report = _rebuild_weekly_report_for_template(dept_report, department_name)
+
+                    # 补齐卡片模板用的超链接变量（URL）
+                    report_info_1 = crm_statistics_service._get_weekly_report_info(session, "review1s", end_date, department_name)
+                    report_info_5 = crm_statistics_service._get_weekly_report_info(session, "review5", end_date, department_name)
+                    dept_report["weekly_review_1_page"] = (
+                        crm_statistics_service._get_weekly_report_url(report_info_1["execution_id"], "review1s")
+                        if report_info_1 and report_info_1.get("execution_id")
+                        else f"{settings.REVIEW_REPORT_HOST}"
+                    )
+                    dept_report["weekly_review_5_page"] = (
+                        crm_statistics_service._get_weekly_report_url(report_info_5["execution_id"], "review5")
+                        if report_info_5 and report_info_5.get("execution_id")
+                        else f"{settings.REVIEW_REPORT_HOST}"
+                    )
+                    dept_report["weekly_followup_page"] = (
+                        f"{settings.REVIEW_REPORT_HOST}/review/opportunitySummary"
+                        f"?department_name={quote_plus(department_name)}"
+                        f"&week_start={start_date.isoformat()}&week_end={end_date.isoformat()}"
+                    )
+                    dept_report["weekly_followup_summary"] = dept_weekly_followup_summary_by_dept.get(department_name, "")
+
+                    department_reports.append(dept_report)
+
+            # 3) 公司周报：仍按接口获取（若失败则跳过公司推送）
+            if not report_type or report_type == "company":
+                try:
+                    company_weekly_report = _aldebaran_fetch_weekly_report(
+                        report_year=report_year,
+                        report_week_of_year=report_week_of_year,
+                        department_name=None,
+                    )
+                    company_weekly_report = _rebuild_weekly_report_for_template(company_weekly_report, None)
+
+                    report_info_1 = crm_statistics_service._get_weekly_report_info(session, "review1", end_date, None)
+                    report_info_5 = crm_statistics_service._get_weekly_report_info(session, "review5", end_date, None)
+                    company_weekly_report["weekly_review_1_page"] = (
+                        crm_statistics_service._get_weekly_report_url(report_info_1["execution_id"], "review1")
+                        if report_info_1 and report_info_1.get("execution_id")
+                        else f"{settings.REVIEW_REPORT_HOST}"
+                    )
+                    company_weekly_report["weekly_review_5_page"] = (
+                        crm_statistics_service._get_weekly_report_url(report_info_5["execution_id"], "review5")
+                        if report_info_5 and report_info_5.get("execution_id")
+                        else f"{settings.REVIEW_REPORT_HOST}"
+                    )
+                    company_weekly_report["weekly_followup_page"] = (
+                        f"{settings.REVIEW_REPORT_HOST}/review/opportunitySummary"
+                        f"?week_start={start_date.isoformat()}&week_end={end_date.isoformat()}"
+                    )
+                    company_weekly_report["weekly_followup_summary"] = company_weekly_followup_summary
+                except Exception as e:
+                    logger.error(f"获取公司周报失败: err={e}")
+
+            if not department_reports and not company_weekly_report:
+                logger.warning(
+                    "未获取到任何周报数据（也没有可推送部门负责人）: %s 到 %s (report_year=%s, report_week=%s)",
+                    start_date,
+                    end_date,
+                    report_year,
+                    report_week_of_year,
+                )
+                return {"success": False, "message": "未获取到任何部门负责人或周报数据", "data": {}}
+
+            logger.info(
+                "周报接口数据获取完成: 部门周报=%s 个，公司周报=%s",
+                len(department_reports),
+                bool(company_weekly_report),
             )
-            
-            if company_weekly_report:
-                logger.info("CRM公司周报数据生成完成")
-                company_report_generated = True
-            else:
-                logger.warning(f"{start_date} 到 {end_date} 没有找到任何公司周报数据")
-                company_report_generated = False
+            company_report_generated = bool(company_weekly_report)
             
             # 如果启用了飞书推送，发送周报通知
             if settings.CRM_WEEKLY_REPORT_FEISHU_ENABLED:
@@ -250,10 +645,14 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                     # 发送部门周报通知
                     for department_report in department_reports:
                         try:
+                            # recipients：优先使用 OAuth 返回的负责人列表（无数据部门也能推送）
+                            dept_name = department_report.get("department_name")
+                            recipients = departments_with_managers.get(dept_name) if dept_name else None
                             # 发送部门周报通知给部门负责人
                             result = platform_notification_service.send_weekly_report_notification(
                                 db_session=session,
-                                department_report_data=department_report
+                                department_report_data=department_report,
+                                recipients=recipients,
                             )
                             
                             if result["success"]:
@@ -301,6 +700,8 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                     "end_date": end_date.isoformat(),
                     "department_count": len(department_reports),
                     "company_report_generated": company_report_generated,
+                    "report_year": report_year,
+                    "report_week_of_year": report_week_of_year,
                     "feishu_enabled": True,
                     "department_success_count": department_success_count,
                     "department_failed_count": department_failed_count,
@@ -315,6 +716,8 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                     "end_date": end_date.isoformat(),
                     "department_count": len(department_reports),
                     "company_report_generated": company_report_generated,
+                    "report_year": report_year,
+                    "report_week_of_year": report_week_of_year,
                     "feishu_enabled": False,
                     "message": f"成功处理了 {len(department_reports)} 个部门的周报数据，{'生成' if company_report_generated else '未生成'}公司周报数据，飞书推送已禁用"
                 }
@@ -346,7 +749,7 @@ def generate_crm_weekly_followup_summary(self, start_date_str=None, end_date_str
                 logger.error(f"无效的日期格式: start_date={start_date_str}, end_date={end_date_str}")
                 return {"success": False, "message": "无效的日期格式", "data": {}}
         else:
-            today = datetime.now().date()
+            today = _beijing_today_date()
             days_since_sunday = (today.weekday() + 1) % 7
             last_sunday = today - timedelta(days=days_since_sunday + 7)
             this_saturday = last_sunday + timedelta(days=6)
@@ -528,7 +931,7 @@ def send_sales_task_summary(self, start_date_str=None, end_date_str=None):
                 }
         else:
             # 默认处理上周日到本周六的数据
-            today = datetime.now().date()
+            today = _beijing_today_date()
             # 计算上周日（今天往前推7天，然后找到最近的周日）
             days_since_sunday = (today.weekday() + 1) % 7  # 0=周一，1=周二，...，6=周日
             last_sunday = today - timedelta(days=days_since_sunday + 7)
