@@ -266,8 +266,11 @@ def get_weekly_followup_detail(
         WeeklyFollowupEntityRowOut(
             id=e.id,
             department_name=e.department_name,
+            account_id=e.account_id,
             account_name=e.account_name,
+            opportunity_id=e.opportunity_id,
             opportunity_name=e.opportunity_name,
+            partner_id=e.partner_id,
             partner_name=e.partner_name,
             owner_name=e.owner_name,
             progress=e.progress,
@@ -312,7 +315,6 @@ def trigger_weekly_followup_summary_task(
     task = generate_crm_weekly_followup_summary.delay(
         start_date_str=start_date.isoformat() if start_date else None,
         end_date_str=end_date.isoformat() if end_date else None,
-        use_llm=payload.use_llm,
     )
     return WeeklyFollowupTriggerTaskOut(task_id=task.id, start_date=start_date, end_date=end_date, status="PENDING")
 
@@ -483,8 +485,11 @@ def save_weekly_followup_comments(
     return WeeklyFollowupEntityRowOut(
         id=entity.id,
         department_name=entity.department_name,
+        account_id=entity.account_id,
         account_name=entity.account_name,
+        opportunity_id=entity.opportunity_id,
         opportunity_name=entity.opportunity_name,
+        partner_id=entity.partner_id,
         partner_name=entity.partner_name,
         owner_name=entity.owner_name,
         progress=entity.progress,

@@ -760,8 +760,11 @@ WeeklyFollowupScope = Literal["my", "department", "company"]
 class WeeklyFollowupEntityRowOut(BaseModel):
     id: UUID
     department_name: str
+    account_id: Optional[str] = None
     account_name: Optional[str] = None
+    opportunity_id: Optional[str] = None
     opportunity_name: Optional[str] = None
+    partner_id: Optional[str] = None
     partner_name: Optional[str] = None
     owner_name: Optional[str] = None
     progress: Optional[str] = None
