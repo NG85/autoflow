@@ -3,6 +3,7 @@ import csv
 import io
 import hashlib
 from typing import List, Literal, Optional
+from zoneinfo import ZoneInfo
 from app.api.deps import CurrentUserDep, SessionDep
 from app.exceptions import InternalServerError
 from app.models.customer_document import CustomerDocument
@@ -28,6 +29,19 @@ from app.api.routes.crm.models import (
     DepartmentSalesTaskWeeklySummaryResponse,
     CompanySalesTaskWeeklySummaryResponse,
     CustomerDocumentUploadRequest,
+    WeeklyFollowupEntityRowOut,
+    WeeklyFollowupDetailQueryIn,
+    WeeklyFollowupDetailOut,
+    WeeklyFollowupWeeklyListQueryIn,
+    WeeklyFollowupWeeklyListOut,
+    WeeklyFollowupWeeklyListItemOut,
+    WeeklyFollowupTriggerTaskIn,
+    WeeklyFollowupTriggerTaskOut,
+    WeeklyFollowupSummaryItemOut,
+    WeeklyFollowupDepartmentOption,
+    WeeklyFollowupScope,
+    WeeklyFollowupEntityPageOut,
+    SaveWeeklyFollowupCommentsIn,
 )
 from app.crm.save_engine import (
     save_visit_record_to_crm_table, 
@@ -47,7 +61,13 @@ from sqlmodel import select, or_, distinct, func
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
 from app.models.crm_accounts import CRMAccount
 from app.models.user_profile import UserProfile
+from app.models.crm_weekly_followup_summary import CRMWeeklyFollowupSummary
+from app.models.crm_weekly_followup_entity_summary import CRMWeeklyFollowupEntitySummary
 from uuid import UUID
+from pydantic import BaseModel
+from app.repositories.user_profile import UserProfileRepo
+from app.repositories.visit_record import visit_record_repo
+from app.repositories.user_department_relation import user_department_relation_repo
 
 
 logger = logging.getLogger(__name__)
@@ -59,6 +79,418 @@ view_registry = ViewRegistry()
 
 # Initialize view engine
 view_engine = CrmViewEngine(view_registry=view_registry)
+
+def _can_view_weekly_followup(db_session: SessionDep, user: CurrentUserDep) -> tuple[bool, bool, Optional[str], Optional[str]]:
+    """
+    Returns: (can_view, is_company_admin, user_department_id, user_department_name)
+    """
+    user_profile_repo = UserProfileRepo()
+    profile = user_profile_repo.get_by_user_id(db_session, user.id)
+    dept_name = profile.department if profile else None
+
+    # 部门信息优先从 user_department_relation 获取（更权威）；拿不到再兜底 profiles
+    dept_id = user_department_relation_repo.get_primary_department_by_user_ids(
+        db_session,
+        [str(user.id)],
+    ).get(str(user.id))
+
+    roles_and_permissions = visit_record_repo._get_user_roles_and_permissions(user.id)
+    permissions = roles_and_permissions.get("permissions", []) if isinstance(roles_and_permissions, dict) else []
+
+    is_company_admin = "report51:company:view" in permissions or visit_record_repo._is_admin_user(user.id, db_session, permissions)
+    # leader 判定：优先使用 user_department_relation.is_leader；兜底再用 profiles 的“无直属上级”口径
+    is_leader_flag = user_department_relation_repo.get_is_leader_by_user_ids(
+        db_session,
+        [str(user.id)],
+    ).get(str(user.id))
+    if is_leader_flag is None:
+        is_team_lead = bool(profile and profile.department and not profile.direct_manager_id)
+    else:
+        is_team_lead = bool(is_leader_flag)
+    has_dept_view = bool("report51:dept:view" in permissions)
+
+    can_view = bool(is_company_admin or is_team_lead or has_dept_view or user.is_superuser)
+    return can_view, bool(is_company_admin or user.is_superuser), dept_id, dept_name
+
+
+def _can_edit_weekly_followup_comments(db_session: SessionDep, user: CurrentUserDep) -> tuple[bool, bool, Optional[str], Optional[str]]:
+    """
+    评论编辑权限：仅团队负责人或公司管理员
+    Returns: (can_edit, is_company_admin, user_department_id, user_department_name)
+    """
+    can_view, is_company_admin, dept_id, dept_name = _can_view_weekly_followup(db_session, user)
+    if is_company_admin:
+        return True, True, dept_id, dept_name
+
+    # 仅 leader 可以编辑评论（普通销售不可编辑）
+    is_leader_flag = user_department_relation_repo.get_is_leader_by_user_ids(
+        db_session,
+        [str(user.id)],
+    ).get(str(user.id))
+    if is_leader_flag is True:
+        return True, False, dept_id, dept_name
+
+    # fallback：如果缺少 relation 数据，沿用 profiles 的 leader 口径
+    user_profile_repo = UserProfileRepo()
+    profile = user_profile_repo.get_by_user_id(db_session, user.id)
+    is_team_lead_fallback = bool(profile and profile.department and not profile.direct_manager_id)
+    return bool(is_team_lead_fallback), False, dept_id, dept_name
+
+
+@router.post("/crm/weekly-followup/detail")
+def get_weekly_followup_detail(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    payload: WeeklyFollowupDetailQueryIn,
+) -> WeeklyFollowupDetailOut:
+    """
+    查询单次周总结详情（整体总结 + scope 下实体明细列表）
+    """
+    can_view_team, is_company_admin, user_dept_id, user_dept_name = _can_view_weekly_followup(db_session, user)
+
+    scope = payload.scope
+    if scope == "company" and not is_company_admin:
+        raise HTTPException(status_code=403, detail="权限不足：仅公司管理员可查看 company scope")
+    # department scope：团队负责人/管理员可看全团队；普通销售允许访问，但仅返回“自己负责”的明细行
+
+    week_start = payload.start_date
+    week_end = payload.end_date
+    # 详情页明细列表需要完整展示（包含评论）
+    include_comments = True
+    is_sales_limited = bool(scope == "department" and (not is_company_admin) and (not can_view_team))
+
+    page = max(int(payload.page or 1), 1)
+    size = max(min(int(payload.size or 50), 200), 1)
+    offset = (page - 1) * size
+
+    # 解析部门过滤（仅 department scope）
+    dept_id = None
+    dept_name = None
+    if scope == "department":
+        if is_company_admin:
+            dept_id = (payload.department_id or "").strip() or None
+            dept_name = (payload.department_name or "").strip() or None
+            if dept_id is None and dept_name is None:
+                raise HTTPException(status_code=400, detail="department scope 需要指定 department_id 或 department_name")
+        else:
+            dept_id = user_dept_id
+            dept_name = user_dept_name
+            if dept_id is None and dept_name is None:
+                raise HTTPException(status_code=403, detail="无法获取本团队信息")
+
+    # summary（company/department）
+    summary_out: Optional[WeeklyFollowupSummaryItemOut] = None
+    if scope in {"company", "department"}:
+        stmt = select(CRMWeeklyFollowupSummary).where(
+            CRMWeeklyFollowupSummary.week_start == week_start,
+            CRMWeeklyFollowupSummary.week_end == week_end,
+            CRMWeeklyFollowupSummary.summary_type == ("company" if scope == "company" else "department"),
+        )
+        if scope == "company":
+            stmt = stmt.where(CRMWeeklyFollowupSummary.department_name == "")
+        else:
+            if dept_id:
+                stmt = stmt.where(CRMWeeklyFollowupSummary.department_id == dept_id)
+            elif dept_name:
+                stmt = stmt.where(CRMWeeklyFollowupSummary.department_name == dept_name)
+
+        s = db_session.exec(stmt).first()
+        if s:
+            # 普通销售查看 department scope：不返回团队整体 summary_content，避免泄露团队其他成员信息
+            summary_content = (s.summary_content or "") if not is_sales_limited else ""
+            summary_out = WeeklyFollowupSummaryItemOut(
+                id=s.id,
+                week_start=s.week_start,
+                week_end=s.week_end,
+                summary_type=s.summary_type,
+                department_id=s.department_id,
+                department_name=s.department_name,
+                title=s.title or "",
+                summary_content=summary_content,
+                created_at=s.created_at,
+                updated_at=s.updated_at,
+            )
+
+    # entities list
+    conds = [
+        CRMWeeklyFollowupEntitySummary.week_start == week_start,
+        CRMWeeklyFollowupEntitySummary.week_end == week_end,
+    ]
+    if scope == "my":
+        conds.append(CRMWeeklyFollowupEntitySummary.owner_user_id == str(user.id))
+    elif scope == "department":
+        if dept_id:
+            conds.append(CRMWeeklyFollowupEntitySummary.department_id == dept_id)
+        elif dept_name:
+            conds.append(CRMWeeklyFollowupEntitySummary.department_name == dept_name)
+        if is_sales_limited:
+            # 普通销售：只能看自己负责的商机/客户明细
+            conds.append(CRMWeeklyFollowupEntitySummary.owner_user_id == str(user.id))
+
+    def _to_comments(v: object) -> list[WeeklyFollowupEntityRowOut.WeeklyFollowupComment]:
+        if not include_comments:
+            return []
+        if not isinstance(v, list):
+            return []
+        out: list[WeeklyFollowupEntityRowOut.WeeklyFollowupComment] = []
+        for item in v:
+            if not isinstance(item, dict):
+                continue
+            try:
+                created_at_raw = item.get("created_at")
+                created_at = None
+                if created_at_raw:
+                    created_at = datetime.fromisoformat(str(created_at_raw))
+                out.append(
+                    WeeklyFollowupEntityRowOut.WeeklyFollowupComment(
+                        author_id=str(item.get("author_id") or ""),
+                        author=str(item.get("author") or ""),
+                        content=str(item.get("content") or ""),
+                        created_at=created_at,
+                    )
+                )
+            except Exception:
+                continue
+        return out
+
+    total = db_session.exec(select(func.count()).select_from(CRMWeeklyFollowupEntitySummary).where(*conds)).one()
+    entities = db_session.exec(
+        select(CRMWeeklyFollowupEntitySummary)
+        .where(*conds)
+        .order_by(CRMWeeklyFollowupEntitySummary.department_name, CRMWeeklyFollowupEntitySummary.updated_at.desc())
+        .offset(offset)
+        .limit(size)
+    ).all()
+
+    items = [
+        WeeklyFollowupEntityRowOut(
+            id=e.id,
+            department_name=e.department_name,
+            account_name=e.account_name,
+            opportunity_name=e.opportunity_name,
+            partner_name=e.partner_name,
+            owner_name=e.owner_name,
+            progress=e.progress,
+            risks=e.risks,
+            comments=_to_comments(e.comments),
+        )
+        for e in entities
+    ]
+
+    return WeeklyFollowupDetailOut(
+        scope=scope,
+        week_start=week_start,
+        week_end=week_end,
+        summary=summary_out,
+        entities=WeeklyFollowupEntityPageOut(total=int(total or 0), page=page, size=size, items=items),
+    )
+
+
+@router.post("/crm/weekly-followup/trigger")
+def trigger_weekly_followup_summary_task(
+    # db_session: SessionDep,
+    # user: CurrentUserDep,
+    payload: WeeklyFollowupTriggerTaskIn = Body(default=WeeklyFollowupTriggerTaskIn()),
+) -> WeeklyFollowupTriggerTaskOut:
+    """
+    人工触发“周跟进总结”生成任务（异步，返回 task_id）。
+    - 暂时不做权限校验，方便测试
+    - start_date/end_date 可不传；不传时任务内部按默认口径计算（上周日-本周六，北京时间）
+    """
+    # _, is_company_admin, _, _ = _can_view_weekly_followup(db_session, user)
+    # if not is_company_admin:
+    #     raise HTTPException(status_code=403, detail="权限不足：仅公司管理员可触发生成任务")
+
+    start_date = payload.start_date
+    end_date = payload.end_date
+    if (start_date is None) != (end_date is None):
+        raise HTTPException(status_code=400, detail="start_date/end_date 需要同时传或同时不传")
+
+    # 延迟导入，避免路由模块加载时引入 Celery task 依赖
+    from app.tasks.cron_jobs import generate_crm_weekly_followup_summary
+
+    task = generate_crm_weekly_followup_summary.delay(
+        start_date_str=start_date.isoformat() if start_date else None,
+        end_date_str=end_date.isoformat() if end_date else None,
+        use_llm=payload.use_llm,
+    )
+    return WeeklyFollowupTriggerTaskOut(task_id=task.id, start_date=start_date, end_date=end_date, status="PENDING")
+
+@router.post("/crm/weekly-followup/query")
+def list_weekly_followup_weekly_summaries(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    payload: WeeklyFollowupWeeklyListQueryIn = Body(default=WeeklyFollowupWeeklyListQueryIn()),
+) -> WeeklyFollowupWeeklyListOut:
+    """
+    每周跟进总结列表（每周一行）。
+    不同用户 scope 不同：
+    - department: 团队负责人/普通销售均可（返回团队周总结列表）
+    - company: 公司管理员（返回公司周总结列表）
+    """
+    can_view_team, is_company_admin, user_dept_id, user_dept_name = _can_view_weekly_followup(db_session, user)
+
+    scope = payload.scope
+    # 列表层只展示 company/department 的“周总结行”
+    if scope == "company" and not is_company_admin:
+        raise HTTPException(status_code=403, detail="权限不足：仅公司管理员可查看 company scope")
+
+    page = max(int(payload.page or 1), 1)
+    size = max(min(int(payload.page_size or 20), 200), 1)
+    offset = (page - 1) * size
+
+    dept_id = None
+    dept_name = None
+    if scope == "department":
+        if is_company_admin:
+            dept_id = (payload.department_id or "").strip() or None
+            dept_name = (payload.department_name or "").strip() or None
+        else:
+            # 非公司管理员：强制本部门（团队负责人/普通销售都一样）
+            dept_id = user_dept_id
+            dept_name = user_dept_name
+        if (not is_company_admin) and (dept_id is None and dept_name is None):
+            raise HTTPException(status_code=403, detail="无法获取本团队信息")
+
+    items: List[WeeklyFollowupWeeklyListItemOut] = []
+
+    if scope in {"company", "department"}:
+        conds = [
+            CRMWeeklyFollowupSummary.summary_type == ("company" if scope == "company" else "department"),
+        ]
+        if scope == "company":
+            conds.append(CRMWeeklyFollowupSummary.department_name == "")
+        else:
+            if dept_id:
+                conds.append(CRMWeeklyFollowupSummary.department_id == dept_id)
+            if dept_name:
+                conds.append(CRMWeeklyFollowupSummary.department_name == dept_name)
+
+        total = db_session.exec(select(func.count()).select_from(CRMWeeklyFollowupSummary).where(*conds)).one()
+        rows = db_session.exec(
+            select(CRMWeeklyFollowupSummary)
+            .where(*conds)
+            .order_by(CRMWeeklyFollowupSummary.week_start.desc(), CRMWeeklyFollowupSummary.updated_at.desc())
+            .offset(offset)
+            .limit(size)
+        ).all()
+        for s in rows:
+            items.append(
+                WeeklyFollowupWeeklyListItemOut(
+                    summary_id=s.id,
+                    scope=scope,
+                    week_start=s.week_start,
+                    week_end=s.week_end,
+                    department_id=s.department_id or "",
+                    department_name=s.department_name or "",
+                    title=s.title or "",
+                )
+            )
+        return WeeklyFollowupWeeklyListOut(total=int(total or 0), page=page, size=size, items=items)
+    raise HTTPException(status_code=400, detail="scope must be 'department' or 'company'")
+
+@router.post("/crm/weekly-followup/entities/{entity_id}/comments")
+def save_weekly_followup_comments(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    entity_id: UUID,
+    payload: SaveWeeklyFollowupCommentsIn,
+) -> WeeklyFollowupEntityRowOut:
+    """
+    3) 修改保存评论（整体覆盖保存）
+    """
+    can_edit, is_company_admin, user_dept_id, user_dept_name = _can_edit_weekly_followup_comments(db_session, user)
+    if not can_edit:
+        raise HTTPException(status_code=403, detail="权限不足：仅团队负责人或管理者可编辑评论")
+
+    entity = db_session.exec(select(CRMWeeklyFollowupEntitySummary).where(CRMWeeklyFollowupEntitySummary.id == entity_id)).first()
+    if entity is None:
+        raise HTTPException(status_code=404, detail="Entity summary not found")
+
+    if not is_company_admin:
+        if user_dept_id and getattr(entity, "department_id", None) and entity.department_id != user_dept_id:
+            raise HTTPException(status_code=403, detail="权限不足：只能编辑本团队记录")
+        if not user_dept_id and user_dept_name and entity.department_name != user_dept_name:
+            raise HTTPException(status_code=403, detail="权限不足：只能编辑本团队记录")
+
+    # 安全保护：只能覆盖“自己写的评论”，不得覆盖/删除他人的评论
+    current_user_id = str(getattr(user, "id", "") or "")
+    now_bj = datetime.now(ZoneInfo("Asia/Shanghai"))
+
+    existing_raw = entity.comments if isinstance(entity.comments, list) else []
+    kept_others: list[dict] = []
+    for item in existing_raw:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("author_id") or "") != current_user_id:
+            kept_others.append(item)
+
+    # 仅采纳 payload 中 author_id=当前用户 的评论；created_at 为空则用北京时间补齐
+    my_comments: list[dict] = []
+    for c in (payload.comments or []):
+        if (c.author_id or "") != current_user_id:
+            continue
+        created_at = c.created_at or now_bj
+        my_comments.append(
+            {
+                "author_id": current_user_id,
+                "author": (c.author or "") or (getattr(user, "email", "") or getattr(user, "name", "") or ""),
+                "content": c.content,
+                "created_at": created_at.isoformat(),
+            }
+        )
+
+    # 合并回写（保持大体时间顺序；时间解析失败则放末尾）
+    merged = kept_others + my_comments
+
+    def _sort_key(x: dict) -> tuple[int, str]:
+        v = str(x.get("created_at") or "")
+        try:
+            return (0, datetime.fromisoformat(v).isoformat())
+        except Exception:
+            return (1, v)
+
+    merged.sort(key=_sort_key)
+    entity.comments = merged
+    db_session.add(entity)
+    db_session.commit()
+    db_session.refresh(entity)
+
+    def _to_comments(v: object) -> list[WeeklyFollowupEntityRowOut.WeeklyFollowupComment]:
+        if not isinstance(v, list):
+            return []
+        out: list[WeeklyFollowupEntityRowOut.WeeklyFollowupComment] = []
+        for item in v:
+            if not isinstance(item, dict):
+                continue
+            try:
+                created_at_raw = item.get("created_at")
+                created_at = None
+                if created_at_raw:
+                    created_at = datetime.fromisoformat(str(created_at_raw))
+                out.append(
+                    WeeklyFollowupEntityRowOut.WeeklyFollowupComment(
+                        author_id=str(item.get("author_id") or ""),
+                        author=str(item.get("author") or ""),
+                        content=str(item.get("content") or ""),
+                        created_at=created_at,
+                    )
+                )
+            except Exception:
+                continue
+        return out
+
+    return WeeklyFollowupEntityRowOut(
+        id=entity.id,
+        department_name=entity.department_name,
+        account_name=entity.account_name,
+        opportunity_name=entity.opportunity_name,
+        partner_name=entity.partner_name,
+        owner_name=entity.owner_name,
+        progress=entity.progress,
+        risks=entity.risks,
+        comments=_to_comments(entity.comments),
+    )
 
 
 @router.post("/crm/views", response_model=Page[Account])

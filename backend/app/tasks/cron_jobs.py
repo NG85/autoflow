@@ -13,6 +13,7 @@ from app.services.crm_statistics_service import crm_statistics_service
 from app.services.platform_notification_service import platform_notification_service
 from app.services.crm_writeback_service import crm_writeback_service
 from app.services.crm_sales_task_statistics_service import crm_sales_task_statistics_service
+from app.services.crm_weekly_followup_service import crm_weekly_followup_service
 from app.tasks.knowledge_base import import_documents_from_kb_datasource
 
 logger = logging.getLogger(__name__)
@@ -322,6 +323,53 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
         logger.exception(f"CRM周报数据生成任务执行失败: {e}")
         # 使用Celery的重试机制
         self.retry(exc=e, countdown=300)  # 5分钟后重试
+
+
+@app.task(bind=True, max_retries=3)
+def generate_crm_weekly_followup_summary(self, start_date_str=None, end_date_str=None, use_llm: bool | None = None):
+    """
+    生成“周跟进总结”（公司/团队整体描述 + 明细列表），用于后台页面展示与人工评论。
+    周区间口径：周日到周六，与现有周报一致。
+
+    Args:
+        start_date_str: 开始日期 YYYY-MM-DD，不传默认上周日
+        end_date_str: 结束日期 YYYY-MM-DD，不传默认本周六
+        use_llm: 是否使用 LLM 生成（不传默认 True）
+    """
+    try:
+        if use_llm is None:
+            use_llm = True
+
+        # 计算日期范围
+        if start_date_str and end_date_str:
+            try:
+                start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+                end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
+                logger.info(f"开始执行CRM周跟进总结生成任务，日期范围: {start_date} 到 {end_date}")
+            except ValueError:
+                logger.error(f"无效的日期格式: start_date={start_date_str}, end_date={end_date_str}")
+                return {"success": False, "message": "无效的日期格式", "data": {}}
+        else:
+            today = datetime.now().date()
+            days_since_sunday = (today.weekday() + 1) % 7
+            last_sunday = today - timedelta(days=days_since_sunday + 7)
+            this_saturday = last_sunday + timedelta(days=6)
+            start_date = last_sunday
+            end_date = this_saturday
+            logger.info(f"开始执行CRM周跟进总结生成任务，默认处理上周日到本周六: {start_date} 到 {end_date}")
+
+        with Session(engine) as session:
+            result = crm_weekly_followup_service.generate_weekly_followup(
+                session=session,
+                week_start=start_date,
+                week_end=end_date,
+                use_llm=bool(use_llm),
+            )
+            return {"success": True, "message": "ok", "data": result}
+
+    except Exception as e:
+        logger.exception(f"CRM周跟进总结生成任务执行失败: {e}")
+        self.retry(exc=e, countdown=300)
 
 
 @app.task(bind=True)

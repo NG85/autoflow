@@ -78,6 +78,8 @@ class CRMAccount(SQLModel, table=True):
 
     # 新增字段 - 第四批：基于先导crm需求新增
     account_type: Optional[str] = Field(nullable=True, max_length=255, description="实体类型")
+    
+    person_in_charge_id: Optional[str] = Field(nullable=True, max_length=255, description="负责人ID")
 
     # 备注: 在SQLModel中指定表名
     __tablename__ = "crm_accounts"
