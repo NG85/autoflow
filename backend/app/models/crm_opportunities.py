@@ -226,6 +226,8 @@ class CRMOpportunity(SQLModel, table=True):
     is_poc: Optional[str] = Field(nullable=True, max_length=255, description="是否进行poc")
     poc_status: Optional[str] = Field(nullable=True, max_length=255, description="PoC 状态")
     sales_order_review_status: Optional[str] = Field(nullable=True, max_length=255, description="销售订单审核状态")
+    
+    owner_id: Optional[str] = Field(nullable=True, max_length=255, description="负责人ID")
 
     __tablename__ = "crm_opportunities"
     

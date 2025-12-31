@@ -1096,7 +1096,8 @@ class PlatformNotificationService:
     def send_weekly_report_notification(
         self,
         db_session: Session,
-        department_report_data: Dict[str, Any]
+        department_report_data: Dict[str, Any],
+        recipients: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """发送部门周报飞书卡片通知"""
         
@@ -1110,11 +1111,12 @@ class PlatformNotificationService:
                 "success_count": 0
             }
         
-        # 获取推送对象 - 部门负责人
-        recipients = self.get_recipients_for_department_report_from_profile(
-            db_session=db_session,
-            department_name=department_name,
-        )
+        # 获取推送对象 - 如果未提供，则从profile中获取部门负责人(向后兼容)
+        if not recipients:
+            recipients = self.get_recipients_for_department_report_from_profile(
+                db_session=db_session,
+                department_name=department_name,
+            )
         
         if not recipients:
             logger.warning(f"No department manager found for department weekly report of {department_name}")
@@ -1129,8 +1131,8 @@ class PlatformNotificationService:
         # 部门周报卡片模板
         template_id_by_platform = {
             PLATFORM_DINGTALK: "a870d934-e925-49dc-a4af-c6f3b79547fa.schema",
-            PLATFORM_FEISHU: "AAqzdm8MsqNjD",
-            PLATFORM_LARK: "AAqzdm8MsqNjD",
+            PLATFORM_FEISHU: "AAqX5j2jPq2Cn",
+            PLATFORM_LARK: "AAqX5j2jPq2Cn",
         }
         
         # 按平台分组接收者
@@ -1198,8 +1200,8 @@ class PlatformNotificationService:
         # 公司周报卡片模板
         template_id_by_platform = {
             PLATFORM_DINGTALK: "ac07cfb0-d549-469f-92c8-814d7afa66f8.schema",
-            PLATFORM_FEISHU: "AAqzdMIhll3Et",
-            PLATFORM_LARK: "AAqzdMIhll3Et",
+            PLATFORM_FEISHU: "AAqvMFGD8n8bZ",
+            PLATFORM_LARK: "AAqvMFGD8n8bZ",
         }
         
         # 按平台分组接收者
@@ -1224,23 +1226,23 @@ class PlatformNotificationService:
         Returns:
             转换后的数据，所有数值和日期字段都转换为字符串
         """
-        converted_data = report_data.copy()
-        
-        # 处理statistics数组中的数值字段
-        if 'statistics' in converted_data and isinstance(converted_data['statistics'], list):
-            for stats in converted_data['statistics']:
-                if isinstance(stats, dict):
-                    for key, value in stats.items():
-                        # 将所有数值转换为字符串
-                        if isinstance(value, (int, float)):
-                            stats[key] = str(value)
-        
-        # 处理其他可能的数值和日期字段
-        for key, value in converted_data.items():
-            if isinstance(value, (int, float)) and key not in ['statistics']:
-                converted_data[key] = str(value)
-            elif hasattr(value, 'isoformat'):  # 处理date对象
-                converted_data[key] = value.isoformat()
+        def _deep_convert(obj: Any) -> Any:
+            """递归把数值/date/datetime 转为字符串，适配嵌套结构的周报接口返回。"""
+            if isinstance(obj, (int, float)):
+                return str(obj)
+            if hasattr(obj, "isoformat"):
+                # date/datetime
+                try:
+                    return obj.isoformat()
+                except Exception:
+                    return str(obj)
+            if isinstance(obj, dict):
+                return {k: _deep_convert(v) for k, v in obj.items()}
+            if isinstance(obj, list):
+                return [_deep_convert(v) for v in obj]
+            return obj
+
+        converted_data = _deep_convert(report_data)
         
         # 添加字段名映射，用于卡片展示
         from app.services.crm_config_service import add_field_mapping_to_data

@@ -38,3 +38,5 @@ from .crm_account_assessment import CRMAccountAssessment
 from .document_contents import DocumentContent
 from .crm_todos_weekly_metrics import CRMTodosWeeklyMetrics
 from .user_department_relation import UserDepartmentRelation
+from .crm_weekly_followup_summary import CRMWeeklyFollowupSummary
+from .crm_weekly_followup_entity_summary import CRMWeeklyFollowupEntitySummary

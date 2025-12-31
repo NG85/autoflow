@@ -11,6 +11,34 @@ from app.repositories.base_repo import BaseRepo
 class UserDepartmentRelationRepo(BaseRepo):
     model_cls = UserDepartmentRelation
 
+    def get_is_leader_by_user_ids(
+        self,
+        db_session: Session,
+        user_ids: Iterable[str],
+    ) -> dict[str, bool]:
+        """
+        批量获取用户是否为 leader（按 user_id 分组）。
+
+        规则：
+        - 任意一条记录 is_leader=1，则认为该用户是 leader
+        """
+        ids = [x for x in (user_ids or []) if x]
+        if not ids:
+            return {}
+
+        rows = db_session.exec(
+            select(UserDepartmentRelation.user_id, UserDepartmentRelation.is_leader)
+            .where(UserDepartmentRelation.user_id.in_(ids))
+        ).all()
+
+        result: dict[str, bool] = {}
+        for user_id, is_leader in rows:
+            if not user_id:
+                continue
+            # 只要出现 True 就锁定为 True
+            result[user_id] = bool(result.get(user_id, False) or bool(is_leader))
+        return result
+
     def get_primary_department_by_user_ids(
         self,
         db_session: Session,

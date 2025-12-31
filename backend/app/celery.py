@@ -19,6 +19,7 @@ app.conf.update(
         # {"app.tasks.evaluate.*": {"queue": "evaluation"}},
         {"app.tasks.cron_jobs.generate_crm_daily_statistics": {"queue": "cron"}},
         {"app.tasks.cron_jobs.generate_crm_weekly_report": {"queue": "cron"}},
+        {"app.tasks.cron_jobs.generate_crm_weekly_followup_summary": {"queue": "cron"}},
         {"app.tasks.cron_jobs.crm_visit_records_writeback": {"queue": "cron"}},
         {"app.tasks.cron_jobs.send_sales_task_summary": {"queue": "cron"}},
         {"app.tasks.bitable_import.*": {"queue": "cron"}},
@@ -124,6 +125,29 @@ if settings.CRM_WEEKLY_REPORT_ENABLED:
     app.conf.beat_schedule['generate_crm_weekly_report'] = {
         'task': 'app.tasks.cron_jobs.generate_crm_weekly_report',
         'schedule': weekly_schedule,
+    }
+
+# CRM周跟进总结任务（公司/部门 + 列表明细）
+if settings.CRM_WEEKLY_FOLLOWUP_ENABLED:
+    cron_expr = settings.CRM_WEEKLY_FOLLOWUP_CRON
+    cron_fields = cron_expr.strip().split()
+    if len(cron_fields) == 5:
+        minute, hour, day_of_month, month_of_year, day_of_week = cron_fields
+        weekly_followup_schedule = crontab(
+            minute=minute,
+            hour=hour,
+            day_of_month=day_of_month,
+            month_of_year=month_of_year,
+            day_of_week=day_of_week,
+        )
+    else:
+        # 默认：每周日上午9:30（需早于 generate_crm_weekly_report）
+        weekly_followup_schedule = crontab(hour=9, minute=30, day_of_week=0)
+
+    app.conf.beat_schedule = getattr(app.conf, 'beat_schedule', {})
+    app.conf.beat_schedule['generate_crm_weekly_followup_summary'] = {
+        'task': 'app.tasks.cron_jobs.generate_crm_weekly_followup_summary',
+        'schedule': weekly_followup_schedule,
     }
 
 # CRM拜访记录回写任务

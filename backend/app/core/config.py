@@ -172,6 +172,10 @@ class Settings(BaseSettings):
     CRM_WEEKLY_REPORT_ENABLED: bool = False
     CRM_WEEKLY_REPORT_CRON: str = '0 11 * * 0'  # 每周日上午11点执行
     CRM_WEEKLY_REPORT_FEISHU_ENABLED: bool = True  # 是否启用飞书推送
+
+    # CRM weekly followup summary (company/department + entity list) configuration
+    CRM_WEEKLY_FOLLOWUP_ENABLED: bool = False
+    CRM_WEEKLY_FOLLOWUP_CRON: str = '30 9 * * 0'  # 每周日上午9:30执行（需早于周报；周日到周六口径）
     
     # CRM writeback task configuration
     CRM_WRITEBACK_ENABLED: bool = False

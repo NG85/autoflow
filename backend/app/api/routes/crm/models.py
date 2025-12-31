@@ -1,6 +1,7 @@
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Annotated, Union
-from datetime import date
+from datetime import date, datetime
+from uuid import UUID
 from pydantic import BaseModel, Field, field_validator
 import json
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
@@ -747,3 +748,129 @@ class CustomerDocumentUploadResponse(BaseModel):
     auth_error: Optional[bool] = Field(default=None, description="授权是否有错误")
     channel: Optional[str] = Field(default=None, description="文档来源渠道")
     document_type: Optional[str] = Field(default=None, description="文档类型")
+
+
+# =========================
+# CRM Weekly Followup (周跟进总结)
+# =========================
+
+WeeklyFollowupScope = Literal["my", "department", "company"]
+
+
+class WeeklyFollowupEntityRowOut(BaseModel):
+    id: UUID
+    department_name: str
+    account_id: Optional[str] = None
+    account_name: Optional[str] = None
+    opportunity_id: Optional[str] = None
+    opportunity_name: Optional[str] = None
+    partner_id: Optional[str] = None
+    partner_name: Optional[str] = None
+    owner_name: Optional[str] = None
+    progress: Optional[str] = None
+    risks: Optional[str] = None
+
+    class WeeklyFollowupComment(BaseModel):
+        author_id: str = ""
+        author: str = ""
+        content: str
+        created_at: Optional[datetime] = None
+
+    comments: list[WeeklyFollowupComment] = []
+
+
+class WeeklyFollowupDetailQueryIn(BaseModel):
+    """
+    单次周总结详情查询：
+    - 给定 week_start/week_end + scope（company/department/my）
+    - 返回整体 summary（company/department 有）+ scope 下的实体明细列表（可分页）
+    """
+    scope: WeeklyFollowupScope = "my"
+    start_date: date
+    end_date: date
+    department_id: Optional[str] = None
+    department_name: Optional[str] = None
+    page: int = 1
+    size: int = 50
+    # 周总结详情页的明细列表需要直接展示评论，因此默认带 comments
+    include_comments: bool = True
+
+
+class WeeklyFollowupEntityPageOut(BaseModel):
+    total: int
+    page: int
+    size: int
+    items: List[WeeklyFollowupEntityRowOut]
+
+
+class WeeklyFollowupDetailOut(BaseModel):
+    scope: WeeklyFollowupScope
+    week_start: date
+    week_end: date
+    summary: Optional["WeeklyFollowupSummaryItemOut"] = None
+    entities: "WeeklyFollowupEntityPageOut"
+
+
+class WeeklyFollowupWeeklyListQueryIn(BaseModel):
+    """
+    每周跟进总结列表（每周一行）：
+    - scope="department": 团队周总结（按 CRMWeeklyFollowupSummary.department）
+    - scope="company": 公司周总结
+    """
+    scope: WeeklyFollowupScope = "department"
+    # department scope 下：公司管理员可指定；非公司管理员忽略该字段，固定为本人团队
+    department_id: Optional[str] = None
+    department_name: Optional[str] = None
+    page: int = 1
+    page_size: int = 20
+
+
+class WeeklyFollowupWeeklyListItemOut(BaseModel):
+    # company/department：为 summary 表主键；my：无实体表主键，因此为空
+    summary_id: Optional[UUID] = None
+    scope: WeeklyFollowupScope
+    week_start: date
+    week_end: date
+    department_id: str = ""
+    department_name: str = ""
+    title: str = ""
+
+
+class WeeklyFollowupWeeklyListOut(BaseModel):
+    total: int
+    page: int
+    size: int
+    items: List[WeeklyFollowupWeeklyListItemOut]
+
+class WeeklyFollowupTriggerTaskIn(BaseModel):
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+
+
+class WeeklyFollowupTriggerTaskOut(BaseModel):
+    task_id: str
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    status: str = "PENDING"
+
+
+class WeeklyFollowupSummaryItemOut(BaseModel):
+    id: UUID
+    week_start: date
+    week_end: date
+    summary_type: str
+    department_id: str = ""
+    department_name: str = ""
+    title: str = ""
+    summary_content: str = ""
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class WeeklyFollowupDepartmentOption(BaseModel):
+    department_id: Optional[str] = None
+    department_name: str
+
+
+class SaveWeeklyFollowupCommentsIn(BaseModel):
+    comments: List[WeeklyFollowupEntityRowOut.WeeklyFollowupComment] = []
