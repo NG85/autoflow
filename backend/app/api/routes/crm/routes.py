@@ -458,6 +458,46 @@ def save_weekly_followup_comments(
     db_session.commit()
     db_session.refresh(entity)
 
+    # 保存评论成功后：推送提醒给负责销售（不影响主流程，失败仅记录日志）
+    try:
+        owner_user_id = str(getattr(entity, "owner_user_id", "") or "")
+        if owner_user_id and owner_user_id != current_user_id:
+            from app.core.config import settings
+            from urllib.parse import quote_plus
+
+            # 选取本次写入的评论内容摘要（可能为空，允许）
+            comment_preview = ""
+            if my_comments:
+                comment_preview = str((my_comments[-1] or {}).get("content") or "").strip()
+            if len(comment_preview) > 200:
+                comment_preview = comment_preview[:197] + "..."
+
+            week_part = f"{entity.week_start.isoformat()}~{entity.week_end.isoformat()}"
+            dept_name = (entity.department_name or "").strip()
+            jump_url = (
+                f"{settings.REVIEW_REPORT_HOST}/review/opportunitySummary"
+                f"?department_name={quote_plus(dept_name)}"
+                f"&week_start={entity.week_start.isoformat()}&week_end={entity.week_end.isoformat()}"
+            )
+
+            author_name = (my_comments[-1].get("author") if my_comments else "") or (getattr(user, "name", "") or "")
+            author_name = str(author_name or "").strip() or "团队负责人"
+
+            text = (
+                f"{author_name}评论了你的周跟进总结（{week_part}）\n"
+                f"[{entity.account_name or entity.partner_name}  {entity.opportunity_name}]({jump_url})\n"
+                f"评论：{comment_preview or '--'}\n"
+            )
+
+            from app.services.platform_notification_service import platform_notification_service
+            platform_notification_service.send_weekly_followup_comment_notification(
+                db_session,
+                recipient_user_id=owner_user_id,
+                message_text=text,
+            )
+    except Exception as e:
+        logger.warning(f"发送周跟进评论提醒失败（不影响保存评论）：{e}")
+
     def _to_comments(v: object) -> list[WeeklyFollowupEntityRowOut.WeeklyFollowupComment]:
         if not isinstance(v, list):
             return []

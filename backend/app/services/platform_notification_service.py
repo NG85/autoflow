@@ -2,10 +2,10 @@ import logging
 from typing import List, Dict, Any, Optional
 
 import requests
+from uuid import UUID
 
 from app.platforms.notification_types import (
     NOTIFICATION_TYPE_DAILY_REPORT,
-    NOTIFICATION_TYPE_VISIT_RECORD,
     NOTIFICATION_TYPE_WEEKLY_REPORT,
 )
 from sqlmodel import Session
@@ -1214,6 +1214,35 @@ class PlatformNotificationService:
             template_vars=template_vars,
             notification_type="company weekly report"
         )
+
+    def send_weekly_followup_comment_notification(
+        self,
+        db_session: Session,
+        *,
+        recipient_user_id: str,
+        message_text: str,
+    ) -> Dict[str, Any]:
+        """
+        周跟进总结评论提醒：给负责销售发一条「文本消息」。
+        - 不走卡片模板（避免引入新模板依赖）
+        - 失败不应影响主业务流程，调用方可自行 try/except
+        """
+        try:
+            user_uuid = UUID(str(recipient_user_id))
+        except Exception:
+            return {"success": False, "message": "invalid recipient_user_id", "recipients_count": 0, "success_count": 0}
+
+        profile = user_profile_repo.get_by_user_id(db_session, user_uuid)
+        if not profile or not profile.oauth_user or not profile.oauth_user.open_id or not profile.oauth_user.provider:
+            return {"success": False, "message": "recipient has no oauth open_id", "recipients_count": 0, "success_count": 0}
+
+        platform = profile.oauth_user.provider
+        open_id = profile.oauth_user.open_id
+        token = self._get_tenant_access_token(platform)
+
+        # 发送文本消息
+        self._send_message(open_id, token, message_text, platform, receive_id_type="open_id", msg_type="text")
+        return {"success": True, "message": "ok", "recipients_count": 1, "success_count": 1}
     
     def _convert_weekly_report_data_for_feishu(self, db_session: Session, report_data: Dict[str, Any]) -> Dict[str, Any]:
         """
