@@ -355,12 +355,12 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                     for item in stage_progress_details_raw:
                         if not isinstance(item, dict):
                             continue
-                        stage_progress_details.append(
-                            {
-                                "stage_name": str(item.get("stage_name", "") or ""),
-                                "companies_count": str(item.get("companies_count", 0) or 0),
-                            }
-                        )
+                        # stage_progress_details.append(
+                        #     {
+                        #         "stage_name": str(item.get("stage_name", "") or ""),
+                        #         "companies_count": str(item.get("companies_count", 0) or 0),
+                        #     }
+                        # )
                 else:
                     # 与空结构对齐：至少给一个占位
                     stage_progress_details = [{"stage_name": "", "companies_count": "0"}]
@@ -579,6 +579,9 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                         if report_info_5 and report_info_5.get("execution_id")
                         else f"{settings.REVIEW_REPORT_HOST}"
                     )
+                    dept_report["weekly_tasks_page"] = (
+                        f"{settings.CRM_SALES_TASK_PAGE_URL}"
+                    )
                     dept_report["weekly_followup_page"] = (
                         f"{settings.REVIEW_REPORT_HOST}/review/opportunitySummary"
                         f"?department_name={quote_plus(department_name)}"
@@ -609,6 +612,9 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                         crm_statistics_service._get_weekly_report_url(report_info_5["execution_id"], "review5")
                         if report_info_5 and report_info_5.get("execution_id")
                         else f"{settings.REVIEW_REPORT_HOST}"
+                    )
+                    company_weekly_report["weekly_tasks_page"] = (
+                        f"{settings.CRM_SALES_TASK_PAGE_URL}"
                     )
                     company_weekly_report["weekly_followup_page"] = (
                         f"{settings.REVIEW_REPORT_HOST}/review/opportunitySummary"
