@@ -18,6 +18,7 @@ from app.models.user_department_relation import UserDepartmentRelation
 from app.models.crm_weekly_followup_entity_summary import CRMWeeklyFollowupEntitySummary
 from app.models.crm_weekly_followup_summary import CRMWeeklyFollowupSummary
 from app.repositories.user_department_relation import user_department_relation_repo
+from app.services.crm_writeback_service import crm_writeback_service
 from app.utils.ark_llm import call_ark_llm
 
 logger = logging.getLogger(__name__)
@@ -79,22 +80,51 @@ class CRMWeeklyFollowupService:
 
     def _build_entity_prompt(self, key: _EntityKey, records: List[Dict[str, Any]]) -> str:
         """
-        records: 已经被压缩后的结构化列表（按时间排序）
+        records: 已经被拼装处理后的结构化列表（按时间排序）
         """
+        # 同一组 records 对应同一个实体（商机/客户/伙伴），提取名称用于上下文理解
+        def _pick_first_non_empty(field: str) -> str:
+            for r in records:
+                v = r.get(field)
+                if v is None:
+                    continue
+                s = str(v).strip()
+                if s:
+                    return s
+            return ""
+
+        opportunity_name = _pick_first_non_empty("opportunity_name")
+        account_name = _pick_first_non_empty("account_name")
+        partner_name = _pick_first_non_empty("partner_name")
+
         visits_text = "\n".join(
             [
-                f"- [{r['date']}] 风险备注: {r['remarks'] or '--'}；跟进记录: {r['followup'] or '--'}；下一步计划: {r['next_steps'] or '--'}"
+                (
+                    f"- 拜访详情: {r.get('context') or '--'}"
+                )
                 for r in records
             ]
         )
         return f"""
-你是销售管理的周复盘助手。请基于“本周拜访记录摘要”，输出该【{key.department_name}】团队下该实体的一周跟进总结。
+你是销售管理的周复盘助手。请基于“本周拜访记录摘要（较完整）”，输出该【{key.department_name}】团队下该实体的一周跟进总结。
+
+实体信息（同一组拜访记录对应同一实体）：
+- 客户: {account_name or '--'}
+- 商机: {opportunity_name or '--'}
+- 伙伴: {partner_name or '--'}
 
 要求：
 1) 输出必须是严格 JSON（不要 markdown、不要多余文字）。
 2) 字段必须包含：
-   - progress: string，本周进展总结（3-6 句，聚焦变化与结论）
-   - risks: string，风险/问题（可为空字符串；如有请列要点）
+   - progress: string（用于“列表页单行/两行展示”，务必精炼）
+   - risks: string（用于列表页展示；可为空字符串）
+3) 列表页展示优化（非常重要）：
+   - progress：1-3 句中文，优先给“结论 + 关键依据 + 下一步动作（可选）”，避免长段落与逐条复述；建议 <= 120 字
+   - risks：如无明确风险输出空字符串；如有风险，最多给出 3 条，每条建议 <= 40 字（总字数建议 <= 120）
+4) 归纳规则：
+   - 综合多次拜访记录提炼关键变化/共识/承诺/下一步；不要照搬原文
+   - 若多条记录互相矛盾，请在 risks 中加以说明
+   - 避免空泛套话（如“总体进展良好”），尽量具体可执行
 
 本周拜访记录摘要：
 {visits_text}
@@ -468,15 +498,15 @@ class CRMWeeklyFollowupService:
             # 压缩输入记录
             compressed: List[Dict[str, Any]] = []
             for r in record_pairs_sorted:
-                followup = r.followup_record_zh or r.followup_record or r.followup_content or ""
-                next_steps = r.next_steps_zh or r.next_steps or ""
+                # 复用回写内容拼装逻辑，提供更多上下文，提升 LLM 评估精度
+                context = crm_writeback_service.generate_visit_summary_content(r)
                 compressed.append(
                     {
                         "id": r.id,
-                        "date": (r.visit_communication_date.isoformat() if r.visit_communication_date else ""),
-                        "remarks": self._truncate(r.remarks or "", 180),
-                        "followup": self._truncate(followup, 180),
-                        "next_steps": self._truncate(next_steps, 180),
+                        "opportunity_name": r.opportunity_name,
+                        "account_name": r.account_name,
+                        "partner_name": r.partner_name,
+                        "context": context,
                     }
                 )
 

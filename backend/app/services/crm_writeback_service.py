@@ -268,9 +268,9 @@ class CrmWritebackService:
             content_parts.append("下一步计划:")
             content_parts.append(record.next_steps)
         
-        # 备注
+        # 风险/备注
         if record.remarks:
-            content_parts.append("备注:")
+            content_parts.append("风险/备注:")
             content_parts.append(record.remarks)
         
         return "\n".join(content_parts)
