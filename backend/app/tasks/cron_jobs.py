@@ -355,15 +355,14 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                     for item in stage_progress_details_raw:
                         if not isinstance(item, dict):
                             continue
-                        # stage_progress_details.append(
-                        #     {
-                        #         "stage_name": str(item.get("stage_name", "") or ""),
-                        #         "companies_count": str(item.get("companies_count", 0) or 0),
-                        #     }
-                        # )
-                else:
-                    # 与空结构对齐：至少给一个占位
-                    stage_progress_details = [{"stage_name": "", "companies_count": "0"}]
+                        if item.get("stage_name"):
+                            stage_progress_details.append(
+                                {
+                                    "stage_name": str(item.get("stage_name", "") or ""),
+                                    "companies_count": str(item.get("companies_count", 0) or 0),
+                                }
+                            )
+                # 只保留有效的阶段推进记录；若无有效记录，则保持空数组
 
                 # sales_process_evaluation
                 spe = raw.get("sales_process_evaluation") if isinstance(raw.get("sales_process_evaluation"), dict) else {}
@@ -465,12 +464,7 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                             "total_opportunities_in_progress": "0"
                         }
                     ],
-                    "stage_progress_details": [
-                        {
-                            "stage_name": "",
-                            "companies_count": "0"
-                        }
-                    ],
+                    "stage_progress_details": [],
                     "sales_process_evaluation": [
                         {
                             "total_tasks": "0",
