@@ -317,11 +317,25 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                 """change 字段：根据 direction=increase/decrease 拼接 +/- 前缀。"""
                 x = abs(_to_float(v, 0.0))
                 s = f"{x:.2f}".rstrip("0").rstrip(".")
-                if direction == "increase":
+                if direction == "increase" or direction == "no_change":
                     return f"+{s}"
                 if direction == "decrease":
                     return f"-{s}"
                 return s
+
+            def _fmt_rate_change(v: Any, direction: Any) -> str:
+                """rate_change 字段：在变化值后拼接 '%'。"""
+                return f"{_fmt_change(v, direction)}%"
+
+            def _fmt_amount_change_yuan_to_wanyuan(v: Any, direction: Any) -> str:
+                """金额变化字段：元 -> 万元（固定两位小数），并拼接 +/- 前缀 + '万元' 后缀。"""
+                x = abs(_to_float(v, 0.0)) / 10000.0
+                s = f"{x:.2f}"  # 固定保留两位小数
+                if direction == "increase" or direction == "no_change":
+                    return f"+{s}万元"
+                if direction == "decrease":
+                    return f"-{s}万元"
+                return f"{s}万元"
 
             def _rebuild_weekly_report_for_template(raw: Any, department: Optional[str]) -> dict[str, Any]:
                 """
@@ -336,7 +350,12 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                 quarterly = perf_overview.get("quarterly_achievement") if isinstance(perf_overview.get("quarterly_achievement"), dict) else {}
                 weekly_deals = perf_overview.get("weekly_closed_deals") if isinstance(perf_overview.get("weekly_closed_deals"), dict) else {}
                 weekly_summary = weekly_deals.get("summary") if isinstance(weekly_deals.get("summary"), dict) else {}
-                deals_formatted = weekly_deals.get("deals_formatted")
+                deals_formatted_raw = weekly_deals.get("deals_formatted")
+                # deals_formatted: 接口返回 list[str]；模板侧需要文本（按行展示）
+                if isinstance(deals_formatted_raw, list):
+                    deals_formatted = "\n".join([str(x) for x in deals_formatted_raw if x is not None and str(x).strip()])
+                else:
+                    deals_formatted = str(deals_formatted_raw or "").strip()
 
                 # performance_forecast
                 perf_forecast = raw.get("performance_forecast") if isinstance(raw.get("performance_forecast"), dict) else {}
@@ -390,11 +409,11 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                         {
                             "forecast_insight": str(perf_forecast.get("forecast_insight", "") or ""),
                             "closed_amount": _fmt_amount_yuan_to_wanyuan(closed.get("amount", 0.0)),
-                            "closed_weekly_change": _fmt_change(closed.get("weekly_change", 0.0), closed.get("weekly_change_direction")),
+                            "closed_weekly_change": _fmt_amount_change_yuan_to_wanyuan(closed.get("weekly_change", 0.0), closed.get("weekly_change_direction")),
                             "commit_amount": _fmt_amount_yuan_to_wanyuan(commit.get("amount", 0.0)),
-                            "commit_weekly_change": _fmt_change(commit.get("weekly_change", 0.0), commit.get("weekly_change_direction")),
+                            "commit_weekly_change": _fmt_amount_change_yuan_to_wanyuan(commit.get("weekly_change", 0.0), commit.get("weekly_change_direction")),
                             "upside_amount": _fmt_amount_yuan_to_wanyuan(upside.get("amount", 0.0)),
-                            "upside_weekly_change": _fmt_change(upside.get("weekly_change", 0.0), upside.get("weekly_change_direction")),
+                            "upside_weekly_change": _fmt_amount_change_yuan_to_wanyuan(upside.get("weekly_change", 0.0), upside.get("weekly_change_direction")),
                         }
                     ],
                     "opportunity_progress": [
@@ -411,7 +430,7 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                             "uncompleted_tasks": str(task_summary.get("uncompleted_tasks", 0) or 0),
                             "cancelled_tasks": str(task_summary.get("cancelled_tasks", 0) or 0),
                             "completion_rate": _fmt_rate(task_summary.get("completion_rate", 0.0)),
-                            "completion_rate_change": _fmt_change(
+                            "completion_rate_change": _fmt_rate_change(
                                 task_summary.get("completion_rate_change", 0.0),
                                 task_summary.get("completion_rate_change_direction"),
                             ),
@@ -451,11 +470,11 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                         {
                             "forecast_insight": "",
                             "closed_amount": _fmt_amount_yuan_to_wanyuan(0.0),
-                            "closed_weekly_change": _fmt_change(0.0, "increase"),
+                            "closed_weekly_change": _fmt_amount_change_yuan_to_wanyuan(0.0, "increase"),
                             "commit_amount": _fmt_amount_yuan_to_wanyuan(0.0),
-                            "commit_weekly_change": _fmt_change(0.0, "increase"),
+                            "commit_weekly_change": _fmt_amount_change_yuan_to_wanyuan(0.0, "increase"),
                             "upside_amount": _fmt_amount_yuan_to_wanyuan(0.0),
-                            "upside_weekly_change": _fmt_change(0.0, "increase")
+                            "upside_weekly_change": _fmt_amount_change_yuan_to_wanyuan(0.0, "increase")
                         }
                     ],
                     "opportunity_progress": [
@@ -472,7 +491,7 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                             "uncompleted_tasks": "0",
                             "cancelled_tasks": "0",
                             "completion_rate": _fmt_rate(0.0),
-                            "completion_rate_change": _fmt_change(0.0, "increase"),
+                            "completion_rate_change": _fmt_rate_change(0.0, "increase"),
                             "overdue_tasks_count": "0",
                             "overdue_tasks_affected_customers_count": "0",
                             "overdue_tasks_overview": ""

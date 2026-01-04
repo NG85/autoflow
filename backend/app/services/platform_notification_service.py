@@ -1130,7 +1130,7 @@ class PlatformNotificationService:
         template_vars = self._convert_weekly_report_data_for_feishu(db_session, department_report_data)
         # 部门周报卡片模板
         template_id_by_platform = {
-            PLATFORM_DINGTALK: "a870d934-e925-49dc-a4af-c6f3b79547fa.schema",
+            PLATFORM_DINGTALK: "349394d8-33ad-4be5-9f7e-bac33494ee42.schema",
             PLATFORM_FEISHU: "AAqX5j2jPq2Cn",
             PLATFORM_LARK: "AAqX5j2jPq2Cn",
         }
@@ -1199,7 +1199,7 @@ class PlatformNotificationService:
         template_vars = self._convert_weekly_report_data_for_feishu(db_session, company_weekly_report_data)
         # 公司周报卡片模板
         template_id_by_platform = {
-            PLATFORM_DINGTALK: "ac07cfb0-d549-469f-92c8-814d7afa66f8.schema",
+            PLATFORM_DINGTALK: "daa13a1a-f064-4512-968c-0a1f101d3222.schema",
             PLATFORM_FEISHU: "AAqvMFGD8n8bZ",
             PLATFORM_LARK: "AAqvMFGD8n8bZ",
         }
