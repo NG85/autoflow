@@ -633,6 +633,7 @@ class PlatformNotificationService:
     def send_visit_record_notification(
         self,
         db_session: Session,
+        record_id: str,
         recorder_name: str = None,
         recorder_id: str = None,
         visit_record: Dict[str, Any] = None,
@@ -698,7 +699,8 @@ class PlatformNotificationService:
             "department": visit_record.get("department", "--") if visit_record else "--",
             "sales_visit_records": [visit_record] if visit_record else [],
             "meeting_notes": meeting_notes,
-            "dynamic_fields": dynamic_fields  # 新增：动态字段数组参数
+            "dynamic_fields": dynamic_fields,  # 新增：动态字段数组参数
+            "comment_page_url": f"{settings.REVIEW_REPORT_HOST}/registerVisitRecord/addComment?record_id={record_id}", # 新增：评论页面链接
         }
         
         # 根据拜访类型、接收者类型和平台确定模板ID

@@ -513,6 +513,7 @@ class VisitRecordResponse(BaseModel):
     attachment: Optional[VisitAttachment] = Field(default=None, description="原始附件字段（字符串或JSON）")
     parent_record: Optional[str] = Field(default=None, description="父记录")
     remarks: Optional[str] = Field(default=None, description="备注")
+    comments: Optional[List[Dict[str, Any]]] = Field(default=None, description="评论列表（人工可编辑，JSON数组）")
     last_modified_time: Optional[str] = Field(default=None, description="最后修改时间")
     record_id: Optional[str] = Field(default=None, description="记录id")
     is_first_visit: Optional[bool] = Field(default=None, description="是否首次拜访")
@@ -537,6 +538,23 @@ class VisitRecordResponse(BaseModel):
         # 允许从ORM / dict 创建，并忽略多余字段
         from_attributes = True
         extra = "ignore"
+
+class CRMComment(BaseModel):
+    """通用评论结构（拜访记录/周总结复用）"""
+
+    author_id: str = ""
+    author: str = ""
+    content: str
+    type: Optional[Literal["comment", "task"]] = None
+    created_at: Optional[datetime] = None
+
+class VisitRecordCommentsUpdate(BaseModel):
+    """更新拜访记录的评论（JSON数组）"""
+
+    comments: Optional[List[CRMComment]] = Field(
+        default=None,
+        description="评论列表（人工可编辑，JSON数组）",
+    )
 
 # 拜访记录查询响应
 class VisitRecordQueryResponse(BaseModel):
@@ -770,13 +788,7 @@ class WeeklyFollowupEntityRowOut(BaseModel):
     progress: Optional[str] = None
     risks: Optional[str] = None
 
-    class WeeklyFollowupComment(BaseModel):
-        author_id: str = ""
-        author: str = ""
-        content: str
-        created_at: Optional[datetime] = None
-
-    comments: list[WeeklyFollowupComment] = []
+    comments: list[CRMComment] = []
 
 
 class WeeklyFollowupDetailQueryIn(BaseModel):
@@ -873,4 +885,4 @@ class WeeklyFollowupDepartmentOption(BaseModel):
 
 
 class SaveWeeklyFollowupCommentsIn(BaseModel):
-    comments: List[WeeklyFollowupEntityRowOut.WeeklyFollowupComment] = []
+    comments: List[CRMComment] = []

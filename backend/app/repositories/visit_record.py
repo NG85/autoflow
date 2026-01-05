@@ -2,7 +2,7 @@ from typing import Any, Dict, Optional, List
 from datetime import datetime
 import logging
 import requests
-from sqlmodel import Session, select, func, or_, desc, asc, String
+from sqlmodel import Session, select, func, or_, desc, asc
 from fastapi_pagination import Params, Page
 from fastapi_pagination.ext.sqlmodel import paginate
 from uuid import UUID
@@ -12,10 +12,12 @@ from cachetools.keys import methodkey
 
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
 from app.models.crm_accounts import CRMAccount
-from app.models.user_profile import UserProfile
 from app.api.routes.crm.models import VisitAttachment, VisitRecordQueryRequest, VisitRecordResponse
+from app.policies.visit_record_access import VisitRecordAccessPolicy
 from app.repositories.base_repo import BaseRepo
-from app.repositories.user_profile import UserProfileRepo, user_profile_repo
+from app.repositories.user_profile import user_profile_repo
+from app.repositories.user_department_relation import user_department_relation_repo
+from app.repositories.department_mirror import department_mirror_repo
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -176,12 +178,11 @@ class VisitRecordRepo(BaseRepo):
             return True
         
         # 2. 检查 notification_tags 中的 list_visit_records 权限（向后兼容）
-        user_profile_repo = UserProfileRepo()
         user_profile = user_profile_repo.get_by_user_id(session, current_user_id)
         
         if user_profile and user_profile.notification_tags:
             # 检查notification_tags中是否包含list_visit_records权限
-            notification_tags = user_profile.get_notification_tags()
+            notification_tags = user_profile.notification_tags
             if "list_visit_records" in notification_tags:
                 logger.info(f"User {current_user_id} has list_visit_records permission in notification_tags: {notification_tags}")
                 return True
@@ -262,6 +263,79 @@ class VisitRecordRepo(BaseRepo):
         
         return accessible_recorder_ids
 
+    def _get_visit_record_accessible_recorder_uuid_ids(
+        self,
+        session: Session,
+        current_user_id: Optional[UUID],
+        user_permissions: Optional[List[str]] = None,
+    ) -> Optional[List[UUID]]:
+        """
+        统一的“拜访记录可访问范围”计算入口，避免各方法里重复写权限逻辑。
+
+        Returns:
+        - None: 可访问所有记录（管理团队/公司级权限/未提供 current_user_id 向后兼容）
+        - []: 无任何可访问记录
+        - [UUID, ...]: 需要按 recorder_id 过滤的 UUID 列表
+        """
+        if not current_user_id:
+            logger.warning("No current_user_id provided, skipping access control")
+            return None
+
+        if user_permissions is None:
+            roles_and_permissions = self._get_user_roles_and_permissions(current_user_id)
+            user_permissions = roles_and_permissions.get("permissions", [])
+
+        # 管理团队成员（含 report51:company:view / notification_tags:list_visit_records）可访问所有
+        if self._is_admin_user(current_user_id, session, user_permissions):
+            logger.info(f"Admin user {current_user_id} detected, skipping access control")
+            return None
+
+        accessible_recorder_ids = self._get_user_accessible_recorder_ids(
+            session=session,
+            current_user_id=current_user_id,
+            user_permissions=user_permissions,
+        )
+
+        # None 表示公司级可访问所有
+        if accessible_recorder_ids is None:
+            return None
+
+        # 空列表表示无权限
+        if not accessible_recorder_ids:
+            return []
+
+        # 字符串ID转换为UUID（兼容 32位无短横线 UUID）
+        uuid_recorder_ids: List[UUID] = []
+        try:
+            for rid in accessible_recorder_ids:
+                if not rid:
+                    continue
+                if len(rid) == 32:
+                    formatted_uuid = f"{rid[:8]}-{rid[8:12]}-{rid[12:16]}-{rid[16:20]}-{rid[20:32]}"
+                    uuid_recorder_ids.append(UUID(formatted_uuid))
+                else:
+                    uuid_recorder_ids.append(UUID(rid))
+        except ValueError as e:
+            logger.error(f"Invalid UUID format in accessible_recorder_ids: {e}")
+            return []
+
+        return uuid_recorder_ids
+
+    def _can_access_visit_record_by_recorder_id(
+        self,
+        session: Session,
+        current_user_id: Optional[UUID],
+        recorder_id: Optional[UUID],
+        user_permissions: Optional[List[str]] = None,
+    ) -> bool:
+        policy = VisitRecordAccessPolicy(
+            session=session,
+            current_user_id=current_user_id,
+            roles_and_permissions_provider=self._get_user_roles_and_permissions,
+            is_admin_user_fn=self._is_admin_user,
+        )
+        return policy.can_access_single_recorder(recorder_id)
+
     def query_visit_records(
         self,
         session: Session,
@@ -279,66 +353,12 @@ class VisitRecordRepo(BaseRepo):
             request.page_size = 20
         elif request.page_size > 100:  # 限制最大页面大小为100（fastapi_pagination的限制）
             request.page_size = 100
-        
-        # 先处理权限控制，获取可访问的recorder_ids
-        uuid_recorder_ids = None
-        is_admin = False
-        user_permissions = None
-        if current_user_id:
-            # 先获取用户权限列表（一次查询，后续复用）
-            roles_and_permissions = self._get_user_roles_and_permissions(current_user_id)
-            user_permissions = roles_and_permissions.get("permissions", [])
-            
-            # 检查是否为管理团队成员（有 report51:company:view 权限或 list_visit_records 权限）
-            # 传递权限列表，避免重复查询
-            is_admin = self._is_admin_user(current_user_id, session, user_permissions)
-            if is_admin:
-                logger.info(f"Admin user {current_user_id} detected, skipping access control")
-            else:
-                # 传递权限列表，避免重复查询
-                accessible_recorder_ids = self._get_user_accessible_recorder_ids(session, current_user_id, user_permissions)
-                # 如果返回 None，表示有公司级查看权限，可以访问所有记录
-                if accessible_recorder_ids is None:
-                    logger.info(f"User {current_user_id} has company view permission, can access all records")
-                    is_admin = True
-                elif accessible_recorder_ids:
-                    # 将字符串ID转换为UUID进行过滤
-                    from uuid import UUID
-                    try:
-                        uuid_recorder_ids = []
-                        for rid in accessible_recorder_ids:
-                            if rid:
-                                # 如果已经是32位字符串（去掉短横线的UUID），需要重新格式化
-                                if len(rid) == 32:
-                                    # 重新插入短横线以创建标准UUID格式
-                                    formatted_uuid = f"{rid[:8]}-{rid[8:12]}-{rid[12:16]}-{rid[16:20]}-{rid[20:32]}"
-                                    uuid_recorder_ids.append(UUID(formatted_uuid))
-                                else:
-                                    # 标准UUID格式
-                                    uuid_recorder_ids.append(UUID(rid))
-                    except ValueError as e:
-                        logger.error(f"Invalid UUID format in accessible_recorder_ids: {e}")
-                        # 如果转换失败，返回空结果
-                        return Page(
-                            items=[],
-                            total=0,
-                            page=request.page,
-                            size=request.page_size,
-                            pages=0
-                        )
-                else:
-                    # 如果没有可访问的记录人，返回空结果
-                    logger.warning(f"No accessible recorder IDs for user: {current_user_id}")
-                    return Page(
-                        items=[],
-                        total=0,
-                        page=request.page,
-                        size=request.page_size,
-                        pages=0
-                    )
-        else:
-            # 如果没有提供用户ID，记录警告但不限制访问（向后兼容）
-            logger.warning("No current_user_id provided, skipping access control")
+        policy = VisitRecordAccessPolicy(
+            session=session,
+            current_user_id=current_user_id,
+            roles_and_permissions_provider=self._get_user_roles_and_permissions,
+            is_admin_user_fn=self._is_admin_user,
+        )
             
         # 构建基础查询，关联客户表获取客户分类
         # 优化：先不JOIN UserProfile，避免使用函数导致索引失效
@@ -354,9 +374,10 @@ class VisitRecordRepo(BaseRepo):
             )
         )
         
-        # 应用权限控制过滤 - 在JOIN之前先过滤，提高性能
-        if not is_admin and uuid_recorder_ids:
-            query = query.where(CRMSalesVisitRecord.recorder_id.in_(uuid_recorder_ids))
+        # 应用权限控制过滤 - 在 JOIN 之前先过滤，提高性能
+        predicate = policy.list_access_predicate(CRMSalesVisitRecord)
+        if predicate is not None:
+            query = query.where(predicate)
 
         # 应用过滤条件
         if request.customer_level:
@@ -419,12 +440,10 @@ class VisitRecordRepo(BaseRepo):
         # 使用拜访人的department字段作为所在团队
         # 优化：先查询符合条件的recorder_ids，然后过滤
         if request.department:
-            # 先查询符合条件的UserProfile，获取对应的oauth_user_id列表
-            department_user_profiles = session.exec(
-                select(UserProfile.oauth_user_id).where(
-                    UserProfile.department.in_(request.department)
-                )
-            ).all()
+            department_user_profiles = user_profile_repo.get_oauth_user_ids_by_departments(
+                session,
+                request.department,
+            )
             
             if department_user_profiles:
                 # 将oauth_user_id转换为UUID格式的recorder_id
@@ -432,7 +451,6 @@ class VisitRecordRepo(BaseRepo):
                 for oauth_id in department_user_profiles:
                     if oauth_id:
                         try:
-                            from uuid import UUID
                             # 处理可能没有短横线的UUID
                             if len(oauth_id) == 32:
                                 formatted_uuid = f"{oauth_id[:8]}-{oauth_id[8:12]}-{oauth_id[12:16]}-{oauth_id[16:20]}-{oauth_id[20:32]}"
@@ -443,22 +461,8 @@ class VisitRecordRepo(BaseRepo):
                             continue
                 
                 if department_recorder_ids:
-                    # 如果已经有权限过滤，需要取交集
-                    if not is_admin and uuid_recorder_ids:
-                        # 取交集
-                        department_recorder_ids = [rid for rid in department_recorder_ids if rid in uuid_recorder_ids]
-                    
-                    if department_recorder_ids:
-                        query = query.where(CRMSalesVisitRecord.recorder_id.in_(department_recorder_ids))
-                    else:
-                        # 没有匹配的记录，返回空结果
-                        return Page(
-                            items=[],
-                            total=0,
-                            page=request.page,
-                            size=request.page_size,
-                            pages=0
-                        )
+                    # 这里不再额外做“权限交集”过滤（权限已在上方通过 EXISTS/本人过滤处理）
+                    query = query.where(CRMSalesVisitRecord.recorder_id.in_(department_recorder_ids))
                 else:
                     # 没有有效的recorder_id，返回空结果
                     return Page(
@@ -558,33 +562,31 @@ class VisitRecordRepo(BaseRepo):
             if record.recorder_id:
                 recorder_ids.add(record.recorder_id)
         
-        # 批量查询部门信息 - 一次性查询所有匹配的UserProfile
-        # oauth_user_id 是带短横线的标准 UUID 字符串格式，可以直接与 recorder_id 转换后的字符串匹配
+        # 批量查询部门信息 - 优先通过 user_department_relation + department_mirror（避免依赖 profiles）
         department_map = {}
         if recorder_ids:
-            # 将 UUID 转换为字符串列表（带短横线），直接使用 IN 查询
-            # 这样可以使用索引，性能更好
             recorder_id_strs = [str(rid) for rid in recorder_ids]
-            
-            # 批量查询所有匹配的UserProfile
-            user_profiles = session.exec(
-                select(UserProfile.oauth_user_id, UserProfile.department).where(
-                    UserProfile.oauth_user_id.in_(recorder_id_strs)
-                )
-            ).all()
-            
-            # 构建映射：将 oauth_user_id 字符串转换回 UUID 作为 key
-            for oauth_user_id, department in user_profiles:
-                if oauth_user_id:
-                    try:
-                        from uuid import UUID
-                        # oauth_user_id 已经是标准 UUID 字符串格式，直接转换
-                        recorder_uuid = UUID(oauth_user_id)
-                        if recorder_uuid in recorder_ids:
-                            department_map[recorder_uuid] = department
-                    except ValueError:
-                        # 如果转换失败，跳过
-                        continue
+            # 1) recorder(user_id) -> department_id
+            user_dept_map = user_department_relation_repo.get_primary_department_by_user_ids(
+                session,
+                recorder_id_strs,
+            )
+
+            # 2) department_id -> department_name
+            dept_ids = [d for d in (user_dept_map or {}).values() if d]
+            dept_name_map = department_mirror_repo.get_department_names_by_ids(session, dept_ids)
+
+            # 3) recorder_id(UUID) -> department_name
+            for user_id_str, dept_id in (user_dept_map or {}).items():
+                if not user_id_str or not dept_id:
+                    continue
+                try:
+                    recorder_uuid = UUID(user_id_str)
+                except ValueError:
+                    continue
+                name = dept_name_map.get(dept_id)
+                if name:
+                    department_map[recorder_uuid] = name
 
         # 转换结果格式 - 复用现有模型
         items = []
@@ -604,55 +606,121 @@ class VisitRecordRepo(BaseRepo):
     def get_visit_record_by_id(
         self,
         session: Session,
-        record_id: int,
+        record_id: str,
         current_user_id: Optional[UUID] = None,
     ) -> Optional[VisitRecordResponse]:
         """
         根据ID获取单个拜访记录
         根据当前用户的汇报关系限制数据访问权限
         """
-        query = (
-            select(
-                CRMSalesVisitRecord,
-                CRMAccount.customer_level,
-                UserProfile.department
-            )
-            .outerjoin(
-                CRMAccount,
-                CRMSalesVisitRecord.account_id == CRMAccount.unique_id
-            )
-            .outerjoin(
-                UserProfile,
-                func.cast(CRMSalesVisitRecord.recorder_id, String) == UserProfile.oauth_user_id
-            )
-            .where(or_(CRMSalesVisitRecord.id == record_id, CRMSalesVisitRecord.record_id == record_id))
-        )
+        # 单条记录查询：先拿到记录本身，再做权限判断，避免 IN 大集合
+        result = session.exec(
+            select(CRMSalesVisitRecord, CRMAccount.customer_level)
+            .outerjoin(CRMAccount, CRMSalesVisitRecord.account_id == CRMAccount.unique_id)
+            .where(CRMSalesVisitRecord.record_id == record_id)
+        ).first()
 
-        # 应用权限控制
-        if current_user_id:
-            # 检查是否为管理团队成员
-            if self._is_admin_user(current_user_id, session):
-                logger.info(f"Admin user {current_user_id} detected, skipping access control")
-                # 管理团队成员可以查看所有记录
+        if not result:
+            return None
+
+        record, customer_level = result
+
+        if not self._can_access_visit_record_by_recorder_id(
+            session=session,
+            current_user_id=current_user_id,
+            recorder_id=getattr(record, "recorder_id", None),
+        ):
+            return None
+
+        # department 仅用于展示，不再作为权限判断依据
+        department: Optional[str] = None
+        if getattr(record, "recorder_id", None):
+            recorder_user_id = str(record.recorder_id)
+            dept_id = user_department_relation_repo.get_primary_department_by_user_ids(
+                session,
+                [recorder_user_id],
+            ).get(recorder_user_id)
+            if dept_id:
+                department = department_mirror_repo.get_department_name_by_id(session, dept_id)
+
+        return _convert_to_response(record, customer_level, department)
+
+    def update_visit_record_comments(
+        self,
+        session: Session,
+        record_id: str,
+        comments: Optional[List[Dict[str, Any]]],
+        current_user_id: Optional[UUID] = None
+    ) -> Optional[List[Dict[str, Any]]]:
+        """
+        更新指定拜访记录的 comments 字段（JSON数组）
+        安全保护：只能覆盖“自己写的评论”，不得覆盖/删除他人的评论
+        """
+        # 更新评论只需要查询拜访记录主表即可
+        query = select(CRMSalesVisitRecord).where(CRMSalesVisitRecord.record_id == record_id)
+
+        record = session.exec(query).first()
+        if not record:
+            return None
+
+        # 单条记录权限判断：避免生成越来越大的 IN 列表
+        if not self._can_access_visit_record_by_recorder_id(
+            session=session,
+            current_user_id=current_user_id,
+            recorder_id=getattr(record, "recorder_id", None),
+        ):
+            return None
+
+        # 安全保护：只能覆盖“自己写的评论”，不得覆盖/删除他人的评论
+        current_user_id_str = str(current_user_id or "")
+        now_bj = datetime.now(ZoneInfo("Asia/Shanghai"))
+
+        existing_raw = record.comments if isinstance(record.comments, list) else []
+        kept_others: List[Dict[str, Any]] = []
+        for item in existing_raw:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("author_id") or "") != current_user_id_str:
+                kept_others.append(item)
+
+        # 仅采纳 payload 中 author_id=当前用户 的评论；created_at 为空则用北京时间补齐
+        my_comments: List[Dict[str, Any]] = []
+        for c in (comments or []):
+            if not isinstance(c, dict):
+                continue
+            if str(c.get("author_id") or "") != current_user_id_str:
+                continue
+            created_at = c.get("created_at") or now_bj
+            if isinstance(created_at, datetime):
+                created_at_str = created_at.isoformat()
             else:
-                accessible_recorder_ids = self._get_user_accessible_recorder_ids(session, current_user_id)
-                if accessible_recorder_ids:
-                    query = query.where(CRMSalesVisitRecord.recorder_id.in_(accessible_recorder_ids))
-                else:
-                    # 如果没有可访问的记录人，返回None
-                    logger.warning(f"No accessible recorder IDs for user: {current_user_id}")
-                    return None
-        else:
-            # 如果没有提供用户ID，记录警告但不限制访问（向后兼容）
-            logger.warning("No current_user_id provided, skipping access control")
+                created_at_str = str(created_at)
+            my_comments.append(
+                {
+                    "author_id": current_user_id_str,
+                    "author": c.get("author"),
+                    "content": c.get("content"),
+                    "type": c.get("type"),
+                    "created_at": created_at_str,
+                }
+            )
 
-        result = session.exec(query).first()
-        
-        if result:
-            record, customer_level, department = result
-            return _convert_to_response(record, customer_level, department)
-        
-        return None
+        merged: List[Dict[str, Any]] = kept_others + my_comments
+
+        def _sort_key(x: Dict[str, Any]) -> tuple[int, str]:
+            v = str(x.get("created_at") or "")
+            try:
+                return (0, datetime.fromisoformat(v).isoformat())
+            except Exception:
+                return (1, v)
+
+        merged.sort(key=_sort_key)
+        record.comments = merged
+        session.add(record)
+        session.commit()
+        session.refresh(record)
+
+        return record.comments
 
 
 # 创建repository实例

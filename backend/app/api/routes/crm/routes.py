@@ -1,5 +1,4 @@
 import logging
-import csv
 import io
 import hashlib
 from typing import List, Literal, Optional
@@ -9,6 +8,7 @@ from app.exceptions import InternalServerError
 from app.models.customer_document import CustomerDocument
 from fastapi import APIRouter, Body, HTTPException
 from fastapi.responses import StreamingResponse
+from openpyxl import Workbook
 from app.crm.view_engine import CrmViewRequest, ViewType, CrmViewEngine, ViewRegistry
 from fastapi_pagination import Page
 from datetime import datetime, timedelta
@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from app.api.routes.crm.models import (
     Account,
     VisitRecordCreate,
+    VisitRecordCommentsUpdate,
     DailyReportRequest,
     DailyReportResponse,
     DailyReportStatistics,
@@ -38,8 +39,6 @@ from app.api.routes.crm.models import (
     WeeklyFollowupTriggerTaskIn,
     WeeklyFollowupTriggerTaskOut,
     WeeklyFollowupSummaryItemOut,
-    WeeklyFollowupDepartmentOption,
-    WeeklyFollowupScope,
     WeeklyFollowupEntityPageOut,
     SaveWeeklyFollowupCommentsIn,
 )
@@ -436,8 +435,9 @@ def save_weekly_followup_comments(
         my_comments.append(
             {
                 "author_id": current_user_id,
-                "author": (c.author or "") or (getattr(user, "email", "") or getattr(user, "name", "") or ""),
+                "author": c.author or "",
                 "content": c.content,
+                "type": c.type or "comment",
                 "created_at": created_at.isoformat(),
             }
         )
@@ -692,6 +692,7 @@ def create_visit_record(
                 # 推送飞书消息（attachment 由下游统一做瘦身与解析）
                 record_data = record.model_dump()
                 push_visit_record_message(
+                    record_id=record_id,
                     visit_type=record.visit_type,
                     sales_visit_record=record_data,
                     db_session=db_session,
@@ -771,6 +772,7 @@ def create_visit_record(
             # 推送飞书消息（attachment 由下游统一做瘦身与解析）
             record_data = record.model_dump()
             push_visit_record_message(
+                record_id=record_id,
                 visit_type=record.visit_type,
                 sales_visit_record=record_data,
                 db_session=db_session,
@@ -876,27 +878,28 @@ def query_visit_records(
 
 
 @router.post("/crm/visit_records/export")
-def export_visit_records_to_csv(
+def export_visit_records_to_xlsx(
     db_session: SessionDep,
     user: CurrentUserDep,
     request: VisitRecordQueryRequest,
 ):
     """
-    导出CRM拜访记录到CSV文件
+    导出CRM拜访记录到 XLSX 文件
     支持条件查询和分页
     根据当前用户的汇报关系限制数据访问权限
     支持中英文版本导出
     """
     try:
-        # 创建CSV内容
-        output = io.StringIO()
-        writer = csv.writer(output)
+        # 创建 XLSX 内容
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "visit_records"
         
-        # 根据语言参数确定CSV头部和数据内容
+        # 根据语言参数确定表头和数据内容
         language = request.language or "zh"  # 默认为中文
         
         if language == "en":
-            # 英文版CSV头部 - 只包含英文字段
+            # 英文版表头 - 只包含英文字段
             headers = [
                 "ID", "Customer Level", "Account Name", "Account ID", "First Visit", "Call High",
                 "Partner Name", "Partner ID", "Opportunity Name", "Opportunity ID", "Follow-up Date", "Person in Charge", "Department",
@@ -907,7 +910,7 @@ def export_visit_records_to_csv(
                 "Record Type", "Information Source", "Remarks", "Created Time"
             ]
         else:
-            # 中文版CSV头部（默认）- 只包含中文字段
+            # 中文版表头（默认）- 只包含中文字段
             headers = [
                 "ID", "客户分类", "客户名称", "客户ID", "是否首次拜访", "是否Call High",
                 "合作伙伴", "合作伙伴ID", "商机名称", "商机ID", "跟进日期", "负责销售", "所在团队",
@@ -918,7 +921,7 @@ def export_visit_records_to_csv(
                 "记录类型", "信息来源", "备注", "创建时间"
             ]
         
-        writer.writerow(headers)
+        ws.append(headers)
         
         # 使用分页查询循环获取所有数据
         # 限制最大导出10000条记录
@@ -933,8 +936,8 @@ def export_visit_records_to_csv(
         total_exported = 0
         total_pages = 0
         
-        # 辅助函数：将单个item转换为CSV行
-        def item_to_csv_row(item):
+        # 辅助函数：将单个item转换为表格行
+        def item_to_row(item):
             # 根据语言选择对应的字段值
             is_en = language == "en"
             
@@ -1056,7 +1059,7 @@ def export_visit_records_to_csv(
             for item in result.items:
                 if total_exported >= max_export_count:
                     break
-                writer.writerow(item_to_csv_row(item))
+                ws.append(item_to_row(item))
                 total_exported += 1
             
             # 如果当前页数据不足一页，说明已经是最后一页
@@ -1070,25 +1073,25 @@ def export_visit_records_to_csv(
             current_page += 1
         
         # 准备文件下载
+        output = io.BytesIO()
+        wb.save(output)
         output.seek(0)
-        csv_content = output.getvalue()
-        output.close()
         
         # 生成文件名（包含语言标识）
         current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
         language_suffix = "_en" if language == "en" else "_zh"
-        filename = f"visit_records_export{language_suffix}_{current_time}.csv"
+        filename = f"visit_records_export{language_suffix}_{current_time}.xlsx"
         
         # 创建响应
-        def iter_csv():
-            yield csv_content.encode('utf-8-sig')  # 使用utf-8-sig编码以支持Excel正确显示中文
+        def iter_xlsx():
+            yield output.getvalue()
         
         return StreamingResponse(
-            iter_csv(),
-            media_type="text/csv",
+            iter_xlsx(),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             headers={
                 "Content-Disposition": f"attachment; filename={filename}",
-                "Content-Type": "text/csv; charset=utf-8-sig"
+                "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             }
         )
         
@@ -1241,7 +1244,7 @@ def get_visit_record_filter_options(
 def get_visit_record_by_id(
     db_session: SessionDep,
     user: CurrentUserDep,
-    record_id: int | str,
+    record_id: str,
 ):
     """
     根据ID获取单个拜访记录详情
@@ -1283,6 +1286,36 @@ def get_visit_record_by_id(
             "message": "success",
             "data": data,
         }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(e)
+        raise InternalServerError()
+
+
+@router.post("/crm/visit_records/{record_id}/comments")
+def update_visit_record_comments(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    record_id: str,
+    payload: VisitRecordCommentsUpdate,
+):
+    """
+    保存指定拜访记录的评论（comments，JSON数组）
+    - 复用拜访记录的权限控制逻辑：无权限/不存在返回 404
+    """
+    try:
+        merged_comments = visit_record_repo.update_visit_record_comments(
+            session=db_session,
+            record_id=record_id,
+            comments=[c.model_dump() for c in (payload.comments or [])],
+            current_user_id=user.id
+        )
+
+        if merged_comments is None:
+            raise HTTPException(status_code=404, detail="拜访记录不存在或无权限访问")
+
+        return {"code": 0, "message": "success", "data": {"comments": merged_comments}}
     except HTTPException:
         raise
     except Exception as e:

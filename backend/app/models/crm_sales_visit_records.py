@@ -2,7 +2,7 @@ from datetime import date, datetime
 from typing import Optional
 from uuid import UUID
 from sqlmodel import SQLModel, Field, Column, DateTime, Text, Index
-from sqlalchemy import DECIMAL
+from sqlalchemy import DECIMAL, JSON
 
 class CRMSalesVisitRecord(SQLModel, table=True):
     __tablename__ = "crm_sales_visit_records"
@@ -48,6 +48,10 @@ class CRMSalesVisitRecord(SQLModel, table=True):
     attachment: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="附件")
     parent_record: Optional[str] = Field(nullable=True, max_length=255, description="父记录")
     remarks: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="备注")
+
+    # 多人评论：JSON 数组，元素结构由上层 API 约束
+    comments: Optional[list[dict]] = Field(default=None, sa_column=Column(JSON, nullable=True), description="评论列表（人工可编辑，JSON数组）")
+
     last_modified_time: Optional[datetime] = Field(nullable=True, description="最后修改时间")
     record_id: Optional[str] = Field(nullable=True, max_length=100, description="记录id")
     is_first_visit: Optional[bool] = Field(nullable=True, description="是否首次拜访")
