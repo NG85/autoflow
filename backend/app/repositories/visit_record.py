@@ -651,7 +651,7 @@ class VisitRecordRepo(BaseRepo):
         record_id: str,
         comments: Optional[List[Dict[str, Any]]],
         current_user_id: Optional[UUID] = None
-    ) -> Optional[List[Dict[str, Any]]]:
+    ) -> Optional[VisitRecordResponse]:
         """
         更新指定拜访记录的 comments 字段（JSON数组）
         安全保护：只能覆盖“自己写的评论”，不得覆盖/删除他人的评论
@@ -720,7 +720,8 @@ class VisitRecordRepo(BaseRepo):
         session.commit()
         session.refresh(record)
 
-        return record.comments
+        # 返回完整记录（便于上层推送消息等后续处理）
+        return _convert_to_response(record, None, None)
 
 
 # 创建repository实例

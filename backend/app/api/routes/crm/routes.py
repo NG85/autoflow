@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 
 from app.api.routes.crm.models import (
     Account,
+    CRMComment,
     VisitRecordCreate,
     VisitRecordCommentsUpdate,
     DailyReportRequest,
@@ -63,7 +64,6 @@ from app.models.user_profile import UserProfile
 from app.models.crm_weekly_followup_summary import CRMWeeklyFollowupSummary
 from app.models.crm_weekly_followup_entity_summary import CRMWeeklyFollowupEntitySummary
 from uuid import UUID
-from pydantic import BaseModel
 from app.repositories.user_profile import UserProfileRepo
 from app.repositories.visit_record import visit_record_repo
 from app.repositories.user_department_relation import user_department_relation_repo
@@ -226,12 +226,12 @@ def get_weekly_followup_detail(
             # 普通销售：只能看自己负责的商机/客户明细
             conds.append(CRMWeeklyFollowupEntitySummary.owner_user_id == str(user.id))
 
-    def _to_comments(v: object) -> list[WeeklyFollowupEntityRowOut.WeeklyFollowupComment]:
+    def _to_comments(v: object) -> list[CRMComment]:
         if not include_comments:
             return []
         if not isinstance(v, list):
             return []
-        out: list[WeeklyFollowupEntityRowOut.WeeklyFollowupComment] = []
+        out: list[CRMComment] = []
         for item in v:
             if not isinstance(item, dict):
                 continue
@@ -241,10 +241,11 @@ def get_weekly_followup_detail(
                 if created_at_raw:
                     created_at = datetime.fromisoformat(str(created_at_raw))
                 out.append(
-                    WeeklyFollowupEntityRowOut.WeeklyFollowupComment(
+                    CRMComment(
                         author_id=str(item.get("author_id") or ""),
                         author=str(item.get("author") or ""),
                         content=str(item.get("content") or ""),
+                        type=str(item.get("type") or ""),
                         created_at=created_at,
                     )
                 )
@@ -480,8 +481,8 @@ def save_weekly_followup_comments(
                 f"&week_start={entity.week_start.isoformat()}&week_end={entity.week_end.isoformat()}"
             )
 
-            author_name = (my_comments[-1].get("author") if my_comments else "") or (getattr(user, "name", "") or "")
-            author_name = str(author_name or "").strip() or "团队负责人"
+            author_name = my_comments[-1].get("author") if my_comments else ""
+            author_name = str(author_name or "").strip() or "有人"
 
             text = (
                 f"{author_name}评论了你的周跟进总结（{week_part}）\n"
@@ -1305,17 +1306,60 @@ def update_visit_record_comments(
     - 复用拜访记录的权限控制逻辑：无权限/不存在返回 404
     """
     try:
-        merged_comments = visit_record_repo.update_visit_record_comments(
+        updated_record = visit_record_repo.update_visit_record_comments(
             session=db_session,
             record_id=record_id,
             comments=[c.model_dump() for c in (payload.comments or [])],
             current_user_id=user.id
         )
 
-        if merged_comments is None:
+        if updated_record is None:
             raise HTTPException(status_code=404, detail="拜访记录不存在或无权限访问")
 
-        return {"code": 0, "message": "success", "data": {"comments": merged_comments}}
+        # 保存评论成功后：推送提醒给拜访记录的记录人（不影响主流程，失败仅记录日志）
+        try:
+            record = updated_record
+            recipient_user_id = str(getattr(record, "recorder_id", "") or "")
+            current_user_id = str(getattr(user, "id", "") or "")
+
+            if record and recipient_user_id and recipient_user_id != current_user_id:
+                from app.core.config import settings
+
+                # 评论摘要（允许为空）
+                comment_preview = ""
+                if payload.comments:
+                    comment_preview = str((payload.comments[-1].content or "")).strip()
+                if len(comment_preview) > 200:
+                    comment_preview = comment_preview[:197] + "..."
+
+                # 跳转到拜访记录评论页
+                jump_url = f"{settings.REVIEW_REPORT_HOST}/registerVisitRecord/detail?record_id={record_id}"
+
+                author_name = ""
+                if payload.comments:
+                    author_name = str(payload.comments[-1].author or "").strip()
+                author_name = author_name or "有人"
+
+                title = (getattr(record, "account_name", None) or getattr(record, "partner_name", None) or "") or ""
+                opp = (getattr(record, "opportunity_name", None) or "") or ""
+                link_text = f"{title}  {opp}".strip() or "拜访记录"
+
+                text = (
+                    f"{author_name}评论了你的拜访记录\n"
+                    f"[{link_text}]({jump_url})\n"
+                    f"评论：{comment_preview or '--'}\n"
+                )
+
+                from app.services.platform_notification_service import platform_notification_service
+                platform_notification_service.send_visit_record_comment_notification(
+                    db_session,
+                    recipient_user_id=recipient_user_id,
+                    message_text=text,
+                )
+        except Exception as e:
+            logger.warning(f"发送拜访记录评论提醒失败（不影响保存评论）：{e}")
+
+        return {"code": 0, "message": "success", "data": {"comments": updated_record.comments or []}}
     except HTTPException:
         raise
     except Exception as e:
