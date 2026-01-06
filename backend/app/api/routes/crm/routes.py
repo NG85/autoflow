@@ -499,10 +499,10 @@ def save_weekly_followup_comments(
     except Exception as e:
         logger.warning(f"发送周跟进评论提醒失败（不影响保存评论）：{e}")
 
-    def _to_comments(v: object) -> list[WeeklyFollowupEntityRowOut.WeeklyFollowupComment]:
+    def _to_comments(v: object) -> list[CRMComment]:
         if not isinstance(v, list):
             return []
-        out: list[WeeklyFollowupEntityRowOut.WeeklyFollowupComment] = []
+        out: list[CRMComment] = []
         for item in v:
             if not isinstance(item, dict):
                 continue
@@ -512,10 +512,11 @@ def save_weekly_followup_comments(
                 if created_at_raw:
                     created_at = datetime.fromisoformat(str(created_at_raw))
                 out.append(
-                    WeeklyFollowupEntityRowOut.WeeklyFollowupComment(
+                    CRMComment(
                         author_id=str(item.get("author_id") or ""),
                         author=str(item.get("author") or ""),
                         content=str(item.get("content") or ""),
+                        type=str(item.get("type") or ""),
                         created_at=created_at,
                     )
                 )
