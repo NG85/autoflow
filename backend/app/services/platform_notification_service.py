@@ -1263,6 +1263,23 @@ class PlatformNotificationService:
             message_text=message_text,
         )
     
+    def send_sales_task_created_notification(
+        self,
+        db_session: Session,
+        *,
+        recipient_user_id: str,
+        message_text: str,
+    ) -> Dict[str, Any]:
+        """
+        销售任务创建提醒：给任务负责人发一条「文本消息」。
+        复用 send_weekly_followup_comment_notification 的通用发送逻辑。
+        """
+        return self.send_weekly_followup_comment_notification(
+            db_session,
+            recipient_user_id=recipient_user_id,
+            message_text=message_text,
+        )
+    
     def _convert_weekly_report_data_for_feishu(self, db_session: Session, report_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         将周报数据转换为飞书卡片所需的格式（所有数值和日期转换为字符串）
