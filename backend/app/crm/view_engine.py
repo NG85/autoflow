@@ -12,7 +12,11 @@ from sqlalchemy.orm import joinedload, load_only, contains_eager
 
 from app.models.crm_opportunities import CRMOpportunity
 from app.models.crm_accounts import CRMAccount
-from app.rag.chat.crm_authority import get_user_crm_authority, CrmDataType
+from app.repositories.crm_data_authority import crm_data_authority_repo
+from app.repositories.department_mirror import department_mirror_repo
+from app.repositories.user_profile import user_profile_repo
+from app.repositories.user_department_relation import user_department_relation_repo
+from app.rag.chat.crm_authority import CrmDataType
 from app.api.routes.crm.models import (
     ViewType,
     FilterOperator,
@@ -275,32 +279,26 @@ class CrmViewEngine:
             return {}
         
         # 构建基础查询
-        query = db_session.query(self.model)
+        base_where = []
         
         # 应用权限过滤
-        authority = None
-        role = None
         if user_id:
-            try:
-                authority, role = get_user_crm_authority(user_id)
-                
-                # 如果是管理员，跳过权限过滤
-                if role != "admin":
-                    # 如果没有权限，直接返回空结果
-                    if authority.is_empty():
-                        logger.info(f"No authorized items found for user {user_id}")
-                        return {}
-                    
-                    if hasattr(self.model, "unique_id"):
-                        authorized_ids = authority.authorized_items.get(CrmDataType.OPPORTUNITY, set())
-                        if authorized_ids:
-                            query = query.filter(self.model.unique_id.in_(authorized_ids))
-                        else:
-                            # 如果没有授权项，返回空结果
-                            query = query.filter(False)
-            except ValueError:
-                logger.warning(f"Invalid entity type")
-                return {}
+            # Admin can view all records; skip authority-table filtering.
+            if user_profile_repo.is_admin_by_user_id(db_session, user_id):
+                pass
+            else:
+                crm_user_id = user_profile_repo.get_crm_user_id_by_user_id(db_session, user_id)
+                if not crm_user_id:
+                    logger.info(f"User {user_id} has no crm_user_id; no authorized items.")
+                    return {}
+                if not crm_data_authority_repo.has_any_authority(db_session, crm_user_id, CrmDataType.OPPORTUNITY):
+                    logger.info(f"No authorized items found for user {user_id}")
+                    return {}
+                base_where.append(
+                    crm_data_authority_repo.build_exists_condition(
+                        crm_user_id, CrmDataType.OPPORTUNITY, self.model.unique_id
+                    )
+                )
         
         # 获取各字段的唯一值
         options = {
@@ -309,23 +307,41 @@ class CrmViewEngine:
         }
         
         # 构建部门到负责人的映射
-        owner_dept_query = query.distinct(self.model.owner, self.model.owner_main_department)
-        owner_dept_values = owner_dept_query.all()
-        
         dept_to_owners = {}
-        owner_to_dept = {}
-        
-        for row in owner_dept_values:
-            owner = row.owner
-            dept = row.owner_main_department
-            
-            if owner is not None and dept is not None:
-                owner = self._clean_json_array_value(owner)
-                
-                if dept not in dept_to_owners:
-                    dept_to_owners[dept] = set()
-                dept_to_owners[dept].add(owner)
-                owner_to_dept[owner] = dept
+        owner_rows = db_session.exec(
+            select(self.model.owner_id, self.model.owner).where(*base_where).distinct()
+        ).all()
+
+        owner_ids: set[str] = set()
+        owner_id_to_name: dict[str, str] = {}
+        for owner_id, owner_name in owner_rows:
+            if not owner_id:
+                continue
+            owner_ids.add(owner_id)
+            if owner_name and owner_id not in owner_id_to_name:
+                owner_id_to_name[owner_id] = self._clean_json_array_value(owner_name)
+
+        # Fallback: fill missing owner names from user_department_relation
+        missing_name_ids = [oid for oid in owner_ids if oid not in owner_id_to_name]
+        if missing_name_ids:
+            name_map = user_department_relation_repo.get_user_names_by_crm_user_ids(db_session, missing_name_ids)
+            for oid, name in name_map.items():
+                if name and oid not in owner_id_to_name:
+                    owner_id_to_name[oid] = name
+
+        # Map owner_id(crm_user_id) -> primary department_id via user_department_relation
+        owner_dept_id_map = user_department_relation_repo.get_primary_department_by_crm_user_ids(db_session, owner_ids)
+        dept_ids = set(owner_dept_id_map.values())
+        dept_name_map = department_mirror_repo.get_department_names_by_ids(db_session, dept_ids)
+
+        for owner_id in owner_ids:
+            dept_id = owner_dept_id_map.get(owner_id)
+            if not dept_id:
+                continue
+            dept_name = dept_name_map.get(dept_id, dept_id)
+            if dept_name not in dept_to_owners:
+                dept_to_owners[dept_name] = set()
+            dept_to_owners[dept_name].add(owner_id_to_name.get(owner_id, owner_id))
         
         # 构建级联选择器格式的数据
         options["owner_dept_mapping"] = [
@@ -374,22 +390,27 @@ class CrmViewEngine:
                     field_values = []
                     if field_source == "account" and hasattr(self.account_model, field):
                         column = getattr(self.account_model, field)
-                        values = db_session.query(column).distinct().all()
+                        values = db_session.exec(select(column).distinct()).all()
                         for v in values:
-                            if v[0] is not None:
-                                field_values.append(v[0])
+                            # v could be scalar or a 1-tuple depending on backend/driver
+                            val = v[0] if isinstance(v, tuple) else v
+                            if val is not None:
+                                field_values.append(val)
                     elif hasattr(self.model, field):
                         column = getattr(self.model, field)
-                        values = query.distinct(column).values(column)
+                        values = db_session.exec(
+                            select(column).where(*base_where).distinct()
+                        ).all()
                         for v in values:
-                            if v[0] is not None:
-                                if field == "expected_closing_date" and isinstance(v[0], str):
-                                    date_value = v[0].split('T')[0]
+                            val = v[0] if isinstance(v, tuple) else v
+                            if val is not None:
+                                if field == "expected_closing_date" and isinstance(val, str):
+                                    date_value = val.split('T')[0]
                                     field_values.append(date_value)
-                                elif field in self.json_array_fields and isinstance(v[0], str):
-                                    field_values.append(self._clean_json_array_value(v[0]))
+                                elif field in self.json_array_fields and isinstance(val, str):
+                                    field_values.append(self._clean_json_array_value(val))
                                 else:
-                                    field_values.append(v[0])
+                                    field_values.append(val)
                     options["enum_fields"][field] = {
                         "values": sorted(field_values),
                         "display_name": field_metadata.display_name,
@@ -426,26 +447,19 @@ class CrmViewEngine:
             query = query.options(load_only(*opportunity_fields_to_query))
         
         if user_id:
-            crm_authority, role = get_user_crm_authority(user_id)
-            
-            if role != "admin":
-                if crm_authority.is_empty():
+            # Admin can view all records; skip authority-table filtering.
+            if not user_profile_repo.is_admin_by_user_id(db_session, user_id):
+                crm_user_id = user_profile_repo.get_crm_user_id_by_user_id(db_session, user_id)
+                if not crm_user_id:
+                    logger.info(f"User {user_id} has no crm_user_id; no authorized items.")
+                    return select(self.model).where(False)
+                if not crm_data_authority_repo.has_any_authority(db_session, crm_user_id, CrmDataType.OPPORTUNITY):
                     logger.info(f"No authorized items found for user {user_id}")
                     return select(self.model).where(False)
-                
-                authorized_opportunity_ids = crm_authority.authorized_items.get(CrmDataType.OPPORTUNITY, set())
-                # authorized_account_ids = crm_authority.authorized_items.get(CrmDataType.ACCOUNT, set())
-                
-                authority_conditions = []
-                
-                if authorized_opportunity_ids:
-                    authority_conditions.append(self.model.unique_id.in_(authorized_opportunity_ids))
-                
-                # if authorized_account_ids:
-                #     authority_conditions.append(self.account_model.unique_id.in_(authorized_account_ids))
-                
-                if authority_conditions:
-                    query = query.where(and_(*authority_conditions))
+
+                query = query.filter(
+                    crm_data_authority_repo.build_exists_condition(crm_user_id, CrmDataType.OPPORTUNITY, self.model.unique_id)
+                )
         
         if request.filters:
             for filter_condition in request.filters:

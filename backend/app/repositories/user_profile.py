@@ -15,10 +15,67 @@ class UserProfileRepo(BaseRepo):
         query = select(UserProfile).options(selectinload(UserProfile.oauth_users)).where(UserProfile.user_id == user_id)
         return db_session.exec(query).first()
 
+    def get_crm_user_id_by_user_id(self, db_session: Session, user_id: UUID) -> Optional[str]:
+        """根据系统 user_id(UUID) 获取 CRM user id（user_profiles.crm_user_id）"""
+        row = db_session.exec(
+            select(UserProfile.crm_user_id).where(
+                UserProfile.user_id == user_id,
+                UserProfile.is_active == True,  # noqa: E712
+                UserProfile.crm_user_id.is_not(None),
+            )
+        ).first()
+        return row if isinstance(row, str) and row else None
+
+    def is_admin_by_user_id(self, db_session: Session, user_id: UUID) -> bool:
+        """根据系统 user_id(UUID) 判断用户是否为管理员（role/position 任一为 admin）"""
+        row = db_session.exec(
+            select(UserProfile.role, UserProfile.position).where(
+                UserProfile.user_id == user_id,
+                UserProfile.is_active == True,  # noqa: E712
+            )
+        ).first()
+        if not row:
+            return False
+        role, position = row
+        return role == "admin" or position == "admin"
+
+    def get_crm_user_id_and_role_by_user_id(
+        self, db_session: Session, user_id: UUID
+    ) -> tuple[Optional[str], Optional[str]]:
+        """根据系统 user_id(UUID) 获取 (crm_user_id, role)。
+
+        规则：
+        - 如果 role/position 任一为 admin，则 role 归一化为 "admin"
+        - 否则返回 user_profiles.role（可能为 None）
+        """
+        row = db_session.exec(
+            select(UserProfile.crm_user_id, UserProfile.role, UserProfile.position).where(
+                UserProfile.user_id == user_id,
+                UserProfile.is_active == True,  # noqa: E712
+            )
+        ).first()
+        if not row:
+            return None, None
+        crm_user_id, role, position = row
+        normalized_role = "admin" if (role == "admin" or position == "admin") else role
+        return (str(crm_user_id) if crm_user_id else None), (str(normalized_role) if normalized_role else None)
+
     def get_by_oauth_user_id(self, db_session: Session, oauth_user_id: str) -> Optional[UserProfile]:
         """根据OAuth用户ID获取档案"""
         query = select(UserProfile).options(selectinload(UserProfile.oauth_users)).where(UserProfile.oauth_user_id == oauth_user_id)
         return db_session.exec(query).first()
+
+    def get_crm_user_id_by_oauth_user_id(self, db_session: Session, oauth_user_id: str) -> Optional[str]:
+        """根据 oauth_user_id 获取 CRM user id（user_profiles.crm_user_id）"""
+        row = db_session.exec(
+            select(UserProfile.crm_user_id).where(
+                UserProfile.oauth_user_id == oauth_user_id,
+                UserProfile.is_active == True,  # noqa: E712
+                UserProfile.crm_user_id.is_not(None),
+            )
+        ).first()
+        return row if isinstance(row, str) and row else None
+
 
     def get_by_recorder_id(self, db_session: Session, recorder_id: str) -> Optional[UserProfile]:
         """根据记录人ID获取档案"""

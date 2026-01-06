@@ -398,19 +398,19 @@ def save_weekly_followup_comments(
     """
     3) 修改保存评论（整体覆盖保存）
     """
-    can_edit, is_company_admin, user_dept_id, user_dept_name = _can_edit_weekly_followup_comments(db_session, user)
-    if not can_edit:
-        raise HTTPException(status_code=403, detail="权限不足：仅团队负责人或管理者可编辑评论")
+    # can_edit, is_company_admin, user_dept_id, user_dept_name = _can_edit_weekly_followup_comments(db_session, user)
+    # if not can_edit:
+    #     raise HTTPException(status_code=403, detail="权限不足：仅团队负责人或管理者可编辑评论")
 
     entity = db_session.exec(select(CRMWeeklyFollowupEntitySummary).where(CRMWeeklyFollowupEntitySummary.id == entity_id)).first()
     if entity is None:
         raise HTTPException(status_code=404, detail="Entity summary not found")
 
-    if not is_company_admin:
-        if user_dept_id and getattr(entity, "department_id", None) and entity.department_id != user_dept_id:
-            raise HTTPException(status_code=403, detail="权限不足：只能编辑本团队记录")
-        if not user_dept_id and user_dept_name and entity.department_name != user_dept_name:
-            raise HTTPException(status_code=403, detail="权限不足：只能编辑本团队记录")
+    # if not is_company_admin:
+    #     if user_dept_id and getattr(entity, "department_id", None) and entity.department_id != user_dept_id:
+    #         raise HTTPException(status_code=403, detail="权限不足：只能编辑本团队记录")
+    #     if not user_dept_id and user_dept_name and entity.department_name != user_dept_name:
+    #         raise HTTPException(status_code=403, detail="权限不足：只能编辑本团队记录")
 
     # 安全保护：只能覆盖“自己写的评论”，不得覆盖/删除他人的评论
     current_user_id = str(getattr(user, "id", "") or "")

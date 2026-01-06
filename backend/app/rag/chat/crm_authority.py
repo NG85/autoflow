@@ -1,11 +1,15 @@
 import logging
 from uuid import UUID
-import requests
 from typing import Any, Dict, List, Optional, Set, Tuple
 from pydantic import BaseModel
 from app.core.config import settings
 from app.rag.types import CrmDataType
-from cachetools import TTLCache, cached
+# from cachetools import TTLCache, cached
+from sqlmodel import Session, select
+
+from app.core.db import engine
+from app.models.crm_data_authority import CrmDataAuthority
+from app.repositories.user_profile import user_profile_repo
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +29,7 @@ class CRMAuthorityResponse(BaseModel):
 class CRMAuthority(BaseModel):
     """CRM authority data structure"""
     authorized_items: Dict[str, Set[str]] = {}  # data type -> data ID set
+    truncated: bool = False  # whether the authorized_items was truncated due to size limit
     
     def is_authorized(self, data_type: str, data_id: str) -> bool:
         """
@@ -75,91 +80,63 @@ class CRMAuthority(BaseModel):
         """Check if there is any authorized data"""
         return len(self.authorized_items) == 0 or all(len(ids) == 0 for ids in self.authorized_items.values())
 
-@cached(cache=TTLCache(maxsize=30, ttl=60 * 60 * 3), key=lambda user_id, crm_type=None: (str(user_id), crm_type))
+# @cached(cache=TTLCache(maxsize=30, ttl=60 * 60 * 3), key=lambda user_id, crm_type=None: (str(user_id), crm_type))
 def get_user_crm_authority(user_id: UUID, crm_type: Optional[CrmDataType] = None) -> Tuple[CRMAuthority, str]:
     """Get the CRM data access permission of the user"""
-    if not user_id:
-        logger.info("Anonymous user has no CRM data access")
-        return CRMAuthority(), None
     
     authority = CRMAuthority()
-            
-    # Get API URL from configuration
-    base_url = settings.OAUTH_BASE_URL.rstrip("/")
-    auth_api_url = f"{base_url}/crm/authority"
     try:
-        # Build request body
-        payload = {
-            "dataId": "",
-            "highSeasAccounts": False,
-            "type": crm_type.value if crm_type else None,
-            "userId": str(user_id)
-        }
-        
-        # Send POST request
-        response = requests.post(auth_api_url, json=payload, timeout=300)
-        
-        # Check HTTP response status
-        if response.status_code != 200:
-            logger.error(f"CRM authority API HTTP error: {response.status_code}")
-            return authority, None
-            
-        # Parse response JSON
-        try:
-            data = response.json()
-        except ValueError:
-            logger.error("CRM authority API returned invalid JSON")
-            return authority, None
-            
-        # Verify response format
-        if not isinstance(data, dict) or "code" not in data or "result" not in data:
-            logger.error(f"CRM authority API returned unexpected format: {data}")
-            return authority, None
-            
-        # Check response status code
-        if data["code"] != 0:
-            logger.error(f"CRM authority API error: {data.get('message', 'Unknown error')}")
-            return authority, None
-            
-        # Process authority data
-        result = data.get("result", {})
-        if not isinstance(result, dict):
-            logger.error(f"CRM authority API returned invalid result format: {result}")
-            return authority, None
-               
-        # Handle role
-        role = result.get("role", None)
-        if role and role == "admin":
-            return authority, role
-        
-        # Handle authList
-        auth_list = result.get("authList", [])
-        if not isinstance(auth_list, list):
-            logger.error(f"CRM authority API returned invalid authList format: {auth_list}")
-            return authority, role
-                 
-        for item in auth_list:
-            if not isinstance(item, dict) or "dataId" not in item or "type" not in item:
-                continue
-                
-            data_type = item["type"]
-            data_id = item["dataId"]
-            
-            if not data_type or not data_id:
-                continue
-                
-            # Map the API returned type to the CrmDataType enum
-            try:
-                crm_type = CrmDataType(data_type)
-                authority.authorized_items.setdefault(crm_type, set()).add(data_id)
-            except ValueError:
-                logger.warning(f"Unknown CRM data type from API: {data_type}")
-          
-        # Handle highSeasAccounts
-        high_seas_accounts = result.get("highSeasAccounts", [])
-        if isinstance(high_seas_accounts, list):
-            authority.authorized_items.setdefault(CrmDataType.ACCOUNT, set()).update(high_seas_accounts)
-             
+        with Session(engine) as session:
+            # 1) Map system user UUID -> (crm_user_id, role) via repo (role normalized)
+            crm_user_id, role = user_profile_repo.get_crm_user_id_and_role_by_user_id(session, user_id)
+
+            if not crm_user_id:
+                logger.info("User %s has no crm_user_id in user_profiles; CRM authority empty.", user_id)
+                return authority, role
+
+            # Admin can access all CRM data; no need to materialize authorized id set.
+            if role == "admin":
+                return authority, role
+
+            # 2) Query authority table by crm_id
+            stmt = select(CrmDataAuthority.type, CrmDataAuthority.data_id).where(
+                CrmDataAuthority.crm_id == str(crm_user_id),
+            )
+            # filter deleted rows (NULL treated as not deleted)
+            stmt = stmt.where(
+                (CrmDataAuthority.delete_flag.is_(None)) | (CrmDataAuthority.delete_flag == False)  # noqa: E712
+            )
+            if crm_type:
+                stmt = stmt.where(CrmDataAuthority.type == crm_type.value)
+
+            max_rows = max(int(getattr(settings, "CRM_AUTHORITY_MAX_ROWS", 50000)), 1)
+            stmt = stmt.limit(max_rows + 1)
+
+            count = 0
+            for data_type, data_id in session.exec(stmt):
+                if not data_type or not data_id:
+                    continue
+                try:
+                    mapped_type = CrmDataType(data_type)
+                except ValueError:
+                    logger.warning(f"Unknown CRM data type from table crm_data_authority: {data_type}")
+                    continue
+                authority.authorized_items.setdefault(mapped_type, set()).add(data_id)
+                count += 1
+                if count >= max_rows:
+                    # If there are still more rows, we will have truncated the result set.
+                    # We don't attempt to compute the exact total count to avoid expensive COUNT(*).
+                    authority.truncated = True
+                    logger.warning(
+                        "CRM authority rows exceeded limit (max_rows=%s) for user=%s crm_user_id=%s crm_type=%s. "
+                        "Authority set truncated; this may reduce recall but remains safe.",
+                        max_rows,
+                        user_id,
+                        crm_user_id,
+                        crm_type.value if crm_type else None,
+                    )
+                    break
+
         # Record authority statistics
         stats = {data_type: len(ids) for data_type, ids in authority.authorized_items.items()}
         logger.info(f"User {user_id} CRM authority fetched: {stats}")
