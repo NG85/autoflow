@@ -11,8 +11,8 @@ class DepartmentMirror(SQLModel, table=True):
 
     unique_id: str = Field(
         max_length=100,
+        primary_key=True,
         nullable=False,
-        unique=True,
         index=True,
         description="CRM 部门唯一ID",
     )

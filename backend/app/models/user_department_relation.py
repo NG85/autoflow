@@ -33,6 +33,8 @@ class UserDepartmentRelation(SQLModel, table=True):
 
     title: Optional[str] = Field(default=None, max_length=100)
     user_name: Optional[str] = Field(default=None, max_length=100)
+    
+    is_active: bool = Field(default=True, index=True)
 
     class Config:
         orm_mode = True

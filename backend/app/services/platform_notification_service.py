@@ -633,6 +633,7 @@ class PlatformNotificationService:
     def send_visit_record_notification(
         self,
         db_session: Session,
+        record_id: str,
         recorder_name: str = None,
         recorder_id: str = None,
         visit_record: Dict[str, Any] = None,
@@ -698,7 +699,8 @@ class PlatformNotificationService:
             "department": visit_record.get("department", "--") if visit_record else "--",
             "sales_visit_records": [visit_record] if visit_record else [],
             "meeting_notes": meeting_notes,
-            "dynamic_fields": dynamic_fields  # 新增：动态字段数组参数
+            "dynamic_fields": dynamic_fields,  # 新增：动态字段数组参数
+            "comment_page_url": f"{settings.REVIEW_REPORT_HOST}/registerVisitRecord/addComment?record_id={record_id}", # 新增：评论页面链接
         }
         
         # 根据拜访类型、接收者类型和平台确定模板ID
@@ -1243,6 +1245,23 @@ class PlatformNotificationService:
         # 发送文本消息
         self._send_message(open_id, token, message_text, platform, receive_id_type="open_id", msg_type="text")
         return {"success": True, "message": "ok", "recipients_count": 1, "success_count": 1}
+
+    def send_visit_record_comment_notification(
+        self,
+        db_session: Session,
+        *,
+        recipient_user_id: str,
+        message_text: str,
+    ) -> Dict[str, Any]:
+        """
+        拜访记录评论提醒：给记录人发一条「文本消息」。
+        复用 send_weekly_followup_comment_notification 的通用发送逻辑。
+        """
+        return self.send_weekly_followup_comment_notification(
+            db_session,
+            recipient_user_id=recipient_user_id,
+            message_text=message_text,
+        )
     
     def _convert_weekly_report_data_for_feishu(self, db_session: Session, report_data: Dict[str, Any]) -> Dict[str, Any]:
         """

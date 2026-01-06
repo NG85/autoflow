@@ -118,6 +118,44 @@ class UserProfileRepo(BaseRepo):
         query = select(UserProfile).options(selectinload(UserProfile.oauth_users)).where(UserProfile.department == department)
         return db_session.exec(query).all()
 
+    def get_oauth_user_ids_by_departments(self, db_session: Session, departments: List[str]) -> List[str]:
+        """按部门列表批量获取 oauth_user_id（用于 visit record 等场景的过滤）"""
+        depts = [d for d in (departments or []) if d]
+        if not depts:
+            return []
+        rows = db_session.exec(
+            select(UserProfile.oauth_user_id).where(
+                UserProfile.department.in_(depts),
+                UserProfile.oauth_user_id.is_not(None),
+                UserProfile.is_active == True,
+            )
+        ).all()
+        # rows 可能是 str 或 tuple；统一为 str 列表
+        return [r for r in rows if isinstance(r, str) and r]
+
+    def get_department_by_oauth_user_ids(self, db_session: Session, oauth_user_ids: List[str]) -> Dict[str, Optional[str]]:
+        """
+        批量获取用户部门映射（按 oauth_user_id 分组）。
+
+        Returns:
+            Dict[str, Optional[str]]: oauth_user_id -> department
+        """
+        ids = [x for x in (oauth_user_ids or []) if x]
+        if not ids:
+            return {}
+        rows = db_session.exec(
+            select(UserProfile.oauth_user_id, UserProfile.department).where(
+                UserProfile.oauth_user_id.in_(ids),
+                UserProfile.is_active == True,
+            )
+        ).all()
+        result: Dict[str, Optional[str]] = {}
+        for oid, dept in rows:
+            if not oid:
+                continue
+            result[str(oid)] = dept
+        return result
+
     def get_subordinates(self, db_session: Session, manager_id: str) -> List[UserProfile]:
         """获取指定管理者的直接下属"""
         return db_session.exec(

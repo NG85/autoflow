@@ -233,7 +233,7 @@ def generate_dynamic_fields_for_visit_record(sales_visit_record):
         return []
 
 
-def push_visit_record_message(sales_visit_record, visit_type, db_session=None, meeting_notes=None, saved_time=None):
+def push_visit_record_message(record_id: str, sales_visit_record, visit_type, db_session=None, meeting_notes=None, saved_time=None):
     try:
         # 如果没有传入db_session，则创建一个新的
         should_close_session = False
@@ -270,6 +270,7 @@ def push_visit_record_message(sales_visit_record, visit_type, db_session=None, m
         # 发送拜访记录通知
         result = platform_notification_service.send_visit_record_notification(
             db_session=db_session,
+            record_id=record_id,
             recorder_name=recorder_name,
             recorder_id=recorder_id,
             visit_record=sales_visit_record,
@@ -417,8 +418,9 @@ def save_visit_record_with_content(
         record_data = record.model_dump()
         # 推送飞书消息（保留附件字段，附件中仅包含URL和少量结构化信息，避免大体积base64）
         push_visit_record_message(
-            visit_type=record.visit_type,
+            record_id=record_id,
             sales_visit_record=record_data,
+            visit_type=record.visit_type,
             db_session=db_session,
             meeting_notes=meeting_summary,
             saved_time=saved_time

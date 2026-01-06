@@ -1,5 +1,4 @@
 import logging
-import csv
 import io
 import hashlib
 from typing import List, Literal, Optional
@@ -9,13 +8,16 @@ from app.exceptions import InternalServerError
 from app.models.customer_document import CustomerDocument
 from fastapi import APIRouter, Body, HTTPException
 from fastapi.responses import StreamingResponse
+from openpyxl import Workbook
 from app.crm.view_engine import CrmViewRequest, ViewType, CrmViewEngine, ViewRegistry
 from fastapi_pagination import Page
 from datetime import datetime, timedelta
 
 from app.api.routes.crm.models import (
     Account,
+    CRMComment,
     VisitRecordCreate,
+    VisitRecordCommentsUpdate,
     DailyReportRequest,
     DailyReportResponse,
     DailyReportStatistics,
@@ -38,8 +40,6 @@ from app.api.routes.crm.models import (
     WeeklyFollowupTriggerTaskIn,
     WeeklyFollowupTriggerTaskOut,
     WeeklyFollowupSummaryItemOut,
-    WeeklyFollowupDepartmentOption,
-    WeeklyFollowupScope,
     WeeklyFollowupEntityPageOut,
     SaveWeeklyFollowupCommentsIn,
 )
@@ -64,7 +64,6 @@ from app.models.user_profile import UserProfile
 from app.models.crm_weekly_followup_summary import CRMWeeklyFollowupSummary
 from app.models.crm_weekly_followup_entity_summary import CRMWeeklyFollowupEntitySummary
 from uuid import UUID
-from pydantic import BaseModel
 from app.repositories.user_profile import UserProfileRepo
 from app.repositories.visit_record import visit_record_repo
 from app.repositories.user_department_relation import user_department_relation_repo
@@ -227,12 +226,12 @@ def get_weekly_followup_detail(
             # 普通销售：只能看自己负责的商机/客户明细
             conds.append(CRMWeeklyFollowupEntitySummary.owner_user_id == str(user.id))
 
-    def _to_comments(v: object) -> list[WeeklyFollowupEntityRowOut.WeeklyFollowupComment]:
+    def _to_comments(v: object) -> list[CRMComment]:
         if not include_comments:
             return []
         if not isinstance(v, list):
             return []
-        out: list[WeeklyFollowupEntityRowOut.WeeklyFollowupComment] = []
+        out: list[CRMComment] = []
         for item in v:
             if not isinstance(item, dict):
                 continue
@@ -242,10 +241,11 @@ def get_weekly_followup_detail(
                 if created_at_raw:
                     created_at = datetime.fromisoformat(str(created_at_raw))
                 out.append(
-                    WeeklyFollowupEntityRowOut.WeeklyFollowupComment(
+                    CRMComment(
                         author_id=str(item.get("author_id") or ""),
                         author=str(item.get("author") or ""),
                         content=str(item.get("content") or ""),
+                        type=str(item.get("type") or ""),
                         created_at=created_at,
                     )
                 )
@@ -436,8 +436,9 @@ def save_weekly_followup_comments(
         my_comments.append(
             {
                 "author_id": current_user_id,
-                "author": (c.author or "") or (getattr(user, "email", "") or getattr(user, "name", "") or ""),
+                "author": c.author or "",
                 "content": c.content,
+                "type": c.type or "comment",
                 "created_at": created_at.isoformat(),
             }
         )
@@ -480,8 +481,8 @@ def save_weekly_followup_comments(
                 f"&week_start={entity.week_start.isoformat()}&week_end={entity.week_end.isoformat()}"
             )
 
-            author_name = (my_comments[-1].get("author") if my_comments else "") or (getattr(user, "name", "") or "")
-            author_name = str(author_name or "").strip() or "团队负责人"
+            author_name = my_comments[-1].get("author") if my_comments else ""
+            author_name = str(author_name or "").strip() or "有人"
 
             text = (
                 f"{author_name}评论了你的周跟进总结（{week_part}）\n"
@@ -692,6 +693,7 @@ def create_visit_record(
                 # 推送飞书消息（attachment 由下游统一做瘦身与解析）
                 record_data = record.model_dump()
                 push_visit_record_message(
+                    record_id=record_id,
                     visit_type=record.visit_type,
                     sales_visit_record=record_data,
                     db_session=db_session,
@@ -771,6 +773,7 @@ def create_visit_record(
             # 推送飞书消息（attachment 由下游统一做瘦身与解析）
             record_data = record.model_dump()
             push_visit_record_message(
+                record_id=record_id,
                 visit_type=record.visit_type,
                 sales_visit_record=record_data,
                 db_session=db_session,
@@ -876,27 +879,28 @@ def query_visit_records(
 
 
 @router.post("/crm/visit_records/export")
-def export_visit_records_to_csv(
+def export_visit_records_to_xlsx(
     db_session: SessionDep,
     user: CurrentUserDep,
     request: VisitRecordQueryRequest,
 ):
     """
-    导出CRM拜访记录到CSV文件
+    导出CRM拜访记录到 XLSX 文件
     支持条件查询和分页
     根据当前用户的汇报关系限制数据访问权限
     支持中英文版本导出
     """
     try:
-        # 创建CSV内容
-        output = io.StringIO()
-        writer = csv.writer(output)
+        # 创建 XLSX 内容
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "visit_records"
         
-        # 根据语言参数确定CSV头部和数据内容
+        # 根据语言参数确定表头和数据内容
         language = request.language or "zh"  # 默认为中文
         
         if language == "en":
-            # 英文版CSV头部 - 只包含英文字段
+            # 英文版表头 - 只包含英文字段
             headers = [
                 "ID", "Customer Level", "Account Name", "Account ID", "First Visit", "Call High",
                 "Partner Name", "Partner ID", "Opportunity Name", "Opportunity ID", "Follow-up Date", "Person in Charge", "Department",
@@ -907,7 +911,7 @@ def export_visit_records_to_csv(
                 "Record Type", "Information Source", "Remarks", "Created Time"
             ]
         else:
-            # 中文版CSV头部（默认）- 只包含中文字段
+            # 中文版表头（默认）- 只包含中文字段
             headers = [
                 "ID", "客户分类", "客户名称", "客户ID", "是否首次拜访", "是否Call High",
                 "合作伙伴", "合作伙伴ID", "商机名称", "商机ID", "跟进日期", "负责销售", "所在团队",
@@ -918,7 +922,7 @@ def export_visit_records_to_csv(
                 "记录类型", "信息来源", "备注", "创建时间"
             ]
         
-        writer.writerow(headers)
+        ws.append(headers)
         
         # 使用分页查询循环获取所有数据
         # 限制最大导出10000条记录
@@ -933,8 +937,8 @@ def export_visit_records_to_csv(
         total_exported = 0
         total_pages = 0
         
-        # 辅助函数：将单个item转换为CSV行
-        def item_to_csv_row(item):
+        # 辅助函数：将单个item转换为表格行
+        def item_to_row(item):
             # 根据语言选择对应的字段值
             is_en = language == "en"
             
@@ -1056,7 +1060,7 @@ def export_visit_records_to_csv(
             for item in result.items:
                 if total_exported >= max_export_count:
                     break
-                writer.writerow(item_to_csv_row(item))
+                ws.append(item_to_row(item))
                 total_exported += 1
             
             # 如果当前页数据不足一页，说明已经是最后一页
@@ -1070,25 +1074,25 @@ def export_visit_records_to_csv(
             current_page += 1
         
         # 准备文件下载
+        output = io.BytesIO()
+        wb.save(output)
         output.seek(0)
-        csv_content = output.getvalue()
-        output.close()
         
         # 生成文件名（包含语言标识）
         current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
         language_suffix = "_en" if language == "en" else "_zh"
-        filename = f"visit_records_export{language_suffix}_{current_time}.csv"
+        filename = f"visit_records_export{language_suffix}_{current_time}.xlsx"
         
         # 创建响应
-        def iter_csv():
-            yield csv_content.encode('utf-8-sig')  # 使用utf-8-sig编码以支持Excel正确显示中文
+        def iter_xlsx():
+            yield output.getvalue()
         
         return StreamingResponse(
-            iter_csv(),
-            media_type="text/csv",
+            iter_xlsx(),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             headers={
                 "Content-Disposition": f"attachment; filename={filename}",
-                "Content-Type": "text/csv; charset=utf-8-sig"
+                "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             }
         )
         
@@ -1241,7 +1245,7 @@ def get_visit_record_filter_options(
 def get_visit_record_by_id(
     db_session: SessionDep,
     user: CurrentUserDep,
-    record_id: int | str,
+    record_id: str,
 ):
     """
     根据ID获取单个拜访记录详情
@@ -1283,6 +1287,79 @@ def get_visit_record_by_id(
             "message": "success",
             "data": data,
         }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(e)
+        raise InternalServerError()
+
+
+@router.post("/crm/visit_records/{record_id}/comments")
+def update_visit_record_comments(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    record_id: str,
+    payload: VisitRecordCommentsUpdate,
+):
+    """
+    保存指定拜访记录的评论（comments，JSON数组）
+    - 复用拜访记录的权限控制逻辑：无权限/不存在返回 404
+    """
+    try:
+        updated_record = visit_record_repo.update_visit_record_comments(
+            session=db_session,
+            record_id=record_id,
+            comments=[c.model_dump() for c in (payload.comments or [])],
+            current_user_id=user.id
+        )
+
+        if updated_record is None:
+            raise HTTPException(status_code=404, detail="拜访记录不存在或无权限访问")
+
+        # 保存评论成功后：推送提醒给拜访记录的记录人（不影响主流程，失败仅记录日志）
+        try:
+            record = updated_record
+            recipient_user_id = str(getattr(record, "recorder_id", "") or "")
+            current_user_id = str(getattr(user, "id", "") or "")
+
+            if record and recipient_user_id and recipient_user_id != current_user_id:
+                from app.core.config import settings
+
+                # 评论摘要（允许为空）
+                comment_preview = ""
+                if payload.comments:
+                    comment_preview = str((payload.comments[-1].content or "")).strip()
+                if len(comment_preview) > 200:
+                    comment_preview = comment_preview[:197] + "..."
+
+                # 跳转到拜访记录评论页
+                jump_url = f"{settings.REVIEW_REPORT_HOST}/registerVisitRecord/detail?record_id={record_id}"
+
+                author_name = ""
+                if payload.comments:
+                    author_name = str(payload.comments[-1].author or "").strip()
+                author_name = author_name or "有人"
+
+                title = (getattr(record, "account_name", None) or getattr(record, "partner_name", None) or "") or ""
+                opp = (getattr(record, "opportunity_name", None) or "") or ""
+                link_text = f"{title}  {opp}".strip() or "拜访记录"
+
+                text = (
+                    f"{author_name}评论了你的拜访记录\n"
+                    f"[{link_text}]({jump_url})\n"
+                    f"评论：{comment_preview or '--'}\n"
+                )
+
+                from app.services.platform_notification_service import platform_notification_service
+                platform_notification_service.send_visit_record_comment_notification(
+                    db_session,
+                    recipient_user_id=recipient_user_id,
+                    message_text=text,
+                )
+        except Exception as e:
+            logger.warning(f"发送拜访记录评论提醒失败（不影响保存评论）：{e}")
+
+        return {"code": 0, "message": "success", "data": {"comments": updated_record.comments or []}}
     except HTTPException:
         raise
     except Exception as e:
