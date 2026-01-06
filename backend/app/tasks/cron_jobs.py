@@ -164,13 +164,14 @@ def create_crm_daily_datasource(self):
 
 
 @app.task(bind=True, max_retries=3)
-def generate_crm_daily_statistics(self, target_date_str=None):
+def generate_crm_daily_statistics(self, target_date_str=None, report_type=None):
     """
     生成CRM销售/团队/公司日报完整数据并推送飞书通知
     每天早上8:30执行，处理前一天的销售和团队日报数据
     
     Args:
         target_date_str: 目标日期字符串，格式YYYY-MM-DD，不传则默认为昨天
+        report_type: 报告类型，支持 'sales'（销售个人日报） / 'department'（团队日报） / 'company'（公司日报），不传则默认为所有
     
     工作流程：
     1. 查询指定日期的拜访记录，按照销售人员分组，统计并生成完整的销售个人日报数据
@@ -195,34 +196,49 @@ def generate_crm_daily_statistics(self, target_date_str=None):
             logger.info(f"开始执行CRM日报数据生成任务，默认处理昨天: {target_date}")
         
         with Session(engine) as session:
+            valid_report_types = {"sales", "department", "company"}
+            if report_type is not None and report_type not in valid_report_types:
+                raise ValueError(f"invalid report_type={report_type}, valid={sorted(valid_report_types)}")
+
+            triggered_types: list[str] = []
+            sales_count = 0
+
             # 1. 生成并推送销售个人日报（仅在 sales_count > 0 时推送个人卡片）
-            sales_count = crm_statistics_service.generate_sales_daily_statistics(session, target_date)
+            if not report_type or report_type == "sales":
+                sales_count = crm_statistics_service.generate_sales_daily_statistics(session, target_date)
+                triggered_types.append("sales")
             
             # 2. 生成并推送团队（部门）日报
             #    - 即使没有团队日报数据，也会为所有有负责人的部门生成空数据的团队日报
-            crm_statistics_service._generate_and_send_department_daily_reports(session, target_date)
+            if not report_type or report_type == "department":
+                crm_statistics_service._generate_and_send_department_daily_reports(session, target_date)
+                triggered_types.append("department")
             
             # 3. 生成并推送公司日报
             #    - 基于 crm_department_daily_summary 中的公司级汇总数据
-            crm_statistics_service._generate_and_send_company_daily_report(session, target_date)
+            if not report_type or report_type == "company":
+                crm_statistics_service._generate_and_send_company_daily_report(session, target_date)
+                triggered_types.append("company")
             
             # 4. 生成简化的返回信息（用于任务状态查询）
-            if sales_count > 0:
+            if "sales" in triggered_types and sales_count > 0:
                 logger.info(
-                    f"CRM销售个人日报/部门日报/公司日报数据生成完成，"
-                    f"处理了 {sales_count} 个销售人员的个人日报数据"
+                    f"CRM日报数据生成完成，report_type={report_type or 'all'}，"
+                    f"个人日报处理了 {sales_count} 个销售人员"
                 )
-                message = f"成功处理了 {sales_count} 个销售人员的个人日报数据，并生成团队/公司日报"
+                message = f"已生成日报 report_type={report_type or 'all'}；个人日报处理了 {sales_count} 个销售人员"
             else:
                 logger.warning(
-                    f"{target_date} 没有找到任何销售人员的个人日报数据，但仍已生成团队/公司级空日报（如有部门/公司定义）"
+                    f"{target_date} 日报任务已执行，report_type={report_type or 'all'}；个人日报数据为 0（若选择了部门/公司日报，则仍会生成空日报）"
                 )
-                message = "没有找到销售人员的个人日报数据，但已生成团队/公司级空日报"
+                message = f"已生成日报 report_type={report_type or 'all'}；个人日报数据为 0（若选择了部门/公司日报，则仍会生成空日报）"
             
             # 返回简化的结果（用于任务状态查询 API）
             return {
                 "target_date": target_date.isoformat(),
                 "sales_count": sales_count,
+                "report_type": report_type,
+                "triggered_types": triggered_types,
                 "message": message
             }
             
