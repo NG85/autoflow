@@ -140,6 +140,9 @@ class Settings(BaseSettings):
     
     # CRM authority API
     CRM_AUTHORITY_API_URL: str = "http://auth:8018/crm/authority"
+    # Max rows to load from crm_data_authority when materializing ID sets in application memory.
+    # If exceeded, the result will be truncated (safe but may reduce recall).
+    CRM_AUTHORITY_MAX_ROWS: int = 50000
     
     # OAuth base URL
     OAUTH_BASE_URL: str = "http://auth:8018"
