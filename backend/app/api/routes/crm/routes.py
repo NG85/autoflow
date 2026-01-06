@@ -135,6 +135,30 @@ def _can_edit_weekly_followup_comments(db_session: SessionDep, user: CurrentUser
     is_team_lead_fallback = bool(profile and profile.department and not profile.direct_manager_id)
     return bool(is_team_lead_fallback), False, dept_id, dept_name
 
+def _to_comments(v: object) -> list[CRMComment]:
+    if not isinstance(v, list):
+        return []
+    out: list[CRMComment] = []
+    for item in v:
+        if not isinstance(item, dict):
+            continue
+        try:
+            created_at_raw = item.get("created_at")
+            created_at = None
+            if created_at_raw:
+                created_at = datetime.fromisoformat(str(created_at_raw))
+            out.append(
+                CRMComment(
+                    author_id=str(item.get("author_id") or ""),
+                    author=str(item.get("author") or ""),
+                    content=str(item.get("content") or ""),
+                    type=str(item.get("type") or ""),
+                    created_at=created_at,
+                )
+            )
+        except Exception:
+            continue
+    return out
 
 @router.post("/crm/weekly-followup/detail")
 def get_weekly_followup_detail(
@@ -226,33 +250,6 @@ def get_weekly_followup_detail(
             # 普通销售：只能看自己负责的商机/客户明细
             conds.append(CRMWeeklyFollowupEntitySummary.owner_user_id == str(user.id))
 
-    def _to_comments(v: object) -> list[CRMComment]:
-        if not include_comments:
-            return []
-        if not isinstance(v, list):
-            return []
-        out: list[CRMComment] = []
-        for item in v:
-            if not isinstance(item, dict):
-                continue
-            try:
-                created_at_raw = item.get("created_at")
-                created_at = None
-                if created_at_raw:
-                    created_at = datetime.fromisoformat(str(created_at_raw))
-                out.append(
-                    CRMComment(
-                        author_id=str(item.get("author_id") or ""),
-                        author=str(item.get("author") or ""),
-                        content=str(item.get("content") or ""),
-                        type=str(item.get("type") or ""),
-                        created_at=created_at,
-                    )
-                )
-            except Exception:
-                continue
-        return out
-
     total = db_session.exec(select(func.count()).select_from(CRMWeeklyFollowupEntitySummary).where(*conds)).one()
     entities = db_session.exec(
         select(CRMWeeklyFollowupEntitySummary)
@@ -275,7 +272,7 @@ def get_weekly_followup_detail(
             owner_name=e.owner_name,
             progress=e.progress,
             risks=e.risks,
-            comments=_to_comments(e.comments),
+            comments=_to_comments(e.comments) if include_comments else [],
         )
         for e in entities
     ]
@@ -498,31 +495,6 @@ def save_weekly_followup_comments(
             )
     except Exception as e:
         logger.warning(f"发送周跟进评论提醒失败（不影响保存评论）：{e}")
-
-    def _to_comments(v: object) -> list[CRMComment]:
-        if not isinstance(v, list):
-            return []
-        out: list[CRMComment] = []
-        for item in v:
-            if not isinstance(item, dict):
-                continue
-            try:
-                created_at_raw = item.get("created_at")
-                created_at = None
-                if created_at_raw:
-                    created_at = datetime.fromisoformat(str(created_at_raw))
-                out.append(
-                    CRMComment(
-                        author_id=str(item.get("author_id") or ""),
-                        author=str(item.get("author") or ""),
-                        content=str(item.get("content") or ""),
-                        type=str(item.get("type") or ""),
-                        created_at=created_at,
-                    )
-                )
-            except Exception:
-                continue
-        return out
 
     return WeeklyFollowupEntityRowOut(
         id=entity.id,
