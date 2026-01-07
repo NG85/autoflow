@@ -5,6 +5,7 @@ from fastapi import APIRouter, Body, HTTPException
 from pydantic import BaseModel
 
 from app.api.deps import SessionDep
+from app.core.config import settings
 from app.feishu.push_reports import push_weekly_reports
 
 logger = logging.getLogger(__name__)
@@ -100,6 +101,10 @@ async def push_notification_api(
         author = (payload.author_name or "").strip() or "有人"
         link_text = (payload.link_text or "").strip() or "查看详情"
         jump_url = (payload.jump_url or "").strip()
+
+        # 特殊兜底：创建销售任务但未传 jump_url 时，跳转到任务列表页
+        if payload.type == "sales_task_created" and not jump_url:
+            jump_url = (settings.CRM_SALES_TASK_PAGE_URL or "").strip()
 
         link_line = ""
         if jump_url:
