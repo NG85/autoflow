@@ -42,7 +42,11 @@ def _get_celery_task_status_response(task_id: str) -> dict:
 def trigger_daily_statistics_task(
     user: CurrentSuperuserDep,
     target_date: Optional[str] = Body(None, description="目标日期，格式YYYY-MM-DD，不传则默认为昨天"),
-    enable_feishu_push: Optional[bool] = Body(None, description="是否启用飞书推送，不传则使用系统配置")
+    enable_feishu_push: Optional[bool] = Body(None, description="是否启用飞书推送，不传则使用系统配置"),
+    report_type: Optional[str] = Body(
+        None,
+        description="报告类型，支持 'sales'（销售个人日报） / 'department'（团队日报） / 'company'（公司日报），不传则默认为所有",
+    ),
 ):
     """
     手动触发CRM日报统计定时任务
@@ -51,7 +55,7 @@ def trigger_daily_statistics_task(
     1. 从crm_daily_account_statistics表查询销售统计数据
     2. 通过correlation_id关联crm_account_assessment表获取评估详情
     3. 组合成完整的日报数据
-    4. 推送日报卡片给销售人员本人、部门负责人和公司负责人
+    4. 根据 report_type 推送日报卡片给销售人员本人 / 部门负责人 / 公司负责人
     
     注意：
     - 这是异步任务，会立即返回任务ID，可通过任务ID查询执行状态
@@ -86,8 +90,19 @@ def trigger_daily_statistics_task(
         if enable_feishu_push is not None:
             logger.info(f"用户指定飞书推送设置: {enable_feishu_push}")
         
+        valid_report_types = ["sales", "department", "company"]
+        if report_type is not None and report_type not in valid_report_types:
+            return {
+                "code": 400,
+                "message": f"无效的报告类型 report_type={report_type}，支持: {valid_report_types}，不传则默认为所有",
+                "data": {},
+            }
+
         # 触发异步任务，传递日期参数
-        task = generate_crm_daily_statistics.delay(target_date_str=parsed_date.isoformat())
+        task = generate_crm_daily_statistics.delay(
+            target_date_str=parsed_date.isoformat(),
+            report_type=report_type,
+        )
         
         return {
             "code": 0,
@@ -95,6 +110,7 @@ def trigger_daily_statistics_task(
             "data": {
                 "task_id": task.id,
                 "target_date": parsed_date.isoformat(),
+                "report_type": report_type,
                 "status": "PENDING",
                 "description": f"已提交 {parsed_date} 的CRM日报统计任务到队列，任务ID: {task.id}"
             }

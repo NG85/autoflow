@@ -137,36 +137,84 @@ class CRMWeeklyFollowupService:
         week_end: date,
         scope: str,
         department_name: str,
-        items: List[CRMWeeklyFollowupEntitySummary],
+        record_groups: List[Tuple[_EntityKey, List[CRMSalesVisitRecord]]],
+        owner_name_by_key: Optional[dict[_EntityKey, Optional[str]]] = None,
     ) -> str:
         """
         生成“团队/公司”层面的周汇总 prompt（输出纯文本中文，不要 JSON）。
         """
-        # 输入压缩：优先风险项，其次按更新时间
-        def _entity_title(x: CRMWeeklyFollowupEntitySummary) -> str:
-            customer = (x.account_name or x.partner_name or "--").strip()
-            opp = (x.opportunity_name or "").strip()
+        # 不做输入压缩：基于“原始拜访记录分组”（按实体聚合），保留全部实体与全部拜访摘要
+        def _entity_title_from_record(last_record: CRMSalesVisitRecord) -> str:
+            customer = (last_record.account_name or last_record.partner_name or "--").strip()
+            opp = (last_record.opportunity_name or "").strip()
             return f"{customer}" + (f" / {opp}" if opp else "")
 
-        risky = [x for x in items if (x.risks or "").strip()]
-        stable = [x for x in items if not (x.risks or "").strip()]
-        risky = sorted(risky, key=lambda x: x.updated_at or datetime.min, reverse=True)
-        stable = sorted(stable, key=lambda x: x.updated_at or datetime.min, reverse=True)
+        def _group_last_key(records: List[CRMSalesVisitRecord]) -> Tuple[date, datetime]:
+            """
+            汇总分组排序：优先按“拜访日期”，同日再按“最新更新时间”兜底。
+            """
+            last_visit = date.min
+            last_modified = datetime.min
+            for r in records:
+                if r.visit_communication_date and r.visit_communication_date > last_visit:
+                    last_visit = r.visit_communication_date
+                if r.last_modified_time and r.last_modified_time > last_modified:
+                    last_modified = r.last_modified_time
+            return last_visit, last_modified
 
-        # 控制长度：最多 18 个条目（风险最多 10）
-        picked = risky[:10] + stable[:8]
+        picked = sorted(record_groups, key=lambda x: _group_last_key(x[1]))
 
-        lines = []
-        for x in picked:
-            t = _entity_title(x)
-            prog = self._truncate((x.progress or "").strip(), 120)
-            risk = self._truncate((x.risks or "").strip(), 120)
-            owner = (x.owner_name or "").strip()
+        # 本周新增实体：该实体分组中任意一条拜访记录 is_first_visit == True
+        def _is_new_entity(records: List[CRMSalesVisitRecord]) -> bool:
+            for r in records:
+                if bool(getattr(r, "is_first_visit", False)):
+                    return True
+            return False
+
+        new_entity_titles: List[str] = []
+        for key, records in picked:
+            if not records:
+                continue
+            if _is_new_entity(records):
+                # 用该实体“最后一条记录”的实体名称做展示（与后续分组标题一致）
+                record_pairs_sorted = sorted(
+                    records,
+                    key=lambda x: (
+                        x.visit_communication_date or date.min,
+                        x.last_modified_time or datetime.min,
+                        x.id or 0,
+                    ),
+                )
+                last_record = record_pairs_sorted[-1]
+                new_entity_titles.append(_entity_title_from_record(last_record))
+
+        lines: List[str] = []
+        for key, records in picked:
+            if not records:
+                continue
+            record_pairs_sorted = sorted(
+                records,
+                key=lambda x: (
+                    x.visit_communication_date or date.min,
+                    x.last_modified_time or datetime.min,
+                    x.id or 0,
+                ),
+            )
+            last_record = record_pairs_sorted[-1]
+            t = _entity_title_from_record(last_record)
+
+            owner = ""
+            if owner_name_by_key:
+                owner = (owner_name_by_key.get(key) or "").strip()
             owner_part = f"（负责人:{owner}）" if owner else ""
-            if risk:
-                lines.append(f"- {t}{owner_part}｜进展:{prog or '--'}｜风险:{risk}")
-            else:
-                lines.append(f"- {t}{owner_part}｜进展:{prog or '--'}｜风险:--")
+
+            # 全量保留该实体本周的拜访摘要（不截断）
+            new_part = "（本周首次拜访）" if _is_new_entity(record_pairs_sorted) else ""
+            lines.append(f"- {t}{owner_part}{new_part}")
+            for r in record_pairs_sorted:
+                day = (r.visit_communication_date.isoformat() if r.visit_communication_date else "--")
+                ctx = (crm_writeback_service.generate_visit_summary_content(r) or "").strip() or "--"
+                lines.append(f"  - [{day}] {ctx}")
 
         week_part = f"{week_start.isoformat()}至{week_end.isoformat()}"
         if scope == "company":
@@ -174,27 +222,31 @@ class CRMWeeklyFollowupService:
         else:
             header = f"团队[{department_name}]周跟进总结，周期[{week_part}]。"
 
-        total = len(items)
-        risky_cnt = len(risky)
+        total_entities = len(record_groups)
+        total_visits = sum(len(rs) for _, rs in record_groups)
         input_text = "\n".join(lines) if lines else "- 无可用明细"
+        new_entities_text = "、".join(dict.fromkeys([x for x in new_entity_titles if (x or "").strip()])) or "无"
 
         return f"""
-你是销售管理的周复盘助手。请基于“本周实体跟进明细（已压缩）”输出周跟进总结，风格参考如下：
-本周销售团队按计划完成了客户拜访，大部分客户沟通顺利，信息收集较全面，但仍有少部分客户未能触达关键联系人或拜访内容不够深入，存在潜在跟进风险。
-整体来看，拜访覆盖面良好，销售动作积极，但部分客户的下一步计划需要进一步明确，以确保持续推进和后续跟进高效。
+你是销售团队管理者的周复盘助手。请基于“本周拜访记录摘要（按实体分组）”，输出【2-3 个自然段】管理者视角的周跟进总结（自然语言），用于管理层快速阅读与决策。
 
-写作要求：
-1) 输出必须是【纯中文文本】，不要 JSON、不要 markdown。
-2) 2-3 段，每段 1-2 句，整体 120-220 字左右。
-3) 先总体结论，再点出主要风险与改进建议（不要列清单）。
-4) 不要暴露具体条目明细原文（可抽象概括）。
+硬性要求（必须同时满足）：
+1) 输出必须是【纯中文文本】，不要 JSON、不要 markdown、不要编号/项目符号。
+2) 输出字数请严格控制在【150 字以内】（包含标点与换行）；允许用换行做自然分段（2-3 段），但不要用列表格式；如超过 150 字，必须自行进一步压缩到 150 字以内。
+3) 只基于输入内容归纳，不要编造；客户/商机名称用输入中的名称；不要逐条复述原文，侧重归纳与抽象。
+4) 内容必须按以下要点依次覆盖，但要自然地写在同一段里（可用“；”“。”等分隔）：
+   - 机会推进说明：先点出本周新增客户（本周有首次拜访的实体），只需举例点到客户即可（不必罗列全部）；再按阶段归类客户进展（阶段固定为：初步接洽、需求澄清、方案讨论、商务决策阶段），每个阶段同样只需举例 1-3 个代表客户。
+   - 进展（共识）：提炼每个客户跟进形成的共识/结论，并将共识归类为 3-4 类；每一类只需举例点到 1-3 个代表客户（不要罗列全部客户名）。
+   - 共性卡点及风险：归纳多个项目反复出现的卡点/异议/待解决问题，并说明会带来的风险影响；卡点归类 3-4 类，每一类只需举例点到 1-3 个代表客户（不要罗列全部客户名）。
+   - 下一步 leader 需要重点关注：基于现存卡点/风险与下一步计划，给出 2-3 条管理者需要参与/推动/重点盯防的事项（要具体、可执行）。
 
 上下文：
 - {header}
-- 本周涉及实体数：{total}
-- 存在风险/问题的实体数：{risky_cnt}
+- 本周涉及实体数：{total_entities}
+- 本周拜访记录数（去重前）：{total_visits}
+- 本周新增实体（首次拜访）：{new_entities_text}
 
-本周实体跟进明细（已压缩）：
+本周拜访记录摘要（按实体分组）：
 {input_text}
 """.strip()
 
@@ -482,6 +534,7 @@ class CRMWeeklyFollowupService:
         dept_by_user_id = user_department_relation_repo.get_primary_department_by_user_ids(session, owner_user_ids)
 
         persisted_entities: List[CRMWeeklyFollowupEntitySummary] = []
+        owner_name_by_key: dict[_EntityKey, Optional[str]] = {}
 
         for key, record_pairs in grouped.items():
             # 按日期 + 最后更新时间排序，取最后一条作为该实体的“最新状态参考”
@@ -531,6 +584,7 @@ class CRMWeeklyFollowupService:
                 if crm_uid:
                     owner_name = crm_user_name_by_owner_id.get(crm_uid)
             owner_name = (owner_name or "").strip() or None
+            owner_name_by_key[key] = owner_name
 
             # 优先用 CRM 表里的名称（更权威/更新），兜底再用拜访记录字段
             account_id = last_record.account_id
@@ -576,18 +630,31 @@ class CRMWeeklyFollowupService:
             persisted_entities.append(persisted)
 
         # 生成部门/公司汇总（仅 LLM）
-        by_dept: Dict[str, List[CRMWeeklyFollowupEntitySummary]] = defaultdict(list)
-        for e in persisted_entities:
-            by_dept[e.department_name].append(e)
+        by_dept: Dict[str, List[Tuple[_EntityKey, List[CRMSalesVisitRecord]]]] = defaultdict(list)
+        for key, rs in grouped.items():
+            by_dept[key.department_name].append((key, rs))
 
-        def _llm_rollup_text(scope: str, dept: str, items: List[CRMWeeklyFollowupEntitySummary]) -> Optional[str]:
+        # 用实体行补齐 department_id（汇总内容不再依赖实体行）
+        dept_id_by_name: Dict[str, str] = {}
+        for e in persisted_entities:
+            dn = (e.department_name or "").strip()
+            did = str(getattr(e, "department_id", "") or "").strip()
+            if dn and did and dn not in dept_id_by_name:
+                dept_id_by_name[dn] = did
+
+        def _llm_rollup_text(
+            scope: str,
+            dept: str,
+            record_groups: List[Tuple[_EntityKey, List[CRMSalesVisitRecord]]],
+        ) -> Optional[str]:
             try:
                 prompt = self._build_rollup_prompt(
                     week_start=week_start,
                     week_end=week_end,
                     scope=scope,
                     department_name=dept,
-                    items=items,
+                    record_groups=record_groups,
+                    owner_name_by_key=owner_name_by_key,
                 )
                 raw = call_ark_llm(prompt, temperature=0.4)
                 txt = (raw or "").strip()
@@ -599,12 +666,8 @@ class CRMWeeklyFollowupService:
                 return ""
 
         # upsert department summaries
-        for dept, items in by_dept.items():
-            dept_id = ""
-            for x in items:
-                if getattr(x, "department_id", None):
-                    dept_id = str(x.department_id)
-                    break
+        for dept, record_groups in by_dept.items():
+            dept_id = dept_id_by_name.get(dept, "")
             summary_obj = CRMWeeklyFollowupSummary(
                 week_start=week_start,
                 week_end=week_end,
@@ -617,13 +680,13 @@ class CRMWeeklyFollowupService:
                     summary_type="department",
                     department_name=dept,
                 ),
-                summary_content=_llm_rollup_text("department", dept, items),
+                summary_content=_llm_rollup_text("department", dept, record_groups),
             )
             self._upsert_summary(session, summary_obj)
 
         # company summary
-        all_items = list(persisted_entities)
-        company_text = _llm_rollup_text("company", "公司", all_items)
+        all_record_groups = list(grouped.items())
+        company_text = _llm_rollup_text("company", "公司", all_record_groups)
         company_obj = CRMWeeklyFollowupSummary(
             week_start=week_start,
             week_end=week_end,
