@@ -460,39 +460,44 @@ def save_weekly_followup_comments(
     try:
         owner_user_id = str(getattr(entity, "owner_user_id", "") or "")
         if owner_user_id and owner_user_id != current_user_id:
-            from app.core.config import settings
-            from urllib.parse import quote_plus
-
-            # 选取本次写入的评论内容摘要（可能为空，允许）
-            comment_preview = ""
+            # 如果最新一条评论是 task，则不做推送
+            latest_comment_type = ""
             if my_comments:
-                comment_preview = str((my_comments[-1] or {}).get("content") or "").strip()
-            if len(comment_preview) > 200:
-                comment_preview = comment_preview[:197] + "..."
+                latest_comment_type = str((my_comments[-1] or {}).get("type") or "").strip().lower()
+            if latest_comment_type != "task":
+                from app.core.config import settings
+                from urllib.parse import quote_plus
 
-            week_part = f"{entity.week_start.isoformat()}~{entity.week_end.isoformat()}"
-            dept_name = (entity.department_name or "").strip()
-            jump_url = (
-                f"{settings.REVIEW_REPORT_HOST}/review/opportunitySummary"
-                f"?department_name={quote_plus(dept_name)}"
-                f"&week_start={entity.week_start.isoformat()}&week_end={entity.week_end.isoformat()}"
-            )
+                # 选取本次写入的评论内容摘要（可能为空，允许）
+                comment_preview = ""
+                if my_comments:
+                    comment_preview = str((my_comments[-1] or {}).get("content") or "").strip()
+                if len(comment_preview) > 200:
+                    comment_preview = comment_preview[:197] + "..."
 
-            author_name = my_comments[-1].get("author") if my_comments else ""
-            author_name = str(author_name or "").strip() or "有人"
+                week_part = f"{entity.week_start.isoformat()}~{entity.week_end.isoformat()}"
+                dept_name = (entity.department_name or "").strip()
+                jump_url = (
+                    f"{settings.REVIEW_REPORT_HOST}/review/opportunitySummary"
+                    f"?department_name={quote_plus(dept_name)}"
+                    f"&week_start={entity.week_start.isoformat()}&week_end={entity.week_end.isoformat()}"
+                )
 
-            text = (
-                f"{author_name}评论了你的周跟进总结（{week_part}）\n"
-                f"[{entity.account_name or entity.partner_name}  {entity.opportunity_name}]({jump_url})\n"
-                f"评论：{comment_preview or '--'}\n"
-            )
+                author_name = my_comments[-1].get("author") if my_comments else ""
+                author_name = str(author_name or "").strip() or "有人"
 
-            from app.services.platform_notification_service import platform_notification_service
-            platform_notification_service.send_weekly_followup_comment_notification(
-                db_session,
-                recipient_user_id=owner_user_id,
-                message_text=text,
-            )
+                text = (
+                    f"{author_name}评论了你的周跟进总结（{week_part}）\n"
+                    f"[{entity.account_name or entity.partner_name}  {entity.opportunity_name}]({jump_url})\n"
+                    f"评论：{comment_preview or '--'}\n"
+                )
+
+                from app.services.platform_notification_service import platform_notification_service
+                platform_notification_service.send_weekly_followup_comment_notification(
+                    db_session,
+                    recipient_user_id=owner_user_id,
+                    message_text=text,
+                )
     except Exception as e:
         logger.warning(f"发送周跟进评论提醒失败（不影响保存评论）：{e}")
 
@@ -1296,39 +1301,44 @@ def update_visit_record_comments(
             current_user_id = str(getattr(user, "id", "") or "")
 
             if record and recipient_user_id and recipient_user_id != current_user_id:
-                from app.core.config import settings
-
-                # 评论摘要（允许为空）
-                comment_preview = ""
+                # 如果最新一条评论是 task，则不做推送
+                latest_comment_type = ""
                 if payload.comments:
-                    comment_preview = str((payload.comments[-1].content or "")).strip()
-                if len(comment_preview) > 200:
-                    comment_preview = comment_preview[:197] + "..."
+                    latest_comment_type = str(getattr(payload.comments[-1], "type", "") or "").strip().lower()
+                if latest_comment_type != "task":
+                    from app.core.config import settings
 
-                # 跳转到拜访记录评论页
-                jump_url = f"{settings.REVIEW_REPORT_HOST}/registerVisitRecord/detail?record_id={record_id}"
+                    # 评论摘要（允许为空）
+                    comment_preview = ""
+                    if payload.comments:
+                        comment_preview = str((payload.comments[-1].content or "")).strip()
+                    if len(comment_preview) > 200:
+                        comment_preview = comment_preview[:197] + "..."
 
-                author_name = ""
-                if payload.comments:
-                    author_name = str(payload.comments[-1].author or "").strip()
-                author_name = author_name or "有人"
+                    # 跳转到拜访记录评论页
+                    jump_url = f"{settings.REVIEW_REPORT_HOST}/registerVisitRecord/detail?record_id={record_id}"
 
-                title = (getattr(record, "account_name", None) or getattr(record, "partner_name", None) or "") or ""
-                opp = (getattr(record, "opportunity_name", None) or "") or ""
-                link_text = f"{title}  {opp}".strip() or "拜访记录"
+                    author_name = ""
+                    if payload.comments:
+                        author_name = str(payload.comments[-1].author or "").strip()
+                    author_name = author_name or "有人"
 
-                text = (
-                    f"{author_name}评论了你的拜访记录\n"
-                    f"[{link_text}]({jump_url})\n"
-                    f"评论：{comment_preview or '--'}\n"
-                )
+                    title = (getattr(record, "account_name", None) or getattr(record, "partner_name", None) or "") or ""
+                    opp = (getattr(record, "opportunity_name", None) or "") or ""
+                    link_text = f"{title}  {opp}".strip() or "拜访记录"
 
-                from app.services.platform_notification_service import platform_notification_service
-                platform_notification_service.send_visit_record_comment_notification(
-                    db_session,
-                    recipient_user_id=recipient_user_id,
-                    message_text=text,
-                )
+                    text = (
+                        f"{author_name}评论了你的拜访记录\n"
+                        f"[{link_text}]({jump_url})\n"
+                        f"评论：{comment_preview or '--'}\n"
+                    )
+
+                    from app.services.platform_notification_service import platform_notification_service
+                    platform_notification_service.send_visit_record_comment_notification(
+                        db_session,
+                        recipient_user_id=recipient_user_id,
+                        message_text=text,
+                    )
         except Exception as e:
             logger.warning(f"发送拜访记录评论提醒失败（不影响保存评论）：{e}")
 
