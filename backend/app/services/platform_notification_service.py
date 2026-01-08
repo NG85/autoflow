@@ -409,7 +409,7 @@ class PlatformNotificationService:
     ) -> Dict[str, List[Dict[str, Any]]]:
         """
         获取记录人相关的推送接收者，按平台分组
-        包括：记录人本人 + OAuth 汇报链中的所有上级
+        包括：记录人本人 + 直属上级（user_profiles.direct_manager_id） + OAuth 汇报链中的所有上级
         
         支持通过recorder_name或recorder_id查找
         返回按平台分组的接收者字典
@@ -466,7 +466,56 @@ class PlatformNotificationService:
                     }
                 )
         
-        # 4. 调用 OAuth 服务查询汇报链领导
+        # 4. 添加直属上级（user_profiles.direct_manager_id，通常是 oauth_user_id）
+        direct_manager_id = (recorder_profile.direct_manager_id or "").strip()
+        if direct_manager_id:
+            try:
+                manager_profile = user_profile_repo.get_by_oauth_user_id(db_session, direct_manager_id)
+                if not manager_profile:
+                    logger.warning(
+                        f"Direct manager profile not found for manager_id={direct_manager_id}, "
+                        f"recorder={recorder_name} (profile: {recorder_profile.name})"
+                    )
+                elif not manager_profile.oauth_user:
+                    logger.warning(
+                        f"Direct manager has no oauth_user, cannot send notification: "
+                        f"manager_id={direct_manager_id}, manager_name={manager_profile.name}"
+                    )
+                else:
+                    manager_platform = manager_profile.oauth_user.provider
+                    manager_open_id = manager_profile.oauth_user.open_id
+                    if not self._validate_platform_support(manager_platform):
+                        logger.warning(
+                            f"Direct manager platform {manager_platform} not supported, skipping direct manager"
+                        )
+                    elif not manager_open_id:
+                        logger.warning(
+                            f"Direct manager missing open_id: manager_id={direct_manager_id}, "
+                            f"manager_name={manager_profile.name}, platform={manager_platform}"
+                        )
+                    else:
+                        if manager_platform not in recipients_by_platform:
+                            recipients_by_platform[manager_platform] = []
+
+                        existing_open_ids = {r["open_id"] for r in recipients_by_platform[manager_platform]}
+                        if manager_open_id not in existing_open_ids:
+                            recipients_by_platform[manager_platform].append(
+                                {
+                                    "open_id": manager_open_id,
+                                    "name": manager_profile.name or "Unknown",
+                                    "type": "direct_manager",
+                                    "department": manager_profile.department or "直属上级",
+                                    "receive_id_type": "open_id",
+                                    "platform": manager_platform,
+                                }
+                            )
+            except Exception as e:
+                logger.error(
+                    f"Failed to resolve direct manager recipient for manager_id={direct_manager_id}, "
+                    f"recorder={recorder_name} (profile: {recorder_profile.name}), error: {e}"
+                )
+
+        # 5. 调用 OAuth 服务查询汇报链领导
         # 使用系统用户ID（user_id），而不是OAuth平台的用户ID
         base_user_id = None
         if recorder_profile.user_id:
@@ -491,7 +540,7 @@ class PlatformNotificationService:
             )
             return recipients_by_platform
         
-        # 5. 将汇报链领导加入接收者列表，按平台分组并去重
+        # 6. 将汇报链领导加入接收者列表，按平台分组并去重
         for leader in leaders:
             platform = leader.get("platform")
             if not platform:
@@ -525,7 +574,7 @@ class PlatformNotificationService:
                 }
             )
         
-        # 6. 添加单独配置了“卡片接收权限”的用户（通常为公司高层或管理员），并与现有集合去重
+        # 7. 添加单独配置了“卡片接收权限”的用户（通常为公司高层或管理员），并与现有集合去重
         card_receivers = self._get_card_permission_receivers("visit_record:card:receive")
         for user in card_receivers:
             platform = user.get("platform")
