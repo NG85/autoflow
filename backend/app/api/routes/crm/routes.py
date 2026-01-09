@@ -57,7 +57,7 @@ from app.models.crm_daily_account_statistics import CRMDailyAccountStatistics
 from app.repositories.user_profile import UserProfileRepo
 from app.repositories.visit_record import visit_record_repo
 from app.repositories.document_content import DocumentContentRepo
-from sqlmodel import select, or_, distinct, func
+from sqlmodel import select, or_, distinct, func, and_
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
 from app.models.crm_accounts import CRMAccount
 from app.models.user_profile import UserProfile
@@ -1382,63 +1382,93 @@ def get_daily_reports(
             start_date = request.start_date or (datetime.now().date() - timedelta(days=7))
             end_date = request.end_date or datetime.now().date()
         
-        # 收集所有日报数据
-        all_reports = []
+        # 日报口径来自 CRMAccountOpportunityAssessment：
+        # 通过 crm_statistics_service.get_sales_complete_daily_report 组装销售维度的完整日报
+        from app.core.config import settings
+
+        # 边界保护：如果 start_date > end_date，则交换
+        if start_date and end_date and start_date > end_date:
+            start_date, end_date = end_date, start_date
+
+        all_reports: list[DailyReportResponse] = []
         current_date = start_date
-        
         while current_date <= end_date:
-            daily_reports = crm_statistics_service.get_complete_daily_report(
-                session=db_session, 
-                target_date=current_date
+            daily_reports = crm_statistics_service.get_sales_complete_daily_report(
+                session=db_session,
+                target_date=current_date,
             )
-            
+
             for report in daily_reports:
+                recorder_id = str(report.get("recorder_id") or "")
+                recorder_name = str(report.get("recorder") or "")
+                department_name = str(report.get("department") or "")
+
                 # 应用过滤条件
-                if request.sales_id and report.get('sales_id') != request.sales_id:
+                if request.sales_id and recorder_id != request.sales_id:
                     continue
-                if request.sales_name and request.sales_name.lower() not in (report.get('sales_name', '')).lower():
+                if request.sales_name and request.sales_name.lower() not in recorder_name.lower():
                     continue
-                if request.department_name and report.get('department_name') != request.department_name:
+                if request.department_name and department_name != request.department_name:
                     continue
-                
-                # 转换为API响应格式
-                daily_report = DailyReportResponse(
-                    recorder=report['sales_name'],
-                    department_name=report['department_name'],
-                    report_date=report['report_date'],
-                    statistics=[DailyReportStatistics(
-                        end_customer_total_follow_up=report.get('end_customer_total_follow_up', 0),
-                        end_customer_total_first_visit=report.get('end_customer_total_first_visit', 0),
-                        end_customer_total_multi_visit=report.get('end_customer_total_multi_visit', 0),
-                        partner_total_follow_up=report.get('partner_total_follow_up', 0),
-                        partner_total_first_visit=report.get('partner_total_first_visit', 0),
-                        partner_total_multi_visit=report.get('partner_total_multi_visit', 0),
-                        assessment_red_count=report.get('assessment_red_count', 0),
-                        assessment_yellow_count=report.get('assessment_yellow_count', 0),
-                        assessment_green_count=report.get('assessment_green_count', 0)
-                    )],
-                    visit_detail_page=report['visit_detail_page'],
-                    account_list_page=report['account_list_page'],
-                    first_assessment=[AssessmentDetail(**assessment) for assessment in report['first_assessment']],
-                    multi_assessment=[AssessmentDetail(**assessment) for assessment in report['multi_assessment']]
+
+                report_date = report.get("report_date") or current_date
+                visit_detail_page = str(report.get("visit_detail_page") or "")
+                account_list_page = (
+                    f"{settings.ACCOUNT_LIST_PAGE_URL}?department={department_name}"
+                    if department_name
+                    else settings.ACCOUNT_LIST_PAGE_URL
                 )
-                all_reports.append(daily_report)
-            
+
+                # 兼容 OpportunityAssessment 明细字段：opportunity_name -> opportunity_names
+                first_assessments = report.get("first_assessment") or []
+                multi_assessments = report.get("multi_assessment") or []
+                for a in first_assessments:
+                    if isinstance(a, dict) and "opportunity_names" not in a:
+                        a["opportunity_names"] = a.get("opportunity_name") or ""
+                for a in multi_assessments:
+                    if isinstance(a, dict) and "opportunity_names" not in a:
+                        a["opportunity_names"] = a.get("opportunity_name") or ""
+
+                all_reports.append(
+                    DailyReportResponse(
+                        recorder=recorder_name,
+                        department_name=department_name,
+                        report_date=report_date,
+                        statistics=[
+                            DailyReportStatistics(
+                                end_customer_total_follow_up=report.get("end_customer_total_follow_up", 0),
+                                end_customer_total_first_visit=report.get("end_customer_total_first_visit", 0),
+                                end_customer_total_multi_visit=report.get("end_customer_total_multi_visit", 0),
+                                partner_total_follow_up=report.get("partner_total_follow_up", 0),
+                                partner_total_first_visit=report.get("partner_total_first_visit", 0),
+                                partner_total_multi_visit=report.get("partner_total_multi_visit", 0),
+                                assessment_red_count=report.get("assessment_red_count", 0),
+                                assessment_yellow_count=report.get("assessment_yellow_count", 0),
+                                assessment_green_count=report.get("assessment_green_count", 0),
+                            )
+                        ],
+                        visit_detail_page=visit_detail_page,
+                        account_list_page=account_list_page,
+                        first_assessment=[AssessmentDetail(**a) for a in first_assessments],
+                        multi_assessment=[AssessmentDetail(**a) for a in multi_assessments],
+                    )
+                )
+
             current_date += timedelta(days=1)
-        
+
         # 按日期降序排序
         all_reports.sort(key=lambda x: x.report_date, reverse=True)
-        
+
         # 手动分页
         total = len(all_reports)
         start_idx = (request.page - 1) * request.page_size
         end_idx = start_idx + request.page_size
-        paginated_reports = all_reports[start_idx:end_idx]
-        
+        items = all_reports[start_idx:end_idx]
+
         total_pages = (total + request.page_size - 1) // request.page_size
         
         return Page(
-            items=paginated_reports,
+            items=items,
             total=total,
             page=request.page,
             size=request.page_size,
