@@ -1201,31 +1201,79 @@ class PlatformNotificationService:
         self,
         db_session: Session
     ) -> List[Dict[str, Any]]:
-        """获取公司周报推送的接收者"""
-        
-        recipients = []
-        
-        # 从profile中获取可以接收周报的人员
-        profiles = user_profile_repo.get_users_by_notification_permission(
-            db_session, NOTIFICATION_TYPE_WEEKLY_REPORT
+        """
+        获取公司周报推送的接收者
+
+        规则：
+        - 调用 OAuth 权限服务，查询拥有
+          permission = "weekly_report:company:card:receive"
+          的用户作为接收人
+        - 如果未查询到，则从profile中获取可以接收公司周报的人员（向后兼容）
+        """
+
+        recipients: List[Dict[str, Any]] = []
+
+        card_receivers = self._get_card_permission_receivers(
+            permission="weekly_report:company:card:receive",
         )
-        
-        for profile in profiles:
-            profile_open_id = profile.oauth_user.open_id
-            if profile_open_id:
-                recipients.append({
-                    "open_id": profile_open_id,
-                    "name": profile.name,
+
+        for user in card_receivers:
+            platform = user.get("platform")
+            open_id = user.get("open_id")
+            name = user.get("name") or "Unknown"
+
+            if not platform or not open_id:
+                logger.warning(f"Skip company-weekly-report card-permission user without platform/open_id: {user}")
+                continue
+
+            if not self._validate_platform_support(platform):
+                logger.warning(f"Company-weekly-report user platform {platform} not supported, skipping")
+                continue
+
+            recipients.append(
+                {
+                    "open_id": open_id,
+                    "name": name,
                     "type": "weekly_report_recipient",
-                    "department": profile.department or "管理团队",
+                    "department": "管理团队",
                     "receive_id_type": "open_id",
-                    "platform": profile.oauth_user.provider
-                })
-                logger.info(f"Added company weekly report recipient: {profile.name} on {profile.oauth_user.provider}")
-        
+                    "platform": platform,
+                }
+            )
+            logger.info(
+                f"Added company weekly report recipient from card-permission: {name} "
+                f"on {platform}"
+            )
+
         if not recipients:
-            logger.warning(f"No recipients configured for company weekly report")
-        
+            logger.warning(
+                "No recipients found for company weekly report via card-permission "
+                '(permission="weekly_report:company:card:receive")'
+            )
+
+            # 从profile中获取可以接收周报的人员（向后兼容）
+            profiles = user_profile_repo.get_users_by_notification_permission(
+                db_session, NOTIFICATION_TYPE_WEEKLY_REPORT
+            )
+
+            for profile in profiles:
+                profile_open_id = profile.oauth_user.open_id
+                if profile_open_id:
+                    recipients.append(
+                        {
+                            "open_id": profile_open_id,
+                            "name": profile.name,
+                            "type": "weekly_report_recipient",
+                            "department": profile.department or "管理团队",
+                            "receive_id_type": "open_id",
+                            "platform": profile.oauth_user.provider,
+                        }
+                    )
+                    logger.info(
+                        f"Added company weekly report recipient from profile: {profile.name} "
+                        f"on {profile.oauth_user.provider}"
+                    )
+
         return recipients
     
     def send_company_weekly_report_notification(
