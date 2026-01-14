@@ -10,6 +10,7 @@ from sqlmodel import Session, select
 from app.core.db import engine
 from app.models.crm_data_authority import CrmDataAuthority
 from app.repositories.user_profile import user_profile_repo
+from app.repositories.visit_record import visit_record_repo
 
 logger = logging.getLogger(__name__)
 
@@ -89,16 +90,36 @@ def get_user_crm_authority(user_id: UUID, crm_type: Optional[CrmDataType] = None
         with Session(engine) as session:
             # 1) Map system user UUID -> (crm_user_id, role) via repo (role normalized)
             crm_user_id, role = user_profile_repo.get_crm_user_id_and_role_by_user_id(session, user_id)
-
-            if not crm_user_id:
-                logger.info("User %s has no crm_user_id in user_profiles; CRM authority empty.", user_id)
+            
+            if role == "admin":
+                logger.info("User %s is admin; can access all CRM data.", user_id)
                 return authority, role
+
+            # 2) 检查用户角色和权限（公司高层/公司管理员）
+            try:
+                roles_and_permissions = visit_record_repo._get_user_roles_and_permissions(user_id)
+                permissions = roles_and_permissions.get("permissions", []) if isinstance(roles_and_permissions, dict) else []
+                roles = roles_and_permissions.get("roles", []) if isinstance(roles_and_permissions, dict) else []
+                
+                # 2.1 检查是否有 crm:company:query 权限
+                if "crm:company:query" in permissions:
+                    logger.info("User %s has crm:company:query permission; can access all CRM data.", user_id)
+                    role = "admin"
+                
+                # 2.2 检查角色是否是公司高层/公司管理员（根据实际角色名称调整）
+                company_admin_roles = ["COMPANY_EXECUTIVE", "COMPANY_ADMIN"]
+                if any(role.lower() in [r.lower() for r in company_admin_roles] for role in roles):
+                    logger.info("User %s has company admin role; can access all CRM data.", user_id)
+                    role = "admin"
+            except Exception as e:
+                # 如果权限查询失败，记录日志但不影响后续检查
+                logger.warning(f"Failed to check user roles and permissions for {user_id}: {e}")
 
             # Admin can access all CRM data; no need to materialize authorized id set.
             if role == "admin":
                 return authority, role
 
-            # 2) Query authority table by crm_id
+            # 3) Query authority table by crm_id           
             stmt = select(CrmDataAuthority.type, CrmDataAuthority.data_id).where(
                 CrmDataAuthority.crm_id == str(crm_user_id),
             )

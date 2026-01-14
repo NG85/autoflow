@@ -5,8 +5,8 @@ from sqlalchemy.exc import IntegrityError
 from app.repositories.base_repo import BaseRepo
 from app.models.local_contacts import LocalContact
 from app.models.crm_accounts import CRMAccount
+from app.models.crm_data_authority import CrmDataAuthority
 from app.rag.types import CrmDataType
-from app.rag.chat.crm_authority import get_user_crm_authority
 from app.repositories.user_profile import user_profile_repo
 from app.repositories.visit_record import visit_record_repo
 
@@ -35,21 +35,17 @@ class LocalContactRepo(BaseRepo):
         Returns:
             True 如果有权限，False 否则
         """
-        # 1. 检查是否是系统管理员（user_profile 中的 role/position 为 admin）
-        if user_profile_repo.is_admin_by_user_id(db_session, user_id):
-            return True
-        
-        # 2. 检查用户角色和权限（公司高层/公司管理员）
+        # 1. 检查用户角色和权限（公司高层/公司管理员）
         try:
             roles_and_permissions = visit_record_repo._get_user_roles_and_permissions(user_id)
             permissions = roles_and_permissions.get("permissions", []) if isinstance(roles_and_permissions, dict) else []
             roles = roles_and_permissions.get("roles", []) if isinstance(roles_and_permissions, dict) else []
             
-            # 2.1 检查是否有 crm:company:query 权限
+            # 1.1 检查是否有 crm:company:query 权限
             if "crm:company:query" in permissions:
                 return True
             
-            # 2.2 检查角色是否是公司高层/公司管理员（根据实际角色名称调整）
+            # 1.2 检查角色是否是公司高层/公司管理员（根据实际角色名称调整）
             company_admin_roles = ["COMPANY_EXECUTIVE", "COMPANY_ADMIN"]
             if any(role.lower() in [r.lower() for r in company_admin_roles] for role in roles):
                 return True
@@ -60,15 +56,26 @@ class LocalContactRepo(BaseRepo):
             logger = logging.getLogger(__name__)
             logger.warning(f"Failed to check user permissions for {user_id}: {e}")
         
-        # 3. 获取用户的CRM权限
-        crm_authority, role = get_user_crm_authority(user_id=user_id, crm_type=CrmDataType.ACCOUNT)
+        # 2. 获取用户的CRM用户ID和自定义role
+        crm_user_id, role = user_profile_repo.get_crm_user_id_and_role_by_user_id(db_session, user_id)
         
-        # 4. Admin 角色可以访问所有客户
+        # 2.1 Admin 角色可以访问所有客户
         if role == "admin":
             return True
         
-        # 5. 检查用户是否有权限访问该客户
-        return crm_authority.is_authorized_account(customer_id)
+        if not crm_user_id:
+            # 如果没有CRM用户ID，则没有权限
+            return False
+        
+        # 2.2 直接查询 crm_data_authority 表，检查是否有权限访问该客户
+        stmt = select(CrmDataAuthority).where(
+            CrmDataAuthority.crm_id == str(crm_user_id),
+            CrmDataAuthority.type == CrmDataType.ACCOUNT.value,
+            CrmDataAuthority.data_id == customer_id,
+            (CrmDataAuthority.delete_flag.is_(None)) | (CrmDataAuthority.delete_flag == False)  # noqa: E712
+        ).limit(1)
+        
+        return db_session.exec(stmt).first() is not None
     
     def get_by_id(
         self, 
@@ -151,19 +158,51 @@ class LocalContactRepo(BaseRepo):
         Returns:
             tuple: (联系人列表, 总数)（只返回用户有权限访问的客户下的联系人）
         """
-        # 获取用户有权限访问的客户ID列表
-        crm_authority, role = get_user_crm_authority(user_id=user_id, crm_type=CrmDataType.ACCOUNT)
-        
         # 构建查询条件
         conditions = [self._not_deleted_condition()]
         
-        # 如果不是admin，需要过滤权限
-        if role != "admin":
-            if not crm_authority.authorized_items.get(CrmDataType.ACCOUNT):
+        # 检查是否是系统管理员或公司高层（如果是，不需要过滤权限）
+        is_admin = user_profile_repo.is_admin_by_user_id(db_session, user_id)
+        is_company_admin = False
+        
+        if not is_admin:
+            try:
+                roles_and_permissions = visit_record_repo._get_user_roles_and_permissions(user_id)
+                permissions = roles_and_permissions.get("permissions", []) if isinstance(roles_and_permissions, dict) else []
+                roles = roles_and_permissions.get("roles", []) if isinstance(roles_and_permissions, dict) else []
+                
+                # 检查是否有 crm:company:query 权限
+                if "crm:company:query" in permissions:
+                    is_company_admin = True
+                else:
+                    # 检查角色是否是公司高层/公司管理员
+                    company_admin_roles = ["COMPANY_EXECUTIVE", "COMPANY_ADMIN"]
+                    if any(role.lower() in [r.lower() for r in company_admin_roles] for role in roles):
+                        is_company_admin = True
+            except Exception:
+                pass
+        
+        # 如果不是管理员，需要过滤权限
+        if not is_admin and not is_company_admin:
+            # 获取用户的CRM用户ID
+            crm_user_id, _ = user_profile_repo.get_crm_user_id_and_role_by_user_id(db_session, user_id)
+            
+            if not crm_user_id:
+                # 如果没有CRM用户ID，则没有权限
+                return [], 0
+            
+            # 查询 crm_data_authority 表获取有权限的客户ID列表
+            stmt = select(CrmDataAuthority.data_id).where(
+                CrmDataAuthority.crm_id == str(crm_user_id),
+                CrmDataAuthority.type == CrmDataType.ACCOUNT.value,
+                (CrmDataAuthority.delete_flag.is_(None)) | (CrmDataAuthority.delete_flag == False)  # noqa: E712
+            )
+            authorized_account_ids = [row[0] for row in db_session.exec(stmt).all()]
+            
+            if not authorized_account_ids:
                 # 用户没有任何客户权限
                 return [], 0
             
-            authorized_account_ids = crm_authority.authorized_items[CrmDataType.ACCOUNT]
             conditions.append(LocalContact.customer_id.in_(authorized_account_ids))
         
         # 客户ID过滤
