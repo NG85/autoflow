@@ -1,6 +1,6 @@
 import enum
-from typing import List
-from pydantic import BaseModel
+from typing import List, Optional
+from pydantic import BaseModel, Field
 
 from app.models.data_source import DataSourceType
 
@@ -46,3 +46,66 @@ class ChatMode(str, enum.Enum):
     SAVE_CVG_REPORT = "save_cvg_report"
     CVG_CHAT = "cvg_chat"
     DEFAULT = "default"
+
+
+# Local Contact Models
+class LocalContactCreate(BaseModel):
+    """创建本地联系人请求模型"""
+    name: str = Field(..., description="联系人姓名（必填）")
+    customer_id: str = Field(..., description="客户ID（必填）")
+    customer_name: str = Field(..., description="客户名称（必填）")
+    position: str = Field(..., description="联系人职位/职务（必填）")
+    gender: Optional[str] = Field(None, description="性别")
+    mobile: Optional[str] = Field(None, description="手机")
+    phone: Optional[str] = Field(None, description="电话")
+    email: Optional[str] = Field(None, description="邮件")
+    wechat: Optional[str] = Field(None, description="微信")
+    address: Optional[str] = Field(None, description="联系地址")
+    key_decision_maker: bool = Field(default=False, description="是否为关键决策人")
+    source: Optional[str] = Field(None, description="来源")
+    remarks: Optional[str] = Field(None, description="备注")
+
+
+class LocalContactUpdate(BaseModel):
+    """更新本地联系人请求模型"""
+    name: Optional[str] = Field(None, description="联系人姓名")
+    position: Optional[str] = Field(None, description="职务")
+    gender: Optional[str] = Field(None, description="性别")
+    mobile: Optional[str] = Field(None, description="手机")
+    phone: Optional[str] = Field(None, description="电话")
+    email: Optional[str] = Field(None, description="邮件")
+    wechat: Optional[str] = Field(None, description="微信")
+    address: Optional[str] = Field(None, description="联系地址")
+    key_decision_maker: Optional[bool] = Field(None, description="是否为关键决策人")
+    source: Optional[str] = Field(None, description="来源")
+    remarks: Optional[str] = Field(None, description="备注")
+
+
+class LocalContactResponse(BaseModel):
+    """本地联系人响应模型"""
+    id: int
+    unique_id: Optional[str] = None
+    name: str
+    customer_id: str
+    customer_name: Optional[str] = None
+    position: Optional[str] = None
+    gender: Optional[str] = None
+    mobile: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    wechat: Optional[str] = None
+    address: Optional[str] = None
+    key_decision_maker: Optional[bool] = None
+    source: Optional[str] = None
+    remarks: Optional[str] = None
+    created_at: str
+    updated_at: str
+    created_by: Optional[str] = None
+    updated_by: Optional[str] = None
+    crm_unique_id: Optional[str] = None
+    synced_to_crm: bool = False
+    synced_at: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
