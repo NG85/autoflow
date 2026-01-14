@@ -18,6 +18,7 @@ class CRMSalesVisitRecord(SQLModel, table=True):
     visit_object_category: Optional[str] = Field(nullable=True, max_length=255, description="拜访对象类别")
     contact_position: Optional[str] = Field(nullable=True, max_length=255, description="客户职位")
     contact_name: Optional[str] = Field(nullable=True, max_length=255, description="客户名字")
+    contact_id: Optional[str] = Field(nullable=True, max_length=255, description="联系人ID（关联local_contacts或crm_contacts的unique_id）")
     recorder: Optional[str] = Field(nullable=True, max_length=255, description="记录人")
     recorder_id: Optional[UUID] = Field(nullable=True, description="记录人ID")
     collaborative_participants: Optional[str] = Field(
@@ -70,5 +71,6 @@ class CRMSalesVisitRecord(SQLModel, table=True):
         Index("idx_recorder", "recorder"),
         Index("idx_visit_date", "visit_communication_date"),
         Index("idx_is_first_visit", "is_first_visit"),
-        Index("idx_subject", "subject")
+        Index("idx_subject", "subject"),
+        Index("idx_contact_id", "contact_id")
     )

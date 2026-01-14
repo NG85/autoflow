@@ -339,8 +339,9 @@ class CompleteVisitRecordCreate(VisitRecordBase):
     form_type: Literal["complete"] = "complete"  # 表单类型标识
     is_first_visit: Optional[bool] = None # 是否首次拜访
     is_call_high: Optional[bool] = None # 是否call high
-    contact_position: Optional[str] = None # 客户职位
-    contact_name: Optional[str] = None # 客户名字
+    contact_position: Optional[str] = None # 联系人职位
+    contact_name: Optional[str] = None # 联系人名字
+    contact_id: Optional[str] = None # 联系人ID
     visit_communication_method: Optional[str] = None # 拜访及沟通方式
     collaborative_participants: Optional[Union[str, List[CollaborativeParticipant]]] = Field(
         default=None, 
@@ -481,8 +482,9 @@ class VisitRecordResponse(BaseModel):
     partner_id: Optional[str] = Field(default=None, description="合作伙伴ID")
     customer_lead_source: Optional[str] = Field(default=None, description="客户/线索来源")
     visit_object_category: Optional[str] = Field(default=None, description="拜访对象类别")
-    contact_position: Optional[str] = Field(default=None, description="客户职位")
-    contact_name: Optional[str] = Field(default=None, description="客户名字")
+    contact_position: Optional[str] = Field(default=None, description="联系人职位")
+    contact_name: Optional[str] = Field(default=None, description="联系人名字")
+    contact_id: Optional[str] = Field(default=None, description="联系人ID")
     recorder: Optional[str] = Field(default=None, description="记录人")
     recorder_id: Optional[str] = Field(default=None, description="记录人ID")
     collaborative_participants: Optional[str] = Field(

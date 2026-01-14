@@ -26,7 +26,7 @@ def _generate_record_id(record_type, now):
 def save_visit_record_to_crm_table(record_schema: SimpleVisitRecordCreate | CompleteVisitRecordCreate, db_session: SessionDep):
     now = datetime.now()
     # 英文转中文
-    fields = record_schema.dict(exclude_none=True)
+    fields = record_schema.model_dump(exclude_none=True)
     feishu_fields = {
         feishu_key: fields[db_key]
         for feishu_key, db_key in FIELD_MAP.items()
