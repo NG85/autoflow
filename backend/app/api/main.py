@@ -9,6 +9,7 @@ from app.api.routes import (
     document,
     sts,
     notification,
+    contacts,
 )
 from app.api.admin_routes.knowledge_base.routes import (
     router as admin_knowledge_base_router,
@@ -72,6 +73,7 @@ api_router.include_router(chat_engine.router, tags=["chat-engines"])
 api_router.include_router(retrieve_routes.router, tags=["retrieve"])
 api_router.include_router(sts.router, tags=["sts"])
 api_router.include_router(notification.router, tags=["notification"])
+api_router.include_router(contacts.router, tags=["contacts"])
 api_router.include_router(admin_user_router)
 api_router.include_router(admin_chat_engine.router, tags=["admin/chat-engines"])
 api_router.include_router(admin_document_router, tags=["admin/documents"])

@@ -93,6 +93,7 @@ EXTRA_FIELD_MAP = {
     '商机ID': 'opportunity_id',
     '客户/线索来源': 'customer_lead_source',
     '拜访对象类别': 'visit_object_category',
+    '联系人ID': 'contact_id',
     '负责销售ID': 'recorder_id',
     '拜访地点': 'counterpart_location',
     '沟通时长': 'communication_duration',
