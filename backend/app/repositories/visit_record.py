@@ -156,6 +156,59 @@ class VisitRecordRepo(BaseRepo):
         logger.info(f"User {current_user_id} permission check for {permission}: {has_permission}")
         return has_permission
     
+    def can_access_all_crm_data(self, current_user_id: UUID, session: Optional[Session] = None) -> bool:
+        """
+        检查用户是否有权限访问所有CRM数据
+        
+        判断标准（按优先级）：
+        1. 是否有 crm:company:query 权限
+        2. 角色是否是 COMPANY_EXECUTIVE 或 COMPANY_ADMIN
+        3. UserProfile 中的 role 或 position 是否为 "admin"（兜底判断）
+        
+        Args:
+            current_user_id: 用户ID
+            session: 数据库会话（可选，如果提供则作为兜底检查 UserProfile 中的 admin 角色）
+            
+        Returns:
+            bool: 如果有权限访问所有CRM数据返回 True，否则返回 False
+        """
+        # 1. 检查权限和角色（优先判断）
+        try:
+            roles_and_permissions = self._get_user_roles_and_permissions(current_user_id)
+            permissions = roles_and_permissions.get("permissions", []) if isinstance(roles_and_permissions, dict) else []
+            roles = roles_and_permissions.get("roles", []) if isinstance(roles_and_permissions, dict) else []
+            
+            # 1.1 检查是否有 crm:company:query 权限
+            if "crm:company:query" in permissions:
+                logger.info(f"User {current_user_id} has crm:company:query permission; can access all CRM data")
+                return True
+            
+            # 1.2 检查角色是否是公司高层/公司管理员
+            # roles 结构：要么是空数组 []，要么是包含字典的数组，每个字典有 code、name 等字段
+            company_admin_roles = ["COMPANY_EXECUTIVE", "COMPANY_ADMIN"]
+            # 从角色字典中提取 code 字段（角色代码）
+            role_codes = [role.get("code") for role in roles if isinstance(role, dict) and role.get("code")]
+            if any(role_code.lower() in [r.lower() for r in company_admin_roles] for role_code in role_codes):
+                logger.info(f"User {current_user_id} has company admin role {role_codes}; can access all CRM data")
+                return True
+        except Exception as e:
+            # 如果权限查询失败，记录日志但继续后续检查
+            logger.warning(f"Failed to check permissions/roles for user {current_user_id}: {e}")
+        
+        # 2. 兜底判断：检查 UserProfile 中的 admin 角色（如果提供了 session）
+        if session is not None:
+            try:
+                from app.repositories.user_profile import user_profile_repo
+                _, role = user_profile_repo.get_crm_user_id_and_role_by_user_id(session, current_user_id)
+                if role == "admin":
+                    logger.info(f"User {current_user_id} is admin (from UserProfile, fallback check); can access all CRM data")
+                    return True
+            except Exception as e:
+                # 如果查询失败，记录日志
+                logger.warning(f"Failed to check UserProfile admin role for user {current_user_id}: {e}")
+        
+        return False
+    
     def _is_admin_user(self, current_user_id: UUID, session: Session, user_permissions: Optional[List[str]] = None) -> bool:
         """
         检查当前用户是否为拜访记录的管理团队成员
