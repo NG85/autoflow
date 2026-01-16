@@ -7,7 +7,6 @@ from typing import Any, Dict, List, Optional
 from datetime import date, datetime, timedelta
 from sqlmodel import Session, select, and_
 from app.models.crm_daily_account_statistics import CRMDailyAccountStatistics
-from app.models.crm_account_assessment import CRMAccountAssessment
 from app.models.crm_account_opportunity_assessment import CRMAccountOpportunityAssessment
 from app.models.crm_department_daily_summary import CRMDepartmentDailySummary
 from app.services.platform_notification_service import platform_notification_service
@@ -417,108 +416,6 @@ class CRMStatisticsService:
         
         return complete_reports
     
-    def get_assessment_by_correlation_id(self, session: Session, correlation_id: str) -> Dict[str, Any]:
-        """
-        通过correlation_id获取评估详情数据
-        
-        Args:
-            session: 数据库会话
-            correlation_id: 关联ID
-            
-        Returns:
-            Dict: 包含first、multi和statistics三个键的字典
-                - first: 首次拜访评估详情列表（包含绿灯）
-                - multi: 多次拜访评估详情列表（不包含绿灯）
-                - statistics: 统计数据字典，包含first和multi的红黄绿灯数量（包含绿灯）
-        """
-        logger.debug(f"通过correlation_id获取评估数据: {correlation_id}")
-        
-        # 优化：只查询一次，获取所有数据（包括绿灯）
-        query = select(CRMAccountAssessment).where(
-            CRMAccountAssessment.correlation_id == correlation_id
-        )
-        
-        all_assessment_records = session.exec(query).all()
-        
-        if not all_assessment_records:
-            logger.debug(f"correlation_id {correlation_id} 没有找到评估记录")
-            return {
-                "first": [],
-                "multi": [],
-                "statistics": {
-                    "first": {"red": 0, "yellow": 0, "green": 0},
-                    "multi": {"red": 0, "yellow": 0, "green": 0}
-                }
-            }
-        
-        # 优化：一次遍历同时完成统计和列表构建
-        first_stats = {"red": 0, "yellow": 0, "green": 0}
-        multi_stats = {"red": 0, "yellow": 0, "green": 0}
-        first_assessments = []
-        multi_assessments = []
-        
-        for assessment in all_assessment_records:
-            flag = (assessment.assessment_flag or "").lower()
-            is_first_visit = assessment.is_first_visit
-            
-            # 统计所有记录（包括绿灯）
-            if is_first_visit:
-                if flag == "red":
-                    first_stats["red"] += 1
-                elif flag == "yellow":
-                    first_stats["yellow"] += 1
-                elif flag == "green":
-                    first_stats["green"] += 1
-            else:
-                if flag == "red":
-                    multi_stats["red"] += 1
-                elif flag == "yellow":
-                    multi_stats["yellow"] += 1
-                elif flag == "green":
-                    multi_stats["green"] += 1
-            
-            # 明细口径：首次拜访包含绿灯；多次跟进排除绿灯
-            if is_first_visit or flag != "green":
-                assessment_data = {
-                    'account_name': self._format_empty_value(assessment.account_name),
-                    'opportunity_names': self._format_empty_value(self._format_opportunity_names(assessment.opportunity_names)),
-                    'follow_up_note': self._format_empty_value(assessment.follow_up_note),
-                    'follow_up_note_en': self._format_empty_value(assessment.follow_up_note_en),
-                    'follow_up_next_step': self._format_empty_value(assessment.follow_up_next_step),
-                    'follow_up_next_step_en': self._format_empty_value(assessment.follow_up_next_step_en),
-                    'assessment_flag': self._convert_assessment_flag(assessment.assessment_flag),
-                    'assessment_description': self._format_empty_value(assessment.assessment_description),
-                    'assessment_description_en': self._format_empty_value(assessment.assessment_description_en),
-                    'account_level': self._format_empty_value(assessment.account_level),
-                    'sales_name': "",  # 这个字段将在上层填充
-                    'department_name': "",  # 这个字段将在上层填充
-                    'assessment_flag_raw': assessment.assessment_flag or ""  # 保留原始标志用于排序
-                }
-                
-                if is_first_visit:
-                    first_assessments.append(assessment_data)
-                else:
-                    multi_assessments.append(assessment_data)
-        
-        logger.debug(
-            f"correlation_id {correlation_id} 找到 {len(all_assessment_records)} 条评估记录（包含绿灯），"
-            f"首次拜访: 红{first_stats['red']} 黄{first_stats['yellow']} 绿{first_stats['green']}, "
-            f"多次拜访: 红{multi_stats['red']} 黄{multi_stats['yellow']} 绿{multi_stats['green']}, "
-            f"明细记录: 首次（含绿灯）{len(first_assessments)} 多次（不含绿灯）{len(multi_assessments)}"
-        )
-        
-        # 按照指定规则排序：红灯>黄灯-团队名称-销售名称
-        # 注意：这里的排序会在上层填充sales_name和department_name后进行
-        
-        return {
-            "first": first_assessments,
-            "multi": multi_assessments,
-            "statistics": {
-                "first": first_stats,
-                "multi": multi_stats
-            }
-        }
-    
     def _get_opportunity_assessments_for_sales(
         self,
         session: Session,
@@ -527,7 +424,7 @@ class CRMStatisticsService:
         accounts_without_opportunity: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
         """
-        基于去重的商机列表和无商机客户列表，从客户商机评估表获取评估详情。
+        基于去重的商机列表和无商机客户列表，从客户商机评估表获取评估详情（仅筛选最终客户）。
         
         评估数据划分为：
         - first: 首次拜访评估详情列表（包含绿灯）
@@ -566,6 +463,7 @@ class CRMStatisticsService:
             query_opps = select(CRMAccountOpportunityAssessment).where(
                 CRMAccountOpportunityAssessment.assessment_date == target_date,
                 CRMAccountOpportunityAssessment.opportunity_id.in_(opportunity_ids),
+                CRMAccountOpportunityAssessment.customer_type == 'end_customer',
             )
             all_records.extend(session.exec(query_opps).all())
         
@@ -574,6 +472,7 @@ class CRMStatisticsService:
                 CRMAccountOpportunityAssessment.assessment_date == target_date,
                 CRMAccountOpportunityAssessment.opportunity_id.is_(None),
                 CRMAccountOpportunityAssessment.account_id.in_(account_ids_without_opp),
+                CRMAccountOpportunityAssessment.customer_type == 'end_customer',
             )
             all_records.extend(session.exec(query_accounts).all())
         
