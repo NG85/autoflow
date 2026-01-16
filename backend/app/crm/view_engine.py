@@ -16,6 +16,7 @@ from app.repositories.crm_data_authority import crm_data_authority_repo
 from app.repositories.department_mirror import department_mirror_repo
 from app.repositories.user_profile import user_profile_repo
 from app.repositories.user_department_relation import user_department_relation_repo
+from app.repositories.visit_record import visit_record_repo
 from app.rag.chat.crm_authority import CrmDataType
 from app.api.routes.crm.models import (
     ViewType,
@@ -283,16 +284,16 @@ class CrmViewEngine:
         
         # 应用权限过滤
         if user_id:
-            # Admin can view all records; skip authority-table filtering.
-            if user_profile_repo.is_admin_by_user_id(db_session, user_id):
-                pass
-            else:
+            # 检查是否有权限访问所有CRM数据（如果是，不需要过滤权限）
+            can_access_all_crm = visit_record_repo.can_access_all_crm_data(user_id, db_session)
+            
+            if not can_access_all_crm:
                 crm_user_id = user_profile_repo.get_crm_user_id_by_user_id(db_session, user_id)
                 if not crm_user_id:
                     logger.info(f"User {user_id} has no crm_user_id; no authorized items.")
                     return {}
                 if not crm_data_authority_repo.has_any_authority(db_session, crm_user_id, CrmDataType.OPPORTUNITY):
-                    logger.info(f"No authorized items found for user {user_id}")
+                    logger.info(f"No authorized items (filter opportunity on crm_data_authority table) found for user {user_id} and crm_user_id {crm_user_id}")
                     return {}
                 base_where.append(
                     crm_data_authority_repo.build_exists_condition(
@@ -447,8 +448,10 @@ class CrmViewEngine:
             query = query.options(load_only(*opportunity_fields_to_query))
         
         if user_id:
-            # Admin can view all records; skip authority-table filtering.
-            if not user_profile_repo.is_admin_by_user_id(db_session, user_id):
+            # 检查是否有权限访问所有CRM数据（如果是，不需要过滤权限）
+            can_access_all_crm = visit_record_repo.can_access_all_crm_data(user_id, db_session)
+            
+            if not can_access_all_crm:
                 crm_user_id = user_profile_repo.get_crm_user_id_by_user_id(db_session, user_id)
                 if not crm_user_id:
                     logger.info(f"User {user_id} has no crm_user_id; no authorized items.")
