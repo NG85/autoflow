@@ -1,3 +1,4 @@
+import logging
 from typing import Optional, List, Tuple
 from uuid import UUID
 from sqlmodel import Session, select, and_, or_, func
@@ -9,6 +10,8 @@ from app.models.crm_data_authority import CrmDataAuthority
 from app.rag.types import CrmDataType
 from app.repositories.user_profile import user_profile_repo
 from app.repositories.visit_record import visit_record_repo
+
+logger = logging.getLogger(__name__)
 
 
 class LocalContactRepo(BaseRepo):
@@ -35,36 +38,15 @@ class LocalContactRepo(BaseRepo):
         Returns:
             True 如果有权限，False 否则
         """
-        # 1. 检查用户角色和权限（公司高层/公司管理员）
-        try:
-            roles_and_permissions = visit_record_repo._get_user_roles_and_permissions(user_id)
-            permissions = roles_and_permissions.get("permissions", []) if isinstance(roles_and_permissions, dict) else []
-            roles = roles_and_permissions.get("roles", []) if isinstance(roles_and_permissions, dict) else []
-            
-            # 1.1 检查是否有 crm:company:query 权限
-            if "crm:company:query" in permissions:
-                return True
-            
-            # 1.2 检查角色是否是公司高层/公司管理员（根据实际角色名称调整）
-            company_admin_roles = ["COMPANY_EXECUTIVE", "COMPANY_ADMIN"]
-            if any(role.lower() in [r.lower() for r in company_admin_roles] for role in roles):
-                return True
-            
-        except Exception as e:
-            # 如果权限查询失败，记录日志但不影响后续检查
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.warning(f"Failed to check user permissions for {user_id}: {e}")
-        
-        # 2. 获取用户的CRM用户ID和自定义role
-        crm_user_id, role = user_profile_repo.get_crm_user_id_and_role_by_user_id(db_session, user_id)
-        
-        # 2.1 Admin 角色可以访问所有客户
-        if role == "admin":
+        # 1. 检查用户是否有权限访问所有CRM数据
+        if visit_record_repo.can_access_all_crm_data(user_id, db_session):
             return True
         
+        # 2. 获取用户的CRM用户ID
+        crm_user_id = user_profile_repo.get_crm_user_id_by_user_id(db_session, user_id)
         if not crm_user_id:
             # 如果没有CRM用户ID，则没有权限
+            logger.info(f"User {user_id} has no crm_user_id; no authorized items.")
             return False
         
         # 2.2 直接查询 crm_data_authority 表，检查是否有权限访问该客户
@@ -161,34 +143,17 @@ class LocalContactRepo(BaseRepo):
         # 构建查询条件
         conditions = [self._not_deleted_condition()]
         
-        # 检查是否是系统管理员或公司高层（如果是，不需要过滤权限）
-        is_admin = user_profile_repo.is_admin_by_user_id(db_session, user_id)
-        is_company_admin = False
+        # 检查是否有权限访问所有CRM数据（如果是，不需要过滤权限）
+        can_access_all_crm = visit_record_repo.can_access_all_crm_data(user_id, db_session)
+        authorized_account_ids = None  # 初始化变量
         
-        if not is_admin:
-            try:
-                roles_and_permissions = visit_record_repo._get_user_roles_and_permissions(user_id)
-                permissions = roles_and_permissions.get("permissions", []) if isinstance(roles_and_permissions, dict) else []
-                roles = roles_and_permissions.get("roles", []) if isinstance(roles_and_permissions, dict) else []
-                
-                # 检查是否有 crm:company:query 权限
-                if "crm:company:query" in permissions:
-                    is_company_admin = True
-                else:
-                    # 检查角色是否是公司高层/公司管理员
-                    company_admin_roles = ["COMPANY_EXECUTIVE", "COMPANY_ADMIN"]
-                    if any(role.lower() in [r.lower() for r in company_admin_roles] for role in roles):
-                        is_company_admin = True
-            except Exception:
-                pass
-        
-        # 如果不是管理员，需要过滤权限
-        if not is_admin and not is_company_admin:
+        # 如果没有权限访问所有CRM数据，需要过滤权限
+        if not can_access_all_crm:
             # 获取用户的CRM用户ID
-            crm_user_id, _ = user_profile_repo.get_crm_user_id_and_role_by_user_id(db_session, user_id)
-            
+            crm_user_id = user_profile_repo.get_crm_user_id_by_user_id(db_session, user_id)
             if not crm_user_id:
                 # 如果没有CRM用户ID，则没有权限
+                logger.info(f"User {user_id} has no crm_user_id; no authorized items.")
                 return [], 0
             
             # 查询 crm_data_authority 表获取有权限的客户ID列表
@@ -205,11 +170,13 @@ class LocalContactRepo(BaseRepo):
             
             conditions.append(LocalContact.customer_id.in_(authorized_account_ids))
         
-        # 客户ID过滤
+        # 客户ID过滤（如果提供了 customer_id，需要检查权限）
         if customer_id:
-            # 检查权限
-            if not self.check_account_permission(db_session, user_id, customer_id):
-                return [], 0
+            # 如果用户没有权限访问所有CRM数据，需要验证该客户是否在授权列表中
+            if not can_access_all_crm and authorized_account_ids is not None:
+                if customer_id not in authorized_account_ids:
+                    # 用户没有权限访问该客户，返回空结果
+                    return [], 0
             conditions.append(LocalContact.customer_id == customer_id)
         
         # 姓名搜索（模糊匹配）
