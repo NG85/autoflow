@@ -922,12 +922,19 @@ def export_visit_records_to_xlsx(
             
             # 生成基于关键字段的hash ID
             # 使用客户名称、跟进日期、负责销售等关键字段生成唯一ID
+            # 处理联系人：优先使用contacts字段，否则使用旧字段
+            contact_names_str = ""
+            if item.contacts and len(item.contacts) > 0:
+                contact_names_str = ", ".join([c.name or "" for c in item.contacts if c.name])
+            else:
+                contact_names_str = item.contact_name or ""
+            
             key_fields = [
                 str(item.id or ""),
                 str(item.account_name or item.partner_name or item.opportunity_name or ""),
                 str(item.visit_communication_date or ""),
                 str(item.recorder or ""),
-                str(item.contact_name or ""),
+                contact_names_str,
                 str(item.last_modified_time or ""),
             ]
             key_string = "|".join(key_fields)
@@ -976,6 +983,20 @@ def export_visit_records_to_xlsx(
                 latitude = ""
                 longitude = ""
                 taken_at = ""
+            # 处理联系人信息：优先使用contacts字段，否则使用旧字段
+            contact_positions_str = ""
+            contact_names_str = ""
+            if item.contacts and len(item.contacts) > 0:
+                # 多个联系人：格式化为 "职位1, 职位2" 和 "姓名1, 姓名2"
+                positions = [c.position or "" for c in item.contacts if c.position]
+                names = [c.name or "" for c in item.contacts if c.name]
+                contact_positions_str = ", ".join(positions)
+                contact_names_str = ", ".join(names)
+            else:
+                # 兼容旧数据：使用单个联系人字段
+                contact_positions_str = item.contact_position or ""
+                contact_names_str = item.contact_name or ""
+            
             # 构建数据行（中英版本字段顺序相同，ID列在最前面）
             return [
                 item.record_id or record_id,
@@ -991,8 +1012,8 @@ def export_visit_records_to_xlsx(
                 item.visit_communication_date or "",
                 item.recorder or "",
                 item.department or "",
-                item.contact_position or "",
-                item.contact_name or "",
+                contact_positions_str,
+                contact_names_str,
                 item.collaborative_participants or "",
                 item.visit_communication_method or "",
                 item.visit_purpose or "",

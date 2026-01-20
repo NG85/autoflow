@@ -73,6 +73,7 @@ DISPLAY_FIELD_MAP = {
     '负责销售': 'recorder',
     '联系人职位': 'contact_position',
     '联系人姓名': 'contact_name',
+    '联系人列表': 'contacts',
     '协同参与人': 'collaborative_participants',
     '拜访及沟通方式': 'visit_communication_method',
     '跟进记录': 'followup_record',
@@ -119,66 +120,6 @@ EXTRA_FIELD_MAP = {
 FIELD_MAP = {**DISPLAY_FIELD_MAP, **EXTRA_FIELD_MAP}
 
 CRM_FIELDS = list(FIELD_MAP.values())
-
-# 拉取bitable全量记录
-def fetch_bitable_records(token, app_token, table_id, view_id, start_time=None, end_time=None, platform=None):
-    """
-    拉取bitable记录
-    
-    Args:
-        token: 访问令牌
-        app_token: 应用令牌
-        table_id: 表格ID
-        view_id: 视图ID
-        start_time: 开始时间
-        end_time: 结束时间
-        platform: 平台名称 (feishu/lark)
-    """
-    # 根据平台选择API端点
-    if platform == PLATFORM_LARK:
-        base_url = "https://open.larksuite.com/open-apis"
-        platform_name = "Lark"
-    else:
-        base_url = "https://open.feishu.cn/open-apis"
-        platform_name = "飞书"
-    
-    url = f"{base_url}/bitable/v1/apps/{app_token}/tables/{table_id}/records/search"
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    records = []
-    page_token = None
-    filter_obj = None
-    conditions = []
-    
-    if start_time:
-        start_ts = str(int(start_time.timestamp()) * 1000)
-        conditions.append({"field_name": "拜访及沟通日期", "operator": "isGreater", "value": [start_ts]})
-    if end_time:
-        end_ts = str(int(end_time.timestamp()) * 1000)
-        conditions.append({"field_name": "拜访及沟通日期", "operator": "isLess", "value": [end_ts]})
-    if conditions:
-        filter_obj = {"conditions": conditions, "conjunction": "and"}
-    
-    while True:
-        body = {"page_size": 100, "automatic_fields": True, "view_id": view_id}
-        if filter_obj:
-            body["filter"] = filter_obj
-        if page_token:
-            body["page_token"] = page_token
-        
-        resp = requests.post(url, headers=headers, json=body)
-        if resp.status_code != 200:
-            logger.error(f"拉取{platform_name}多维表格拜访记录失败: {resp.text}")
-            break
-        resp.raise_for_status()
-        data = resp.json()["data"]
-        items = data.get("items", [])
-        records.extend(items)
-        if not data.get("has_more"):
-            break
-        page_token = data.get("page_token")
-    
-    logger.info(f"从{platform_name}拉取了 {len(records)} 条记录")
-    return records
 
 # 解析Feishu字段为DB字段
 def parse_field_value(val, field_name=None):

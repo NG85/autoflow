@@ -333,15 +333,26 @@ class CollaborativeParticipant(BaseModel):
     name: str = Field(description="协同参与人姓名")
     ask_id: Optional[str] = Field(default=None, description="协同参与人ask_id，为空表示非系统注册人员")
 
+# 联系人数据结构
+class Contact(BaseModel):
+    """联系人信息"""
+    name: Optional[str] = Field(default=None, description="联系人姓名")
+    position: Optional[str] = Field(default=None, description="联系人职位")
+    contact_id: Optional[str] = Field(default=None, description="联系人ID（关联local_contacts或crm_contacts的unique_id）")
+
 # 拜访记录创建请求模型
 # 完整版表单
 class CompleteVisitRecordCreate(VisitRecordBase):
     form_type: Literal["complete"] = "complete"  # 表单类型标识
     is_first_visit: Optional[bool] = None # 是否首次拜访
     is_call_high: Optional[bool] = None # 是否call high
-    contact_position: Optional[str] = None # 联系人职位
-    contact_name: Optional[str] = None # 联系人名字
-    contact_id: Optional[str] = None # 联系人ID
+    contact_position: Optional[str] = None # 联系人职位（旧字段，保留以兼容旧数据）
+    contact_name: Optional[str] = None # 联系人名字（旧字段，保留以兼容旧数据）
+    contact_id: Optional[str] = None # 联系人ID（旧字段，保留以兼容旧数据）
+    contacts: Optional[List[Contact]] = Field(
+        default=None,
+        description="联系人列表（支持多个联系人），如果提供此字段，将优先使用；否则从旧字段（contact_name, contact_position, contact_id）构造"
+    )
     visit_communication_method: Optional[str] = None # 拜访及沟通方式
     collaborative_participants: Optional[Union[str, List[CollaborativeParticipant]]] = Field(
         default=None, 
@@ -482,9 +493,13 @@ class VisitRecordResponse(BaseModel):
     partner_id: Optional[str] = Field(default=None, description="合作伙伴ID")
     customer_lead_source: Optional[str] = Field(default=None, description="客户/线索来源")
     visit_object_category: Optional[str] = Field(default=None, description="拜访对象类别")
-    contact_position: Optional[str] = Field(default=None, description="联系人职位")
-    contact_name: Optional[str] = Field(default=None, description="联系人名字")
-    contact_id: Optional[str] = Field(default=None, description="联系人ID")
+    contact_position: Optional[str] = Field(default=None, description="联系人职位（旧字段，保留以兼容旧数据）")
+    contact_name: Optional[str] = Field(default=None, description="联系人名字（旧字段，保留以兼容旧数据）")
+    contact_id: Optional[str] = Field(default=None, description="联系人ID（旧字段，保留以兼容旧数据）")
+    contacts: Optional[List[Contact]] = Field(
+        default=None,
+        description="联系人列表（支持多个联系人），如果数据库中有contacts字段则使用，否则从旧字段构造"
+    )
     recorder: Optional[str] = Field(default=None, description="记录人")
     recorder_id: Optional[str] = Field(default=None, description="记录人ID")
     collaborative_participants: Optional[str] = Field(

@@ -1,7 +1,7 @@
 import logging
 import json
 import requests
-from typing import Optional
+from typing import Optional, Any
 from datetime import datetime
 from app.core.config import settings
 from app.core.db import get_db_session
@@ -9,7 +9,6 @@ from app.api.routes.crm.models import SimpleVisitRecordCreate, CompleteVisitReco
 from app.api.deps import CurrentUserDep, SessionDep
 from app.repositories.document_content import DocumentContentRepo
 from app.services.platform_notification_service import platform_notification_service
-from app.tasks.bitable_import import FIELD_MAP
 from app.tasks.document_qa import extract_and_save_document_qa
 from app.utils.ark_llm import call_ark_llm
 from app.utils.uuid6 import uuid6
@@ -22,38 +21,128 @@ def _generate_record_id(record_type, now):
     rand = uuid6().hex[:8]
     return f"{record_type}_{dt}_{millisecond}_{rand}"
 
+def _process_field_value_for_db(field_name: str, value: Any) -> Any:
+    """
+    处理表单提交的字段值，转换为数据库存储格式
+    只处理需要特殊转换的字段，其他字段直接返回
+    """
+    if value is None or value == "":
+        return None
+    
+    # 处理附件字段
+    if field_name == 'attachment':
+        if isinstance(value, dict):
+            # 结构化 JSON，序列化为 JSON 字符串
+            try:
+                return json.dumps(value, ensure_ascii=False)
+            except Exception:
+                return str(value)
+        elif isinstance(value, str):
+            # 字符串（base64 / URL / JSON 字符串），直接返回
+            return value
+        return str(value) if value else None
+    
+    # 处理协同参与人字段
+    if field_name == 'collaborative_participants':
+        if isinstance(value, list):
+            # 如果是列表，转换为JSON字符串存储
+            try:
+                return json.dumps(value, ensure_ascii=False)
+            except Exception:
+                return str(value)
+        elif isinstance(value, str):
+            # 如果是字符串，直接返回（可能是旧格式或已经是JSON字符串）
+            return value
+        elif isinstance(value, dict):
+            # 如果是字典，转换为JSON字符串
+            try:
+                return json.dumps(value, ensure_ascii=False)
+            except Exception:
+                return str(value)
+        return str(value) if value else None
+    
+    # 处理时间字段（visit_start_time, visit_end_time）
+    if field_name in ['visit_start_time', 'visit_end_time']:
+        if isinstance(value, str):
+            return value
+        elif hasattr(value, 'strftime'):  # datetime类型
+            return value.strftime('%Y-%m-%d %H:%M:%S')
+        return value
+    
+    # 其他字段直接返回
+    return value
+
+
 # 保存表单拜访记录到 crm_sales_visit_records
 def save_visit_record_to_crm_table(record_schema: SimpleVisitRecordCreate | CompleteVisitRecordCreate, db_session: SessionDep):
+    """
+    保存拜访记录到数据库
+    直接使用数据库字段名，不再进行飞书字段名转换
+    """
     now = datetime.now()
-    # 英文转中文
+    batch_time = datetime.now()
+    
+    # 获取所有字段（排除None值）
     fields = record_schema.model_dump(exclude_none=True)
-    feishu_fields = {
-        feishu_key: fields[db_key]
-        for feishu_key, db_key in FIELD_MAP.items()
-        if db_key in fields and fields[db_key] not in ("", None)
-    }
+    
+    # 生成record_id
     record_id = _generate_record_id(record_schema.visit_type, now)
-    item = {
-        "fields": feishu_fields,
-        "last_modified_time": int(now.timestamp() * 1000),
-        "record_id": record_id,
-    }
+    
+    # 构建数据库字段映射，直接使用数据库字段名
+    mapped = {}
+    
+    # 处理需要特殊转换的字段
+    special_fields = ['attachment', 'collaborative_participants', 'visit_start_time', 'visit_end_time']
+    for field_name in special_fields:
+        if field_name in fields:
+            mapped[field_name] = _process_field_value_for_db(field_name, fields[field_name])
+    
+    # 处理其他字段（直接使用，但需要过滤空值）
+    for field_name, field_value in fields.items():
+        if field_name not in special_fields and field_name not in ['contacts', 'latitude', 'longitude']:
+            if field_value not in ("", None):
+                mapped[field_name] = field_value
+    
+    # 处理多个联系人字段
+    contacts_list = None
+    if isinstance(record_schema, CompleteVisitRecordCreate):
+        # 如果提供了contacts字段，优先使用
+        if record_schema.contacts:
+            contacts_list = [contact.model_dump(exclude_none=True) for contact in record_schema.contacts]
+        # 否则，如果提供了旧的单个联系人字段，构造联系人列表
+        elif record_schema.contact_name or record_schema.contact_position or record_schema.contact_id:
+            contact_dict = {}
+            if record_schema.contact_name:
+                contact_dict['name'] = record_schema.contact_name
+            if record_schema.contact_position:
+                contact_dict['position'] = record_schema.contact_position
+            if record_schema.contact_id:
+                contact_dict['contact_id'] = record_schema.contact_id
+            if contact_dict:
+                contacts_list = [contact_dict]
+    
+    # 保存contacts字段（JSON格式）
+    if contacts_list:
+        mapped['contacts'] = contacts_list
+    
+    # 处理经纬度字段
+    if 'latitude' in fields:
+        mapped['latitude'] = fields['latitude']
+    if 'longitude' in fields:
+        mapped['longitude'] = fields['longitude']
+    
+    # 设置必需字段
+    mapped['record_id'] = record_id
+    mapped['last_modified_time'] = batch_time
     
     # 使用事务保存
-    batch_time = datetime.now()
-    from app.tasks.bitable_import import map_fields, CRM_TABLE
+    from app.tasks.bitable_import import CRM_TABLE
     from sqlalchemy import MetaData, Table, text
     from sqlalchemy.dialects.mysql import insert as mysql_insert
     
     metadata = MetaData()
     crm_table = Table(CRM_TABLE, metadata, autoload_with=db_session.bind)
     
-    mapped = map_fields(item, batch_time=batch_time)
-    # 直接添加经纬度字段（不在FIELD_MAP中，需要单独处理）
-    if 'latitude' in fields:
-        mapped['latitude'] = fields['latitude']
-    if 'longitude' in fields:
-        mapped['longitude'] = fields['longitude']
     insert_stmt = mysql_insert(crm_table).values(**mapped)
     update_stmt = {k: mapped[k] for k in mapped if k != 'record_id'}
     if mapped.get('account_id') in (None, '', 'null'):
@@ -63,7 +152,7 @@ def save_visit_record_to_crm_table(record_schema: SimpleVisitRecordCreate | Comp
     # 不在这里commit，由调用方控制事务
     
     # 返回record_id和实际保存的时间
-    return record_id, mapped['last_modified_time']
+    return record_id, batch_time
 
 def extract_followup_record_and_next_steps(followup_content: str) -> tuple[str, str]:
     """
@@ -143,6 +232,50 @@ def fill_sales_visit_record_fields(sales_visit_record, db_session):
     is_call_high = sales_visit_record.get("is_call_high")
     sales_visit_record["is_call_high"] = "关键决策人拜访" if is_call_high else None
     sales_visit_record["is_call_high_en"] = "call high" if is_call_high else None
+    
+    # 处理联系人字段：将contacts转换为格式化文本 "姓名1（职位1）\n姓名2（职位2）"
+    contacts = sales_visit_record.get("contacts")
+    contact_info_parts = []
+    has_contacts_field = contacts is not None  # 标记是否明确提供了contacts字段
+    
+    if contacts:
+        # 如果提供了contacts字段（列表格式）
+        if isinstance(contacts, list):
+            for contact in contacts:
+                if isinstance(contact, dict):
+                    name = contact.get("name", "").strip()
+                    position = contact.get("position", "").strip()
+                    if name:
+                        if position:
+                            contact_info_parts.append(f"{name}（{position}）")
+                        else:
+                            contact_info_parts.append(name)
+                elif hasattr(contact, "name") and hasattr(contact, "position"):
+                    # 如果是Contact对象
+                    name = (contact.name or "").strip()
+                    position = (contact.position or "").strip()
+                    if name:
+                        if position:
+                            contact_info_parts.append(f"{name}（{position}）")
+                        else:
+                            contact_info_parts.append(name)
+    
+    # 如果没有contacts字段（不是空列表，而是字段不存在），尝试从旧字段构造
+    if not has_contacts_field and not contact_info_parts:
+        contact_name = sales_visit_record.get("contact_name", "").strip()
+        contact_position = sales_visit_record.get("contact_position", "").strip()
+        if contact_name:
+            if contact_position:
+                contact_info_parts.append(f"{contact_name}（{contact_position}）")
+            else:
+                contact_info_parts.append(contact_name)
+    
+    # 将格式化后的联系人信息保存到contacts字段（用于推送消息显示）
+    if contact_info_parts:
+        sales_visit_record["contacts"] = "\n".join(contact_info_parts)
+    elif has_contacts_field:
+        # 如果明确提供了contacts字段但为空，设置为None
+        sales_visit_record["contacts"] = None
     
     # 处理附件字段：避免将历史的 base64 大字段推送到通知中
     attachment = sales_visit_record.get("attachment")
@@ -346,13 +479,36 @@ def save_visit_record_with_content(
         from app.services.meeting_summary_service import MeetingSummaryService
         meeting_summary_service = MeetingSummaryService()
         
+        # 处理联系人信息：优先使用contacts字段，否则使用旧字段，保留完整的联系人信息
+        contact_name = None
+        contact_position = None
+        if isinstance(record, CompleteVisitRecordCreate):
+            if record.contacts and len(record.contacts) > 0:
+                # 多个联系人：格式化为 "姓名1（职位1）\n姓名2（职位2）" 格式
+                contact_info_parts = []
+                for contact in record.contacts:
+                    name = contact.name or ""
+                    position = contact.position or ""
+                    if name:
+                        if position:
+                            contact_info_parts.append(f"{name}（{position}）")
+                        else:
+                            contact_info_parts.append(name)
+                if contact_info_parts:
+                    # 如果有多个联系人，用换行符分隔；单个联系人直接使用
+                    contact_name = "\n".join(contact_info_parts)
+            else:
+                # 兼容旧数据：使用单个联系人字段
+                contact_name = record.contact_name
+                contact_position = record.contact_position
+        
         summary_result = meeting_summary_service.generate_meeting_summary(
             content=content,
             title=title,
             sales_name=record.recorder,
             account_name=record.account_name,
-            contact_name=record.contact_name,
-            contact_position=record.contact_position,
+            contact_name=contact_name,
+            contact_position=contact_position,
             visit_date=record.visit_communication_date,
             opportunity_name=record.opportunity_name,
             is_first_visit=record.is_first_visit,

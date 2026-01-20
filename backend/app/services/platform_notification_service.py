@@ -763,13 +763,13 @@ class PlatformNotificationService:
                 if visit_type == "form":
                     # 钉钉目前只支持完整版表单模板
                     if recipient_type == "recorder":
-                        return "68d00411-0144-4e3b-b14b-c5fcb834e5d4.schema"  # 销售个人卡片：完整版
+                        return "ceda714f-6862-4f42-a77f-7f6d6f95f06d.schema"  # 销售个人卡片：填报无评估版V2
                     elif recipient_type == "collaborative_participant":
-                        return "68d00411-0144-4e3b-b14b-c5fcb834e5d4.schema"  # 协同参与人卡片：完整版
+                        return "ceda714f-6862-4f42-a77f-7f6d6f95f06d.schema"  # 协同参与人卡片：填报无评估版V2
                     else:
-                        return "feefcc55-fa5d-44f3-ba09-9e6fa595743b.schema"  # leader和管理者卡片：完整版
+                        return "1ea96d75-f14a-4dbc-87e5-baf3f893f5b5.schema"  # leader和管理者卡片：填报版V2
                 else:
-                    return "dbff8619-db4c-49e4-930f-9fc1fc072049.schema"  # link类型使用通用卡片：会议纪要版
+                    return "28dd4d85-7f38-4a5c-9bdb-8156bdff4d20.schema"  # link类型使用通用卡片：链接或文件版V2
             elif platform == PLATFORM_FEISHU or platform == PLATFORM_LARK:
                 if visit_type == "form":
                     # 检查是否为简易版表单
@@ -786,13 +786,13 @@ class PlatformNotificationService:
                     else:
                         # 完整版表单模板
                         if recipient_type == "recorder":
-                            return "AAqzzmP2uT85t"  # 销售个人卡片：完整版
+                            return "AAqv2BVqurMLn"  # 销售个人卡片：填报无评估版
                         elif recipient_type == "collaborative_participant":
-                            return "AAqzzmP2uT85t"  # 协同参与人卡片：完整版
+                            return "AAqv2BVqurMLn"  # 协同参与人卡片：填报无评估版
                         else:
-                            return "AAqz0J0JSTciO"  # leader和管理者卡片：完整版
+                            return "AAqv2BIB41oor"  # leader和管理者卡片：填报版
                 else:
-                    return "AAqz0v4nx70HL"  # link类型使用通用卡片：会议纪要版
+                    return "AAqv2BCd4MmZW"  # link类型使用通用卡片：链接或文件版
         
         # 逐个平台推送消息（因为需要根据接收者类型选择不同模板）
         total_success_count = 0

@@ -79,10 +79,18 @@ class MeetingSummaryService:
             if account_name:
                 background_info += f"• 拜访客户：{account_name}\n"
             if contact_name:
-                contact_info = f"• 拜访对象：{contact_name}"
-                if contact_position:
-                    contact_info += f"（{contact_position}）"
-                background_info += contact_info + "\n"
+                # 如果contact_name包含换行符，说明是多个联系人（格式：姓名1（职位1）\n姓名2（职位2））
+                if "\n" in contact_name:
+                    background_info += f"• 拜访对象：\n"
+                    for contact_line in contact_name.split("\n"):
+                        if contact_line.strip():
+                            background_info += f"  - {contact_line.strip()}\n"
+                else:
+                    # 单个联系人
+                    contact_info = f"• 拜访对象：{contact_name}"
+                    if contact_position:
+                        contact_info += f"（{contact_position}）"
+                    background_info += contact_info + "\n"
             if visit_date:
                 background_info += f"• 拜访日期：{visit_date}\n"
             if opportunity_name:
