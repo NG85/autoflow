@@ -244,83 +244,25 @@ class LocalContactRepo(BaseRepo):
         if not contact_data.get("customer_name") and account.customer_name:
             contact_data["customer_name"] = account.customer_name
         
-        # 智能去重检查：优先使用联系方式，其次使用客户+姓名+职位
+        # 去重检查：使用客户+姓名+职位
+        # 排除已删除的联系人，避免与新建混淆
         # 使用数据库锁防止并发创建重复记录
-        existing_contact = None
-        
-        # 1. 优先检查联系方式（手机号或邮箱）- 更准确的唯一标识
-        mobile = contact_data.get("mobile")
-        email = contact_data.get("email")
-        
-        if mobile or email:
-            # 优先匹配：如果同时提供 mobile 和 email，优先查找两者都相同的记录
-            if mobile and email:
-                # 先查找 mobile 和 email 都匹配的记录（最精确）
-                conditions = [
-                    LocalContact.customer_id == customer_id,
-                    LocalContact.mobile == mobile,
-                    LocalContact.email == email
-                ]
-                existing_contact = db_session.exec(
-                    select(LocalContact).where(and_(*conditions)).with_for_update()
-                ).first()
-            
-            # 如果没有找到精确匹配，使用 OR 条件：mobile 或 email 任一匹配
-            if not existing_contact:
-                contact_conditions = []
-                if mobile:
-                    contact_conditions.append(LocalContact.mobile == mobile)
-                if email:
-                    contact_conditions.append(LocalContact.email == email)
-                
-                # 使用 OR 连接联系方式条件，AND 连接客户ID条件
-                if len(contact_conditions) > 1:
-                    contact_condition = or_(*contact_conditions)
-                else:
-                    contact_condition = contact_conditions[0]
-                
-                conditions = [
-                    LocalContact.customer_id == customer_id,
-                    contact_condition
-                ]
-                
-                # 使用 with_for_update 加锁，防止并发问题
-                existing_contact = db_session.exec(
-                    select(LocalContact).where(and_(*conditions)).with_for_update()
-                ).first()
-        
-        # 2. 如果没有通过联系方式找到，使用客户+姓名+职位作为备选
-        if not existing_contact:
-            # 使用 with_for_update 加锁，防止并发问题
-            existing_contact = db_session.exec(
-                select(LocalContact).where(
+        existing_contact = db_session.exec(
+            select(LocalContact).where(
+                and_(
                     LocalContact.customer_id == customer_id,
                     LocalContact.name == name,
-                    LocalContact.position == position
-                ).with_for_update()
-            ).first()
+                    LocalContact.position == position,
+                    self._not_deleted_condition()  # 排除已删除的联系人
+                )
+            ).with_for_update()
+        ).first()
         
         if existing_contact:
-            # 如果已存在，检查是否已删除
-            if existing_contact.delete_flag:
-                # 恢复已删除的联系人并更新信息
-                from datetime import datetime
-                existing_contact.delete_flag = False
-                existing_contact.updated_by = user_id
-                existing_contact.updated_at = datetime.now()
-                
-                # 更新其他字段（保留原有数据，只更新新提供的字段）
-                for key, value in contact_data.items():
-                    if key not in ["customer_id", "name", "position"] and hasattr(existing_contact, key):
-                        setattr(existing_contact, key, value)
-                
-                db_session.add(existing_contact)
-                db_session.commit()
-                db_session.refresh(existing_contact)
-                return existing_contact
-            else:
-                # 如果未删除，直接返回已存在的联系人
-                return existing_contact
+            # 如果已存在且未删除，直接返回已存在的联系人
+            # 添加标记，表示是已存在的联系人（使用 __dict__ 避免 SQLModel 验证）
+            object.__setattr__(existing_contact, 'is_existing', True)
+            return existing_contact
         
         # 不存在相同的联系人，创建新的
         # 生成唯一ID（如果未提供）
@@ -342,57 +284,30 @@ class LocalContactRepo(BaseRepo):
             db_session.add(contact)
             db_session.commit()
             db_session.refresh(contact)
+            # 添加标记，表示是新创建的联系人（使用 __dict__ 避免 SQLModel 验证）
+            object.__setattr__(contact, 'is_existing', False)
             return contact
         except IntegrityError:
             # 处理并发情况：如果创建时发生唯一性约束冲突（如 unique_id 重复）
             # 回滚后重新查询一次（可能在锁释放后，另一个请求已经创建了）
             db_session.rollback()
             
-            # 重新查询（不加锁，因为已经释放了）
-            if mobile or email:
-                # 优先匹配：如果同时提供 mobile 和 email，优先查找两者都相同的记录
-                if mobile and email:
-                    conditions = [
-                        LocalContact.customer_id == customer_id,
-                        LocalContact.mobile == mobile,
-                        LocalContact.email == email
-                    ]
-                    existing_contact = db_session.exec(
-                        select(LocalContact).where(and_(*conditions))
-                    ).first()
-                
-                # 如果没有找到精确匹配，使用 OR 条件
-                if not existing_contact:
-                    contact_conditions = []
-                    if mobile:
-                        contact_conditions.append(LocalContact.mobile == mobile)
-                    if email:
-                        contact_conditions.append(LocalContact.email == email)
-                    
-                    if len(contact_conditions) > 1:
-                        contact_condition = or_(*contact_conditions)
-                    else:
-                        contact_condition = contact_conditions[0]
-                    
-                    conditions = [
-                        LocalContact.customer_id == customer_id,
-                        contact_condition
-                    ]
-                    existing_contact = db_session.exec(
-                        select(LocalContact).where(and_(*conditions))
-                    ).first()
-            
-            if not existing_contact:
-                existing_contact = db_session.exec(
-                    select(LocalContact).where(
+            # 重新查询：使用客户+姓名+职位，排除已删除的联系人
+            existing_contact = db_session.exec(
+                select(LocalContact).where(
+                    and_(
                         LocalContact.customer_id == customer_id,
                         LocalContact.name == name,
-                        LocalContact.position == position
+                        LocalContact.position == position,
+                        self._not_deleted_condition()  # 排除已删除的联系人
                     )
-                ).first()
+                )
+            ).first()
             
             if existing_contact:
                 # 如果找到了已存在的联系人，返回它
+                # 添加标记，表示是已存在的联系人（使用 __dict__ 避免 SQLModel 验证）
+                object.__setattr__(existing_contact, 'is_existing', True)
                 return existing_contact
             
             # 如果还是没找到，重新抛出异常（可能是其他类型的 IntegrityError）

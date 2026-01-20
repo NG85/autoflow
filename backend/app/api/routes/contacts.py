@@ -78,6 +78,9 @@ def require_contact_permission(
 
 def _contact_to_response(contact: LocalContact) -> LocalContactResponse:
     """将 LocalContact 模型转换为 LocalContactResponse"""
+    # 安全获取 is_existing 属性（动态添加的，可能不存在）
+    is_existing = getattr(contact, 'is_existing', None)
+    
     return LocalContactResponse(
         id=contact.id,
         unique_id=contact.unique_id,
@@ -92,7 +95,11 @@ def _contact_to_response(contact: LocalContact) -> LocalContactResponse:
         wechat=contact.wechat,
         address=contact.address,
         key_decision_maker=contact.key_decision_maker,
+        department=contact.department,
+        direct_superior=contact.direct_superior,
+        status=contact.status,
         source=contact.source,
+        business_relationship=contact.business_relationship,
         remarks=contact.remarks,
         created_at=contact.created_at.isoformat() if contact.created_at else "",
         updated_at=contact.updated_at.isoformat() if contact.updated_at else "",
@@ -101,6 +108,7 @@ def _contact_to_response(contact: LocalContact) -> LocalContactResponse:
         crm_unique_id=contact.crm_unique_id,
         synced_to_crm=contact.synced_to_crm if contact.synced_to_crm is not None else False,
         synced_at=contact.synced_at.isoformat() if contact.synced_at else None,
+        is_existing=is_existing,
     )
 
 

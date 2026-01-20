@@ -30,8 +30,14 @@ class LocalContact(UpdatableBaseModel, table=True):
     address: Optional[str] = Field(nullable=True, max_length=512, description="联系地址")
     
     ## 业务信息
-    key_decision_maker: Optional[str] = Field(nullable=True, max_length=255, description="关键决策人")
+    key_decision_maker: Optional[bool] = Field(nullable=True, description="是否关键决策人")
+    department: Optional[str] = Field(nullable=True, max_length=255, description="部门")
+    direct_superior: Optional[str] = Field(nullable=True, max_length=255, description="直属上级")
+    status: Optional[str] = Field(nullable=True, max_length=255, description="在职状态")
     source: Optional[str] = Field(nullable=True, max_length=255, description="来源")
+        
+    ## 本地业务字段（CRM中没有对应字段，保留用于本地业务）
+    business_relationship: Optional[str] = Field(nullable=True, max_length=255, description="商务关系")
 
     ## 备注
     remarks: Optional[str] = Field(nullable=True, description="备注")

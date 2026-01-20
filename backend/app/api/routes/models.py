@@ -1,6 +1,6 @@
 import enum
 from typing import List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.models.data_source import DataSourceType
 
@@ -61,9 +61,22 @@ class LocalContactCreate(BaseModel):
     email: Optional[str] = Field(None, description="邮件")
     wechat: Optional[str] = Field(None, description="微信")
     address: Optional[str] = Field(None, description="联系地址")
-    key_decision_maker: bool = Field(default=False, description="是否为关键决策人")
+    key_decision_maker: bool = Field(default=False, description="是否关键决策人")
+    department: Optional[str] = Field(None, description="部门")
+    direct_superior: Optional[str] = Field(None, description="直属上级")
+    status: Optional[str] = Field(None, description="在职状态")
     source: Optional[str] = Field(None, description="来源")
+    business_relationship: Optional[str] = Field(None, description="商务关系")
     remarks: Optional[str] = Field(None, description="备注")
+    
+    @model_validator(mode='after')
+    def validate_contact_info(self):
+        """验证手机和电话至少有一个"""
+        mobile = (self.mobile or "").strip()
+        phone = (self.phone or "").strip()
+        if not mobile and not phone:
+            raise ValueError("手机和电话至少需要填写一个")
+        return self
 
 
 class LocalContactUpdate(BaseModel):
@@ -76,8 +89,12 @@ class LocalContactUpdate(BaseModel):
     email: Optional[str] = Field(None, description="邮件")
     wechat: Optional[str] = Field(None, description="微信")
     address: Optional[str] = Field(None, description="联系地址")
-    key_decision_maker: Optional[bool] = Field(None, description="是否为关键决策人")
+    key_decision_maker: Optional[bool] = Field(None, description="是否关键决策人")
+    department: Optional[str] = Field(None, description="部门")
+    direct_superior: Optional[str] = Field(None, description="直属上级")
+    status: Optional[str] = Field(None, description="在职状态")
     source: Optional[str] = Field(None, description="来源")
+    business_relationship: Optional[str] = Field(None, description="商务关系")
     remarks: Optional[str] = Field(None, description="备注")
 
 
@@ -96,7 +113,11 @@ class LocalContactResponse(BaseModel):
     wechat: Optional[str] = None
     address: Optional[str] = None
     key_decision_maker: Optional[bool] = None
+    department: Optional[str] = None
+    direct_superior: Optional[str] = None
+    status: Optional[str] = None
     source: Optional[str] = None
+    business_relationship: Optional[str] = None
     remarks: Optional[str] = None
     created_at: str
     updated_at: str
@@ -105,6 +126,7 @@ class LocalContactResponse(BaseModel):
     crm_unique_id: Optional[str] = None
     synced_to_crm: bool = False
     synced_at: Optional[str] = None
+    is_existing: Optional[bool] = Field(default=None, description="是否为已存在的联系人（创建时返回）")
     
     class Config:
         from_attributes = True
