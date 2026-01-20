@@ -100,6 +100,32 @@ class DocumentContentRepo(BaseRepo):
             logger.error(f"更新问答对抽取结果失败: {e}")
             return None
     
+    def update_risk_info(
+        self,
+        session: Session,
+        document_content_id: int,
+        risk_info: str,
+        risk_status: str = "success",
+        auto_commit: bool = False
+    ) -> Optional[DocumentContent]:
+        """更新文档内容的风险信息提取结果"""
+        try:
+            document_content = session.get(DocumentContent, document_content_id)
+            if not document_content:
+                return None
+            
+            document_content.risk_info = risk_info
+            document_content.risk_extract_status = risk_status
+            
+            if auto_commit:
+                session.commit()
+                session.refresh(document_content)
+            
+            return document_content
+        except Exception as e:
+            logger.error(f"更新风险信息提取结果失败: {e}")
+            return None
+    
     def get_by_visit_record_id(
         self,
         session: Session,

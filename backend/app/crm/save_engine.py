@@ -366,7 +366,7 @@ def generate_dynamic_fields_for_visit_record(sales_visit_record):
         return []
 
 
-def push_visit_record_message(record_id: str, sales_visit_record, visit_type, db_session=None, meeting_notes=None, saved_time=None):
+def push_visit_record_message(record_id: str, sales_visit_record, visit_type, db_session=None, meeting_notes=None, risk_info=None, saved_time=None):
     try:
         # 如果没有传入db_session，则创建一个新的
         should_close_session = False
@@ -408,7 +408,8 @@ def push_visit_record_message(record_id: str, sales_visit_record, visit_type, db
             recorder_id=recorder_id,
             visit_record=sales_visit_record,
             visit_type=visit_type,
-            meeting_notes=meeting_notes
+            meeting_notes=meeting_notes,
+            risk_info=risk_info
         )
         
         if result["success"]:
@@ -425,6 +426,197 @@ def push_visit_record_message(record_id: str, sales_visit_record, visit_type, db
         # 只有当我们创建了session时才关闭它
         if should_close_session:
             db_session.close()
+
+
+def _extract_contact_info_from_record(record: SimpleVisitRecordCreate | CompleteVisitRecordCreate) -> tuple[Optional[str], Optional[str]]:
+    """
+    从拜访记录中提取联系人信息
+    
+    Args:
+        record: 拜访记录
+        
+    Returns:
+        tuple: (contact_name, contact_position) 联系人姓名和职位
+    """
+    contact_name = None
+    contact_position = None
+    
+    if isinstance(record, CompleteVisitRecordCreate):
+        if record.contacts and len(record.contacts) > 0:
+            # 多个联系人：格式化为 "姓名1（职位1）\n姓名2（职位2）" 格式
+            contact_info_parts = []
+            for contact in record.contacts:
+                name = contact.name or ""
+                position = contact.position or ""
+                if name:
+                    if position:
+                        contact_info_parts.append(f"{name}（{position}）")
+                    else:
+                        contact_info_parts.append(name)
+            if contact_info_parts:
+                # 如果有多个联系人，用换行符分隔；单个联系人直接使用
+                contact_name = "\n".join(contact_info_parts)
+        else:
+            # 兼容旧数据：使用单个联系人字段
+            contact_name = record.contact_name
+            contact_position = record.contact_position
+    
+    return contact_name, contact_position
+
+
+def _build_visit_background_info(
+    sales_name: Optional[str] = None,
+    account_name: Optional[str] = None,
+    contact_name: Optional[str] = None,
+    contact_position: Optional[str] = None,
+    visit_date: Optional[str] = None,
+    opportunity_name: Optional[str] = None,
+    is_first_visit: Optional[bool] = None,
+    is_call_high: Optional[bool] = None,
+    remarks: Optional[str] = None
+) -> str:
+    """
+    构建拜访背景信息字符串
+    
+    Args:
+        sales_name: 销售人员姓名
+        account_name: 客户名称
+        contact_name: 联系人姓名
+        contact_position: 联系人职位
+        visit_date: 拜访日期
+        opportunity_name: 商机名称
+        is_first_visit: 是否首次拜访
+        is_call_high: 是否关键决策人拜访
+        remarks: 现有风险或备注信息
+        
+    Returns:
+        str: 背景信息字符串
+    """
+    if not any([sales_name, account_name, contact_name, contact_position, visit_date, opportunity_name, is_first_visit, is_call_high, remarks]):
+        return ""
+    
+    background_info = "**背景信息（仅供理解，不在输出中显示）：**\n"
+    if sales_name:
+        background_info += f"• 销售人员：{sales_name}\n"
+    if account_name:
+        background_info += f"• 拜访客户：{account_name}\n"
+    if contact_name:
+        # 如果contact_name包含换行符，说明是多个联系人（格式：姓名1（职位1）\n姓名2（职位2））
+        if "\n" in contact_name:
+            background_info += f"• 拜访对象：\n"
+            for contact_line in contact_name.split("\n"):
+                if contact_line.strip():
+                    background_info += f"  - {contact_line.strip()}\n"
+        else:
+            # 单个联系人
+            contact_info = f"• 拜访对象：{contact_name}"
+            if contact_position:
+                contact_info += f"（{contact_position}）"
+            background_info += contact_info + "\n"
+    if visit_date:
+        background_info += f"• 拜访日期：{visit_date}\n"
+    if opportunity_name:
+        background_info += f"• 商机名称：{opportunity_name}\n"
+    if is_first_visit is not None:
+        background_info += f"• 拜访类型：{'首次拜访' if is_first_visit else '多次拜访'}\n"
+    if is_call_high is not None:
+        background_info += f"• 拜访层级：{'关键决策人拜访' if is_call_high else '普通拜访'}\n"
+    background_info += "• 文档类型：销售拜访记录会议文件\n"
+    if remarks and remarks.strip():
+        background_info += f"• 风险/备注：{remarks}\n"
+    background_info += "\n"
+    
+    return background_info
+
+
+def extract_risk_info_from_content(
+    content: str,
+    title: Optional[str] = None,
+    sales_name: Optional[str] = None,
+    account_name: Optional[str] = None,
+    contact_name: Optional[str] = None,
+    contact_position: Optional[str] = None,
+    visit_date: Optional[str] = None,
+    opportunity_name: Optional[str] = None,
+    is_first_visit: Optional[bool] = None,
+    is_call_high: Optional[bool] = None,
+    remarks: Optional[str] = None
+) -> str:
+    """
+    从文档内容中提取风险信息（一次LLM调用完成）
+    
+    Args:
+        content: 文档内容
+        title: 文档标题（可选）
+        sales_name: 销售人员姓名（可选）
+        account_name: 客户名称（可选）
+        contact_name: 联系人姓名（可选）
+        contact_position: 联系人职位（可选）
+        visit_date: 拜访日期（可选）
+        opportunity_name: 商机名称（可选）
+        is_first_visit: 是否首次拜访（可选）
+        is_call_high: 是否Call High（可选）
+        remarks: 现有的remarks内容（作为上下文，可选）
+        
+    Returns:
+        str: 提取的风险信息，如果没有风险信息则返回空字符串
+    """
+    # 如果文档内容为空，直接返回空字符串
+    if not content or not content.strip():
+        return ""
+    
+    # 构建背景信息
+    background_info = _build_visit_background_info(
+        sales_name=sales_name,
+        account_name=account_name,
+        contact_name=contact_name,
+        contact_position=contact_position,
+        visit_date=visit_date,
+        opportunity_name=opportunity_name,
+        is_first_visit=is_first_visit,
+        is_call_high=is_call_high,
+        remarks=remarks
+    )
+    
+    prompt = f"""{background_info}你是一位专业的销售风险分析专家，需要从销售拜访文档中提取风险信息。
+
+**文档标题**：{title or "未提供标题"}
+
+**文档内容**：
+{content}
+
+**任务说明**：
+从上述文档内容中识别并提取所有与风险相关的信息。风险信息包括但不限于：客户担忧疑虑异议、技术难点实施风险、业务风险竞争压力、时间紧迫性预算限制、决策障碍不确定性、客户内部阻力组织变化风险、项目延期风险交付风险，以及其他可能影响项目推进的风险因素。
+
+**提取要求**：
+1. **只从文档内容中提取**：仅提取文档正文中明确提及的风险信息，不要推测或编造
+2. **参考背景信息**：结合背景信息（如拜访类型、拜访层级、现有风险/备注等）来更好地理解风险信息的上下文，但只提取文档中的风险信息
+3. **具体明确**：提取的风险信息应该具体、明确，避免泛泛而谈
+5. **处理重复**：如果文档中的风险信息与背景信息中的"风险/备注"重复，只提取文档中的信息（以文档为准）
+6. **无风险信息**：如果文档内容中完全没有风险信息，直接返回空字符串
+
+**输出要求（重要）**：
+- 使用一段自然语言来描述，不要使用列表、要点或分条格式
+- 字数严格控制在150字以内
+- 使用简洁、专业的表达，避免冗余
+- 直接输出提取的风险信息，不要添加任何前缀、后缀或说明文字
+- 如果没有风险信息，直接返回空字符串
+
+请输出提取的风险信息：
+"""
+    
+    try:
+        result = call_ark_llm(prompt)
+        risk_info = result.strip()
+        
+        # 如果结果为空或只包含无意义的字符，返回空字符串
+        if not risk_info or len(risk_info) < 5:
+            return ""
+        
+        return risk_info
+    except Exception as e:
+        logger.warning(f"提取风险信息失败: {e}")
+        return ""
 
 
 def save_visit_record_with_content(
@@ -472,35 +664,70 @@ def save_visit_record_with_content(
     # 注意：不在这里commit，由调用方控制事务
     # db_session.commit()
     
-    # ========== 第二阶段：生成会议纪要总结（不影响主流程） ==========
+    # ========== 第二阶段：提取风险信息并保存到document_contents表（不影响主流程） ==========
+    try:
+        # 提取联系人信息（使用公共函数）
+        contact_name, contact_position = _extract_contact_info_from_record(record)
+        
+        # 提取风险信息（使用完整的背景信息和remarks作为上下文，但不修改remarks）
+        risk_info = extract_risk_info_from_content(
+            content=content,
+            title=title,
+            sales_name=record.recorder,
+            account_name=record.account_name,
+            contact_name=contact_name,
+            contact_position=contact_position,
+            visit_date=record.visit_communication_date,
+            opportunity_name=record.opportunity_name,
+            is_first_visit=record.is_first_visit,
+            is_call_high=record.is_call_high,
+            remarks=record.remarks
+        )
+        
+        if risk_info:
+            # 保存风险信息到document_contents表
+            document_content_repo.update_risk_info(
+                session=db_session,
+                document_content_id=document_content.id,
+                risk_info=risk_info,
+                risk_status="success",
+                auto_commit=False  # 不立即提交，等待主事务提交
+            )
+            logger.info(f"成功提取并保存风险信息到document_contents，文档ID: {document_content.id}")
+        else:
+            # 记录未提取到风险信息的状态
+            document_content_repo.update_risk_info(
+                session=db_session,
+                document_content_id=document_content.id,
+                risk_info="",
+                risk_status="success",  # 虽然没有风险信息，但提取过程成功
+                auto_commit=False
+            )
+            logger.debug(f"未从文档内容中提取到风险信息，文档ID: {document_content.id}")
+    except Exception as e:
+        logger.error(f"提取或保存风险信息时出错: {e}")
+        # 记录失败状态（如果失败不影响主流程）
+        try:
+            document_content_repo.update_risk_info(
+                session=db_session,
+                document_content_id=document_content.id,
+                risk_info="",
+                risk_status="failed",
+                auto_commit=False
+            )
+        except Exception as update_error:
+            logger.error(f"更新风险信息失败状态到数据库失败: {update_error}")
+        # 不影响主流程，继续执行
+    
+    # ========== 第三阶段：生成会议纪要总结（不影响主流程） ==========
     meeting_summary = None
     
     try:
         from app.services.meeting_summary_service import MeetingSummaryService
         meeting_summary_service = MeetingSummaryService()
         
-        # 处理联系人信息：优先使用contacts字段，否则使用旧字段，保留完整的联系人信息
-        contact_name = None
-        contact_position = None
-        if isinstance(record, CompleteVisitRecordCreate):
-            if record.contacts and len(record.contacts) > 0:
-                # 多个联系人：格式化为 "姓名1（职位1）\n姓名2（职位2）" 格式
-                contact_info_parts = []
-                for contact in record.contacts:
-                    name = contact.name or ""
-                    position = contact.position or ""
-                    if name:
-                        if position:
-                            contact_info_parts.append(f"{name}（{position}）")
-                        else:
-                            contact_info_parts.append(name)
-                if contact_info_parts:
-                    # 如果有多个联系人，用换行符分隔；单个联系人直接使用
-                    contact_name = "\n".join(contact_info_parts)
-            else:
-                # 兼容旧数据：使用单个联系人字段
-                contact_name = record.contact_name
-                contact_position = record.contact_position
+        # 抽取联系人信息
+        contact_name, contact_position = _extract_contact_info_from_record(record)
         
         summary_result = meeting_summary_service.generate_meeting_summary(
             content=content,
@@ -512,7 +739,8 @@ def save_visit_record_with_content(
             visit_date=record.visit_communication_date,
             opportunity_name=record.opportunity_name,
             is_first_visit=record.is_first_visit,
-            is_call_high=record.is_call_high
+            is_call_high=record.is_call_high,
+            remarks=record.remarks
         )
         
         if summary_result["success"]:
@@ -561,7 +789,7 @@ def save_visit_record_with_content(
             logger.error(f"更新会议纪要失败状态到数据库失败: {update_error}")
         # 不影响主流程，继续执行
     
-    # ========== 第三阶段：异步触发文档问答对抽取任务（不影响主流程） ==========
+    # ========== 第四阶段：异步触发文档问答对抽取任务（不影响主流程） ==========
     try:
         extract_and_save_document_qa.delay(document_content.id)
         logger.info(f"已异步触发文档问答对抽取任务，文档ID: {document_content.id}")
@@ -569,7 +797,7 @@ def save_visit_record_with_content(
         logger.error(f"触发文档问答对抽取异步任务失败: {e}")
         # 不影响主流程，继续执行
     
-    # ========== 第四阶段：推送飞书消息（不影响事务） ==========
+    # ========== 第五阶段：推送飞书消息（不影响事务） ==========
     try:
         record_data = record.model_dump()
         # 推送飞书消息（保留附件字段，附件中仅包含URL和少量结构化信息，避免大体积base64）
@@ -579,6 +807,7 @@ def save_visit_record_with_content(
             visit_type=record.visit_type,
             db_session=db_session,
             meeting_notes=meeting_summary,
+            risk_info=risk_info,
             saved_time=saved_time
         )
     except Exception as e:

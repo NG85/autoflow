@@ -802,6 +802,7 @@ def create_visit_record(
                     sales_visit_record=record_data,
                     db_session=db_session,
                     meeting_notes=None,
+                    risk_info=None,
                     saved_time=saved_time
                 )
                 return {"code": 0, "message": "success", "data": {}}
@@ -882,6 +883,7 @@ def create_visit_record(
                 sales_visit_record=record_data,
                 db_session=db_session,
                 meeting_notes=None,
+                risk_info=None,
                 saved_time=saved_time
             )
             return {"code": 0, "message": "success", "data": data}
@@ -1389,7 +1391,7 @@ def get_visit_record_by_id(
         # 基础数据
         data = record.model_dump()
 
-        # 如果是 link 类型的拜访记录，尝试返回从文档中抽取的问答对
+        # 如果是 link 类型的拜访记录，尝试返回从文档中抽取的问答对和风险信息
         try:
             if getattr(record, "visit_type", None) == "link":
                 document_content_repo = DocumentContentRepo()
@@ -1403,9 +1405,11 @@ def get_visit_record_by_id(
                     if document_content:
                         data["document_qa_pairs"] = document_content.qa_pairs or []
                         data["document_qa_extract_status"] = document_content.qa_extract_status or ""
+                        data["document_risk_info"] = document_content.risk_info or ""
+                        data["document_risk_extract_status"] = document_content.risk_extract_status or ""
         except Exception as e:
-            # 问答对加载失败不影响主流程，只记录日志
-            logger.warning(f"加载文档问答对失败: record_id={record_id}, error={e}")
+            # 文档信息加载失败不影响主流程，只记录日志
+            logger.warning(f"加载文档信息（问答对和风险信息）失败: record_id={record_id}, error={e}")
         
         return {
             "code": 0,

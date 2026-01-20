@@ -47,6 +47,17 @@ class DocumentContent(SQLModel, table=True):
         description="问答对抽取状态: success, failed"
     )
     
+    # 风险信息提取结果（LLM生成）
+    risk_info: Optional[str] = Field(
+        sa_column=Column(MEDIUMTEXT, nullable=True),
+        description="从文档内容中提取的风险信息"
+    )
+    risk_extract_status: Optional[str] = Field(
+        max_length=20,
+        nullable=True,
+        description="风险信息提取状态: success, failed"
+    )
+    
     # 元数据
     title: Optional[str] = Field(max_length=500, nullable=True, description="文档标题")
     file_size: Optional[int] = Field(nullable=True, description="文件大小(字节)")

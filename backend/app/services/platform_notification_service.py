@@ -687,7 +687,8 @@ class PlatformNotificationService:
         recorder_id: str = None,
         visit_record: Dict[str, Any] = None,
         visit_type: str = "form",
-        meeting_notes: str = None
+        meeting_notes: str = None,
+        risk_info: str = None
     ) -> Dict[str, Any]:
         """
         发送拜访记录通知
@@ -748,6 +749,7 @@ class PlatformNotificationService:
             "department": visit_record.get("department", "--") if visit_record else "--",
             "sales_visit_records": [visit_record] if visit_record else [],
             "meeting_notes": meeting_notes,
+            "risk_info": risk_info or '--',
             "dynamic_fields": dynamic_fields,  # 新增：动态字段数组参数
             "comment_page_url": f"{settings.REVIEW_REPORT_HOST}/registerVisitRecord/addComment?record_id={record_id}", # 新增：评论页面链接
         }
