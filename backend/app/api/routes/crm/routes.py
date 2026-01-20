@@ -34,6 +34,8 @@ from app.api.routes.crm.models import (
     WeeklyFollowupEntityRowOut,
     WeeklyFollowupDetailQueryIn,
     WeeklyFollowupDetailOut,
+    WeeklyFollowupFilterOptionsQueryIn,
+    WeeklyFollowupFilterOptionsOut,
     WeeklyFollowupWeeklyListQueryIn,
     WeeklyFollowupWeeklyListOut,
     WeeklyFollowupWeeklyListItemOut,
@@ -249,12 +251,63 @@ def get_weekly_followup_detail(
         if is_sales_limited:
             # 普通销售：只能看自己负责的商机/客户明细
             conds.append(CRMWeeklyFollowupEntitySummary.owner_user_id == str(user.id))
+    
+    # 添加筛选条件（支持多选）
+    if payload.filter_department_name:
+        # 过滤空字符串并去重
+        filter_dept_names = list(set([name.strip() for name in payload.filter_department_name if name and name.strip()]))
+        if filter_dept_names:
+            conds.append(CRMWeeklyFollowupEntitySummary.department_name.in_(filter_dept_names))
+    
+    if payload.filter_owner_name:
+        # 过滤空字符串并去重
+        filter_owner_names = list(set([name.strip() for name in payload.filter_owner_name if name and name.strip()]))
+        if filter_owner_names:
+            conds.append(CRMWeeklyFollowupEntitySummary.owner_name.in_(filter_owner_names))
+    
+    # Account 筛选（支持 id 或 name，任一匹配即可）
+    account_conds = []
+    if payload.filter_account_id:
+        filter_account_id = payload.filter_account_id.strip()
+        if filter_account_id:
+            account_conds.append(CRMWeeklyFollowupEntitySummary.account_id == filter_account_id)
+    
+    if payload.filter_account_name:
+        filter_account_name = payload.filter_account_name.strip()
+        if filter_account_name:
+            account_conds.append(CRMWeeklyFollowupEntitySummary.account_name == filter_account_name)
+    
+    if account_conds:
+        # 如果同时提供了 id 和 name，使用 OR 逻辑（匹配任一即可）
+        if len(account_conds) > 1:
+            conds.append(or_(*account_conds))
+        else:
+            conds.append(account_conds[0])
+    
+    # Opportunity 筛选（支持 id 或 name，任一匹配即可）
+    opportunity_conds = []
+    if payload.filter_opportunity_id:
+        filter_opportunity_id = payload.filter_opportunity_id.strip()
+        if filter_opportunity_id:
+            opportunity_conds.append(CRMWeeklyFollowupEntitySummary.opportunity_id == filter_opportunity_id)
+    
+    if payload.filter_opportunity_name:
+        filter_opportunity_name = payload.filter_opportunity_name.strip()
+        if filter_opportunity_name:
+            opportunity_conds.append(CRMWeeklyFollowupEntitySummary.opportunity_name == filter_opportunity_name)
+    
+    if opportunity_conds:
+        # 如果同时提供了 id 和 name，使用 OR 逻辑（匹配任一即可）
+        if len(opportunity_conds) > 1:
+            conds.append(or_(*opportunity_conds))
+        else:
+            conds.append(opportunity_conds[0])
 
     total = db_session.exec(select(func.count()).select_from(CRMWeeklyFollowupEntitySummary).where(*conds)).one()
     entities = db_session.exec(
         select(CRMWeeklyFollowupEntitySummary)
         .where(*conds)
-        .order_by(CRMWeeklyFollowupEntitySummary.department_name, CRMWeeklyFollowupEntitySummary.updated_at.desc())
+        .order_by(CRMWeeklyFollowupEntitySummary.department_name, CRMWeeklyFollowupEntitySummary.owner_name, CRMWeeklyFollowupEntitySummary.updated_at.desc())
         .offset(offset)
         .limit(size)
     ).all()
@@ -283,6 +336,79 @@ def get_weekly_followup_detail(
         week_end=week_end,
         summary=summary_out,
         entities=WeeklyFollowupEntityPageOut(total=int(total or 0), page=page, size=size, items=items),
+    )
+
+
+@router.post("/crm/weekly-followup/detail/filter-options")
+def get_weekly_followup_filter_options(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    payload: WeeklyFollowupFilterOptionsQueryIn,
+) -> WeeklyFollowupFilterOptionsOut:
+    """
+    获取周总结详情页的筛选选项（部门名称、负责人名称）
+    用于前端下拉选择框填充
+    """
+    can_view_team, is_company_admin, user_dept_id, user_dept_name = _can_view_weekly_followup(db_session, user)
+
+    scope = payload.scope
+    if scope == "company" and not is_company_admin:
+        raise HTTPException(status_code=403, detail="权限不足：仅公司管理员可查看 company scope")
+
+    week_start = payload.start_date
+    week_end = payload.end_date
+    is_sales_limited = bool(scope == "department" and (not is_company_admin) and (not can_view_team))
+
+    # 解析部门过滤（仅 department scope）
+    dept_id = None
+    dept_name = None
+    if scope == "department":
+        if is_company_admin:
+            dept_id = (payload.department_id or "").strip() or None
+            dept_name = (payload.department_name or "").strip() or None
+            if dept_id is None and dept_name is None:
+                raise HTTPException(status_code=400, detail="department scope 需要指定 department_id 或 department_name")
+        else:
+            dept_id = user_dept_id
+            dept_name = user_dept_name
+            if dept_id is None and dept_name is None:
+                raise HTTPException(status_code=403, detail="无法获取本团队信息")
+
+    # 构建基础查询条件（与详情接口保持一致）
+    conds = [
+        CRMWeeklyFollowupEntitySummary.week_start == week_start,
+        CRMWeeklyFollowupEntitySummary.week_end == week_end,
+    ]
+    if scope == "my":
+        conds.append(CRMWeeklyFollowupEntitySummary.owner_user_id == str(user.id))
+    elif scope == "department":
+        if dept_id:
+            conds.append(CRMWeeklyFollowupEntitySummary.department_id == dept_id)
+        elif dept_name:
+            conds.append(CRMWeeklyFollowupEntitySummary.department_name == dept_name)
+        if is_sales_limited:
+            # 普通销售：只能看自己负责的商机/客户明细
+            conds.append(CRMWeeklyFollowupEntitySummary.owner_user_id == str(user.id))
+
+    # 获取去重后的部门名称列表
+    department_names = db_session.exec(
+        select(distinct(CRMWeeklyFollowupEntitySummary.department_name))
+        .where(*conds)
+        .where(CRMWeeklyFollowupEntitySummary.department_name.is_not(None))
+        .order_by(CRMWeeklyFollowupEntitySummary.department_name)
+    ).all()
+
+    # 获取去重后的负责人名称列表
+    owner_names = db_session.exec(
+        select(distinct(CRMWeeklyFollowupEntitySummary.owner_name))
+        .where(*conds)
+        .where(CRMWeeklyFollowupEntitySummary.owner_name.is_not(None))
+        .order_by(CRMWeeklyFollowupEntitySummary.owner_name)
+    ).all()
+
+    return WeeklyFollowupFilterOptionsOut(
+        department_names=[name for name in department_names if name],  # 过滤空字符串
+        owner_names=[name for name in owner_names if name],  # 过滤空字符串
     )
 
 
@@ -893,7 +1019,7 @@ def export_visit_records_to_xlsx(
             headers = [
                 "ID", "客户分类", "客户名称", "客户ID", "是否首次拜访", "是否Call High",
                 "合作伙伴", "合作伙伴ID", "商机名称", "商机ID", "跟进日期", "负责销售", "所在团队",
-                "客户岗位", "客户名字", "协同参与人", "跟进方式",
+                "联系人职位", "联系人姓名", "协同参与人", "跟进方式",
                 "拜访目的", "附件地点", "附件纬度", "附件经度", "附件拍摄时间", "跟进记录", 
                 "AI对跟进记录质量评估", "AI对跟进记录质量评估详情",
                 "下一步计划", "AI对下一步计划质量评估", "AI对下一步计划质量评估详情",

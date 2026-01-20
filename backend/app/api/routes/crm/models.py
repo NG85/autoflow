@@ -823,6 +823,34 @@ class WeeklyFollowupDetailQueryIn(BaseModel):
     size: int = 50
     # 周总结详情页的明细列表需要直接展示评论，因此默认带 comments
     include_comments: bool = True
+    # 实体明细列表筛选条件
+    filter_department_name: Optional[List[str]] = None  # 部门名称筛选（支持多选）
+    filter_owner_name: Optional[List[str]] = None  # 负责人名称筛选（支持多选）
+    filter_account_id: Optional[str] = None  # 客户ID筛选（单选）
+    filter_account_name: Optional[str] = None  # 客户名称筛选（单选）
+    filter_opportunity_id: Optional[str] = None  # 商机ID筛选（单选）
+    filter_opportunity_name: Optional[str] = None  # 商机名称筛选（单选）
+
+
+class WeeklyFollowupFilterOptionsQueryIn(BaseModel):
+    """
+    周总结详情筛选选项查询：
+    - 给定 week_start/week_end + scope（company/department/my）
+    - 返回该查询条件下可用的部门名称列表和负责人名称列表
+    """
+    scope: WeeklyFollowupScope = "my"
+    start_date: date
+    end_date: date
+    department_id: Optional[str] = None
+    department_name: Optional[str] = None
+
+
+class WeeklyFollowupFilterOptionsOut(BaseModel):
+    """
+    周总结详情筛选选项输出
+    """
+    department_names: List[str]  # 可用的部门名称列表（去重、排序）
+    owner_names: List[str]  # 可用的负责人名称列表（去重、排序）
 
 
 class WeeklyFollowupEntityPageOut(BaseModel):
