@@ -99,7 +99,7 @@ def save_visit_record_to_crm_table(record_schema: SimpleVisitRecordCreate | Comp
     
     # 处理其他字段（直接使用，但需要过滤空值）
     for field_name, field_value in fields.items():
-        if field_name not in special_fields and field_name not in ['contacts', 'latitude', 'longitude']:
+        if field_name not in special_fields and field_name not in ['contacts', 'latitude', 'longitude', 'form_type']:
             if field_value not in ("", None):
                 mapped[field_name] = field_value
     
