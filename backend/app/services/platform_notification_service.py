@@ -1184,8 +1184,8 @@ class PlatformNotificationService:
         # 部门周报卡片模板 - 从配置文件读取，支持不同公司使用不同的模板
         template_id_by_platform = {
             PLATFORM_DINGTALK: settings.DINGTALK_DEPT_WEEKLY_REPORT_TEMPLATE_ID,
-            PLATFORM_FEISHU: "AAqX5j2jPq2Cn",
-            PLATFORM_LARK: "AAqX5j2jPq2Cn",
+            PLATFORM_FEISHU: settings.FEISHU_DEPT_WEEKLY_REPORT_TEMPLATE_ID,
+            PLATFORM_LARK: settings.FEISHU_DEPT_WEEKLY_REPORT_TEMPLATE_ID,
         }
         
         # 按平台分组接收者
@@ -1301,8 +1301,8 @@ class PlatformNotificationService:
         # 公司周报卡片模板 - 从配置文件读取，支持不同公司使用不同的模板
         template_id_by_platform = {
             PLATFORM_DINGTALK: settings.DINGTALK_COMPANY_WEEKLY_REPORT_TEMPLATE_ID,
-            PLATFORM_FEISHU: "AAqvMFGD8n8bZ",
-            PLATFORM_LARK: "AAqvMFGD8n8bZ",
+            PLATFORM_FEISHU: settings.FEISHU_COMPANY_WEEKLY_REPORT_TEMPLATE_ID,
+            PLATFORM_LARK: settings.FEISHU_COMPANY_WEEKLY_REPORT_TEMPLATE_ID,
         }
         
         # 按平台分组接收者

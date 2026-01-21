@@ -211,6 +211,8 @@ class Settings(BaseSettings):
     DINGTALK_COPR_ID: str = 'ding2f8a51bf16e4fc5facaaa37764f94726'
     DINGTALK_COMPANY_WEEKLY_REPORT_TEMPLATE_ID: str = 'daa13a1a-f064-4512-968c-0a1f101d3222.schema'  # 钉钉公司周报卡片模板ID
     DINGTALK_DEPT_WEEKLY_REPORT_TEMPLATE_ID: str = '349394d8-33ad-4be5-9f7e-bac33494ee42.schema'  # 钉钉团队周报卡片模板ID
+    FEISHU_COMPANY_WEEKLY_REPORT_TEMPLATE_ID: str = 'AAqvMFGD8n8bZ'  # 飞书公司周报卡片模板ID
+    FEISHU_DEPT_WEEKLY_REPORT_TEMPLATE_ID: str = 'AAqX5j2jPq2Cn'  # 飞书部门周报卡片模板ID
     CUSTOM_FONT_SIZE_TOKEN: str | None = None
     
     # Feishu send message configuration
