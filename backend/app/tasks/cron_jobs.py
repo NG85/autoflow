@@ -395,6 +395,7 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                                 {
                                     "stage_name": str(item.get("stage_name", "") or ""),
                                     "companies_count": str(item.get("companies_count", 0) or 0),
+                                    "opportunities_count": str(item.get("opportunities_count", 0) or 0),
                                 }
                             )
                 # 只保留有效的阶段推进记录；若无有效记录，则保持空数组
