@@ -83,7 +83,6 @@ def _extract_qa_pairs_for_chunk(
                 "account_name": visit_context.get("account_name") or "",
                 "opportunity_name": visit_context.get("opportunity_name") or "",
                 "contact_name": visit_context.get("contact_name") or "",
-                "contact_position": visit_context.get("contact_position") or "",
                 "is_first_visit": visit_context.get("is_first_visit") or "",
                 "is_call_high": visit_context.get("is_call_high") or "",
             },
@@ -99,8 +98,7 @@ def _extract_qa_pairs_for_chunk(
 - recorder: 本次拜访的销售/记录人姓名
 - account_name: 客户公司名称
 - opportunity_name: 相关商机/项目名称
-- contact_name: 主要客户联系人姓名
-- contact_position: 联系人职位
+- contact_name: 客户联系人信息（格式：姓名（职位），多个联系人用逗号分隔，如"张三（CTO）, 李四（CEO）"）
 - is_first_visit: 是否首次拜访（是/否）
 - is_call_high: 是否拜访关键决策人（是/否）
 
@@ -290,12 +288,36 @@ def extract_and_save_document_qa(self, document_content_id: int) -> Dict[str, An
                     # 这里只做 best-effort 的反查；如果关联复杂，可以后续扩展专门的查询函数。                    
                     visit_record = visit_record_repo.get_visit_record_by_id(session, visit_record_id)
                     if visit_record:
+                        # 处理联系人信息：优先使用contacts字段，否则使用旧字段
+                        # 将每个联系人的姓名和职位放在一起，更有利于LLM理解
+                        contact_name = ""
+                        if visit_record.contacts and len(visit_record.contacts) > 0:
+                            # 多个联系人：将每个联系人的姓名和职位合并，格式为 "姓名1（职位1）, 姓名2（职位2）"
+                            contact_info_parts = []
+                            for contact in visit_record.contacts:
+                                name = contact.name or ""
+                                position = contact.position or ""
+                                if name:
+                                    if position:
+                                        contact_info_parts.append(f"{name}（{position}）")
+                                    else:
+                                        contact_info_parts.append(name)
+                            contact_name = ", ".join(contact_info_parts) if contact_info_parts else ""
+                        else:
+                            # 兼容旧数据：使用单个联系人字段，将姓名和职位合并
+                            name = visit_record.contact_name or ""
+                            position = visit_record.contact_position or ""
+                            if name:
+                                if position:
+                                    contact_name = f"{name}（{position}）"
+                                else:
+                                    contact_name = name
+                        
                         visit_context = {
                             "recorder": visit_record.recorder or "",
                             "account_name": visit_record.account_name or visit_record.partner_name or "",
                             "opportunity_name": visit_record.opportunity_name or "",
-                            "contact_name": visit_record.contact_name or "",
-                            "contact_position": visit_record.contact_position or "",
+                            "contact_name": contact_name,
                             "is_first_visit": "是" if visit_record.is_first_visit else "否",
                             "is_call_high": "是" if visit_record.is_call_high else "否",
                         }

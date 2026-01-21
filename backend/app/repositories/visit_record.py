@@ -85,6 +85,28 @@ def _convert_to_response(record: CRMSalesVisitRecord, customer_level: Optional[s
     attachment = record_dict.get("attachment")
     if attachment:
         record_dict["attachment"] = VisitAttachment.from_legacy_value(attachment)
+    
+    # 处理联系人字段：如果数据库中有contacts字段则使用，否则从旧字段构造
+    from app.api.routes.crm.models import Contact
+    contacts_list = None
+    if record.contacts and isinstance(record.contacts, list) and len(record.contacts) > 0:
+        # 使用新字段（contacts）
+        contacts_list = [Contact(**contact) if isinstance(contact, dict) else contact for contact in record.contacts]
+    elif record.contact_name or record.contact_position or record.contact_id:
+        # 从旧字段构造联系人列表（兼容旧数据）
+        contact_dict = {}
+        if record.contact_name:
+            contact_dict['name'] = record.contact_name
+        if record.contact_position:
+            contact_dict['position'] = record.contact_position
+        if record.contact_id:
+            contact_dict['contact_id'] = record.contact_id
+        if contact_dict:
+            contacts_list = [Contact(**contact_dict)]
+    
+    # 将contacts字段添加到record_dict中
+    if contacts_list:
+        record_dict["contacts"] = contacts_list
 
     # 使用处理后的字典创建VisitRecordResponse
     response = VisitRecordResponse.model_validate(record_dict)

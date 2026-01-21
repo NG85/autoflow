@@ -34,6 +34,8 @@ from app.api.routes.crm.models import (
     WeeklyFollowupEntityRowOut,
     WeeklyFollowupDetailQueryIn,
     WeeklyFollowupDetailOut,
+    WeeklyFollowupFilterOptionsQueryIn,
+    WeeklyFollowupFilterOptionsOut,
     WeeklyFollowupWeeklyListQueryIn,
     WeeklyFollowupWeeklyListOut,
     WeeklyFollowupWeeklyListItemOut,
@@ -249,12 +251,63 @@ def get_weekly_followup_detail(
         if is_sales_limited:
             # 普通销售：只能看自己负责的商机/客户明细
             conds.append(CRMWeeklyFollowupEntitySummary.owner_user_id == str(user.id))
+    
+    # 添加筛选条件（支持多选）
+    if payload.filter_department_name:
+        # 过滤空字符串并去重
+        filter_dept_names = list(set([name.strip() for name in payload.filter_department_name if name and name.strip()]))
+        if filter_dept_names:
+            conds.append(CRMWeeklyFollowupEntitySummary.department_name.in_(filter_dept_names))
+    
+    if payload.filter_owner_name:
+        # 过滤空字符串并去重
+        filter_owner_names = list(set([name.strip() for name in payload.filter_owner_name if name and name.strip()]))
+        if filter_owner_names:
+            conds.append(CRMWeeklyFollowupEntitySummary.owner_name.in_(filter_owner_names))
+    
+    # Account 筛选（支持 id 或 name，任一匹配即可）
+    account_conds = []
+    if payload.filter_account_id:
+        filter_account_id = payload.filter_account_id.strip()
+        if filter_account_id:
+            account_conds.append(CRMWeeklyFollowupEntitySummary.account_id == filter_account_id)
+    
+    if payload.filter_account_name:
+        filter_account_name = payload.filter_account_name.strip()
+        if filter_account_name:
+            account_conds.append(CRMWeeklyFollowupEntitySummary.account_name == filter_account_name)
+    
+    if account_conds:
+        # 如果同时提供了 id 和 name，使用 OR 逻辑（匹配任一即可）
+        if len(account_conds) > 1:
+            conds.append(or_(*account_conds))
+        else:
+            conds.append(account_conds[0])
+    
+    # Opportunity 筛选（支持 id 或 name，任一匹配即可）
+    opportunity_conds = []
+    if payload.filter_opportunity_id:
+        filter_opportunity_id = payload.filter_opportunity_id.strip()
+        if filter_opportunity_id:
+            opportunity_conds.append(CRMWeeklyFollowupEntitySummary.opportunity_id == filter_opportunity_id)
+    
+    if payload.filter_opportunity_name:
+        filter_opportunity_name = payload.filter_opportunity_name.strip()
+        if filter_opportunity_name:
+            opportunity_conds.append(CRMWeeklyFollowupEntitySummary.opportunity_name == filter_opportunity_name)
+    
+    if opportunity_conds:
+        # 如果同时提供了 id 和 name，使用 OR 逻辑（匹配任一即可）
+        if len(opportunity_conds) > 1:
+            conds.append(or_(*opportunity_conds))
+        else:
+            conds.append(opportunity_conds[0])
 
     total = db_session.exec(select(func.count()).select_from(CRMWeeklyFollowupEntitySummary).where(*conds)).one()
     entities = db_session.exec(
         select(CRMWeeklyFollowupEntitySummary)
         .where(*conds)
-        .order_by(CRMWeeklyFollowupEntitySummary.department_name, CRMWeeklyFollowupEntitySummary.updated_at.desc())
+        .order_by(CRMWeeklyFollowupEntitySummary.department_name, CRMWeeklyFollowupEntitySummary.owner_name, CRMWeeklyFollowupEntitySummary.updated_at.desc())
         .offset(offset)
         .limit(size)
     ).all()
@@ -283,6 +336,79 @@ def get_weekly_followup_detail(
         week_end=week_end,
         summary=summary_out,
         entities=WeeklyFollowupEntityPageOut(total=int(total or 0), page=page, size=size, items=items),
+    )
+
+
+@router.post("/crm/weekly-followup/detail/filter-options")
+def get_weekly_followup_filter_options(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    payload: WeeklyFollowupFilterOptionsQueryIn,
+) -> WeeklyFollowupFilterOptionsOut:
+    """
+    获取周总结详情页的筛选选项（部门名称、负责人名称）
+    用于前端下拉选择框填充
+    """
+    can_view_team, is_company_admin, user_dept_id, user_dept_name = _can_view_weekly_followup(db_session, user)
+
+    scope = payload.scope
+    if scope == "company" and not is_company_admin:
+        raise HTTPException(status_code=403, detail="权限不足：仅公司管理员可查看 company scope")
+
+    week_start = payload.start_date
+    week_end = payload.end_date
+    is_sales_limited = bool(scope == "department" and (not is_company_admin) and (not can_view_team))
+
+    # 解析部门过滤（仅 department scope）
+    dept_id = None
+    dept_name = None
+    if scope == "department":
+        if is_company_admin:
+            dept_id = (payload.department_id or "").strip() or None
+            dept_name = (payload.department_name or "").strip() or None
+            if dept_id is None and dept_name is None:
+                raise HTTPException(status_code=400, detail="department scope 需要指定 department_id 或 department_name")
+        else:
+            dept_id = user_dept_id
+            dept_name = user_dept_name
+            if dept_id is None and dept_name is None:
+                raise HTTPException(status_code=403, detail="无法获取本团队信息")
+
+    # 构建基础查询条件（与详情接口保持一致）
+    conds = [
+        CRMWeeklyFollowupEntitySummary.week_start == week_start,
+        CRMWeeklyFollowupEntitySummary.week_end == week_end,
+    ]
+    if scope == "my":
+        conds.append(CRMWeeklyFollowupEntitySummary.owner_user_id == str(user.id))
+    elif scope == "department":
+        if dept_id:
+            conds.append(CRMWeeklyFollowupEntitySummary.department_id == dept_id)
+        elif dept_name:
+            conds.append(CRMWeeklyFollowupEntitySummary.department_name == dept_name)
+        if is_sales_limited:
+            # 普通销售：只能看自己负责的商机/客户明细
+            conds.append(CRMWeeklyFollowupEntitySummary.owner_user_id == str(user.id))
+
+    # 获取去重后的部门名称列表
+    department_names = db_session.exec(
+        select(distinct(CRMWeeklyFollowupEntitySummary.department_name))
+        .where(*conds)
+        .where(CRMWeeklyFollowupEntitySummary.department_name.is_not(None))
+        .order_by(CRMWeeklyFollowupEntitySummary.department_name)
+    ).all()
+
+    # 获取去重后的负责人名称列表
+    owner_names = db_session.exec(
+        select(distinct(CRMWeeklyFollowupEntitySummary.owner_name))
+        .where(*conds)
+        .where(CRMWeeklyFollowupEntitySummary.owner_name.is_not(None))
+        .order_by(CRMWeeklyFollowupEntitySummary.owner_name)
+    ).all()
+
+    return WeeklyFollowupFilterOptionsOut(
+        department_names=[name for name in department_names if name],  # 过滤空字符串
+        owner_names=[name for name in owner_names if name],  # 过滤空字符串
     )
 
 
@@ -676,6 +802,7 @@ def create_visit_record(
                     sales_visit_record=record_data,
                     db_session=db_session,
                     meeting_notes=None,
+                    risk_info=None,
                     saved_time=saved_time
                 )
                 return {"code": 0, "message": "success", "data": {}}
@@ -756,6 +883,7 @@ def create_visit_record(
                 sales_visit_record=record_data,
                 db_session=db_session,
                 meeting_notes=None,
+                risk_info=None,
                 saved_time=saved_time
             )
             return {"code": 0, "message": "success", "data": data}
@@ -893,7 +1021,7 @@ def export_visit_records_to_xlsx(
             headers = [
                 "ID", "客户分类", "客户名称", "客户ID", "是否首次拜访", "是否Call High",
                 "合作伙伴", "合作伙伴ID", "商机名称", "商机ID", "跟进日期", "负责销售", "所在团队",
-                "客户岗位", "客户名字", "协同参与人", "跟进方式",
+                "联系人职位", "联系人姓名", "协同参与人", "跟进方式",
                 "拜访目的", "附件地点", "附件纬度", "附件经度", "附件拍摄时间", "跟进记录", 
                 "AI对跟进记录质量评估", "AI对跟进记录质量评估详情",
                 "下一步计划", "AI对下一步计划质量评估", "AI对下一步计划质量评估详情",
@@ -922,12 +1050,19 @@ def export_visit_records_to_xlsx(
             
             # 生成基于关键字段的hash ID
             # 使用客户名称、跟进日期、负责销售等关键字段生成唯一ID
+            # 处理联系人：优先使用contacts字段，否则使用旧字段
+            contact_names_str = ""
+            if item.contacts and len(item.contacts) > 0:
+                contact_names_str = ", ".join([c.name or "" for c in item.contacts if c.name])
+            else:
+                contact_names_str = item.contact_name or ""
+            
             key_fields = [
                 str(item.id or ""),
                 str(item.account_name or item.partner_name or item.opportunity_name or ""),
                 str(item.visit_communication_date or ""),
                 str(item.recorder or ""),
-                str(item.contact_name or ""),
+                contact_names_str,
                 str(item.last_modified_time or ""),
             ]
             key_string = "|".join(key_fields)
@@ -976,6 +1111,20 @@ def export_visit_records_to_xlsx(
                 latitude = ""
                 longitude = ""
                 taken_at = ""
+            # 处理联系人信息：优先使用contacts字段，否则使用旧字段
+            contact_positions_str = ""
+            contact_names_str = ""
+            if item.contacts and len(item.contacts) > 0:
+                # 多个联系人：格式化为 "职位1, 职位2" 和 "姓名1, 姓名2"
+                positions = [c.position or "" for c in item.contacts if c.position]
+                names = [c.name or "" for c in item.contacts if c.name]
+                contact_positions_str = ", ".join(positions)
+                contact_names_str = ", ".join(names)
+            else:
+                # 兼容旧数据：使用单个联系人字段
+                contact_positions_str = item.contact_position or ""
+                contact_names_str = item.contact_name or ""
+            
             # 构建数据行（中英版本字段顺序相同，ID列在最前面）
             return [
                 item.record_id or record_id,
@@ -991,8 +1140,8 @@ def export_visit_records_to_xlsx(
                 item.visit_communication_date or "",
                 item.recorder or "",
                 item.department or "",
-                item.contact_position or "",
-                item.contact_name or "",
+                contact_positions_str,
+                contact_names_str,
                 item.collaborative_participants or "",
                 item.visit_communication_method or "",
                 item.visit_purpose or "",
@@ -1242,7 +1391,7 @@ def get_visit_record_by_id(
         # 基础数据
         data = record.model_dump()
 
-        # 如果是 link 类型的拜访记录，尝试返回从文档中抽取的问答对
+        # 如果是 link 类型的拜访记录，尝试返回从文档中抽取的问答对和风险信息
         try:
             if getattr(record, "visit_type", None) == "link":
                 document_content_repo = DocumentContentRepo()
@@ -1256,9 +1405,11 @@ def get_visit_record_by_id(
                     if document_content:
                         data["document_qa_pairs"] = document_content.qa_pairs or []
                         data["document_qa_extract_status"] = document_content.qa_extract_status or ""
+                        data["document_risk_info"] = document_content.risk_info or ""
+                        data["document_risk_extract_status"] = document_content.risk_extract_status or ""
         except Exception as e:
-            # 问答对加载失败不影响主流程，只记录日志
-            logger.warning(f"加载文档问答对失败: record_id={record_id}, error={e}")
+            # 文档信息加载失败不影响主流程，只记录日志
+            logger.warning(f"加载文档信息（问答对和风险信息）失败: record_id={record_id}, error={e}")
         
         return {
             "code": 0,

@@ -1,7 +1,7 @@
 import logging
 import json
 import requests
-from typing import Optional
+from typing import Optional, Any
 from datetime import datetime
 from app.core.config import settings
 from app.core.db import get_db_session
@@ -9,7 +9,6 @@ from app.api.routes.crm.models import SimpleVisitRecordCreate, CompleteVisitReco
 from app.api.deps import CurrentUserDep, SessionDep
 from app.repositories.document_content import DocumentContentRepo
 from app.services.platform_notification_service import platform_notification_service
-from app.tasks.bitable_import import FIELD_MAP
 from app.tasks.document_qa import extract_and_save_document_qa
 from app.utils.ark_llm import call_ark_llm
 from app.utils.uuid6 import uuid6
@@ -22,38 +21,128 @@ def _generate_record_id(record_type, now):
     rand = uuid6().hex[:8]
     return f"{record_type}_{dt}_{millisecond}_{rand}"
 
+def _process_field_value_for_db(field_name: str, value: Any) -> Any:
+    """
+    处理表单提交的字段值，转换为数据库存储格式
+    只处理需要特殊转换的字段，其他字段直接返回
+    """
+    if value is None or value == "":
+        return None
+    
+    # 处理附件字段
+    if field_name == 'attachment':
+        if isinstance(value, dict):
+            # 结构化 JSON，序列化为 JSON 字符串
+            try:
+                return json.dumps(value, ensure_ascii=False)
+            except Exception:
+                return str(value)
+        elif isinstance(value, str):
+            # 字符串（base64 / URL / JSON 字符串），直接返回
+            return value
+        return str(value) if value else None
+    
+    # 处理协同参与人字段
+    if field_name == 'collaborative_participants':
+        if isinstance(value, list):
+            # 如果是列表，转换为JSON字符串存储
+            try:
+                return json.dumps(value, ensure_ascii=False)
+            except Exception:
+                return str(value)
+        elif isinstance(value, str):
+            # 如果是字符串，直接返回（可能是旧格式或已经是JSON字符串）
+            return value
+        elif isinstance(value, dict):
+            # 如果是字典，转换为JSON字符串
+            try:
+                return json.dumps(value, ensure_ascii=False)
+            except Exception:
+                return str(value)
+        return str(value) if value else None
+    
+    # 处理时间字段（visit_start_time, visit_end_time）
+    if field_name in ['visit_start_time', 'visit_end_time']:
+        if isinstance(value, str):
+            return value
+        elif hasattr(value, 'strftime'):  # datetime类型
+            return value.strftime('%Y-%m-%d %H:%M:%S')
+        return value
+    
+    # 其他字段直接返回
+    return value
+
+
 # 保存表单拜访记录到 crm_sales_visit_records
 def save_visit_record_to_crm_table(record_schema: SimpleVisitRecordCreate | CompleteVisitRecordCreate, db_session: SessionDep):
+    """
+    保存拜访记录到数据库
+    直接使用数据库字段名，不再进行飞书字段名转换
+    """
     now = datetime.now()
-    # 英文转中文
+    batch_time = datetime.now()
+    
+    # 获取所有字段（排除None值）
     fields = record_schema.model_dump(exclude_none=True)
-    feishu_fields = {
-        feishu_key: fields[db_key]
-        for feishu_key, db_key in FIELD_MAP.items()
-        if db_key in fields and fields[db_key] not in ("", None)
-    }
+    
+    # 生成record_id
     record_id = _generate_record_id(record_schema.visit_type, now)
-    item = {
-        "fields": feishu_fields,
-        "last_modified_time": int(now.timestamp() * 1000),
-        "record_id": record_id,
-    }
+    
+    # 构建数据库字段映射，直接使用数据库字段名
+    mapped = {}
+    
+    # 处理需要特殊转换的字段
+    special_fields = ['attachment', 'collaborative_participants', 'visit_start_time', 'visit_end_time']
+    for field_name in special_fields:
+        if field_name in fields:
+            mapped[field_name] = _process_field_value_for_db(field_name, fields[field_name])
+    
+    # 处理其他字段（直接使用，但需要过滤空值）
+    for field_name, field_value in fields.items():
+        if field_name not in special_fields and field_name not in ['contacts', 'latitude', 'longitude']:
+            if field_value not in ("", None):
+                mapped[field_name] = field_value
+    
+    # 处理多个联系人字段
+    contacts_list = None
+    if isinstance(record_schema, CompleteVisitRecordCreate):
+        # 如果提供了contacts字段，优先使用
+        if record_schema.contacts:
+            contacts_list = [contact.model_dump(exclude_none=True) for contact in record_schema.contacts]
+        # 否则，如果提供了旧的单个联系人字段，构造联系人列表
+        elif record_schema.contact_name or record_schema.contact_position or record_schema.contact_id:
+            contact_dict = {}
+            if record_schema.contact_name:
+                contact_dict['name'] = record_schema.contact_name
+            if record_schema.contact_position:
+                contact_dict['position'] = record_schema.contact_position
+            if record_schema.contact_id:
+                contact_dict['contact_id'] = record_schema.contact_id
+            if contact_dict:
+                contacts_list = [contact_dict]
+    
+    # 保存contacts字段（JSON格式）
+    if contacts_list:
+        mapped['contacts'] = contacts_list
+    
+    # 处理经纬度字段
+    if 'latitude' in fields:
+        mapped['latitude'] = fields['latitude']
+    if 'longitude' in fields:
+        mapped['longitude'] = fields['longitude']
+    
+    # 设置必需字段
+    mapped['record_id'] = record_id
+    mapped['last_modified_time'] = batch_time
     
     # 使用事务保存
-    batch_time = datetime.now()
-    from app.tasks.bitable_import import map_fields, CRM_TABLE
+    from app.tasks.bitable_import import CRM_TABLE
     from sqlalchemy import MetaData, Table, text
     from sqlalchemy.dialects.mysql import insert as mysql_insert
     
     metadata = MetaData()
     crm_table = Table(CRM_TABLE, metadata, autoload_with=db_session.bind)
     
-    mapped = map_fields(item, batch_time=batch_time)
-    # 直接添加经纬度字段（不在FIELD_MAP中，需要单独处理）
-    if 'latitude' in fields:
-        mapped['latitude'] = fields['latitude']
-    if 'longitude' in fields:
-        mapped['longitude'] = fields['longitude']
     insert_stmt = mysql_insert(crm_table).values(**mapped)
     update_stmt = {k: mapped[k] for k in mapped if k != 'record_id'}
     if mapped.get('account_id') in (None, '', 'null'):
@@ -63,7 +152,7 @@ def save_visit_record_to_crm_table(record_schema: SimpleVisitRecordCreate | Comp
     # 不在这里commit，由调用方控制事务
     
     # 返回record_id和实际保存的时间
-    return record_id, mapped['last_modified_time']
+    return record_id, batch_time
 
 def extract_followup_record_and_next_steps(followup_content: str) -> tuple[str, str]:
     """
@@ -143,6 +232,50 @@ def fill_sales_visit_record_fields(sales_visit_record, db_session):
     is_call_high = sales_visit_record.get("is_call_high")
     sales_visit_record["is_call_high"] = "关键决策人拜访" if is_call_high else None
     sales_visit_record["is_call_high_en"] = "call high" if is_call_high else None
+    
+    # 处理联系人字段：将contacts转换为格式化文本 "姓名1（职位1）\n姓名2（职位2）"
+    contacts = sales_visit_record.get("contacts")
+    contact_info_parts = []
+    has_contacts_field = contacts is not None  # 标记是否明确提供了contacts字段
+    
+    if contacts:
+        # 如果提供了contacts字段（列表格式）
+        if isinstance(contacts, list):
+            for contact in contacts:
+                if isinstance(contact, dict):
+                    name = contact.get("name", "").strip()
+                    position = contact.get("position", "").strip()
+                    if name:
+                        if position:
+                            contact_info_parts.append(f"{name}（{position}）")
+                        else:
+                            contact_info_parts.append(name)
+                elif hasattr(contact, "name") and hasattr(contact, "position"):
+                    # 如果是Contact对象
+                    name = (contact.name or "").strip()
+                    position = (contact.position or "").strip()
+                    if name:
+                        if position:
+                            contact_info_parts.append(f"{name}（{position}）")
+                        else:
+                            contact_info_parts.append(name)
+    
+    # 如果没有contacts字段（不是空列表，而是字段不存在），尝试从旧字段构造
+    if not has_contacts_field and not contact_info_parts:
+        contact_name = sales_visit_record.get("contact_name", "").strip()
+        contact_position = sales_visit_record.get("contact_position", "").strip()
+        if contact_name:
+            if contact_position:
+                contact_info_parts.append(f"{contact_name}（{contact_position}）")
+            else:
+                contact_info_parts.append(contact_name)
+    
+    # 将格式化后的联系人信息保存到contacts字段（用于推送消息显示）
+    if contact_info_parts:
+        sales_visit_record["contacts"] = "\n".join(contact_info_parts)
+    elif has_contacts_field:
+        # 如果明确提供了contacts字段但为空，设置为None
+        sales_visit_record["contacts"] = None
     
     # 处理附件字段：避免将历史的 base64 大字段推送到通知中
     attachment = sales_visit_record.get("attachment")
@@ -233,7 +366,7 @@ def generate_dynamic_fields_for_visit_record(sales_visit_record):
         return []
 
 
-def push_visit_record_message(record_id: str, sales_visit_record, visit_type, db_session=None, meeting_notes=None, saved_time=None):
+def push_visit_record_message(record_id: str, sales_visit_record, visit_type, db_session=None, meeting_notes=None, risk_info=None, saved_time=None):
     try:
         # 如果没有传入db_session，则创建一个新的
         should_close_session = False
@@ -275,7 +408,8 @@ def push_visit_record_message(record_id: str, sales_visit_record, visit_type, db
             recorder_id=recorder_id,
             visit_record=sales_visit_record,
             visit_type=visit_type,
-            meeting_notes=meeting_notes
+            meeting_notes=meeting_notes,
+            risk_info=risk_info
         )
         
         if result["success"]:
@@ -292,6 +426,197 @@ def push_visit_record_message(record_id: str, sales_visit_record, visit_type, db
         # 只有当我们创建了session时才关闭它
         if should_close_session:
             db_session.close()
+
+
+def _extract_contact_info_from_record(record: SimpleVisitRecordCreate | CompleteVisitRecordCreate) -> tuple[Optional[str], Optional[str]]:
+    """
+    从拜访记录中提取联系人信息
+    
+    Args:
+        record: 拜访记录
+        
+    Returns:
+        tuple: (contact_name, contact_position) 联系人姓名和职位
+    """
+    contact_name = None
+    contact_position = None
+    
+    if isinstance(record, CompleteVisitRecordCreate):
+        if record.contacts and len(record.contacts) > 0:
+            # 多个联系人：格式化为 "姓名1（职位1）\n姓名2（职位2）" 格式
+            contact_info_parts = []
+            for contact in record.contacts:
+                name = contact.name or ""
+                position = contact.position or ""
+                if name:
+                    if position:
+                        contact_info_parts.append(f"{name}（{position}）")
+                    else:
+                        contact_info_parts.append(name)
+            if contact_info_parts:
+                # 如果有多个联系人，用换行符分隔；单个联系人直接使用
+                contact_name = "\n".join(contact_info_parts)
+        else:
+            # 兼容旧数据：使用单个联系人字段
+            contact_name = record.contact_name
+            contact_position = record.contact_position
+    
+    return contact_name, contact_position
+
+
+def _build_visit_background_info(
+    sales_name: Optional[str] = None,
+    account_name: Optional[str] = None,
+    contact_name: Optional[str] = None,
+    contact_position: Optional[str] = None,
+    visit_date: Optional[str] = None,
+    opportunity_name: Optional[str] = None,
+    is_first_visit: Optional[bool] = None,
+    is_call_high: Optional[bool] = None,
+    remarks: Optional[str] = None
+) -> str:
+    """
+    构建拜访背景信息字符串
+    
+    Args:
+        sales_name: 销售人员姓名
+        account_name: 客户名称
+        contact_name: 联系人姓名
+        contact_position: 联系人职位
+        visit_date: 拜访日期
+        opportunity_name: 商机名称
+        is_first_visit: 是否首次拜访
+        is_call_high: 是否关键决策人拜访
+        remarks: 现有风险或备注信息
+        
+    Returns:
+        str: 背景信息字符串
+    """
+    if not any([sales_name, account_name, contact_name, contact_position, visit_date, opportunity_name, is_first_visit, is_call_high, remarks]):
+        return ""
+    
+    background_info = "**背景信息（仅供理解，不在输出中显示）：**\n"
+    if sales_name:
+        background_info += f"• 销售人员：{sales_name}\n"
+    if account_name:
+        background_info += f"• 拜访客户：{account_name}\n"
+    if contact_name:
+        # 如果contact_name包含换行符，说明是多个联系人（格式：姓名1（职位1）\n姓名2（职位2））
+        if "\n" in contact_name:
+            background_info += f"• 拜访对象：\n"
+            for contact_line in contact_name.split("\n"):
+                if contact_line.strip():
+                    background_info += f"  - {contact_line.strip()}\n"
+        else:
+            # 单个联系人
+            contact_info = f"• 拜访对象：{contact_name}"
+            if contact_position:
+                contact_info += f"（{contact_position}）"
+            background_info += contact_info + "\n"
+    if visit_date:
+        background_info += f"• 拜访日期：{visit_date}\n"
+    if opportunity_name:
+        background_info += f"• 商机名称：{opportunity_name}\n"
+    if is_first_visit is not None:
+        background_info += f"• 拜访类型：{'首次拜访' if is_first_visit else '多次拜访'}\n"
+    if is_call_high is not None:
+        background_info += f"• 拜访层级：{'关键决策人拜访' if is_call_high else '普通拜访'}\n"
+    background_info += "• 文档类型：销售拜访记录会议文件\n"
+    if remarks and remarks.strip():
+        background_info += f"• 风险/备注：{remarks}\n"
+    background_info += "\n"
+    
+    return background_info
+
+
+def extract_risk_info_from_content(
+    content: str,
+    title: Optional[str] = None,
+    sales_name: Optional[str] = None,
+    account_name: Optional[str] = None,
+    contact_name: Optional[str] = None,
+    contact_position: Optional[str] = None,
+    visit_date: Optional[str] = None,
+    opportunity_name: Optional[str] = None,
+    is_first_visit: Optional[bool] = None,
+    is_call_high: Optional[bool] = None,
+    remarks: Optional[str] = None
+) -> str:
+    """
+    从文档内容中提取风险信息（一次LLM调用完成）
+    
+    Args:
+        content: 文档内容
+        title: 文档标题（可选）
+        sales_name: 销售人员姓名（可选）
+        account_name: 客户名称（可选）
+        contact_name: 联系人姓名（可选）
+        contact_position: 联系人职位（可选）
+        visit_date: 拜访日期（可选）
+        opportunity_name: 商机名称（可选）
+        is_first_visit: 是否首次拜访（可选）
+        is_call_high: 是否Call High（可选）
+        remarks: 现有的remarks内容（作为上下文，可选）
+        
+    Returns:
+        str: 提取的风险信息，如果没有风险信息则返回空字符串
+    """
+    # 如果文档内容为空，直接返回空字符串
+    if not content or not content.strip():
+        return ""
+    
+    # 构建背景信息
+    background_info = _build_visit_background_info(
+        sales_name=sales_name,
+        account_name=account_name,
+        contact_name=contact_name,
+        contact_position=contact_position,
+        visit_date=visit_date,
+        opportunity_name=opportunity_name,
+        is_first_visit=is_first_visit,
+        is_call_high=is_call_high,
+        remarks=remarks
+    )
+    
+    prompt = f"""{background_info}你是一位专业的销售风险分析专家，需要从销售拜访文档中提取风险信息。
+
+**文档标题**：{title or "未提供标题"}
+
+**文档内容**：
+{content}
+
+**任务说明**：
+从上述文档内容中识别并提取所有与风险相关的信息。风险信息包括但不限于：客户担忧疑虑异议、技术难点实施风险、业务风险竞争压力、时间紧迫性预算限制、决策障碍不确定性、客户内部阻力组织变化风险、项目延期风险交付风险，以及其他可能影响项目推进的风险因素。
+
+**提取要求**：
+1. **只从文档内容中提取**：仅提取文档正文中明确提及的风险信息，不要推测或编造
+2. **参考背景信息**：结合背景信息（如拜访类型、拜访层级、现有风险/备注等）来更好地理解风险信息的上下文，但只提取文档中的风险信息
+3. **具体明确**：提取的风险信息应该具体、明确，避免泛泛而谈
+5. **处理重复**：如果文档中的风险信息与背景信息中的"风险/备注"重复，只提取文档中的信息（以文档为准）
+6. **无风险信息**：如果文档内容中完全没有风险信息，直接返回空字符串
+
+**输出要求（重要）**：
+- 使用一段自然语言来描述，不要使用列表、要点或分条格式
+- 字数严格控制在150字以内
+- 使用简洁、专业的表达，避免冗余
+- 直接输出提取的风险信息，不要添加任何前缀、后缀或说明文字
+- 如果没有风险信息，直接返回空字符串
+
+请输出提取的风险信息：
+"""
+    
+    try:
+        result = call_ark_llm(prompt)
+        risk_info = result.strip()
+        
+        # 如果结果为空或只包含无意义的字符，返回空字符串
+        if not risk_info or len(risk_info) < 5:
+            return ""
+        
+        return risk_info
+    except Exception as e:
+        logger.warning(f"提取风险信息失败: {e}")
+        return ""
 
 
 def save_visit_record_with_content(
@@ -339,24 +664,83 @@ def save_visit_record_with_content(
     # 注意：不在这里commit，由调用方控制事务
     # db_session.commit()
     
-    # ========== 第二阶段：生成会议纪要总结（不影响主流程） ==========
+    # ========== 第二阶段：提取风险信息并保存到document_contents表（不影响主流程） ==========
+    try:
+        # 提取联系人信息（使用公共函数）
+        contact_name, contact_position = _extract_contact_info_from_record(record)
+        
+        # 提取风险信息（使用完整的背景信息和remarks作为上下文，但不修改remarks）
+        risk_info = extract_risk_info_from_content(
+            content=content,
+            title=title,
+            sales_name=record.recorder,
+            account_name=record.account_name,
+            contact_name=contact_name,
+            contact_position=contact_position,
+            visit_date=record.visit_communication_date,
+            opportunity_name=record.opportunity_name,
+            is_first_visit=record.is_first_visit,
+            is_call_high=record.is_call_high,
+            remarks=record.remarks
+        )
+        
+        if risk_info:
+            # 保存风险信息到document_contents表
+            document_content_repo.update_risk_info(
+                session=db_session,
+                document_content_id=document_content.id,
+                risk_info=risk_info,
+                risk_status="success",
+                auto_commit=False  # 不立即提交，等待主事务提交
+            )
+            logger.info(f"成功提取并保存风险信息到document_contents，文档ID: {document_content.id}")
+        else:
+            # 记录未提取到风险信息的状态
+            document_content_repo.update_risk_info(
+                session=db_session,
+                document_content_id=document_content.id,
+                risk_info="",
+                risk_status="success",  # 虽然没有风险信息，但提取过程成功
+                auto_commit=False
+            )
+            logger.debug(f"未从文档内容中提取到风险信息，文档ID: {document_content.id}")
+    except Exception as e:
+        logger.error(f"提取或保存风险信息时出错: {e}")
+        # 记录失败状态（如果失败不影响主流程）
+        try:
+            document_content_repo.update_risk_info(
+                session=db_session,
+                document_content_id=document_content.id,
+                risk_info="",
+                risk_status="failed",
+                auto_commit=False
+            )
+        except Exception as update_error:
+            logger.error(f"更新风险信息失败状态到数据库失败: {update_error}")
+        # 不影响主流程，继续执行
+    
+    # ========== 第三阶段：生成会议纪要总结（不影响主流程） ==========
     meeting_summary = None
     
     try:
         from app.services.meeting_summary_service import MeetingSummaryService
         meeting_summary_service = MeetingSummaryService()
         
+        # 抽取联系人信息
+        contact_name, contact_position = _extract_contact_info_from_record(record)
+        
         summary_result = meeting_summary_service.generate_meeting_summary(
             content=content,
             title=title,
             sales_name=record.recorder,
             account_name=record.account_name,
-            contact_name=record.contact_name,
-            contact_position=record.contact_position,
+            contact_name=contact_name,
+            contact_position=contact_position,
             visit_date=record.visit_communication_date,
             opportunity_name=record.opportunity_name,
             is_first_visit=record.is_first_visit,
-            is_call_high=record.is_call_high
+            is_call_high=record.is_call_high,
+            remarks=record.remarks
         )
         
         if summary_result["success"]:
@@ -405,7 +789,7 @@ def save_visit_record_with_content(
             logger.error(f"更新会议纪要失败状态到数据库失败: {update_error}")
         # 不影响主流程，继续执行
     
-    # ========== 第三阶段：异步触发文档问答对抽取任务（不影响主流程） ==========
+    # ========== 第四阶段：异步触发文档问答对抽取任务（不影响主流程） ==========
     try:
         extract_and_save_document_qa.delay(document_content.id)
         logger.info(f"已异步触发文档问答对抽取任务，文档ID: {document_content.id}")
@@ -413,7 +797,7 @@ def save_visit_record_with_content(
         logger.error(f"触发文档问答对抽取异步任务失败: {e}")
         # 不影响主流程，继续执行
     
-    # ========== 第四阶段：推送飞书消息（不影响事务） ==========
+    # ========== 第五阶段：推送飞书消息（不影响事务） ==========
     try:
         record_data = record.model_dump()
         # 推送飞书消息（保留附件字段，附件中仅包含URL和少量结构化信息，避免大体积base64）
@@ -423,6 +807,7 @@ def save_visit_record_with_content(
             visit_type=record.visit_type,
             db_session=db_session,
             meeting_notes=meeting_summary,
+            risk_info=risk_info,
             saved_time=saved_time
         )
     except Exception as e:

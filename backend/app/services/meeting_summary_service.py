@@ -6,7 +6,7 @@
 
 import logging
 from typing import Optional, Dict, Any
-from app.crm.save_engine import call_ark_llm
+from app.crm.save_engine import call_ark_llm, _build_visit_background_info
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,8 @@ class MeetingSummaryService:
         visit_date: Optional[str] = None,
         opportunity_name: Optional[str] = None,
         is_first_visit: Optional[bool] = None,
-        is_call_high: Optional[bool] = None) -> Dict[str, Any]:
+        is_call_high: Optional[bool] = None,
+        remarks: Optional[str] = None) -> Dict[str, Any]:
         """
         使用LLM生成会议纪要总结
         
@@ -38,7 +39,7 @@ class MeetingSummaryService:
         """
         try:
             # 构建提示词
-            prompt = self._build_summary_prompt(content, title, sales_name, account_name, contact_name, contact_position, visit_date, opportunity_name, is_first_visit, is_call_high)
+            prompt = self._build_summary_prompt(content, title, sales_name, account_name, contact_name, contact_position, visit_date, opportunity_name, is_first_visit, is_call_high, remarks)
             
             # 调用LLM生成总结
             summary = call_ark_llm(prompt)
@@ -67,31 +68,22 @@ class MeetingSummaryService:
         visit_date: Optional[str] = None,
         opportunity_name: Optional[str] = None,
         is_first_visit: Optional[bool] = None,
-        is_call_high: Optional[bool] = None
+        is_call_high: Optional[bool] = None,
+        remarks: Optional[str] = None
     ) -> str:
         """构建销售拜访会议纪要提示词（飞书卡片专用）"""
-
-        background_info = ""
-        if any([sales_name, account_name, contact_name, contact_position, visit_date, opportunity_name, is_first_visit, is_call_high]):
-            background_info = "**背景信息（仅供理解，不在输出中显示）：**\n"
-            if sales_name:
-                background_info += f"• 销售人员：{sales_name}\n"
-            if account_name:
-                background_info += f"• 拜访客户：{account_name}\n"
-            if contact_name:
-                contact_info = f"• 拜访对象：{contact_name}"
-                if contact_position:
-                    contact_info += f"（{contact_position}）"
-                background_info += contact_info + "\n"
-            if visit_date:
-                background_info += f"• 拜访日期：{visit_date}\n"
-            if opportunity_name:
-                background_info += f"• 商机名称：{opportunity_name}\n"
-            if is_first_visit is not None:
-                background_info += f"• 拜访类型：{'首次拜访' if is_first_visit else '多次拜访'}\n"
-            if is_call_high is not None:
-                background_info += f"• 拜访层级：{'Call High' if is_call_high else '普通拜访'}\n"
-            background_info += "• 文档类型：销售拜访记录会议文件\n\n"
+        # 使用公共函数构建背景信息
+        background_info = _build_visit_background_info(
+            sales_name=sales_name,
+            account_name=account_name,
+            contact_name=contact_name,
+            contact_position=contact_position,
+            visit_date=visit_date,
+            opportunity_name=opportunity_name,
+            is_first_visit=is_first_visit,
+            is_call_high=is_call_high,
+            remarks=remarks
+        )
 
         return f"""{background_info}
 ## 角色定义
@@ -120,7 +112,7 @@ class MeetingSummaryService:
 1. **内容重点**（根据背景信息调整）：
    - 首次拜访：重点挖掘客户需求、建立关系、探索合作方向
    - 多次拜访：对比进展、识别新需求变化、推进具体成果
-   - Call High：关注高层决策、战略合作、关键决策点
+   - 关键决策人拜访：关注高层决策、战略合作、关键决策点
    - 普通拜访：聚焦业务细节、技术需求、执行计划
    - 有商机：突出推进状态、关键里程碑、执行计划
 

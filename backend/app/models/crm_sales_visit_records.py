@@ -16,9 +16,11 @@ class CRMSalesVisitRecord(SQLModel, table=True):
     partner_id: Optional[str] = Field(nullable=True, max_length=255, description="合作伙伴ID")
     customer_lead_source: Optional[str] = Field(nullable=True, max_length=255, description="客户/线索来源")
     visit_object_category: Optional[str] = Field(nullable=True, max_length=255, description="拜访对象类别")
-    contact_position: Optional[str] = Field(nullable=True, max_length=255, description="客户职位")
-    contact_name: Optional[str] = Field(nullable=True, max_length=255, description="客户名字")
-    contact_id: Optional[str] = Field(nullable=True, max_length=255, description="联系人ID（关联local_contacts或crm_contacts的unique_id）")
+    contact_position: Optional[str] = Field(nullable=True, max_length=255, description="客户职位（旧字段，保留以兼容旧数据）")
+    contact_name: Optional[str] = Field(nullable=True, max_length=255, description="客户名字（旧字段，保留以兼容旧数据）")
+    contact_id: Optional[str] = Field(nullable=True, max_length=255, description="联系人ID（旧字段，保留以兼容旧数据，关联local_contacts或crm_contacts的unique_id）")
+    # 多个联系人：JSON 数组，元素结构为 {"name": str, "position": str, "contact_id": str}
+    contacts: Optional[list[dict]] = Field(default=None, sa_column=Column(JSON, nullable=True), description="联系人列表（支持多个联系人，JSON数组）")
     recorder: Optional[str] = Field(nullable=True, max_length=255, description="记录人")
     recorder_id: Optional[UUID] = Field(nullable=True, description="记录人ID")
     collaborative_participants: Optional[str] = Field(

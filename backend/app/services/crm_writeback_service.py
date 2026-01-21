@@ -248,8 +248,29 @@ class CrmWritebackService:
         #     if formatted_time != "--":
         #         content_parts.append(f"创建时间: {formatted_time}")
         
-        content_parts.append(f"联系人职位: {record.contact_position}")
-        content_parts.append(f"联系人姓名: {record.contact_name}")
+        # 处理联系人信息：优先使用contacts字段，否则使用旧字段
+        if record.contacts and isinstance(record.contacts, list) and len(record.contacts) > 0:
+            # 多个联系人
+            for idx, contact in enumerate(record.contacts, 1):
+                if isinstance(contact, dict):
+                    contact_name = contact.get('name', '')
+                    contact_position = contact.get('position', '')
+                    if contact_name or contact_position:
+                        if len(record.contacts) > 1:
+                            # 多个联系人：将姓名和职位放在一起
+                            if contact_position:
+                                content_parts.append(f"联系人{idx}: {contact_name}（{contact_position}）")
+                            else:
+                                content_parts.append(f"联系人{idx}: {contact_name}")
+                        else:
+                            # 单个联系人：保持原格式，分开显示
+                            content_parts.append(f"联系人职位: {contact_position}")
+                            content_parts.append(f"联系人姓名: {contact_name}")
+        else:
+            # 兼容旧数据：使用单个联系人字段，保持原格式
+            if record.contact_position or record.contact_name:
+                content_parts.append(f"联系人职位: {record.contact_position or ''}")
+                content_parts.append(f"联系人姓名: {record.contact_name or ''}")
         
         if record.collaborative_participants:
             # 处理协同参与人数据，支持多种格式
