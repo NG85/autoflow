@@ -723,6 +723,8 @@ def create_visit_record(
                 recorder_id = UUID(record.recorder_id)
                 if not user.is_superuser and recorder_id != user.id:
                     return {"code": 400, "message": "记录人ID必须与当前用户ID一致", "data": {}}
+                # 验证通过后，确保recorder_id为标准格式的UUID字符串
+                record.recorder_id = str(recorder_id)
             except ValueError:
                 return {"code": 400, "message": "记录人ID格式无效，应为有效的UUID", "data": {}}
         else:
