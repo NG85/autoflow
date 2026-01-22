@@ -23,6 +23,29 @@ def parse_cors(v: Any) -> list[str] | str:
         return v
     raise ValueError(v)
 
+def parse_str_list(v: Any) -> list[str] | None:
+    """
+    Parse comma-separated string or list into list[str].
+    - "" / None -> None
+    - "a,b" -> ["a","b"]
+    - ["a","b"] -> ["a","b"]
+    """
+    if v is None:
+        return None
+    if isinstance(v, str):
+        s = v.strip()
+        if not s:
+            return None
+        # allow JSON-like list string to pass through unchanged; pydantic can coerce it
+        if s.startswith("[") and s.endswith("]"):
+            return v  # type: ignore[return-value]
+        items = [x.strip() for x in s.split(",") if x is not None and x.strip()]
+        return items or None
+    if isinstance(v, list):
+        items = [str(x).strip() for x in v if x is not None and str(x).strip()]
+        return items or None
+    raise ValueError(v)
+
 
 class Environment(str, enum.Enum):
     LOCAL = "local"
@@ -211,10 +234,18 @@ class Settings(BaseSettings):
     DINGTALK_COPR_ID: str = 'ding2f8a51bf16e4fc5facaaa37764f94726'
     DINGTALK_COMPANY_WEEKLY_REPORT_TEMPLATE_ID: str = 'daa13a1a-f064-4512-968c-0a1f101d3222.schema'  # 钉钉公司周报卡片模板ID
     DINGTALK_DEPT_WEEKLY_REPORT_TEMPLATE_ID: str = '349394d8-33ad-4be5-9f7e-bac33494ee42.schema'  # 钉钉团队周报卡片模板ID
+    FEISHU_COMPANY_WEEKLY_REPORT_TEMPLATE_ID: str = 'AAqvMFGD8n8bZ'  # 飞书公司周报卡片模板ID
+    FEISHU_DEPT_WEEKLY_REPORT_TEMPLATE_ID: str = 'AAqX5j2jPq2Cn'  # 飞书部门周报卡片模板ID
     CUSTOM_FONT_SIZE_TOKEN: str | None = None
     
     # Feishu send message configuration
     REVIEW_REPORT_HOST: str = "https://aptsell.pingcap.net"
+
+    # Ops backdoor: CC Feishu cards to specified open_ids using specified Feishu app
+    OPS_CC_FEISHU_ENABLED: bool = False
+    OPS_CC_FEISHU_APP_ID: str | None = None
+    OPS_CC_FEISHU_APP_SECRET: str | None = None
+    OPS_CC_FEISHU_OPEN_IDS: Annotated[list[str] | str | None, BeforeValidator(parse_str_list)] = None
     
     # Visit detail page URL configuration
     VISIT_DETAIL_PAGE_URL: str = "https://aptsell.pingcap.net/registerVisitRecord/list"

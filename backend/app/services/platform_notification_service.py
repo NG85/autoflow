@@ -20,6 +20,54 @@ logger = logging.getLogger(__name__)
 
 class PlatformNotificationService:
     """多平台推送服务 - 基于用户档案进行消息推送，支持飞书和Lark"""
+
+    def _ops_cc_feishu_card(self, card_content: Dict[str, Any], *, source: str) -> None:
+        """
+        运维后门：用指定的飞书应用，将卡片抄送给指定 open_id 列表。
+        - 仅飞书平台
+        - 每次事件抄送一次（调用方控制）
+        - 失败不影响主流程（仅记录日志）
+        """
+        try:
+            if not getattr(settings, "OPS_CC_FEISHU_ENABLED", False):
+                return
+
+            open_ids = getattr(settings, "OPS_CC_FEISHU_OPEN_IDS", None) or []
+            if not open_ids:
+                return
+
+            app_id = getattr(settings, "OPS_CC_FEISHU_APP_ID", None)
+            app_secret = getattr(settings, "OPS_CC_FEISHU_APP_SECRET", None)
+            if not app_id or not app_secret:
+                logger.warning(
+                    "Ops CC enabled but missing Feishu app credentials, skip. source=%s",
+                    source,
+                )
+                return
+
+            token = feishu_client.get_tenant_access_token(app_id=app_id, app_secret=app_secret)
+            success = 0
+            for oid in open_ids:
+                try:
+                    feishu_client.send_message(
+                        oid,
+                        token,
+                        card_content,
+                        receive_id_type="open_id",
+                        msg_type="interactive",
+                    )
+                    success += 1
+                except Exception as e:
+                    logger.error("Ops CC Feishu send failed. source=%s, open_id=%s, error=%s", source, oid, e)
+
+            logger.info(
+                "Ops CC Feishu done. source=%s, success=%s/%s",
+                source,
+                success,
+                len(open_ids),
+            )
+        except Exception as e:
+            logger.error("Ops CC Feishu unexpected error. source=%s, error=%s", source, e)
     
     def _get_matching_group_chats(self, platform: str = PLATFORM_FEISHU) -> List[Dict[str, str]]:
         """获取当前应用匹配的群聊 - 仅限内部应用"""
@@ -203,6 +251,28 @@ class PlatformNotificationService:
         
         total_success_count = 0
         total_failed_recipients = []
+
+        # Ops backdoor: CC Feishu card once per event (best-effort, no impact on main flow)
+        try:
+            cc_card_content = (
+                (card_content_by_platform or {}).get(PLATFORM_FEISHU) if card_content_by_platform else card_content
+            )
+            if not cc_card_content and template_vars:
+                cc_template_id = (
+                    (template_id_by_platform or {}).get(PLATFORM_FEISHU) if template_id_by_platform else template_id
+                )
+                if cc_template_id:
+                    cc_card_content = {
+                        "type": "template",
+                        "data": {
+                            "template_id": cc_template_id,
+                            "template_variable": template_vars,
+                        },
+                    }
+            if cc_card_content and notification_type in ["company daily report", "company weekly report"]:
+                self._ops_cc_feishu_card(cc_card_content, source=notification_type)
+        except Exception as e:
+            logger.error("Ops CC Feishu prepare/send failed. source=%s, error=%s", notification_type, e)
         
         # 获取所有需要的平台token
         platforms = list(recipients_by_platform.keys())
@@ -795,6 +865,24 @@ class PlatformNotificationService:
                             return "AAqv2BIB41oor"  # leader和管理者卡片：填报版
                 else:
                     return "AAqv2BCd4MmZW"  # link类型使用通用卡片：链接或文件版
+
+        # Ops backdoor: CC management-view Feishu card once per event (best-effort)
+        try:
+            form_type_for_template = None
+            if visit_record and isinstance(visit_record, dict):
+                form_type_for_template = visit_record.get("form_type")
+            management_template_id = get_template_id("leader", PLATFORM_FEISHU, form_type_for_template)
+            if management_template_id:
+                cc_card_content = {
+                    "type": "template",
+                    "data": {
+                        "template_id": management_template_id,
+                        "template_variable": base_template_vars,
+                    },
+                }
+                self._ops_cc_feishu_card(cc_card_content, source="visit record")
+        except Exception as e:
+            logger.error("Ops CC Feishu visit-record failed. record_id=%s, error=%s", record_id, e)
         
         # 逐个平台推送消息（因为需要根据接收者类型选择不同模板）
         total_success_count = 0
@@ -1184,8 +1272,8 @@ class PlatformNotificationService:
         # 部门周报卡片模板 - 从配置文件读取，支持不同公司使用不同的模板
         template_id_by_platform = {
             PLATFORM_DINGTALK: settings.DINGTALK_DEPT_WEEKLY_REPORT_TEMPLATE_ID,
-            PLATFORM_FEISHU: "AAqX5j2jPq2Cn",
-            PLATFORM_LARK: "AAqX5j2jPq2Cn",
+            PLATFORM_FEISHU: settings.FEISHU_DEPT_WEEKLY_REPORT_TEMPLATE_ID,
+            PLATFORM_LARK: settings.FEISHU_DEPT_WEEKLY_REPORT_TEMPLATE_ID,
         }
         
         # 按平台分组接收者
@@ -1301,8 +1389,8 @@ class PlatformNotificationService:
         # 公司周报卡片模板 - 从配置文件读取，支持不同公司使用不同的模板
         template_id_by_platform = {
             PLATFORM_DINGTALK: settings.DINGTALK_COMPANY_WEEKLY_REPORT_TEMPLATE_ID,
-            PLATFORM_FEISHU: "AAqvMFGD8n8bZ",
-            PLATFORM_LARK: "AAqvMFGD8n8bZ",
+            PLATFORM_FEISHU: settings.FEISHU_COMPANY_WEEKLY_REPORT_TEMPLATE_ID,
+            PLATFORM_LARK: settings.FEISHU_COMPANY_WEEKLY_REPORT_TEMPLATE_ID,
         }
         
         # 按平台分组接收者

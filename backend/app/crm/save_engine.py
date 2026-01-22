@@ -3,6 +3,7 @@ import json
 import requests
 from typing import Optional, Any
 from datetime import datetime
+from uuid import UUID
 from app.core.config import settings
 from app.core.db import get_db_session
 from app.api.routes.crm.models import SimpleVisitRecordCreate, CompleteVisitRecordCreate
@@ -97,9 +98,45 @@ def save_visit_record_to_crm_table(record_schema: SimpleVisitRecordCreate | Comp
         if field_name in fields:
             mapped[field_name] = _process_field_value_for_db(field_name, fields[field_name])
     
+    # 处理recorder_id字段：确保转换为不带连字符的UUID字符串格式（32字符）
+    # 在TiDB/MySQL中，GUID类型存储为不带连字符的32字符字符串
+    if 'recorder_id' in fields and fields['recorder_id'] not in ("", None):
+        try:
+            recorder_id_value = fields['recorder_id']
+            # 统一转换为UUID对象，然后转换为不带连字符的32字符字符串格式
+            if isinstance(recorder_id_value, str):
+                # 验证并标准化UUID字符串格式
+                uuid_obj = UUID(recorder_id_value)
+                uuid_str = uuid_obj.hex  # 转换为不带连字符的32字符格式
+                # 标准UUID hex字符串应该是32字符
+                if len(uuid_str) != 32:
+                    logger.error(f"recorder_id string length incorrect: {len(uuid_str)} chars (expected 32): {uuid_str}")
+                    raise ValueError(f"Invalid UUID hex string length: {len(uuid_str)}")
+                mapped['recorder_id'] = uuid_str
+            elif isinstance(recorder_id_value, UUID):
+                # 如果已经是UUID对象，转换为不带连字符的hex字符串
+                uuid_str = recorder_id_value.hex
+                if len(uuid_str) != 32:
+                    logger.error(f"recorder_id string length incorrect: {len(uuid_str)} chars (expected 32): {uuid_str}")
+                    raise ValueError(f"Invalid UUID hex string length: {len(uuid_str)}")
+                mapped['recorder_id'] = uuid_str
+            else:
+                # 其他类型尝试转换为UUID再转换为hex字符串
+                uuid_obj = UUID(str(recorder_id_value))
+                uuid_str = uuid_obj.hex
+                if len(uuid_str) != 32:
+                    logger.error(f"recorder_id string length incorrect: {len(uuid_str)} chars (expected 32): {uuid_str}")
+                    raise ValueError(f"Invalid UUID hex string length: {len(uuid_str)}")
+                mapped['recorder_id'] = uuid_str
+            logger.debug(f"Converted recorder_id to UUID hex string: {mapped['recorder_id']} (length: {len(mapped['recorder_id'])})")
+        except (ValueError, TypeError) as e:
+            logger.error(f"Failed to convert recorder_id to UUID hex string: {fields['recorder_id']}, error: {e}")
+            # 如果转换失败，跳过该字段，让数据库使用默认值或报错
+            pass
+    
     # 处理其他字段（直接使用，但需要过滤空值）
     for field_name, field_value in fields.items():
-        if field_name not in special_fields and field_name not in ['contacts', 'latitude', 'longitude']:
+        if field_name not in special_fields and field_name not in ['contacts', 'latitude', 'longitude', 'form_type', 'recorder_id']:
             if field_value not in ("", None):
                 mapped[field_name] = field_value
     
