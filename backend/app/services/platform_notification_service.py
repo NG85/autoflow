@@ -269,7 +269,7 @@ class PlatformNotificationService:
                             "template_variable": template_vars,
                         },
                     }
-            if cc_card_content:
+            if cc_card_content and notification_type in ["company daily report", "company weekly report"]:
                 self._ops_cc_feishu_card(cc_card_content, source=notification_type)
         except Exception as e:
             logger.error("Ops CC Feishu prepare/send failed. source=%s, error=%s", notification_type, e)
