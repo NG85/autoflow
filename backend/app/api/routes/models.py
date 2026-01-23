@@ -69,16 +69,6 @@ class LocalContactCreate(BaseModel):
     business_relationship: Optional[str] = Field(None, description="商务关系")
     remarks: Optional[str] = Field(None, description="备注")
     
-    @model_validator(mode='after')
-    def validate_contact_info(self):
-        """验证手机和电话至少有一个"""
-        mobile = (self.mobile or "").strip()
-        phone = (self.phone or "").strip()
-        if not mobile and not phone:
-            raise ValueError("手机和电话至少需要填写一个")
-        return self
-
-
 class LocalContactUpdate(BaseModel):
     """更新本地联系人请求模型"""
     name: Optional[str] = Field(None, description="联系人姓名")
