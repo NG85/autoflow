@@ -250,11 +250,19 @@ class CrmWritebackService:
         
         # 处理联系人信息：优先使用contacts字段，否则使用旧字段
         if record.contacts and isinstance(record.contacts, list) and len(record.contacts) > 0:
+            def _safe_str(v: Any) -> str:
+                """将可能为 None/非字符串 的值安全转成字符串并 strip，避免出现 'None' 文本。"""
+                if v is None:
+                    return ""
+                if isinstance(v, str):
+                    return v.strip()
+                return str(v).strip()
+
             # 多个联系人
             for idx, contact in enumerate(record.contacts, 1):
                 if isinstance(contact, dict):
-                    contact_name = contact.get('name', '')
-                    contact_position = contact.get('position', '')
+                    contact_name = _safe_str(contact.get("name"))
+                    contact_position = _safe_str(contact.get("position"))
                     if contact_name or contact_position:
                         if len(record.contacts) > 1:
                             # 多个联系人：将姓名和职位放在一起
@@ -269,8 +277,8 @@ class CrmWritebackService:
         else:
             # 兼容旧数据：使用单个联系人字段，保持原格式
             if record.contact_position or record.contact_name:
-                content_parts.append(f"联系人职位: {record.contact_position or ''}")
-                content_parts.append(f"联系人姓名: {record.contact_name or ''}")
+                content_parts.append(f"联系人职位: {_safe_str(record.contact_position)}")
+                content_parts.append(f"联系人姓名: {_safe_str(record.contact_name)}")
         
         if record.collaborative_participants:
             # 处理协同参与人数据，支持多种格式
