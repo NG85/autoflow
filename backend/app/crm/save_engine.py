@@ -274,14 +274,22 @@ def fill_sales_visit_record_fields(sales_visit_record, db_session):
     contacts = sales_visit_record.get("contacts")
     contact_info_parts = []
     has_contacts_field = contacts is not None  # 标记是否明确提供了contacts字段
+
+    def _safe_strip(v) -> str:
+        """将可能为 None/非字符串 的值安全转成字符串并 strip，避免 AttributeError。"""
+        if v is None:
+            return ""
+        if isinstance(v, str):
+            return v.strip()
+        return str(v).strip()
     
     if contacts:
         # 如果提供了contacts字段（列表格式）
         if isinstance(contacts, list):
             for contact in contacts:
                 if isinstance(contact, dict):
-                    name = contact.get("name", "").strip()
-                    position = contact.get("position", "").strip()
+                    name = _safe_strip(contact.get("name"))
+                    position = _safe_strip(contact.get("position"))
                     if name:
                         if position:
                             contact_info_parts.append(f"{name}（{position}）")
@@ -299,8 +307,8 @@ def fill_sales_visit_record_fields(sales_visit_record, db_session):
     
     # 如果没有contacts字段（不是空列表，而是字段不存在），尝试从旧字段构造
     if not has_contacts_field and not contact_info_parts:
-        contact_name = sales_visit_record.get("contact_name", "").strip()
-        contact_position = sales_visit_record.get("contact_position", "").strip()
+        contact_name = _safe_strip(sales_visit_record.get("contact_name"))
+        contact_position = _safe_strip(sales_visit_record.get("contact_position"))
         if contact_name:
             if contact_position:
                 contact_info_parts.append(f"{contact_name}（{contact_position}）")
