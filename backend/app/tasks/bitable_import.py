@@ -73,7 +73,6 @@ DISPLAY_FIELD_MAP = {
     '负责销售': 'recorder',
     '联系人职位': 'contact_position',
     '联系人姓名': 'contact_name',
-    '联系人列表': 'contacts',
     '协同参与人': 'collaborative_participants',
     '拜访及沟通方式': 'visit_communication_method',
     '跟进记录': 'followup_record',
@@ -289,6 +288,41 @@ def build_bitable_fields_from_crm_row(crm_row: dict) -> dict:
             if isinstance(v, str):
                 return v
             return str(v) if v else None
+
+    def _parse_contacts(v) -> list[dict]:
+        """
+        contacts 兼容：
+        - list[dict]（推荐）
+        - JSON 字符串（历史/导入场景）
+        """
+        if v is None or v == "":
+            return []
+        if isinstance(v, list):
+            return [x for x in v if isinstance(x, dict)]
+        if isinstance(v, str):
+            try:
+                parsed = json.loads(v)
+                if isinstance(parsed, list):
+                    return [x for x in parsed if isinstance(x, dict)]
+            except Exception:
+                return []
+        return []
+
+    # 联系人字段优先级：
+    # 1) 优先用 contacts（新字段）填充“联系人姓名/联系人职位”
+    # 2) contacts 为空时，才使用旧字段 contact_name/contact_position
+    contacts_list = _parse_contacts(crm_row.get("contacts"))
+    contacts_name_text: str | None = None
+    contacts_position_text: str | None = None
+    if contacts_list:
+        names = [c.get("name") for c in contacts_list if isinstance(c.get("name"), str) and c.get("name").strip()]
+        positions = [c.get("position") for c in contacts_list if isinstance(c.get("position"), str) and c.get("position").strip()]
+        if names:
+            contacts_name_text = "、".join(names)
+            feishu_fields["联系人姓名"] = contacts_name_text
+        if positions:
+            contacts_position_text = "、".join(positions)
+            feishu_fields["联系人职位"] = contacts_position_text
     
     for db_key, value in crm_row.items():
         # 跳过attachment字段，回写时赋空值
@@ -302,6 +336,11 @@ def build_bitable_fields_from_crm_row(crm_row: dict) -> dict:
         # 处理其他字段
         if db_key in DB_TO_FEISHU_FIELD_MAP and value not in (None, ""):
             feishu_key = DB_TO_FEISHU_FIELD_MAP[db_key]
+            # 如果 contacts 已经填充了联系人姓名/职位，则不要再被旧字段覆盖
+            if feishu_key == "联系人姓名" and contacts_name_text:
+                continue
+            if feishu_key == "联系人职位" and contacts_position_text:
+                continue
             if feishu_key in ts_fields:
                 ts = _to_millis(value)
                 if ts is not None:
@@ -434,7 +473,11 @@ def sync_bitable_visit_records(self, start_date_str: str | None = None, end_date
         # 查询指定时间范围内的CRM拜访记录
         with Session(engine) as session:
             # 构建字段列表（需要通过JOIN获取）
-            cols = ", ".join([f"{CRM_TABLE}.{col}" for col in DISPLAY_FIELD_MAP.values()])
+            cols_list = [f"{CRM_TABLE}.{col}" for col in DISPLAY_FIELD_MAP.values()]
+            # 写回联系人姓名/职位需要优先使用 contacts（即使多维表格没有“联系人列表”字段，也需要从DB取出来做拼接）
+            # 注意：contacts 不再出现在 DISPLAY_FIELD_MAP（避免写回不存在的多维字段），这里只是用于 SELECT
+            cols_list.append(f"{CRM_TABLE}.contacts")
+            cols = ", ".join(cols_list)
             # 添加部门字段和open_id（通过JOIN获取）
             sql = text(f"""
                 SELECT {cols}, up.department AS recorder_department, up.open_id AS recorder_open_id
