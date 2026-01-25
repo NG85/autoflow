@@ -248,16 +248,16 @@ class CrmWritebackService:
         #     if formatted_time != "--":
         #         content_parts.append(f"创建时间: {formatted_time}")
         
+        def _safe_str(v: Any) -> str:
+            """将可能为 None/非字符串 的值安全转成字符串并 strip，避免出现 'None' 文本。"""
+            if v is None:
+                return ""
+            if isinstance(v, str):
+                return v.strip()
+            return str(v).strip()
+        
         # 处理联系人信息：优先使用contacts字段，否则使用旧字段
         if record.contacts and isinstance(record.contacts, list) and len(record.contacts) > 0:
-            def _safe_str(v: Any) -> str:
-                """将可能为 None/非字符串 的值安全转成字符串并 strip，避免出现 'None' 文本。"""
-                if v is None:
-                    return ""
-                if isinstance(v, str):
-                    return v.strip()
-                return str(v).strip()
-
             # 多个联系人
             for idx, contact in enumerate(record.contacts, 1):
                 if isinstance(contact, dict):
