@@ -1593,11 +1593,35 @@ def get_daily_reports(
                                 end_customer_total_first_visit=report.get("end_customer_total_first_visit", 0),
                                 end_customer_total_multi_visit=report.get("end_customer_total_multi_visit", 0),
                                 partner_total_follow_up=report.get("partner_total_follow_up", 0),
-                                partner_total_first_visit=report.get("partner_total_first_visit", 0),
-                                partner_total_multi_visit=report.get("partner_total_multi_visit", 0),
-                                assessment_red_count=report.get("assessment_red_count", 0),
-                                assessment_yellow_count=report.get("assessment_yellow_count", 0),
-                                assessment_green_count=report.get("assessment_green_count", 0),
+                                # 合作伙伴不区分首次/多次，使用默认值0
+                                # 首次拜访的红黄绿灯统计（包含客户和合作伙伴）
+                                first_visit_red_count=report.get("first_visit_red_count", 0),
+                                first_visit_yellow_count=report.get("first_visit_yellow_count", 0),
+                                first_visit_green_count=report.get("first_visit_green_count", 0),
+                                # 多次跟进的红黄绿灯统计（仅客户）
+                                multi_visit_red_count=report.get("multi_visit_red_count", 0),
+                                multi_visit_yellow_count=report.get("multi_visit_yellow_count", 0),
+                                multi_visit_green_count=report.get("multi_visit_green_count", 0),
+                                # 合作伙伴的红黄绿灯统计（不区分首次/多次）
+                                partner_red_count=report.get("partner_red_count", 0),
+                                partner_yellow_count=report.get("partner_yellow_count", 0),
+                                partner_green_count=report.get("partner_green_count", 0),
+                                # 兼容旧字段（如果存在则使用，否则使用新字段的汇总值）
+                                assessment_red_count=report.get("assessment_red_count") or (
+                                    report.get("first_visit_red_count", 0) + 
+                                    report.get("multi_visit_red_count", 0) + 
+                                    report.get("partner_red_count", 0)
+                                ),
+                                assessment_yellow_count=report.get("assessment_yellow_count") or (
+                                    report.get("first_visit_yellow_count", 0) + 
+                                    report.get("multi_visit_yellow_count", 0) + 
+                                    report.get("partner_yellow_count", 0)
+                                ),
+                                assessment_green_count=report.get("assessment_green_count") or (
+                                    report.get("first_visit_green_count", 0) + 
+                                    report.get("multi_visit_green_count", 0) + 
+                                    report.get("partner_green_count", 0)
+                                ),
                             )
                         ],
                         visit_detail_page=visit_detail_page,
@@ -1634,57 +1658,6 @@ def get_daily_reports(
         logger.exception(e)
         raise InternalServerError()
 
-
-@router.get("/crm/daily-reports/filter-options")
-def get_daily_report_filter_options(
-    db_session: SessionDep,
-    user: CurrentUserDep,
-):
-    """
-    获取销售个人日报的过滤选项
-    用于前端下拉选择框等
-    """
-    try:
-        # 获取销售人员选项
-        sales_names = db_session.exec(
-            select(distinct(CRMDailyAccountStatistics.sales_name))
-            .where(CRMDailyAccountStatistics.sales_name.is_not(None))
-            .order_by(CRMDailyAccountStatistics.sales_name)
-        ).all()
-        
-        # 获取部门选项
-        department_names = db_session.exec(
-            select(distinct(CRMDailyAccountStatistics.department_name))
-            .where(CRMDailyAccountStatistics.department_name.is_not(None))
-            .order_by(CRMDailyAccountStatistics.department_name)
-        ).all()
-        
-        # 获取日期范围
-        date_range = db_session.exec(
-            select(
-                func.min(CRMDailyAccountStatistics.report_date),
-                func.max(CRMDailyAccountStatistics.report_date)
-            )
-        ).first()
-        
-        return {
-            "code": 0,
-            "message": "success",
-            "data": {
-                "sales_names": sales_names,
-                "department_names": department_names,
-                "date_range": {
-                    "min_date": date_range[0].isoformat() if date_range[0] else None,
-                    "max_date": date_range[1].isoformat() if date_range[1] else None,
-                }
-            }
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(e)
-        raise InternalServerError()
 
 @router.post("/crm/department-daily-reports", response_model=List[DepartmentDailyReportResponse])
 def get_department_daily_reports(
@@ -1729,11 +1702,24 @@ def get_department_daily_reports(
             return []
         
         # 转换为响应格式
+        from app.core.config import settings
         response_reports = []
         for report in department_reports:
             # 转换日期格式
             if hasattr(report.get('report_date'), 'isoformat'):
                 report['report_date'] = report['report_date'].isoformat()
+            
+            # 添加必需的字段（与推送逻辑保持一致）
+            department_name = report.get('department_name', '')
+            report['visit_detail_page'] = (
+                f"{settings.VISIT_DETAIL_PAGE_URL}"
+                f"?start_date={parsed_date}&end_date={parsed_date}"
+            )
+            report['account_list_page'] = (
+                f"{settings.ACCOUNT_LIST_PAGE_URL}?department={department_name}"
+                if department_name
+                else settings.ACCOUNT_LIST_PAGE_URL
+            )
             
             # 构造响应对象
             department_response = DepartmentDailyReportResponse(**report)
@@ -1798,6 +1784,14 @@ def get_company_daily_report(
         # 转换日期格式
         if hasattr(company_report.get('report_date'), 'isoformat'):
             company_report['report_date'] = company_report['report_date'].isoformat()
+        
+        # 添加必需的字段（与推送逻辑保持一致）
+        from app.core.config import settings
+        company_report['visit_detail_page'] = (
+            f"{settings.VISIT_DETAIL_PAGE_URL}"
+            f"?start_date={parsed_date}&end_date={parsed_date}"
+        )
+        company_report['account_list_page'] = settings.ACCOUNT_LIST_PAGE_URL
         
         # 构造响应对象
         company_response = CompanyDailyReportResponse(**company_report)

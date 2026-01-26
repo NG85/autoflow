@@ -596,7 +596,21 @@ class BaseReportStatistics(BaseModel):
 
 class DailyReportStatistics(BaseReportStatistics):
     """销售个人日报统计数据"""
-    pass
+    # 合作伙伴不区分首次/多次，只统计总数，这两个字段设为默认0
+    partner_total_first_visit: int = Field(default=0, description="总首次拜访合作伙伴数（销售日报不区分，固定为0）", ge=0)
+    partner_total_multi_visit: int = Field(default=0, description="总多次拜访合作伙伴数（销售日报不区分，固定为0）", ge=0)
+    # 首次拜访的红黄绿灯统计（包含客户和合作伙伴）
+    first_visit_red_count: int = Field(default=0, description="首次拜访评估为red的次数", ge=0)
+    first_visit_yellow_count: int = Field(default=0, description="首次拜访评估为yellow的次数", ge=0)
+    first_visit_green_count: int = Field(default=0, description="首次拜访评估为green的次数", ge=0)
+    # 多次跟进的红黄绿灯统计（仅客户）
+    multi_visit_red_count: int = Field(default=0, description="多次跟进评估为red的次数", ge=0)
+    multi_visit_yellow_count: int = Field(default=0, description="多次跟进评估为yellow的次数", ge=0)
+    multi_visit_green_count: int = Field(default=0, description="多次跟进评估为green的次数", ge=0)
+    # 合作伙伴的红黄绿灯统计（不区分首次/多次）
+    partner_red_count: int = Field(default=0, description="合作伙伴评估为red的次数", ge=0)
+    partner_yellow_count: int = Field(default=0, description="合作伙伴评估为yellow的次数", ge=0)
+    partner_green_count: int = Field(default=0, description="合作伙伴评估为green的次数", ge=0)
 
 # 团队周报统计数据模型
 class WeeklyReportStatistics(BaseReportStatistics):

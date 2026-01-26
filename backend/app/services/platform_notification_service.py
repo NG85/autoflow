@@ -1023,9 +1023,9 @@ class PlatformNotificationService:
         template_vars = self._convert_daily_report_data_for_feishu(db_session, daily_report_data)
         # 个人日报卡片模板
         template_id_by_platform = {
-            PLATFORM_DINGTALK: "801a3e2c-33cc-474e-9474-c0f7cd394311.schema",
-            PLATFORM_FEISHU: "AAqX3POFl4934",
-            PLATFORM_LARK: "AAqX3POFl4934",
+            PLATFORM_DINGTALK: "40452d31-c1fa-46b3-b0ea-28921bcf52ae.schema",
+            PLATFORM_FEISHU: "AAqvGwEs503C4",
+            PLATFORM_LARK: "AAqvGwEs503C4",
         }
         
         # 按平台分组接收者
@@ -1111,9 +1111,9 @@ class PlatformNotificationService:
             template_vars['report_date'] = template_vars['report_date'].isoformat()
         # 部门日报卡片模板
         template_id_by_platform = {
-            PLATFORM_DINGTALK: "c8a179c5-aaae-48b0-97d6-75d4c7bdce30.schema",
-            PLATFORM_FEISHU: "AAqX3PiS5HUx4",
-            PLATFORM_LARK: "AAqX3PiS5HUx4",
+            PLATFORM_DINGTALK: "caae8019-62c5-4f3d-9387-0616b365039b.schema",
+            PLATFORM_FEISHU: "AAqvGxezuuhGD",
+            PLATFORM_LARK: "AAqvGxezuuhGD",
         }
         
         # 按平台分组接收者
@@ -1218,9 +1218,9 @@ class PlatformNotificationService:
             template_vars['report_date'] = template_vars['report_date'].isoformat()
         # 公司日报卡片模板
         template_id_by_platform = {
-            PLATFORM_DINGTALK: "9b888860-bb7f-4b3e-843a-bacacb954bc4.schema",
-            PLATFORM_FEISHU: "AAqX3PU2Ss9aL",
-            PLATFORM_LARK: "AAqX3PU2Ss9aL",
+            PLATFORM_DINGTALK: "6618eed4-1d1a-4536-9625-61e99cb14837.schema",
+            PLATFORM_FEISHU: "AAqvGhJJNR59v",
+            PLATFORM_LARK: "AAqvGhJJNR59v",
         }
         
         # 按平台分组接收者
