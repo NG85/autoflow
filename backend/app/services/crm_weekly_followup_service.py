@@ -400,6 +400,8 @@ class CRMWeeklyFollowupService:
         # 批量准备：CRM 商机/客户，用于获取负责人（不是拜访记录填写人）
         opportunity_ids = {str(r.opportunity_id).strip() for r in records if r.opportunity_id}
         account_ids = {str(r.account_id).strip() for r in records if r.account_id}
+        # 仅有 partner_id（无商机、无客户）时，也需要从客户表中查负责人
+        partner_ids = {str(r.partner_id).strip() for r in records if r.partner_id}
 
         # 只缓存周跟进生成所需的少数字段，避免 select(CRMOpportunity) 拉全量大字段
         opp_by_id: dict[str, dict[str, Optional[str]]] = {}
@@ -445,6 +447,26 @@ class CRMWeeklyFollowupService:
                     "person_in_charge_id": (str(person_in_charge_id).strip() if person_in_charge_id else None),
                 }
 
+        # 合作伙伴：同样从客户表中查负责人（按 unique_id == partner_id 匹配）
+        partner_by_id: dict[str, dict[str, Optional[str]]] = {}
+        if partner_ids:
+            partner_rows = session.exec(
+                select(
+                    CRMAccount.unique_id,
+                    CRMAccount.customer_name,
+                    CRMAccount.person_in_charge_id,
+                ).where(CRMAccount.unique_id.in_(list(partner_ids)))
+            ).all()
+            for unique_id, customer_name, person_in_charge_id in partner_rows:
+                if not unique_id:
+                    continue
+                pid = str(unique_id).strip()
+                partner_by_id[pid] = {
+                    "unique_id": pid,
+                    "customer_name": (str(customer_name).strip() if customer_name else None),
+                    "person_in_charge_id": (str(person_in_charge_id).strip() if person_in_charge_id else None),
+                }
+
         # 批量准备：负责人（CRM 用户ID）与其部门（来自 crm_user）
         owner_crm_user_id_by_entity: dict[tuple[str, str], Optional[str]] = {}
         owner_crm_user_ids: set[str] = set()
@@ -456,6 +478,11 @@ class CRMWeeklyFollowupService:
         for aid, acc in acc_by_id.items():
             owner_id = self._norm_id(acc.get("person_in_charge_id"))
             owner_crm_user_id_by_entity[("account", aid)] = owner_id
+            if owner_id:
+                owner_crm_user_ids.add(owner_id)
+        for pid, partner in partner_by_id.items():
+            owner_id = self._norm_id(partner.get("person_in_charge_id"))
+            owner_crm_user_id_by_entity[("partner", pid)] = owner_id
             if owner_id:
                 owner_crm_user_ids.add(owner_id)
 
@@ -495,6 +522,8 @@ class CRMWeeklyFollowupService:
                 owner_crm_user_id = owner_crm_user_id_by_entity.get(("opportunity", entity_id))
             elif entity_type == "account":
                 owner_crm_user_id = owner_crm_user_id_by_entity.get(("account", entity_id))
+            elif entity_type == "partner":
+                owner_crm_user_id = owner_crm_user_id_by_entity.get(("partner", entity_id))
 
             # 团队口径：仅用负责人在 crm_user 里的 department（不做 recorder 兜底，避免口径混淆）
             if owner_crm_user_id:
@@ -621,6 +650,12 @@ class CRMWeeklyFollowupService:
                 if acc:
                     account_id = str((acc.get("unique_id") or "") or account_id or "")
                     account_name = acc.get("customer_name") or account_name
+            elif key.entity_type == "partner":
+                partner = partner_by_id.get(key.entity_id)
+                if partner:
+                    # partner_id/partner_name 保持与字段语义一致；名称优先用客户表中的 customer_name
+                    partner_id = str((partner.get("unique_id") or "") or partner_id or "")
+                    partner_name = partner.get("customer_name") or partner_name
 
             entity_obj = CRMWeeklyFollowupEntitySummary(
                 week_start=week_start,
