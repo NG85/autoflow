@@ -1,5 +1,5 @@
 import logging
-from typing import List, Optional, Any
+from typing import Optional, Any
 
 import requests
 from app.api.deps import CurrentUserDep, SessionDep
@@ -7,6 +7,7 @@ from app.exceptions import InternalServerError
 from fastapi import APIRouter, HTTPException
 from fastapi_pagination import Page
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from app.api.routes.crm.models import (
     DailyReportRequest,
@@ -32,7 +33,7 @@ def get_daily_reports(
         if request.report_date:            
             parsed_date = request.report_date
         else:
-            parsed_date = (datetime.now() - timedelta(days=1)).date()
+            parsed_date = (datetime.now(ZoneInfo("Asia/Shanghai")) - timedelta(days=1)).date()
         
         # 日报口径来自 CRMAccountOpportunityAssessment：
         # 通过 crm_statistics_service.get_sales_complete_daily_report 组装销售维度的完整日报
@@ -98,7 +99,7 @@ def get_department_daily_reports(
         if request.report_date:
             parsed_date = request.report_date
         else:
-            parsed_date = (datetime.now() - timedelta(days=1)).date()
+            parsed_date = (datetime.now(ZoneInfo("Asia/Shanghai")) - timedelta(days=1)).date()
                 
         # 获取部门汇总报告
         department_reports = crm_statistics_service.aggregate_department_reports(
@@ -157,7 +158,7 @@ def get_company_daily_report(
         if request.report_date:
             parsed_date = request.report_date
         else:
-            parsed_date = (datetime.now() - timedelta(days=1)).date()
+            parsed_date = (datetime.now(ZoneInfo("Asia/Shanghai")) - timedelta(days=1)).date()
         
         # 获取公司汇总报告
         company_report = crm_statistics_service.aggregate_company_report(
@@ -240,14 +241,12 @@ def get_department_weekly_reports(
         团队周报数据列表
     """
     try:
-        from app.core.config import settings
-        
         # 解析日期范围
         if request.report_date:
             parsed_date = request.report_date
         else:
             # 没有设置 report_date 时，选择当前日期往前最近的一个周六
-            today = datetime.now().date()
+            today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
             weekday = today.weekday()  # 周一为0，周六为5，周日为6
             days_to_last_saturday = (weekday - 5) % 7
             parsed_date = today - timedelta(days=days_to_last_saturday)
@@ -317,14 +316,12 @@ def get_company_weekly_report(
         公司周报数据
     """
     try:
-        from app.core.config import settings
-        
         # 解析日期范围
         if request.report_date:
             parsed_date = request.report_date
         else:
             # 没有设置 report_date 时，选择当前日期往前最近的一个周六
-            today = datetime.now().date()
+            today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
             weekday = today.weekday()  # 周一为0，周六为5，周日为6
             days_to_last_saturday = (weekday - 5) % 7
             parsed_date = today - timedelta(days=days_to_last_saturday)
