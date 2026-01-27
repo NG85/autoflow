@@ -209,7 +209,7 @@ class PlatformNotificationService:
                 success_count += 1
                 
             except Exception as e:
-                logger.error(f"Failed to send message to {recipient['name']} on {platform}: {e}")
+                logger.error(f"向{recipient['name']}发送{platform}通知失败: {e}")
                 failed_recipients.append(
                     self._create_failed_recipient_record(recipient, platform, str(e))
                 )
