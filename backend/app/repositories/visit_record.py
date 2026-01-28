@@ -312,7 +312,7 @@ class VisitRecordRepo(BaseRepo):
         policy = VisitRecordAccessPolicy(
             session=session,
             current_user_id=current_user_id,
-            roles_and_permissions_provider=oauth_client.query_user_roles_and_permissions,
+            roles_and_permissions_provider=lambda user_id: oauth_client.query_user_roles_and_permissions(user_id=user_id),
             is_admin_user_fn=self._is_admin_user,
         )
         return policy.can_access_single_recorder(recorder_id)
@@ -337,7 +337,7 @@ class VisitRecordRepo(BaseRepo):
         policy = VisitRecordAccessPolicy(
             session=session,
             current_user_id=current_user_id,
-            roles_and_permissions_provider=oauth_client.query_user_roles_and_permissions,
+            roles_and_permissions_provider=lambda user_id: oauth_client.query_user_roles_and_permissions(user_id=user_id),
             is_admin_user_fn=self._is_admin_user,
         )
             
