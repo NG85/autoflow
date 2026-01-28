@@ -4,8 +4,6 @@ from datetime import date, datetime
 from uuid import UUID
 from pydantic import BaseModel, Field, field_validator
 import json
-from app.models.crm_sales_visit_records import CRMSalesVisitRecord
-from app.core.config import settings
 
 # 定义响应模型
 class Opportunity(BaseModel):
@@ -596,7 +594,21 @@ class BaseReportStatistics(BaseModel):
 
 class DailyReportStatistics(BaseReportStatistics):
     """销售个人日报统计数据"""
-    pass
+    # 合作伙伴不区分首次/多次，只统计总数，这两个字段设为默认0
+    partner_total_first_visit: int = Field(default=0, description="总首次拜访合作伙伴数（销售日报不区分，固定为0）", ge=0)
+    partner_total_multi_visit: int = Field(default=0, description="总多次拜访合作伙伴数（销售日报不区分，固定为0）", ge=0)
+    # 首次拜访的红黄绿灯统计（包含客户和合作伙伴）
+    first_visit_red_count: int = Field(default=0, description="首次拜访评估为red的次数", ge=0)
+    first_visit_yellow_count: int = Field(default=0, description="首次拜访评估为yellow的次数", ge=0)
+    first_visit_green_count: int = Field(default=0, description="首次拜访评估为green的次数", ge=0)
+    # 多次跟进的红黄绿灯统计（仅客户）
+    multi_visit_red_count: int = Field(default=0, description="多次跟进评估为red的次数", ge=0)
+    multi_visit_yellow_count: int = Field(default=0, description="多次跟进评估为yellow的次数", ge=0)
+    multi_visit_green_count: int = Field(default=0, description="多次跟进评估为green的次数", ge=0)
+    # 合作伙伴的红黄绿灯统计（不区分首次/多次）
+    partner_red_count: int = Field(default=0, description="合作伙伴评估为red的次数", ge=0)
+    partner_yellow_count: int = Field(default=0, description="合作伙伴评估为yellow的次数", ge=0)
+    partner_green_count: int = Field(default=0, description="合作伙伴评估为green的次数", ge=0)
 
 # 团队周报统计数据模型
 class WeeklyReportStatistics(BaseReportStatistics):
@@ -650,113 +662,19 @@ class CompanyAssessmentDetail(BaseAssessmentDetail):
     """公司级评估详情（不包含跟进记录）"""
     pass
 
-# 销售个人日报响应模型
-class BaseDailyReportResponse(BaseModel):
-    """基础日报响应模型"""
-    report_date: date = Field(description="报告日期")
-    statistics: List[DailyReportStatistics] = Field(description="统计数据")
-    visit_detail_page: str = Field(description="拜访记录详情页面链接")
-    account_list_page: str = Field(description="客户列表页面链接")
-    first_assessment: List[AssessmentDetail] = Field(description="首次拜访评估详情")
-    multi_assessment: List[AssessmentDetail] = Field(description="多次拜访评估详情")
-
-class DailyReportResponse(BaseDailyReportResponse):
-    """销售个人日报响应"""
-    recorder: str = Field(description="记录人/销售人员")
-    department_name: str = Field(description="部门名称")
-
-class DepartmentDailyReportResponse(BaseDailyReportResponse):
-    """部门日报响应"""
-    department_name: str = Field(description="部门名称")
-
-class CompanyDailyReportResponse(BaseModel):
-    """公司日报响应"""
-    report_date: date = Field(description="报告日期")
-    statistics: List[DailyReportStatistics] = Field(description="公司汇总统计数据")
-    visit_detail_page: str = Field(description="拜访记录详情页面链接")
-    account_list_page: str = Field(description="客户列表页面链接")
-    first_assessment: List[CompanyAssessmentDetail] = Field(description="公司首次拜访评估详情汇总")
-    multi_assessment: List[CompanyAssessmentDetail] = Field(description="公司多次拜访评估详情汇总")
-
-# 销售四象限分布模型
-class SalesQuadrants(BaseModel):
-    """销售四象限分布"""
-    behavior_hh: List[str] = Field(description="高行为高结果象限的销售人员列表")
-    behavior_hl: List[str] = Field(description="高行为低结果象限的销售人员列表")
-    behavior_lh: List[str] = Field(description="低行为高结果象限的销售人员列表")
-    behavior_ll: List[str] = Field(description="低行为低结果象限的销售人员列表")
-
-# 周报响应模型
-class BaseWeeklyReportResponse(BaseModel):
-    """基础周报响应模型"""
-    report_start_date: date = Field(description="报告开始日期")
-    report_end_date: date = Field(description="报告结束日期")
-    statistics: List[WeeklyReportStatistics] = Field(description="周报统计数据")
-    visit_detail_page: str = Field(description="拜访记录详情页面链接")
-    account_list_page: str = Field(description="客户列表页面链接")
-    weekly_review_1_page: str = Field(
-        description="周报Review1页面链接",
-        default_factory=lambda: f"{settings.REVIEW_REPORT_HOST}/review/weeklyDetail/execution_id"
-    )
-    weekly_review_5_page: str = Field(
-        description="周报Review5页面链接", 
-        default_factory=lambda: f"{settings.REVIEW_REPORT_HOST}/review/muban5Detail/execution_id"
-    )
-    sales_quadrants: Optional[SalesQuadrants] = Field(default=None, description="销售四象限分布")
-
-class DepartmentWeeklyReportResponse(BaseWeeklyReportResponse):
-    """团队周报响应"""
-    department_name: str = Field(description="部门名称")
-
-# 公司周报响应模型
-class CompanyWeeklyReportResponse(BaseWeeklyReportResponse):
-    """公司周报响应"""
-    pass
-
 # 团队周报查询请求
 class WeeklyReportRequest(BaseModel):
     """团队周报查询请求"""
     department_name: Optional[str] = Field(default=None, description="部门名称，不传则查询所有部门")
-    start_date: Optional[date] = Field(default=None, description="开始日期")
-    end_date: Optional[date] = Field(default=None, description="结束日期")
-
-
-class SalesTaskWeeklySummaryRequest(BaseModel):
-    """销售任务周报汇总查询请求（按部门/公司）"""
-    department_id: Optional[str] = Field(default=None, description="部门ID，不传则查询所有部门")
-    start_date: Optional[date] = Field(default=None, description="开始日期（周起始）")
-    end_date: Optional[date] = Field(default=None, description="结束日期（周结束）")
-
-
-class SalesTaskWeeklyMetricItem(BaseModel):
-    """销售任务周报指标条目"""
-    metric: str = Field(description="指标类型：completed/overdue/next_week/cancelled/no_due_date")
-    data_source: str = Field(description="任务类型（data_source），或 '__ALL__'/''")
-    value: int = Field(description="指标数值")
-
-
-class DepartmentSalesTaskWeeklySummaryResponse(BaseModel):
-    """部门销售任务周报汇总"""
-    report_start_date: date = Field(description="报告开始日期（周起始）")
-    report_end_date: date = Field(description="报告结束日期（周结束）")
-    department_id: str = Field(description="部门ID")
-    metrics: List[SalesTaskWeeklyMetricItem] = Field(description="指标列表")
-
-
-class CompanySalesTaskWeeklySummaryResponse(BaseModel):
-    """公司销售任务周报汇总（全公司）"""
-    report_start_date: date = Field(description="报告开始日期（周起始）")
-    report_end_date: date = Field(description="报告结束日期（周结束）")
-    metrics: List[SalesTaskWeeklyMetricItem] = Field(description="指标列表")
+    report_date: Optional[date] = Field(default=None, description="报告日期")
 
 # 销售个人日报查询请求
 class DailyReportRequest(BaseModel):
     """销售个人日报查询请求"""
-    sales_id: Optional[str] = Field(default=None, description="销售人员ID，不传则查询所有销售")
-    sales_name: Optional[str] = Field(default=None, description="销售人员姓名，支持模糊查询")
-    start_date: Optional[date] = Field(default=None, description="开始日期")
-    end_date: Optional[date] = Field(default=None, description="结束日期")
-    department_name: Optional[str] = Field(default=None, description="部门名称过滤")
+    sales_id: Optional[str] = Field(default=None, description="销售人员ID")
+    sales_name: Optional[str] = Field(default=None, description="销售人员姓名")
+    report_date: Optional[date] = Field(default=None, description="日报日期")
+    department_name: Optional[str] = Field(default=None, description="部门名称")
     page: int = Field(default=1, ge=1, description="页码")
     page_size: int = Field(default=20, ge=1, le=100, description="每页大小")
 

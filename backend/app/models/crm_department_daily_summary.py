@@ -111,6 +111,22 @@ class CRMDepartmentDailySummary(SQLModel, table=True):
         description="合作伙伴多次跟进数量"
     )
     
+    partner_red_count: Optional[int] = Field(
+        default=0,
+        sa_column=Column(Integer, default=0),
+        description="合作伙伴评估为red的次数"
+    )
+    partner_yellow_count: Optional[int] = Field(
+        default=0,
+        sa_column=Column(Integer, default=0),
+        description="合作伙伴评估为yellow的次数"
+    )
+    partner_green_count: Optional[int] = Field(
+        default=0,
+        sa_column=Column(Integer, default=0),
+        description="合作伙伴评估为green的次数"
+    )
+    
     # Summary content
     summary_content: Optional[str] = Field(default=None, sa_column=Column(Text), description="汇总内容（中文）")
     summary_content_en: Optional[str] = Field(default=None, sa_column=Column(Text), description="汇总内容（英文）")

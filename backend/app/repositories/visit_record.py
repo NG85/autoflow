@@ -1,14 +1,11 @@
 from typing import Any, Dict, Optional, List
 from datetime import datetime
 import logging
-import requests
 from sqlmodel import Session, select, func, or_, desc, asc
 from fastapi_pagination import Params, Page
 from fastapi_pagination.ext.sqlmodel import paginate
 from uuid import UUID
 from zoneinfo import ZoneInfo
-from cachetools import TTLCache, cached
-from cachetools.keys import methodkey
 
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
 from app.models.crm_accounts import CRMAccount
@@ -18,44 +15,10 @@ from app.repositories.base_repo import BaseRepo
 from app.repositories.user_profile import user_profile_repo
 from app.repositories.user_department_relation import user_department_relation_repo
 from app.repositories.department_mirror import department_mirror_repo
-from app.core.config import settings
+from app.services.oauth_service import oauth_client
+from app.utils.date_utils import convert_beijing_date_to_utc_range
 
 logger = logging.getLogger(__name__)
-
-
-def _convert_beijing_date_to_utc_range(beijing_date_str: str, is_start: bool = True) -> Optional[datetime]:
-    """
-    将北京时间的日期字符串转换为UTC时间
-    
-    Args:
-        beijing_date_str: 北京时间的日期字符串，格式为 "YYYY-MM-DD"
-        is_start: True表示开始时间（00:00:00），False表示结束时间（23:59:59）
-        
-    Returns:
-        UTC时间对象，如果解析失败则返回None
-    """
-    try:
-        # 解析北京时间的日期
-        beijing_date = datetime.strptime(beijing_date_str, "%Y-%m-%d").date()
-        
-        # 根据is_start参数选择时间
-        if is_start:
-            # 开始时间：00:00:00
-            beijing_datetime = datetime.combine(beijing_date, datetime.min.time())
-        else:
-            # 结束时间：23:59:59
-            beijing_datetime = datetime.combine(beijing_date, datetime.max.time().replace(microsecond=0))
-        
-        # 转换为UTC时间
-        beijing_tz = ZoneInfo("Asia/Shanghai")
-        utc_tz = ZoneInfo("UTC")
-        beijing_datetime = beijing_datetime.replace(tzinfo=beijing_tz)
-        utc_datetime = beijing_datetime.astimezone(utc_tz)
-        
-        return utc_datetime
-    except ValueError:
-        logger.warning(f"Invalid date format: {beijing_date_str}")
-        return None
 
 
 
@@ -121,62 +84,6 @@ def _convert_to_response(record: CRMSalesVisitRecord, customer_level: Optional[s
 class VisitRecordRepo(BaseRepo):
     model_cls = CRMSalesVisitRecord
 
-    @cached(cache=TTLCache(maxsize=100, ttl=60 * 10), key=methodkey)
-    def _get_user_roles_and_permissions(self, current_user_id: UUID) -> Dict[str, Any]:
-        """
-        获取用户的角色和权限列表（带缓存，TTL 10分钟）
-        
-        Args:
-            current_user_id: 用户ID
-            
-        Returns:
-            Dict[str, Any]: 角色和权限列表，如果获取失败返回空字典
-            {
-                "roles": List[str],
-                "permissions": List[str]
-            }
-        """
-        try:
-            base_url = settings.OAUTH_BASE_URL.rstrip("/")
-            url = f"{base_url}/permission/query"
-            
-            headers = {"Content-Type": "application/json"}
-            body = {
-                "user_id": str(current_user_id)
-            }
-            
-            response = requests.post(url, json=body, headers=headers, timeout=5)
-            response.raise_for_status()
-            
-            data = response.json()            
-            result = data.get("result", {})
-            return {
-                "roles": result.get("roles", []),
-                "permissions": result.get("permissions", [])
-            }
-        except Exception as e:
-            logger.error(f"Error querying user permissions: {e}")
-            return {
-                "roles": [],
-                "permissions": []
-            }
-    
-    def _check_user_permission(self, current_user_id: UUID, permission: str) -> bool:
-        """
-        检查用户是否具有指定权限
-        
-        Args:
-            current_user_id: 用户ID
-            permission: 权限名称，如 "report51:company:view" 或 "report51:dept:view"
-            
-        Returns:
-            bool: 是否具有该权限
-        """
-        roles_and_permissions = self._get_user_roles_and_permissions(current_user_id)
-        permissions = roles_and_permissions.get("permissions", [])
-        has_permission = permission in permissions
-        logger.info(f"User {current_user_id} permission check for {permission}: {has_permission}")
-        return has_permission
     
     def can_access_all_crm_data(self, current_user_id: UUID, session: Optional[Session] = None) -> bool:
         """
@@ -196,7 +103,7 @@ class VisitRecordRepo(BaseRepo):
         """
         # 1. 检查权限和角色（优先判断）
         try:
-            roles_and_permissions = self._get_user_roles_and_permissions(current_user_id)
+            roles_and_permissions = oauth_client.query_user_roles_and_permissions(user_id=current_user_id)
             permissions = roles_and_permissions.get("permissions", []) if isinstance(roles_and_permissions, dict) else []
             roles = roles_and_permissions.get("roles", []) if isinstance(roles_and_permissions, dict) else []
             
@@ -244,7 +151,7 @@ class VisitRecordRepo(BaseRepo):
         """
         # 获取用户权限（如果未提供）
         if user_permissions is None:
-            roles_and_permissions = self._get_user_roles_and_permissions(current_user_id)
+            roles_and_permissions = oauth_client.query_user_roles_and_permissions(user_id=current_user_id)
             user_permissions = roles_and_permissions.get("permissions", [])
         
         # 1. 先检查是否有 report51:company:view 权限
@@ -282,7 +189,7 @@ class VisitRecordRepo(BaseRepo):
         """
         # 获取用户权限（如果未提供）
         if user_permissions is None:
-            roles_and_permissions = self._get_user_roles_and_permissions(current_user_id)
+            roles_and_permissions = oauth_client.query_user_roles_and_permissions(user_id=current_user_id)
             user_permissions = roles_and_permissions.get("permissions", [])
         
         # 检查是否有公司级查看权限
@@ -357,7 +264,7 @@ class VisitRecordRepo(BaseRepo):
             return None
 
         if user_permissions is None:
-            roles_and_permissions = self._get_user_roles_and_permissions(current_user_id)
+            roles_and_permissions = oauth_client.query_user_roles_and_permissions(user_id=current_user_id)
             user_permissions = roles_and_permissions.get("permissions", [])
 
         # 管理团队成员（含 report51:company:view / notification_tags:list_visit_records）可访问所有
@@ -401,12 +308,11 @@ class VisitRecordRepo(BaseRepo):
         session: Session,
         current_user_id: Optional[UUID],
         recorder_id: Optional[UUID],
-        user_permissions: Optional[List[str]] = None,
     ) -> bool:
         policy = VisitRecordAccessPolicy(
             session=session,
             current_user_id=current_user_id,
-            roles_and_permissions_provider=self._get_user_roles_and_permissions,
+            roles_and_permissions_provider=lambda user_id: oauth_client.query_user_roles_and_permissions(user_id=user_id),
             is_admin_user_fn=self._is_admin_user,
         )
         return policy.can_access_single_recorder(recorder_id)
@@ -431,7 +337,7 @@ class VisitRecordRepo(BaseRepo):
         policy = VisitRecordAccessPolicy(
             session=session,
             current_user_id=current_user_id,
-            roles_and_permissions_provider=self._get_user_roles_and_permissions,
+            roles_and_permissions_provider=lambda user_id: oauth_client.query_user_roles_and_permissions(user_id=user_id),
             is_admin_user_fn=self._is_admin_user,
         )
             
@@ -610,12 +516,12 @@ class VisitRecordRepo(BaseRepo):
 
         # 处理创建时间筛选 - 将北京时间的日期转换为UTC时间范围
         if request.last_modified_time_start:
-            utc_start_datetime = _convert_beijing_date_to_utc_range(request.last_modified_time_start, is_start=True)
+            utc_start_datetime = convert_beijing_date_to_utc_range(request.last_modified_time_start, is_start=True)
             if utc_start_datetime:
                 query = query.where(CRMSalesVisitRecord.last_modified_time >= utc_start_datetime)
 
         if request.last_modified_time_end:
-            utc_end_datetime = _convert_beijing_date_to_utc_range(request.last_modified_time_end, is_start=False)
+            utc_end_datetime = convert_beijing_date_to_utc_range(request.last_modified_time_end, is_start=False)
             if utc_end_datetime:
                 query = query.where(CRMSalesVisitRecord.last_modified_time <= utc_end_datetime)
 

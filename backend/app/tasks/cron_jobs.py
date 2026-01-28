@@ -3,10 +3,8 @@ from datetime import datetime, timedelta
 from enum import Enum
 from sqlmodel import Session, select
 import pytz
-from zoneinfo import ZoneInfo
 from typing import Any, Optional
 
-import requests
 from urllib.parse import quote_plus
 
 from app.core.config import settings, WritebackMode, WritebackFrequency
@@ -14,76 +12,17 @@ from app.core.db import engine
 from app.celery import app
 from app.models import DataSource, DataSourceType
 from app.repositories import knowledge_base_repo
+from app.services.aldebaran_service import aldebaran_client
 from app.services.crm_statistics_service import crm_statistics_service
+from app.services.oauth_service import oauth_client
 from app.services.platform_notification_service import platform_notification_service
 from app.services.crm_writeback_service import crm_writeback_service
 from app.services.crm_sales_task_statistics_service import crm_sales_task_statistics_service
 from app.services.crm_weekly_followup_service import crm_weekly_followup_service
 from app.tasks.knowledge_base import import_documents_from_kb_datasource
+from app.utils.date_utils import beijing_today_date
 
 logger = logging.getLogger(__name__)
-
-_BEIJING_TZ = ZoneInfo("Asia/Shanghai")
-
-
-def _beijing_today_date():
-    """获取北京时间的“今天”（date）。"""
-    return datetime.now(_BEIJING_TZ).date()
-
-
-def _aldebaran_fetch_weekly_report(
-    *,
-    report_year: int,
-    report_week_of_year: int,
-    department_name: Optional[str],
-    timeout_seconds: int = 30,
-) -> dict[str, Any]:
-    """
-    调用 Aldebaran 周报接口获取周报内容。
-
-    约定：
-    - 公司周报：department_name=None
-    - 部门周报：department_name=部门名
-    """
-    base_url = settings.ALDEBARAN_BASE_URL.rstrip("/")
-    url = f"{base_url}/api/v1/report/weekly"
-    payload = {
-        "tenant_id": 'PINGCAP',
-        "report_year": int(report_year),
-        "report_week_of_year": int(report_week_of_year),
-        "department": department_name,  # None -> null（公司周报）
-    }
-
-    logger.info(
-        "调用 Aldebaran 周报接口: %s, payload=%s",
-        url,
-        {
-            "tenant_id": payload["tenant_id"],
-            "report_year": payload["report_year"],
-            "report_week_of_year": payload["report_week_of_year"],
-            "department": payload["department"],
-        },
-    )
-
-    resp = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=timeout_seconds)
-    if resp.status_code != 200:
-        raise RuntimeError(f"Aldebaran weekly report http {resp.status_code}: {resp.text}")
-
-    data = resp.json()
-
-    if isinstance(data, dict) and data.get("status") == "success":
-        report_data = data.get("data")
-        if not isinstance(report_data, dict):
-            raise RuntimeError(f"Aldebaran weekly report missing data: {data}")
-        result = report_data
-    else:
-        raise RuntimeError(f"Aldebaran weekly report invalid json: {data}")
-
-    # 推送侧依赖 department_name 做接收者定位；兜底只依赖调用参数，不依赖接口返回
-    if department_name:
-        result.setdefault("department_name", department_name)
-
-    return result
 
 
 class TodoDataSourceType(str, Enum):
@@ -281,7 +220,7 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                 }
         else:
             # 默认处理上周日到本周六的数据
-            today = _beijing_today_date()
+            today = beijing_today_date()
             # 计算上周日（今天往前推7天，然后找到最近的周日）
             days_since_sunday = (today.weekday() + 1) % 7  # 0=周一，1=周二，...，6=周日
             last_sunday = today - timedelta(days=days_since_sunday + 7)
@@ -407,6 +346,8 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                 overdue = task_stats.get("overdue_tasks") if isinstance(task_stats.get("overdue_tasks"), dict) else {}
                 process_eval = spe.get("process_evaluation") if isinstance(spe.get("process_evaluation"), dict) else {}
                 sales_quadrants = process_eval.get("sales_quadrants") if isinstance(process_eval.get("sales_quadrants"), dict) else {}
+                distribution_insight_raw = process_eval.get("distribution_insight")
+                distribution_insight = str(distribution_insight_raw or "").strip()
 
                 resolved_department = department or ""
 
@@ -464,6 +405,9 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                             "behavior_ll": _join_names(sales_quadrants.get("behavior_ll")),
                         }
                     ],
+                    # sales_process_evaluation.process_evaluation.distribution_insight
+                    # 模板侧可直接使用该字段渲染分布洞察文本。
+                    "distribution_insight": distribution_insight,
                     "department_name": resolved_department,
                     "start_date": start_date,
                     "end_date": end_date,
@@ -522,6 +466,7 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                             "behavior_ll": ""
                         }
                     ],
+                    "distribution_insight": "",
                     # 推送/模板常用的顶层兜底字段
                     "department_name": department,
                     "start_date": start_date,
@@ -529,7 +474,7 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                 }
 
             # 1) 部门 & 负责人：参照日报逻辑，优先从 OAuth 服务获取（可覆盖“无数据部门也推送”）
-            departments_with_managers = crm_statistics_service._get_departments_with_managers_from_oauth()
+            departments_with_managers = oauth_client.get_departments_with_leaders()
 
             # OAuth 异常兜底：回退到本地 profile 的部门负责人集合（至少不影响线上推送）
             if not departments_with_managers:
@@ -584,7 +529,7 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                     if not managers:
                         continue
                     try:
-                        dept_report = _aldebaran_fetch_weekly_report(
+                        dept_report = aldebaran_client.fetch_weekly_report(
                             report_year=report_year,
                             report_week_of_year=report_week_of_year,
                             department_name=department_name,
@@ -624,7 +569,7 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
             # 3) 公司周报：仍按接口获取（若失败则跳过公司推送）
             if not report_type or report_type == "company":
                 try:
-                    company_weekly_report = _aldebaran_fetch_weekly_report(
+                    company_weekly_report = aldebaran_client.fetch_weekly_report(
                         report_year=report_year,
                         report_week_of_year=report_week_of_year,
                         department_name=None,
@@ -785,7 +730,7 @@ def generate_crm_weekly_followup_summary(self, start_date_str=None, end_date_str
                 logger.error(f"无效的日期格式: start_date={start_date_str}, end_date={end_date_str}")
                 return {"success": False, "message": "无效的日期格式", "data": {}}
         else:
-            today = _beijing_today_date()
+            today = beijing_today_date()
             days_since_sunday = (today.weekday() + 1) % 7
             last_sunday = today - timedelta(days=days_since_sunday + 7)
             this_saturday = last_sunday + timedelta(days=6)
@@ -967,7 +912,7 @@ def send_sales_task_summary(self, start_date_str=None, end_date_str=None):
                 }
         else:
             # 默认处理上周日到本周六的数据
-            today = _beijing_today_date()
+            today = beijing_today_date()
             # 计算上周日（今天往前推7天，然后找到最近的周日）
             days_since_sunday = (today.weekday() + 1) % 7  # 0=周一，1=周二，...，6=周日
             last_sunday = today - timedelta(days=days_since_sunday + 7)

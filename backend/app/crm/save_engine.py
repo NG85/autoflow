@@ -465,7 +465,7 @@ def push_visit_record_message(record_id: str, sales_visit_record, visit_type, db
         return result["success"]
         
     except Exception as e:
-        logger.error(f"Failed to push visit record message: {e}")
+        logger.error(f"发送拜访记录通知失败: {e}")
         return False
     finally:
         # 只有当我们创建了session时才关闭它

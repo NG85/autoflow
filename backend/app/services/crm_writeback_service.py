@@ -15,7 +15,6 @@ from app.models.wb_visit_requests import (
     OlmVisitRecordBatchCreateRequest, 
     OlmVisitRecordCreateRequest
 )
-from app.utils.date_utils import convert_utc_to_local_timezone
 from app.api.routes.crm.models import VisitAttachment
 
 logger = logging.getLogger(__name__)
@@ -30,66 +29,10 @@ class CrmWritebackClient:
             "Content-Type": "application/json"
         }
     
-    def single_writeback(self, writeback_type: str, unique_id: str, content: str, 
-                        write_mode: str = "APPEND", operator: str = None) -> Dict[str, Any]:
-        """
-        单个对象回写
-        
-        Args:
-            writeback_type: 回写类型 ("ACCOUNT" 或 "OPPORTUNITY")
-            unique_id: 对象唯一ID
-            content: 回写内容
-            write_mode: 回写模式 ("APPEND", "REPLACE", "PREPEND")
-            operator: 操作人
-        
-        Returns:
-            回写结果
-        """
-        url = f"{self.base_url}/crm/writeback/single"
-        
-        payload = {
-            "writebackType": writeback_type,
-            "uniqueId": unique_id,
-            "content": content,
-            "writeMode": write_mode,
-            "operator": operator
-        }
-        
-        try:
-            timeout = httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0)
-            with httpx.Client(timeout=timeout) as client:
-                response = client.post(url, headers=self.headers, json=payload)
-                response.raise_for_status()
-                return response.json()
-        except httpx.RequestError as e:
-            logger.error(f"请求失败: {e}")
-            return {"success": False, "message": f"请求失败: {e}"}
-    
-    def batch_writeback(self, requests_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        批量对象回写
-        
-        Args:
-            requests_list: 回写请求列表
-        
-        Returns:
-            回写结果列表
-        """
-        url = f"{self.base_url}/crm/writeback/batch"
-        
-        try:
-            timeout = httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0)
-            with httpx.Client(timeout=timeout) as client:
-                response = client.post(url, headers=self.headers, json=requests_list)
-                response.raise_for_status()
-                return response.json()
-        except httpx.RequestError as e:
-            logger.error(f"批量请求失败: {e}")
-            return [{"success": False, "message": f"批量请求失败: {e}"}]
     
     def batch_task_create(self, task_batch_request: TaskBatchCreateRequest) -> Dict[str, Any]:
         """
-        批量创建任务
+        批量创建APAC任务
         
         Args:
             task_batch_request: 任务批量创建请求
@@ -306,7 +249,7 @@ class CrmWritebackService:
     
     def generate_task_requests(self, visit_records: List[CRMSalesVisitRecord]) -> List[TaskCreateRequest]:
         """
-        根据拜访记录生成任务创建请求列表
+        根据拜访记录生成APAC任务创建请求列表
         
         Args:
             visit_records: 拜访记录列表

@@ -15,6 +15,7 @@ from app.platforms.feishu.client import feishu_client
 from app.platforms.lark.client import lark_client
 from app.platforms.dingtalk.client import dingtalk_client
 from app.core.config import settings
+from app.services.oauth_service import oauth_client
 
 logger = logging.getLogger(__name__)
 
@@ -209,7 +210,7 @@ class PlatformNotificationService:
                 success_count += 1
                 
             except Exception as e:
-                logger.error(f"Failed to send message to {recipient['name']} on {platform}: {e}")
+                logger.error(f"向{recipient['name']}发送{platform}通知失败: {e}")
                 failed_recipients.append(
                     self._create_failed_recipient_record(recipient, platform, str(e))
                 )
@@ -348,61 +349,11 @@ class PlatformNotificationService:
         if not base_user_id:
             return []
 
-        base_url = settings.OAUTH_BASE_URL.rstrip("/")
-        url = f"{base_url}/permission/reporting-chain/query"
-
-        payload = {
-            "userId": base_user_id,
-            "maxLevels": max_levels,
-            "includeLeaderIdentity": include_leader_identity,
-        }
-
-        try:
-            resp = requests.post(url, json=payload, timeout=5)
-            resp.raise_for_status()
-        except Exception as e:
-            logger.error(f"Failed to query reporting chain from OAuth service: {e}")
-            return []
-
-        try:
-            data = resp.json() or {}
-        except Exception as e:
-            logger.error(f"Invalid JSON from OAuth reporting-chain service: {e}")
-            return []
-
-        if data.get("code") != 0:
-            logger.error(f"OAuth reporting-chain service returned error: {data}")
-            return []
-
-        result = data.get("result") or {}
-        leaders = result.get("leaders") or []
-
-        simplified: List[Dict[str, Any]] = []
-        for leader in leaders:
-            platform = leader.get("platform")
-            name = leader.get("name") or "Unknown"
-            open_id = leader.get("openId") or leader.get("open_id")
-
-            if not platform:
-                logger.warning(f"Skip leader without platform: {leader}")
-                continue
-
-            if not open_id:
-                logger.warning(f"Skip leader without identifier: {leader}")
-                continue
-
-            simplified.append(
-                {
-                    "open_id": open_id,
-                    "name": name or "Unknown",
-                    "type": "leader",
-                    "department": leader.get("department") or "部门团队",
-                    "receive_id_type": "open_id",
-                    "platform": platform,
-                }
-            )
-
-        return simplified
+        return oauth_client.get_reporting_chain_leaders(
+            base_user_id=base_user_id,
+            max_levels=max_levels,
+            include_leader_identity=include_leader_identity,
+        )
     
     def _get_card_permission_receivers(self, permission: str, role_codes: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         """
@@ -416,60 +367,11 @@ class PlatformNotificationService:
             "includeIdentity": true
         }
         """
-        base_url = settings.OAUTH_BASE_URL.rstrip("/")
-        url = f"{base_url}/permission/users/by-permission"
-
-        payload = {
-            "permission": permission,
-            "roleCodes": role_codes,
-            "includeIdentity": True,
-        }
-
-        try:
-            resp = requests.post(url, json=payload, timeout=5)
-            resp.raise_for_status()
-        except Exception as e:
-            logger.error(f"Failed to query card-permission users from OAuth service: {e}")
-            return []
-
-        try:
-            data = resp.json() or {}
-        except Exception as e:
-            logger.error(f"Invalid JSON from OAuth users-by-permission service: {e}")
-            return []
-
-        if data.get("code") != 0:
-            logger.error(f"OAuth users-by-permission service returned error: {data}")
-            return []
-
-        users = data.get("result") or []
-
-        simplified: List[Dict[str, Any]] = []
-        for user in users:
-            platform = user.get("platform")
-            name = user.get("name") or "Unknown"
-            open_id = user.get("openId") or user.get("open_id")
-            crm_user_id = user.get("crmUserId")
-
-            if not platform:
-                logger.warning(f"Skip card-permission user without platform: {user}")
-                continue
-
-            if not open_id:
-                logger.warning(f"Skip card-permission user without open_id: {user}")
-                continue
-
-            simplified.append(
-                {
-                    "name": name,
-                    "platform": platform,
-                    "open_id": open_id,
-                    "crm_user_id": crm_user_id,
-                    "raw": user,
-                }
-            )
-
-        return simplified
+        return oauth_client.get_users_by_permission(
+            permission=permission,
+            role_codes=role_codes,
+            include_identity=True,
+        )
     
     def get_recipients_for_recorder(
         self, 
@@ -1023,9 +925,9 @@ class PlatformNotificationService:
         template_vars = self._convert_daily_report_data_for_feishu(db_session, daily_report_data)
         # 个人日报卡片模板
         template_id_by_platform = {
-            PLATFORM_DINGTALK: "801a3e2c-33cc-474e-9474-c0f7cd394311.schema",
-            PLATFORM_FEISHU: "AAqX3POFl4934",
-            PLATFORM_LARK: "AAqX3POFl4934",
+            PLATFORM_DINGTALK: "40452d31-c1fa-46b3-b0ea-28921bcf52ae.schema",
+            PLATFORM_FEISHU: "AAqvGwEs503C4",
+            PLATFORM_LARK: "AAqvGwEs503C4",
         }
         
         # 按平台分组接收者
@@ -1111,9 +1013,9 @@ class PlatformNotificationService:
             template_vars['report_date'] = template_vars['report_date'].isoformat()
         # 部门日报卡片模板
         template_id_by_platform = {
-            PLATFORM_DINGTALK: "c8a179c5-aaae-48b0-97d6-75d4c7bdce30.schema",
-            PLATFORM_FEISHU: "AAqX3PiS5HUx4",
-            PLATFORM_LARK: "AAqX3PiS5HUx4",
+            PLATFORM_DINGTALK: "caae8019-62c5-4f3d-9387-0616b365039b.schema",
+            PLATFORM_FEISHU: "AAqvGxezuuhGD",
+            PLATFORM_LARK: "AAqvGxezuuhGD",
         }
         
         # 按平台分组接收者
@@ -1218,9 +1120,9 @@ class PlatformNotificationService:
             template_vars['report_date'] = template_vars['report_date'].isoformat()
         # 公司日报卡片模板
         template_id_by_platform = {
-            PLATFORM_DINGTALK: "9b888860-bb7f-4b3e-843a-bacacb954bc4.schema",
-            PLATFORM_FEISHU: "AAqX3PU2Ss9aL",
-            PLATFORM_LARK: "AAqX3PU2Ss9aL",
+            PLATFORM_DINGTALK: "6618eed4-1d1a-4536-9625-61e99cb14837.schema",
+            PLATFORM_FEISHU: "AAqvGhJJNR59v",
+            PLATFORM_LARK: "AAqvGhJJNR59v",
         }
         
         # 按平台分组接收者
