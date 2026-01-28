@@ -346,6 +346,8 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                 overdue = task_stats.get("overdue_tasks") if isinstance(task_stats.get("overdue_tasks"), dict) else {}
                 process_eval = spe.get("process_evaluation") if isinstance(spe.get("process_evaluation"), dict) else {}
                 sales_quadrants = process_eval.get("sales_quadrants") if isinstance(process_eval.get("sales_quadrants"), dict) else {}
+                distribution_insight_raw = process_eval.get("distribution_insight")
+                distribution_insight = str(distribution_insight_raw or "").strip()
 
                 resolved_department = department or ""
 
@@ -403,6 +405,9 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                             "behavior_ll": _join_names(sales_quadrants.get("behavior_ll")),
                         }
                     ],
+                    # sales_process_evaluation.process_evaluation.distribution_insight
+                    # 模板侧可直接使用该字段渲染分布洞察文本。
+                    "distribution_insight": distribution_insight,
                     "department_name": resolved_department,
                     "start_date": start_date,
                     "end_date": end_date,
@@ -461,6 +466,7 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                             "behavior_ll": ""
                         }
                     ],
+                    "distribution_insight": "",
                     # 推送/模板常用的顶层兜底字段
                     "department_name": department,
                     "start_date": start_date,
