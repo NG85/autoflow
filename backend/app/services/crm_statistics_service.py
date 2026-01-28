@@ -5,16 +5,15 @@ CRM统计服务
 
 from typing import Any, Dict, List, Optional
 from datetime import date, datetime, timedelta
-from sqlmodel import Session, select, and_
-from app.models.crm_daily_account_statistics import CRMDailyAccountStatistics
+from sqlmodel import Session, select
 from app.models.crm_account_opportunity_assessment import CRMAccountOpportunityAssessment
 from app.models.crm_department_daily_summary import CRMDepartmentDailySummary
-from app.services.platform_notification_service import platform_notification_service
 import logging
-import requests
+from app.services.platform_notification_service import platform_notification_service
 
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
 from app.models.user_profile import UserProfile
+from app.services.oauth_service import oauth_client
 
 logger = logging.getLogger(__name__)
 
@@ -24,74 +23,6 @@ class CRMStatisticsService:
     
     def __init__(self):
         pass
-    
-    def _get_departments_with_managers_from_oauth(self) -> Dict[str, Optional[List[Dict[str, Any]]]]:
-        """
-        从 OAuth 服务获取所有部门及其负责人
-        
-        Returns:
-            Dict[str, Optional[List[Dict[str, Any]]]]: 字典，键是部门名称，值是负责人信息列表（如果没有负责人则为None）
-                负责人信息字典包含：name, openId, crmUserId, email, phone 等字段
-        """
-        from app.core.config import settings
-        
-        base_url = settings.OAUTH_BASE_URL.rstrip("/")
-        url = f"{base_url}/organization/departments/leaders"
-        
-        # POST 请求，参数放在 body 中
-        headers = {"Content-Type": "application/json"}
-        body = {
-            "include_leader_identity": True
-        }
-        
-        try:
-            response = requests.post(url, json=body, headers=headers, timeout=10)
-            response.raise_for_status()
-            
-            data = response.json()
-            
-            if not isinstance(data, dict) or data.get("code") != 0:
-                logger.error(f"OAuth service returned error: {data.get('message', 'Unknown error')}")
-                return {}
-            
-            result = data.get("result", [])
-            if not isinstance(result, list):
-                logger.error(f"OAuth service returned invalid result format: {result}")
-                return {}
-            
-            departments_with_managers = {}
-            for dept_info in result:
-                department_name = dept_info.get("departmentName")
-                if not department_name:
-                    continue
-                
-                leaders = dept_info.get("leaders", [])
-                if leaders:
-                    manager_list = []
-                    for leader in leaders:
-                        manager_list.append({
-                            "open_id": leader["openId"],
-                            "name": leader.get("name", ""),
-                            "crmUserId": leader.get("crmUserId", ""),
-                            # "email": leader.get("email", ""),
-                            # "phone": leader.get("phone", ""),
-                            "userId": leader.get("userId", ""),
-                            "platform": leader.get("platform", "feishu"),
-                            "type": "department_manager",
-                            "department": department_name,
-                            "receive_id_type": "open_id",
-                        })
-                    departments_with_managers[department_name] = manager_list
-            
-            logger.info(f"从 OAuth 服务获取到 {len(departments_with_managers)} 个部门信息")
-            return departments_with_managers
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"调用 OAuth 服务获取部门负责人信息失败: {e}")
-            return {}
-        except Exception as e:
-            logger.error(f"处理 OAuth 服务响应时出错: {e}")
-            return {}
 
     def get_sales_daily_statistics(self, session: Session, target_date: date) -> List[Dict]:
         """
@@ -587,31 +518,6 @@ class CRMStatisticsService:
             },
         }
     
-    def _format_opportunity_names(self, opportunity_names_json: str) -> str:
-        """
-        格式化商机名称，从JSON数组转换为用 | 分隔的字符串
-        """
-        if not opportunity_names_json:
-            return ""
-        
-        try:
-            import json
-            opportunity_list = json.loads(opportunity_names_json)
-            if isinstance(opportunity_list, list):
-                if not opportunity_list:  # 空数组
-                    return ""
-                # 过滤空字符串并用 | 连接
-                filtered_list = [name.strip() for name in opportunity_list if name and name.strip()]
-                if not filtered_list:  # 所有元素都是空字符串
-                    return ""
-                return " | ".join(filtered_list)
-            else:
-                result = str(opportunity_list).strip()
-                return result
-        except (json.JSONDecodeError, TypeError):
-            # 如果解析失败，直接返回原字符串
-            return opportunity_names_json.strip() if opportunity_names_json else ""
-    
     def _convert_assessment_flag(self, flag: str) -> str:
         """
         将评估标志转换为emoji
@@ -805,7 +711,7 @@ class CRMStatisticsService:
         department_reports_with_data = self.aggregate_department_reports(session, target_date)
         
         # 从 OAuth 服务获取所有部门及其负责人
-        all_departments_with_managers = self._get_departments_with_managers_from_oauth()
+        all_departments_with_managers = oauth_client.get_departments_with_leaders()
         
         # 创建有数据的部门名称集合
         departments_with_data = {report['department_name'] for report in department_reports_with_data}
@@ -1192,319 +1098,6 @@ class CRMStatisticsService:
             # 移除: follow_up_note, follow_up_next_step
         }
 
-
-    def get_weekly_statistics(self, session: Session, start_date: date, end_date: date) -> List[Dict]:
-        """
-        获取指定日期范围的销售周报统计数据
-        
-        Args:
-            session: 数据库会话
-            start_date: 开始日期
-            end_date: 结束日期
-            
-        Returns:
-            List[Dict]: 统计结果列表
-        """
-        logger.info(f"开始获取 {start_date} 到 {end_date} 的销售周报统计数据")
-        
-        # 从crm_daily_account_statistics表查询指定日期范围的数据
-        query = select(CRMDailyAccountStatistics).where(
-            and_(
-                CRMDailyAccountStatistics.report_date >= start_date,
-                CRMDailyAccountStatistics.report_date <= end_date
-            )
-        )
-        
-        statistics_records = session.exec(query).all()
-        
-        if not statistics_records:
-            logger.info(f"{start_date} 到 {end_date} 没有找到任何统计记录")
-            return []
-        
-        logger.info(f"找到 {len(statistics_records)} 条 {start_date} 到 {end_date} 的统计记录")
-        
-        # 转换为字典格式
-        statistics_results = []
-        for record in statistics_records:
-            statistics_data = {
-                'unique_id': record.unique_id,
-                'report_date': record.report_date,
-                'sales_id': record.sales_id,
-                'sales_name': self._format_empty_value(record.sales_name),
-                'department_name': self._format_empty_value(record.department_name),
-                'assessment_red_count': record.assessment_red_count or 0,
-                'assessment_yellow_count': record.assessment_yellow_count or 0,
-                'assessment_green_count': record.assessment_green_count or 0,
-                'end_customer_total_follow_up': record.end_customer_total_follow_up or 0,
-                'end_customer_total_first_visit': record.end_customer_total_first_visit or 0,
-                'end_customer_total_multi_visit': record.end_customer_total_multi_visit or 0,
-                'partner_total_follow_up': record.partner_total_follow_up or 0,
-                'partner_total_first_visit': record.partner_total_first_visit or 0,
-                'partner_total_multi_visit': record.partner_total_multi_visit or 0,
-            }
-            statistics_results.append(statistics_data)
-        
-        return statistics_results
-    
-    def aggregate_department_weekly_reports(self, session: Session, start_date: date, end_date: date) -> List[Dict]:
-        """
-        按部门汇总销售周报数据
-        
-        Args:
-            session: 数据库会话
-            start_date: 开始日期
-            end_date: 结束日期
-            
-        Returns:
-            List[Dict]: 部门周报数据列表
-        """
-        logger.info(f"开始汇总 {start_date} 到 {end_date} 的部门周报数据")
-        
-        # 获取指定日期范围的所有统计数据
-        statistics_records = self.get_weekly_statistics(session, start_date, end_date)
-        
-        if not statistics_records:
-            logger.warning(f"{start_date} 到 {end_date} 没有找到任何销售周报数据")
-            return []
-        
-        # 按部门分组
-        department_groups = {}
-        
-        for record in statistics_records:
-            department_name = record.get('department_name', '未知部门')
-            
-            if department_name not in department_groups:
-                department_groups[department_name] = []
-            
-            department_groups[department_name].append(record)
-        
-        # 生成部门汇总报告
-        department_reports = []
-        
-        for department_name, sales_records in department_groups.items():
-            department_report = self._aggregate_single_department_weekly(
-                department_name=department_name,
-                sales_records=sales_records,
-                start_date=start_date,
-                end_date=end_date,
-                session=session
-            )
-            department_reports.append(department_report)
-        
-        logger.info(f"完成 {start_date} 到 {end_date} 的部门周报汇总，共 {len(department_reports)} 个部门")
-        
-        return department_reports
-    
-    def _aggregate_single_department_weekly(self, department_name: str, sales_records: List[Dict], start_date: date, end_date: date, session: Session = None) -> Dict:
-        """
-        汇总单个部门的周报数据
-        
-        Args:
-            department_name: 部门名称
-            sales_records: 该部门所有销售的周报数据
-            start_date: 开始日期
-            end_date: 结束日期
-            session: 数据库会话（可选）
-            
-        Returns:
-            Dict: 部门汇总周报数据
-        """
-        from app.core.config import settings
-        
-        # 获取该部门的销售人员数量（不包含leader）
-        sales_count = self._get_department_sales_count(department_name, session)
-        
-        # 汇总统计数据（直接加和）
-        total_stats = {
-            'end_customer_total_follow_up': 0,
-            'end_customer_total_first_visit': 0,
-            'end_customer_total_multi_visit': 0,
-            'partner_total_follow_up': 0,
-            'partner_total_first_visit': 0,
-            'partner_total_multi_visit': 0,
-            'assessment_red_count': 0,
-            'assessment_yellow_count': 0,
-            'assessment_green_count': 0
-        }
-        
-        for record in sales_records:
-            # 累加统计数据
-            for key in total_stats.keys():
-                total_stats[key] += record.get(key, 0)
-        
-        # 构造统计数据，总计字段为整数，平均值字段为字符串
-        avg_stats = {}
-        for key, value in total_stats.items():
-            if key in ['end_customer_total_follow_up', 'partner_total_follow_up']:
-                # 计算平均值，保留1位小数，返回字符串
-                avg_value = round(value / sales_count, 1) if sales_count > 0 else 0
-                avg_stats[f"{key.replace('total', 'avg')}"] = str(avg_value)
-                # 总计字段保持整数类型
-                avg_stats[key] = value
-            else:
-                # 其他字段保持整数类型
-                avg_stats[key] = value
-        
-        # 获取报告信息
-        report_info_1 = self._get_weekly_report_info(session, 'review1s', end_date, department_name)
-        report_info_5 = self._get_weekly_report_info(session, 'review5', end_date, department_name)
-        
-        # 获取销售四象限数据
-        sales_quadrants = None
-        if report_info_5 and report_info_5.get('execution_id'):
-            sales_quadrants = self._get_sales_quadrants_data(report_info_5['execution_id'])
-        
-        # 构造部门周报数据
-        department_report = {
-            'department_name': department_name,
-            'report_start_date': start_date,
-            'report_end_date': end_date,
-            'statistics': [avg_stats],  # 作为数组，包含平均值
-            'visit_detail_page': f"{settings.VISIT_DETAIL_PAGE_URL}?start_date={start_date}&end_date={end_date}",
-            'account_list_page': f"{settings.ACCOUNT_LIST_PAGE_URL}?department={department_name}",
-            'weekly_review_1_page': self._get_weekly_report_url(report_info_1['execution_id'], 'review1s') if report_info_1 and report_info_1.get('execution_id') else f"{settings.REVIEW_REPORT_HOST}",
-            'weekly_review_5_page': self._get_weekly_report_url(report_info_5['execution_id'], 'review5') if report_info_5 and report_info_5.get('execution_id') else f"{settings.REVIEW_REPORT_HOST}",
-            'sales_quadrants': [sales_quadrants] if sales_quadrants else [{"behavior_hh": "--", "behavior_hl": "--", "behavior_lh": "--", "behavior_ll": "--"}]
-        }
-        
-        logger.info(
-            f"部门 {department_name} 周报汇总完成: {len(sales_records)} 个销售记录, "
-            f"销售人员数量: {sales_count}, 总跟进客户数: {total_stats['end_customer_total_follow_up']}"
-        )
-        
-        return department_report
-    
-    def _get_department_sales_count(self, department_name: str, session: Session = None) -> int:
-        """
-        获取指定部门的销售人员数量（不包含leader）
-        
-        Args:
-            department_name: 部门名称
-            session: 数据库会话（可选）
-            
-        Returns:
-            int: 销售人员数量
-        """
-        try:
-            from app.repositories.user_profile import UserProfileRepo
-            
-            # 如果没有传入session，创建一个新的
-            should_close_session = False
-            if session is None:
-                from app.core.db import get_db_session
-                session = get_db_session()
-                should_close_session = True
-            
-            try:
-                user_profile_repo = UserProfileRepo()
-                
-                # 获取部门所有成员
-                department_members = user_profile_repo.get_department_members(session, department_name)
-                
-                # 过滤掉leader（没有直属上级的用户被认为是leader）
-                sales_count = 0
-                for member in department_members:
-                    if member.is_active and member.direct_manager_id:
-                        # 有直属上级的活跃用户被认为是销售人员
-                        sales_count += 1
-                
-                logger.info(f"部门 {department_name} 的销售人员数量: {sales_count}")
-                return max(sales_count, 1)  # 至少返回1，避免除零错误
-                
-            finally:
-                # 只有当我们创建了session时才关闭它
-                if should_close_session:
-                    session.close()
-                    
-        except Exception as e:
-            logger.error(f"获取部门 {department_name} 销售人员数量失败: {e}")
-            return 1  # 出错时返回1，避免除零错误
-
-
-    def aggregate_company_weekly_report(self, session: Session, start_date: date, end_date: date) -> Dict:
-        """
-        汇总公司级周报数据
-        
-        Args:
-            session: 数据库会话
-            start_date: 开始日期
-            end_date: 结束日期
-            
-        Returns:
-            Dict: 公司汇总周报数据
-        """
-        from app.core.config import settings
-        
-        logger.info(f"开始汇总 {start_date} 到 {end_date} 的公司周报数据")
-        
-        # 获取指定日期范围的所有统计数据
-        statistics_records = self.get_weekly_statistics(session, start_date, end_date)
-        
-        if not statistics_records:
-            logger.warning(f"{start_date} 到 {end_date} 没有找到任何销售周报数据")
-            return None
-        
-        # 获取公司所有销售人员数量（不包含leader）
-        total_sales_count = self._get_company_sales_count(session)
-        
-        # 汇总统计数据（直接加和）
-        total_stats = {
-            'end_customer_total_follow_up': 0,
-            'end_customer_total_first_visit': 0,
-            'end_customer_total_multi_visit': 0,
-            'partner_total_follow_up': 0,
-            'partner_total_first_visit': 0,
-            'partner_total_multi_visit': 0,
-            'assessment_red_count': 0,
-            'assessment_yellow_count': 0,
-            'assessment_green_count': 0
-        }
-        
-        for record in statistics_records:
-            # 累加统计数据
-            for key in total_stats.keys():
-                total_stats[key] += record.get(key, 0)
-        
-        # 构造统计数据，总计字段为整数，平均值字段为字符串
-        avg_stats = {}
-        for key, value in total_stats.items():
-            if key in ['end_customer_total_follow_up', 'partner_total_follow_up']:
-                # 计算平均值，保留1位小数，返回字符串
-                avg_value = round(value / total_sales_count, 1) if total_sales_count > 0 else 0
-                avg_stats[f"{key.replace('total', 'avg')}"] = str(avg_value)
-                # 总计字段保持整数类型
-                avg_stats[key] = value
-            else:
-                # 其他字段保持整数类型
-                avg_stats[key] = value
-        
-        # 获取报告信息
-        report_info_1 = self._get_weekly_report_info(session, 'review1', end_date, None)
-        report_info_5 = self._get_weekly_report_info(session, 'review5', end_date, None)
-        
-        # 获取销售四象限数据
-        sales_quadrants = None
-        if report_info_5 and report_info_5.get('execution_id'):
-            sales_quadrants = self._get_sales_quadrants_data(report_info_5['execution_id'])
-        
-        # 构造公司周报数据
-        company_report = {
-            'report_start_date': start_date,
-            'report_end_date': end_date,
-            'statistics': [avg_stats],  # 作为数组，包含平均值
-            'visit_detail_page': f"{settings.VISIT_DETAIL_PAGE_URL}?start_date={start_date}&end_date={end_date}",
-            'account_list_page': settings.ACCOUNT_LIST_PAGE_URL,
-            'weekly_review_1_page': self._get_weekly_report_url(report_info_1['execution_id'], 'review1') if report_info_1 and report_info_1.get('execution_id') else f"{settings.REVIEW_REPORT_HOST}",
-            'weekly_review_5_page': self._get_weekly_report_url(report_info_5['execution_id'], 'review5') if report_info_5 and report_info_5.get('execution_id') else f"{settings.REVIEW_REPORT_HOST}",
-            'sales_quadrants': [sales_quadrants] if sales_quadrants else [{"behavior_hh": "--", "behavior_hl": "--", "behavior_lh": "--", "behavior_ll": "--"}]
-        }
-        
-        logger.info(
-            f"公司周报汇总完成: {len(statistics_records)} 个销售记录, "
-            f"销售人员数量: {total_sales_count}, 总跟进客户数: {total_stats['end_customer_total_follow_up']}"
-        )
-        
-        return company_report
     
     def _get_weekly_report_url(self, execution_id: str, report_type: str) -> str:
         """
@@ -1621,38 +1214,6 @@ class CRMStatisticsService:
         except Exception as e:
             logger.error(f"获取销售四象限数据失败: {e}")
             return None
-
-    def _get_company_sales_count(self, session: Session) -> int:
-        """
-        获取公司所有销售人员数量（不包含leader）
-        
-        Args:
-            session: 数据库会话
-            
-        Returns:
-            int: 销售人员数量
-        """
-        try:
-            from app.repositories.user_profile import UserProfileRepo
-            
-            user_profile_repo = UserProfileRepo()
-            
-            # 获取所有活跃用户
-            all_members = user_profile_repo.get_all_active_profiles(session)
-            
-            # 过滤掉leader（没有直属上级的用户被认为是leader）
-            sales_count = 0
-            for member in all_members:
-                if member.direct_manager_id:
-                    # 有直属上级的活跃用户被认为是销售人员
-                    sales_count += 1
-            
-            logger.info(f"公司销售人员数量: {sales_count}")
-            return max(sales_count, 1)  # 至少返回1，避免除零错误
-                
-        except Exception as e:
-            logger.error(f"获取公司销售人员数量失败: {e}")
-            return 1  # 出错时返回1，避免除零错误
 
 
 # 创建服务实例

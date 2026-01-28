@@ -172,7 +172,8 @@ class Settings(BaseSettings):
     
     # Client Visit Guide Generation API
     ALDEBARAN_BASE_URL: str = "http://aldebaran:8000"
-    ALDEBARAN_CVGG_URL: str = f"{ALDEBARAN_BASE_URL}/api/v1/previsit/create_v4"
+    ALDEBARAN_CVGG_URL: str = "/api/v1/previsit/create_v4"
+    ALDEBARAN_WEEKLY_REPORT_URL: str = "/api/v1/report/weekly"
     ALDEBARAN_TENANT_ID: str = "PINGCAP"
     
     EMBEDDING_THRESHOLD: float = 0.92

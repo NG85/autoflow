@@ -54,6 +54,7 @@ from uuid import UUID
 from app.repositories.user_profile import UserProfileRepo
 from app.repositories.visit_record import visit_record_repo
 from app.repositories.user_department_relation import user_department_relation_repo
+from app.services.oauth_service import oauth_client
 
 
 logger = logging.getLogger(__name__)
@@ -80,7 +81,7 @@ def _can_view_weekly_followup(db_session: SessionDep, user: CurrentUserDep) -> t
         [str(user.id)],
     ).get(str(user.id))
 
-    roles_and_permissions = visit_record_repo._get_user_roles_and_permissions(user.id)
+    roles_and_permissions = oauth_client.query_user_roles_and_permissions(user_id=user.id)
     permissions = roles_and_permissions.get("permissions", []) if isinstance(roles_and_permissions, dict) else []
 
     is_company_admin = "report51:company:view" in permissions or visit_record_repo._is_admin_user(user.id, db_session, permissions)

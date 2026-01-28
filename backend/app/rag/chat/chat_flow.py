@@ -1475,20 +1475,20 @@ class ChatFlow:
         langfuse_instrumentor_context.get().update(ctx)
     
         # Invoke external document generation service
-        aldebaran_cvgg_url = settings.ALDEBARAN_CVGG_URL
-        # Build request body
-        payload = {
-            "account_name": self.user_question_args.get("account_name", ""),
-            "account_id": self.user_question_args.get("account_id", ""),
-            "lang": self.user_question_args.get("lang", "zh"),
-            "content": self.user_question,
-            "tenant_id": settings.ALDEBARAN_TENANT_ID,
-        }
-        response = requests.post(aldebaran_cvgg_url, json=payload, timeout=300, headers={"cookie": self.incoming_cookie, "user_id": str(self.user.id)})
         data = None
         error_message = None
         try:
-            response.raise_for_status()
+            from app.services.aldebaran_service import aldebaran_client
+
+            data = aldebaran_client.generate_client_visit_guide(
+                account_name=self.user_question_args.get("account_name", ""),
+                account_id=self.user_question_args.get("account_id", ""),
+                lang=self.user_question_args.get("lang", "zh"),
+                content=self.user_question,
+                incoming_cookie=self.incoming_cookie,
+                user_id=str(self.user.id),
+                timeout_seconds=300,
+            )
         except requests.exceptions.HTTPError as e:
             logger.error(f"HTTP error occurred: {e}")
             error_message = "报告服务响应异常，请稍后再试"
@@ -1504,9 +1504,6 @@ class ChatFlow:
                 source_documents=[]
             )
         else:
-            # Parse JSON response
-            result = response.json()
-            data = result["data"]
             with self._trace_manager.span(name="client_visit_guide_generation") as span:
                 span.end(output={json.dumps(data)})
                         

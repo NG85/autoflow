@@ -15,6 +15,7 @@ from app.platforms.feishu.client import feishu_client
 from app.platforms.lark.client import lark_client
 from app.platforms.dingtalk.client import dingtalk_client
 from app.core.config import settings
+from app.services.oauth_service import oauth_client
 
 logger = logging.getLogger(__name__)
 
@@ -348,61 +349,11 @@ class PlatformNotificationService:
         if not base_user_id:
             return []
 
-        base_url = settings.OAUTH_BASE_URL.rstrip("/")
-        url = f"{base_url}/permission/reporting-chain/query"
-
-        payload = {
-            "userId": base_user_id,
-            "maxLevels": max_levels,
-            "includeLeaderIdentity": include_leader_identity,
-        }
-
-        try:
-            resp = requests.post(url, json=payload, timeout=5)
-            resp.raise_for_status()
-        except Exception as e:
-            logger.error(f"Failed to query reporting chain from OAuth service: {e}")
-            return []
-
-        try:
-            data = resp.json() or {}
-        except Exception as e:
-            logger.error(f"Invalid JSON from OAuth reporting-chain service: {e}")
-            return []
-
-        if data.get("code") != 0:
-            logger.error(f"OAuth reporting-chain service returned error: {data}")
-            return []
-
-        result = data.get("result") or {}
-        leaders = result.get("leaders") or []
-
-        simplified: List[Dict[str, Any]] = []
-        for leader in leaders:
-            platform = leader.get("platform")
-            name = leader.get("name") or "Unknown"
-            open_id = leader.get("openId") or leader.get("open_id")
-
-            if not platform:
-                logger.warning(f"Skip leader without platform: {leader}")
-                continue
-
-            if not open_id:
-                logger.warning(f"Skip leader without identifier: {leader}")
-                continue
-
-            simplified.append(
-                {
-                    "open_id": open_id,
-                    "name": name or "Unknown",
-                    "type": "leader",
-                    "department": leader.get("department") or "部门团队",
-                    "receive_id_type": "open_id",
-                    "platform": platform,
-                }
-            )
-
-        return simplified
+        return oauth_client.get_reporting_chain_leaders(
+            base_user_id=base_user_id,
+            max_levels=max_levels,
+            include_leader_identity=include_leader_identity,
+        )
     
     def _get_card_permission_receivers(self, permission: str, role_codes: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         """
@@ -416,60 +367,11 @@ class PlatformNotificationService:
             "includeIdentity": true
         }
         """
-        base_url = settings.OAUTH_BASE_URL.rstrip("/")
-        url = f"{base_url}/permission/users/by-permission"
-
-        payload = {
-            "permission": permission,
-            "roleCodes": role_codes,
-            "includeIdentity": True,
-        }
-
-        try:
-            resp = requests.post(url, json=payload, timeout=5)
-            resp.raise_for_status()
-        except Exception as e:
-            logger.error(f"Failed to query card-permission users from OAuth service: {e}")
-            return []
-
-        try:
-            data = resp.json() or {}
-        except Exception as e:
-            logger.error(f"Invalid JSON from OAuth users-by-permission service: {e}")
-            return []
-
-        if data.get("code") != 0:
-            logger.error(f"OAuth users-by-permission service returned error: {data}")
-            return []
-
-        users = data.get("result") or []
-
-        simplified: List[Dict[str, Any]] = []
-        for user in users:
-            platform = user.get("platform")
-            name = user.get("name") or "Unknown"
-            open_id = user.get("openId") or user.get("open_id")
-            crm_user_id = user.get("crmUserId")
-
-            if not platform:
-                logger.warning(f"Skip card-permission user without platform: {user}")
-                continue
-
-            if not open_id:
-                logger.warning(f"Skip card-permission user without open_id: {user}")
-                continue
-
-            simplified.append(
-                {
-                    "name": name,
-                    "platform": platform,
-                    "open_id": open_id,
-                    "crm_user_id": crm_user_id,
-                    "raw": user,
-                }
-            )
-
-        return simplified
+        return oauth_client.get_users_by_permission(
+            permission=permission,
+            role_codes=role_codes,
+            include_identity=True,
+        )
     
     def get_recipients_for_recorder(
         self, 

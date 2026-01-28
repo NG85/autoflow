@@ -1,21 +1,19 @@
 import logging
-from typing import Optional, Any
 
-import requests
 from app.api.deps import CurrentUserDep, SessionDep
 from app.exceptions import InternalServerError
 from fastapi import APIRouter, HTTPException
 from fastapi_pagination import Page
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import timedelta
 
 from app.api.routes.crm.models import (
     DailyReportRequest,
     WeeklyReportRequest,
 )
 from app.services.crm_statistics_service import crm_statistics_service
-from app.services.crm_sales_task_statistics_service import crm_sales_task_statistics_service
-from app.core.config import settings
+from app.services.aldebaran_service import aldebaran_client
+from app.services.oauth_service import oauth_client
+from app.utils.date_utils import beijing_today_date
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +31,7 @@ def get_daily_reports(
         if request.report_date:            
             parsed_date = request.report_date
         else:
-            parsed_date = (datetime.now(ZoneInfo("Asia/Shanghai")) - timedelta(days=1)).date()
+            parsed_date = beijing_today_date() - timedelta(days=1)
         
         # 日报口径来自 CRMAccountOpportunityAssessment：
         # 通过 crm_statistics_service.get_sales_complete_daily_report 组装销售维度的完整日报
@@ -99,7 +97,7 @@ def get_department_daily_reports(
         if request.report_date:
             parsed_date = request.report_date
         else:
-            parsed_date = (datetime.now(ZoneInfo("Asia/Shanghai")) - timedelta(days=1)).date()
+            parsed_date = beijing_today_date() - timedelta(days=1)
                 
         # 获取部门汇总报告
         department_reports = crm_statistics_service.aggregate_department_reports(
@@ -158,7 +156,7 @@ def get_company_daily_report(
         if request.report_date:
             parsed_date = request.report_date
         else:
-            parsed_date = (datetime.now(ZoneInfo("Asia/Shanghai")) - timedelta(days=1)).date()
+            parsed_date = beijing_today_date() - timedelta(days=1)
         
         # 获取公司汇总报告
         company_report = crm_statistics_service.aggregate_company_report(
@@ -177,51 +175,6 @@ def get_company_daily_report(
     except Exception as e:
         logger.exception(f"获取公司日报数据失败: {e}")
         raise InternalServerError()
-
-
-def _aldebaran_fetch_weekly_report(
-    *,
-    report_year: int,
-    report_week_of_year: int,
-    department_name: Optional[str],
-    timeout_seconds: int = 30,
-) -> dict[str, Any]:
-    """调用 Aldebaran 周报接口获取周报内容"""
-    base_url = settings.ALDEBARAN_BASE_URL.rstrip("/")
-    url = f"{base_url}/api/v1/report/weekly"
-    payload = {
-        "tenant_id": 'PINGCAP',
-        "report_year": int(report_year),
-        "report_week_of_year": int(report_week_of_year),
-        "department": department_name,
-    }
-
-    logger.info(
-        "调用 Aldebaran 周报接口: %s, payload=%s",
-        url,
-        {
-            "tenant_id": payload["tenant_id"],
-            "report_year": payload["report_year"],
-            "report_week_of_year": payload["report_week_of_year"],
-            "department": payload["department"],
-        },
-    )
-
-    resp = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=timeout_seconds)
-    if resp.status_code != 200:
-        raise RuntimeError(f"Aldebaran weekly report http {resp.status_code}: {resp.text}")
-
-    data = resp.json()
-
-    if isinstance(data, dict) and data.get("status") == "success":
-        report_data = data.get("data")
-        if not isinstance(report_data, dict):
-            raise RuntimeError(f"Aldebaran weekly report missing data: {data}")
-        result = report_data
-    else:
-        raise RuntimeError(f"Aldebaran weekly report invalid json: {data}")
-
-    return result
 
 @router.post("/weekly-reports/department")
 def get_department_weekly_reports(
@@ -246,7 +199,7 @@ def get_department_weekly_reports(
             parsed_date = request.report_date
         else:
             # 没有设置 report_date 时，选择当前日期往前最近的一个周六
-            today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
+            today = beijing_today_date()
             weekday = today.weekday()  # 周一为0，周六为5，周日为6
             days_to_last_saturday = (weekday - 5) % 7
             parsed_date = today - timedelta(days=days_to_last_saturday)
@@ -261,7 +214,7 @@ def get_department_weekly_reports(
             department_names = [request.department_name]
         else:
             # 获取所有有负责人的部门
-            departments_with_managers = crm_statistics_service._get_departments_with_managers_from_oauth()
+            departments_with_managers = oauth_client.get_departments_with_leaders(include_leader_identity=True, timeout_seconds=10)
             if not departments_with_managers:
                 from app.repositories.user_profile import user_profile_repo
                 dept_managers = user_profile_repo.get_all_departments_with_managers(db_session)
@@ -273,7 +226,7 @@ def get_department_weekly_reports(
         department_reports = []
         for department_name in department_names:
             try:
-                dept_report = _aldebaran_fetch_weekly_report(
+                dept_report = aldebaran_client.fetch_weekly_report(
                     report_year=report_year,
                     report_week_of_year=report_week_of_year,
                     department_name=department_name,
@@ -321,7 +274,7 @@ def get_company_weekly_report(
             parsed_date = request.report_date
         else:
             # 没有设置 report_date 时，选择当前日期往前最近的一个周六
-            today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
+            today = beijing_today_date()
             weekday = today.weekday()  # 周一为0，周六为5，周日为6
             days_to_last_saturday = (weekday - 5) % 7
             parsed_date = today - timedelta(days=days_to_last_saturday)
@@ -332,7 +285,7 @@ def get_company_weekly_report(
         report_week_of_year = int(iso_week)        
         
         # 获取公司周报数据
-        company_weekly_report = _aldebaran_fetch_weekly_report(
+        company_weekly_report = aldebaran_client.fetch_weekly_report(
             report_year=report_year,
             report_week_of_year=report_week_of_year,
             department_name=None,

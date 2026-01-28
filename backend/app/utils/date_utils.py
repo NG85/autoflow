@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from typing import Any, Tuple
+from typing import Any, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 
@@ -75,3 +75,44 @@ def convert_utc_to_local_timezone(utc_datetime: Any) -> str:
         
     except Exception as e:
         return "--"
+
+
+def convert_beijing_date_to_utc_range(beijing_date_str: str, is_start: bool = True) -> Optional[datetime]:
+    """
+    将北京时间的日期字符串转换为UTC时间
+    
+    Args:
+        beijing_date_str: 北京时间的日期字符串，格式为 "YYYY-MM-DD"
+        is_start: True表示开始时间（00:00:00），False表示结束时间（23:59:59）
+        
+    Returns:
+        UTC时间对象，如果解析失败则返回None
+    """
+    try:
+        # 解析北京时间的日期
+        beijing_date = datetime.strptime(beijing_date_str, "%Y-%m-%d").date()
+        
+        # 根据is_start参数选择时间
+        if is_start:
+            # 开始时间：00:00:00
+            beijing_datetime = datetime.combine(beijing_date, datetime.min.time())
+        else:
+            # 结束时间：23:59:59
+            beijing_datetime = datetime.combine(beijing_date, datetime.max.time().replace(microsecond=0))
+        
+        # 转换为UTC时间
+        beijing_tz = ZoneInfo("Asia/Shanghai")
+        utc_tz = ZoneInfo("UTC")
+        beijing_datetime = beijing_datetime.replace(tzinfo=beijing_tz)
+        utc_datetime = beijing_datetime.astimezone(utc_tz)
+        
+        return utc_datetime
+    except ValueError:
+        return None
+
+
+_BEIJING_TZ = ZoneInfo("Asia/Shanghai")
+
+def beijing_today_date():
+    """获取北京时间的“今天”（date）。"""
+    return datetime.now(_BEIJING_TZ).date()
