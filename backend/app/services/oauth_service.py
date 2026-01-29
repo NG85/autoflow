@@ -2,8 +2,8 @@ import logging
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from cachetools import TTLCache, cached
-from cachetools.keys import methodkey
+# from cachetools import TTLCache, cached
+# from cachetools.keys import methodkey
 import requests
 
 from app.core.config import settings
@@ -22,7 +22,7 @@ class OAuthClient:
         self._session = session or requests.Session()
 
 
-    @cached(cache=TTLCache(maxsize=100, ttl=60 * 10), key=methodkey)
+    # @cached(cache=TTLCache(maxsize=100, ttl=60 * 10), key=methodkey)
     def query_user_roles_and_permissions(self, *, user_id: UUID, timeout_seconds: int = 5) -> Dict[str, Any]:
         """
         POST /permission/query

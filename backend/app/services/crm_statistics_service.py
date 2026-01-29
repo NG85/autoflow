@@ -707,29 +707,48 @@ class CRMStatisticsService:
         
         logger.info(f"[部门日报] 开始生成并推送 {target_date} 的部门日报")
         
-        # 获取有数据的部门报告
-        department_reports_with_data = self.aggregate_department_reports(session, target_date)
-        
         # 从 OAuth 服务获取所有部门及其负责人
         all_departments_with_managers = oauth_client.get_departments_with_leaders()
         
-        # 创建有数据的部门名称集合
-        departments_with_data = {report['department_name'] for report in department_reports_with_data}
-        
-        # 为没有数据的部门生成空数据的报告
+        # 只处理有负责人的部门（先拿部门&负责人，再取报告）
+        department_names_with_managers = [
+            department_name
+            for department_name, managers in (all_departments_with_managers or {}).items()
+            if department_name and managers
+        ]
+
+        if not department_names_with_managers:
+            logger.warning(f"{target_date} 未找到任何有负责人的部门，跳过部门日报推送")
+            return
+
+        department_reports_with_data = self.aggregate_department_reports(
+            session=session,
+            target_date=target_date,
+            department_names=department_names_with_managers,
+        )
+        department_reports_with_data_by_name = {
+            report.get("department_name"): report
+            for report in department_reports_with_data
+            if report.get("department_name")
+        }
+        departments_with_data = set(department_reports_with_data_by_name.keys())
+
+        # 为没有数据的部门生成空数据的报告（仅限有负责人的部门）
         department_reports_no_data = []
-        for department_name, managers in all_departments_with_managers.items():
-            # 只处理有负责人的部门
-            if managers and department_name not in departments_with_data:
-                empty_report = self._aggregate_single_department(
-                    department_name=department_name,
-                    target_date=target_date,
-                )
-                department_reports_no_data.append(empty_report)
-                logger.info(f"为部门 {department_name} 生成空数据报告（无销售数据）")
-        
-        # 合并有数据和没数据的部门报告
-        all_department_reports = department_reports_with_data + department_reports_no_data
+        all_department_reports: List[Dict[str, Any]] = []
+        for department_name in department_names_with_managers:
+            existing_report = department_reports_with_data_by_name.get(department_name)
+            if existing_report:
+                all_department_reports.append(existing_report)
+                continue
+
+            empty_report = self._aggregate_single_department(
+                department_name=department_name,
+                target_date=target_date,
+            )
+            department_reports_no_data.append(empty_report)
+            all_department_reports.append(empty_report)
+            logger.info(f"为部门 {department_name} 生成空数据报告（无销售数据）")
         
         if not all_department_reports:
             logger.warning(f"{target_date} 没有找到任何部门，跳过部门日报推送")
@@ -748,6 +767,16 @@ class CRMStatisticsService:
                 # 获取该部门的负责人信息
                 department_name = department_report.get('department_name')
                 managers = all_departments_with_managers.get(department_name) if department_name else None
+
+                if not department_name:
+                    logger.warning(f"[部门日报] 跳过无部门名称的日报数据: {department_report}")
+                    continue
+
+                has_data = department_name in departments_with_data
+                # 只推送给负责人；无负责人的部门忽略
+                if not managers:
+                    logger.info(f"[部门日报] 部门 {department_name} 未找到负责人，忽略该部门推送")
+                    continue
                 
                 # 发送部门日报飞书通知
                 result = platform_notification_service.send_department_daily_report_notification(
@@ -760,7 +789,6 @@ class CRMStatisticsService:
                 
                 if result["success"]:
                     successful_departments += 1
-                    has_data = department_report['department_name'] in departments_with_data
                     data_status = "有数据" if has_data else "无数据"
                     logger.info(
                         f"成功为部门 {department_report['department_name']} ({data_status}) 发送日报飞书通知，"
@@ -820,13 +848,19 @@ class CRMStatisticsService:
         
         logger.info("CRM公司日报飞书通知发送完成")
     
-    def aggregate_department_reports(self, session: Session, target_date: Optional[date] = None) -> List[Dict]:
+    def aggregate_department_reports(
+        self,
+        session: Session,
+        target_date: Optional[date] = None,
+        department_names: Optional[List[str]] = None,
+    ) -> List[Dict]:
         """
         按部门汇总日报数据（基于 crm_department_daily_summary 表）
         
         Args:
             session: 数据库会话
             target_date: 目标日期，默认为昨天
+            department_names: 仅汇总指定部门（为空则汇总全部部门）
             
         Returns:
             List[Dict]: 部门日报数据列表
@@ -843,6 +877,8 @@ class CRMStatisticsService:
             CRMDepartmentDailySummary.report_date == target_date,
             CRMDepartmentDailySummary.summary_type == "department",
         )
+        if department_names:
+            query = query.where(CRMDepartmentDailySummary.department_name.in_(department_names))
         records: List[CRMDepartmentDailySummary] = session.exec(query).all()
         
         if not records:
@@ -853,6 +889,8 @@ class CRMStatisticsService:
         
         for record in records:
             department_name = record.department_name or ""
+            if not department_name:
+                continue
             
             # 统计字段：直接使用汇总表中的结果（对齐 CRMDepartmentDailySummary 新字段定义）
             total_stats = {

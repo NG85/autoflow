@@ -405,8 +405,6 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                             "behavior_ll": _join_names(sales_quadrants.get("behavior_ll")),
                         }
                     ],
-                    # sales_process_evaluation.process_evaluation.distribution_insight
-                    # 模板侧可直接使用该字段渲染分布洞察文本。
                     "distribution_insight": distribution_insight,
                     "department_name": resolved_department,
                     "start_date": start_date,
