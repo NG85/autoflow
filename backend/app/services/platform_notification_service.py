@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 class PlatformNotificationService:
     """多平台推送服务 - 基于用户档案进行消息推送，支持飞书和Lark"""
 
+    # Ops backdoor allowlist: only CC company-level daily/weekly reports.
+    _OPS_CC_FEISHU_ALLOWED_SOURCES = {"company daily report", "company weekly report"}
+
     def _ops_cc_feishu_card(self, card_content: Dict[str, Any], *, source: str) -> None:
         """
         运维后门：用指定的飞书应用，将卡片抄送给指定 open_id 列表。
@@ -30,15 +33,18 @@ class PlatformNotificationService:
         - 失败不影响主流程（仅记录日志）
         """
         try:
-            if not getattr(settings, "OPS_CC_FEISHU_ENABLED", False):
+            if source not in self._OPS_CC_FEISHU_ALLOWED_SOURCES:
+                return
+            
+            if not settings.OPS_CC_FEISHU_ENABLED:
                 return
 
-            open_ids = getattr(settings, "OPS_CC_FEISHU_OPEN_IDS", None) or []
+            open_ids = settings.OPS_CC_FEISHU_OPEN_IDS or []
             if not open_ids:
                 return
 
-            app_id = getattr(settings, "OPS_CC_FEISHU_APP_ID", None)
-            app_secret = getattr(settings, "OPS_CC_FEISHU_APP_SECRET", None)
+            app_id = settings.OPS_CC_FEISHU_APP_ID
+            app_secret = settings.OPS_CC_FEISHU_APP_SECRET
             if not app_id or not app_secret:
                 logger.warning(
                     "Ops CC enabled but missing Feishu app credentials, skip. source=%s",
@@ -270,7 +276,7 @@ class PlatformNotificationService:
                             "template_variable": template_vars,
                         },
                     }
-            if cc_card_content and notification_type in ["company daily report", "company weekly report"]:
+            if cc_card_content:
                 self._ops_cc_feishu_card(cc_card_content, source=notification_type)
         except Exception as e:
             logger.error("Ops CC Feishu prepare/send failed. source=%s, error=%s", notification_type, e)
@@ -768,23 +774,23 @@ class PlatformNotificationService:
                 else:
                     return "AAqv2BCd4MmZW"  # link类型使用通用卡片：链接或文件版
 
-        # Ops backdoor: CC management-view Feishu card once per event (best-effort)
-        try:
-            form_type_for_template = None
-            if visit_record and isinstance(visit_record, dict):
-                form_type_for_template = visit_record.get("form_type")
-            management_template_id = get_template_id("leader", PLATFORM_FEISHU, form_type_for_template)
-            if management_template_id:
-                cc_card_content = {
-                    "type": "template",
-                    "data": {
-                        "template_id": management_template_id,
-                        "template_variable": base_template_vars,
-                    },
-                }
-                self._ops_cc_feishu_card(cc_card_content, source="visit record")
-        except Exception as e:
-            logger.error("Ops CC Feishu visit-record failed. record_id=%s, error=%s", record_id, e)
+        # # Ops backdoor: CC management-view Feishu card once per event (best-effort)
+        # try:
+        #     form_type_for_template = None
+        #     if visit_record and isinstance(visit_record, dict):
+        #         form_type_for_template = visit_record.get("form_type")
+        #     management_template_id = get_template_id("leader", PLATFORM_FEISHU, form_type_for_template)
+        #     if management_template_id:
+        #         cc_card_content = {
+        #             "type": "template",
+        #             "data": {
+        #                 "template_id": management_template_id,
+        #                 "template_variable": base_template_vars,
+        #             },
+        #         }
+        #         self._ops_cc_feishu_card(cc_card_content, source="visit record")
+        # except Exception as e:
+        #     logger.error("Ops CC Feishu visit-record failed. record_id=%s, error=%s", record_id, e)
         
         # 逐个平台推送消息（因为需要根据接收者类型选择不同模板）
         total_success_count = 0
