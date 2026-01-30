@@ -433,6 +433,7 @@ class CRMStatisticsService:
         if partner_ids:
             query_partners = select(CRMAccountOpportunityAssessment).where(
                 CRMAccountOpportunityAssessment.assessment_date == target_date,
+                CRMAccountOpportunityAssessment.opportunity_id.is_(None),
                 CRMAccountOpportunityAssessment.account_id.in_(partner_ids),
                 CRMAccountOpportunityAssessment.customer_type == 'partner',
             )
@@ -559,7 +560,8 @@ class CRMStatisticsService:
             # 评估灯光优先级：red=1, yellow=2, 其他=3
             flag_priority = {
                 'red': 1,
-                'yellow': 2
+                'yellow': 2,
+                'green': 3
             }
             assessment_flag_raw = assessment.get('assessment_flag_raw', '').lower()
             flag_order = flag_priority.get(assessment_flag_raw, 3)
@@ -607,7 +609,7 @@ class CRMStatisticsService:
                 
                 logger.info(
                     f"总计: {total_first_assessments} 个销售个人首次拜访评估（含绿灯），"
-                    f"{total_multi_assessments} 个销售个人多次拜访评估（不含绿灯）"
+                    f"{total_multi_assessments} 个销售个人多次拜访评估（含绿灯）"
                 )
                 
                 # 推送个人日报（只在开关启用时发送卡片）
