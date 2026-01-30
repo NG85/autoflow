@@ -132,7 +132,7 @@ def create_local_contact(
             db_session=db_session,
             user=user,
             customer_id=customer_id,
-            error_message=f"没有权限访问客户 {customer_id}，无法创建联系人"
+            error_message=f"没有权限访问该客户，无法创建联系人"
         )
         
         new_contact = local_contact_repo.create(
@@ -376,7 +376,7 @@ def query_local_contacts_by_customer(
             db_session=db_session,
             user=user,
             customer_id=customer_id,
-            error_message=f"没有权限访问客户 {customer_id}"
+            error_message=f"没有权限访问该客户，无法获取联系人列表"
         )
         
         # 参数验证

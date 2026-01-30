@@ -57,7 +57,9 @@ class LocalContactRepo(BaseRepo):
             (CrmDataAuthority.delete_flag.is_(None)) | (CrmDataAuthority.delete_flag == False)  # noqa: E712
         ).limit(1)
         
-        return db_session.exec(stmt).first() is not None
+        result = db_session.exec(stmt).first()
+        logger.info(f"CRM data authority result for user {user_id} and customer {customer_id}: {result}")
+        return result is not None
     
     def get_by_id(
         self, 
