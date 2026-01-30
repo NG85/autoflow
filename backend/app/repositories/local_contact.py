@@ -7,6 +7,7 @@ from app.repositories.base_repo import BaseRepo
 from app.models.local_contacts import LocalContact
 from app.models.crm_accounts import CRMAccount
 from app.models.crm_data_authority import CrmDataAuthority
+from app.models.user_reporting_relation import UserReportingRelation
 from app.rag.types import CrmDataType
 from app.repositories.user_profile import user_profile_repo
 from app.repositories.visit_record import visit_record_repo
@@ -59,7 +60,52 @@ class LocalContactRepo(BaseRepo):
         
         result = db_session.exec(stmt).first()
         logger.info(f"CRM data authority result for user {user_id} and customer {customer_id}: {result}")
-        return result is not None
+        if result is not None:
+            return True
+
+        # 2.3 兜底逻辑：
+        # - 如果权限表里没有记录，先检查 crm_accounts 的负责人是否为本人
+        # - 如果负责人是本人的下级（汇报关系表 user_reporting_relation，且 is_active=True），也允许访问
+        # customer_id 对应 crm_accounts.unique_id
+        owner_id_stmt = (
+            select(CRMAccount.person_in_charge_id)
+            .where(CRMAccount.unique_id == customer_id)
+            .limit(1)
+        )
+        owner_id = db_session.exec(owner_id_stmt).first()
+        logger.info(
+            f"CRM account owner_id for user {user_id} (crm_user_id={crm_user_id}) "
+            f"and customer {customer_id}: {owner_id}"
+        )
+        if not owner_id:
+            return False
+
+        # 负责人为本人
+        if str(owner_id) == str(crm_user_id):
+            return True
+
+        # 负责人为下级（直接或间接均可，依赖 user_reporting_relation 的 level）
+        try:
+            subordinate_stmt = (
+                select(UserReportingRelation.id)
+                .where(UserReportingRelation.from_user_id == str(crm_user_id))
+                .where(UserReportingRelation.to_user_id == str(owner_id))
+                .where(UserReportingRelation.is_active == True)  # noqa: E712
+                .limit(1)
+            )
+            subordinate_match = db_session.exec(subordinate_stmt).first()
+            logger.info(
+                f"CRM account subordinate owner match for user {user_id} (crm_user_id={crm_user_id}) "
+                f"and customer {customer_id} (owner_id={owner_id}): {subordinate_match}"
+            )
+            return subordinate_match is not None
+        except Exception as e:
+            # nice-to-have: 汇报关系表异常不影响主逻辑（按“未命中下级”处理）
+            logger.warning(
+                f"Failed to check subordinate relation for user {user_id} (crm_user_id={crm_user_id}) "
+                f"and customer {customer_id} (owner_id={owner_id}): {e}"
+            )
+            return False
     
     def get_by_id(
         self, 
