@@ -346,7 +346,7 @@ class CRMStatisticsService:
                 f"销售 {stats['recorder']} 的完整日报数据已组装，"
                 f"所在团队 {stats['department']}，"
                 f"首次评估明细（含绿灯，客户和合作伙伴） {len(assessment_details['first'])} 个，"
-                f"多次评估明细（含绿灯，仅客户） {len(assessment_details['multi'])} 个"
+                f"多次评估明细（含绿灯，客户和合作伙伴） {len(assessment_details['multi'])} 个"
             )
         
         return complete_reports
@@ -364,7 +364,7 @@ class CRMStatisticsService:
         
         评估数据划分为：
         - first: 首次拜访评估详情列表（包含绿灯，客户和合作伙伴）
-        - multi: 多次跟进评估详情列表（包含绿灯，仅客户）
+        - multi: 多次跟进评估详情列表（包含绿灯，客户和合作伙伴）
         - statistics: 统计数据字典，包含：
             - first: 首次拜访的红黄绿灯数量（客户和合作伙伴）
             - multi: 多次跟进的红黄绿灯数量（仅客户）
@@ -488,8 +488,11 @@ class CRMStatisticsService:
                     partner_stats["yellow"] += 1
                 elif flag == "green":
                     partner_stats["green"] += 1
-                # 合作伙伴的评估详情都加入到首次拜访列表中（因为不区分首次/多次）
-                first_assessments.append(assessment_data)
+                # 明细仍按首次/多次分组；仅统计不区分首次/多次
+                if is_first_visit:
+                    first_assessments.append(assessment_data)
+                else:
+                    multi_assessments.append(assessment_data)
             else:
                 # 客户：按首次/多次分别统计和分组（都包含绿灯）
                 if is_first_visit:
