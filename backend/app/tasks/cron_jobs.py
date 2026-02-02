@@ -239,6 +239,9 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
             # 从接口获取周报数据（公司 + 各部门），不再自行查询数据库做汇总统计
             department_reports: list[dict[str, Any]] = []
             company_weekly_report: Optional[dict[str, Any]] = None
+            dept_report_fetch_failures: list[dict[str, str]] = []
+            dept_weekly_report_send_failures: list[dict[str, str]] = []
+            company_weekly_report_send_failure: Optional[str] = None
             from app.models.crm_weekly_followup_summary import CRMWeeklyFollowupSummary
 
             def _join_names(val: Any) -> str:
@@ -533,7 +536,10 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                             department_name=department_name,
                         )
                     except Exception as e:
-                        logger.warning(f"获取部门周报失败，改为推送空周报: department={department_name}, err={e}")
+                        dept_report_fetch_failures.append({
+                            "department_name": str(department_name),
+                            "error": str(e),
+                        })
                         dept_report = _build_empty_department_weekly_report(department_name)
                     else:
                         # 接口返回有数据时，重组结构以适配模板
@@ -612,20 +618,32 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                 len(department_reports),
                 bool(company_weekly_report),
             )
+            if dept_report_fetch_failures:
+                # 避免按部门刷屏：仅汇总一次（展示前若干个部门名）
+                failed_depts = [x.get("department_name", "") for x in dept_report_fetch_failures if x.get("department_name")]
+                logger.warning(
+                    "获取部门周报失败，已改为推送空周报: 失败=%s 个，department=%s",
+                    len(dept_report_fetch_failures),
+                    "|".join(failed_depts[:10]),
+                )
             company_report_generated = bool(company_weekly_report)
             
             # 如果启用了飞书推送，发送周报通知
             if settings.CRM_WEEKLY_REPORT_FEISHU_ENABLED:
                 department_success_count = 0
                 department_failed_count = 0
+                department_skipped_no_recipients_count = 0
                 company_success = False
+                company_attempted = False
+                company_skipped_no_recipients = False
                 
                 if not report_type or report_type == 'department':
                     # 发送部门周报通知
                     for department_report in department_reports:
+                        # 先取出部门名，确保异常分支也能记录定位信息
+                        dept_name = department_report.get("department_name")
                         try:
                             # recipients：优先使用 OAuth 返回的负责人列表（无数据部门也能推送）
-                            dept_name = department_report.get("department_name")
                             recipients = departments_with_managers.get(dept_name) if dept_name else None
                             # 发送部门周报通知给部门负责人
                             result = platform_notification_service.send_weekly_report_notification(
@@ -641,17 +659,30 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                                     f"推送成功 {result['success_count']}/{result['recipients_count']} 次"
                                 )
                             else:
-                                department_failed_count += 1
-                                logger.warning(f"部门周报通知发送失败: {result['message']}")
+                                msg = str(result.get("message", ""))
+                                # 运维告警规则会排除 "No recipients found for"（属于可预期的无收件人场景，避免误报）
+                                if "No recipients found for" in msg:
+                                    department_skipped_no_recipients_count += 1
+                                else:
+                                    department_failed_count += 1
+                                    dept_weekly_report_send_failures.append({
+                                        "department_name": str(dept_name or "未知部门"),
+                                        "error": msg,
+                                    })
                                 
                         except Exception as e:
                             department_failed_count += 1
-                            logger.error(f"发送部门周报通知时出错: {str(e)}")
+                            dept_weekly_report_send_failures.append({
+                                "department_name": str(dept_name or "未知部门"),
+                                "error": str(e),
+                            })
+                            logger.exception(f"发送部门周报通知时出错: department={dept_name}, err={e}")
                 
                 if not report_type or report_type == 'company':
                     # 发送公司周报通知
                     if company_weekly_report:
                         try:
+                            company_attempted = True
                             company_result = platform_notification_service.send_company_weekly_report_notification(
                                 db_session=session,
                                 company_weekly_report_data=company_weekly_report
@@ -664,14 +695,45 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                                     f"推送成功 {company_result['success_count']}/{company_result['recipients_count']} 次"
                                 )
                             else:
-                                logger.warning(f"公司周报通知发送失败: {company_result['message']}")
+                                msg = str(company_result.get("message", ""))
+                                if "No recipients found for" in msg:
+                                    company_skipped_no_recipients = True
+                                else:
+                                    company_weekly_report_send_failure = msg
                                 
                         except Exception as e:
-                            logger.error(f"发送公司周报通知时出错: {str(e)}")
+                            company_attempted = True
+                            company_weekly_report_send_failure = str(e)
+                            logger.exception(f"发送公司周报通知时出错: {str(e)}")
                     else:
                         logger.warning(f"{start_date} 到 {end_date} 没有找到任何公司周报数据，跳过公司周报推送")
                 
-                logger.info(f"CRM周报飞书通知发送完成: 部门周报成功 {department_success_count} 个，失败 {department_failed_count} 个，公司周报推送{'成功' if company_success else '失败'}")
+                if dept_weekly_report_send_failures:
+                    failed_depts = [x.get("department_name", "") for x in dept_weekly_report_send_failures if x.get("department_name")]
+                    logger.warning(
+                        "部门周报通知发送失败汇总: 失败=%s 个，department=%s",
+                        len(dept_weekly_report_send_failures),
+                        "|".join(failed_depts[:10]),
+                    )
+                if company_weekly_report_send_failure:
+                    logger.warning("公司周报通知发送失败: %s", company_weekly_report_send_failure)
+
+                if company_skipped_no_recipients:
+                    company_status = "跳过(无收件人)"
+                elif company_attempted:
+                    company_status = "成功" if company_success else "失败"
+                else:
+                    company_status = "未推送"
+                summary_msg = (
+                    f"CRM周报飞书通知发送完成: 部门周报成功 {department_success_count} 个，失败 {department_failed_count} 个，"
+                    f"公司周报推送{company_status}"
+                )
+                if department_skipped_no_recipients_count > 0:
+                    summary_msg += f"，无收件人跳过 {department_skipped_no_recipients_count} 个部门"
+                if department_failed_count > 0 or (company_attempted and not company_success and not company_skipped_no_recipients):
+                    logger.warning(summary_msg)
+                else:
+                    logger.info(summary_msg)
                 
                 return {
                     "success": True,
@@ -1029,6 +1091,7 @@ def send_sales_task_summary(self, start_date_str=None, end_date_str=None):
                 logger.exception(f"写入销售任务周指标失败（不影响推送主流程）: {e}")
             success_count = 0
             failed_count = 0
+            skipped_no_recipients_count = 0
             failed_tasks = []
 
             for task_data in analyze_results:
@@ -1044,23 +1107,35 @@ def send_sales_task_summary(self, start_date_str=None, end_date_str=None):
                             f"推送成功 {result['success_count']}/{result['recipients_count']} 次"
                         )
                     else:
-                        failed_count += 1
-                        failed_tasks.append({
-                            "assignee_name": task_data.get("assignee_name"),
-                            "error": result.get("message", "未知错误")
-                        })
-                        logger.warning(f"销售任务推送失败: {result.get('message')}")
+                        msg = str(result.get("message", "未知错误"))
+                        # 运维告警规则会排除 "No recipients found for"（属于可预期的无收件人场景，避免误报）
+                        if "No recipients found for" in msg:
+                            skipped_no_recipients_count += 1
+                        else:
+                            failed_count += 1
+                            failed_tasks.append({
+                                "assignee_name": task_data.get("assignee_name"),
+                                "error": msg
+                            })
                 except Exception as e:
                     failed_count += 1
                     failed_tasks.append({
                         "assignee_name": task_data.get("assignee_name"),
                         "error": str(e)
                     })
-                    logger.exception(f"推送销售任务时异常: {e}")
+                    logger.exception(
+                        f"任务总结推送出错: assignee={task_data.get('assignee_name')}, err={e}"
+                    )
 
-            logger.info(
+            summary_msg = (
                 f"销售任务总结任务完成: 总数 {len(analyze_results)}，成功 {success_count}，失败 {failed_count}"
             )
+            if skipped_no_recipients_count > 0:
+                summary_msg += f"，无收件人跳过 {skipped_no_recipients_count}"
+            if failed_count > 0:
+                logger.warning(summary_msg)
+            else:
+                logger.info(summary_msg)
 
             return {
                 "success": True,
