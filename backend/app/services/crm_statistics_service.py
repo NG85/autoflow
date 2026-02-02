@@ -692,7 +692,9 @@ class CRMStatisticsService:
                     )
                     
             except Exception as e:
-                logger.error(f"为销售 {report.get('recorder', 'Unknown')} 发送飞书通知时出错: {str(e)}")
+                logger.error(
+                    f"销售日报通知发送出错: recorder={report.get('recorder', 'Unknown')}, err={str(e)}"
+                )
                 total_notifications += 1
         
         logger.info(
@@ -805,7 +807,9 @@ class CRMStatisticsService:
                     )
                     
             except Exception as e:
-                logger.error(f"为部门 {department_report.get('department_name', 'Unknown')} 发送飞书通知时出错: {str(e)}")
+                logger.error(
+                    f"部门日报通知发送出错: department={department_report.get('department_name', 'Unknown')}, err={str(e)}"
+                )
                 total_departments += 1
         
         logger.info(
