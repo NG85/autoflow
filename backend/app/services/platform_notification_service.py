@@ -127,7 +127,27 @@ class PlatformNotificationService:
         """将接收者列表按平台分组"""
         recipients_by_platform = {}
         for recipient in recipients:
-            platform = recipient.get("platform", PLATFORM_FEISHU)
+            # 不兜底默认平台：platform 为空/不支持时直接丢弃，并记录日志（便于排查数据源）
+            raw_platform = recipient.get("platform")
+            platform = (str(raw_platform).strip() if raw_platform is not None else "")
+            if not platform:
+                logger.warning(
+                    "Skip recipient without platform: name=%s type=%s open_id=%s platform=%s",
+                    recipient.get("name"),
+                    recipient.get("type"),
+                    recipient.get("open_id"),
+                    raw_platform,
+                )
+                continue
+            if not self._validate_platform_support(platform):
+                logger.warning(
+                    "Skip recipient with unsupported platform: name=%s type=%s open_id=%s platform=%s",
+                    recipient.get("name"),
+                    recipient.get("type"),
+                    recipient.get("open_id"),
+                    platform,
+                )
+                continue
             if platform not in recipients_by_platform:
                 recipients_by_platform[platform] = []
             recipients_by_platform[platform].append(recipient)
@@ -137,6 +157,10 @@ class PlatformNotificationService:
         """批量获取多个平台的访问令牌"""
         platform_tokens = {}
         for platform in platforms:
+            if not platform:
+                continue
+            if not self._validate_platform_support(platform):
+                continue
             if platform not in platform_tokens:
                 try:
                     platform_tokens[platform] = self._get_tenant_access_token(platform)
@@ -282,7 +306,7 @@ class PlatformNotificationService:
             logger.error("Ops CC Feishu prepare/send failed. source=%s, error=%s", notification_type, e)
         
         # 获取所有需要的平台token
-        platforms = list(recipients_by_platform.keys())
+        platforms = [p for p in recipients_by_platform.keys() if p]
         platform_tokens = self._get_platform_tokens(platforms)
         
         for platform, platform_recipients in recipients_by_platform.items():
@@ -331,7 +355,7 @@ class PlatformNotificationService:
             total_failed_recipients.extend(failed_recipients)
         
         # 统计各平台的结果
-        platforms_used = list(recipients_by_platform.keys())
+        platforms_used = [str(p) for p in recipients_by_platform.keys() if p]
         total_recipients_count = sum(len(recipients) for recipients in recipients_by_platform.values())
         
         return {
@@ -797,7 +821,7 @@ class PlatformNotificationService:
         total_failed_recipients = []
         
         # 获取所有需要的平台token
-        platforms = list(recipients_by_platform.keys())
+        platforms = [p for p in recipients_by_platform.keys() if p]
         platform_tokens = self._get_platform_tokens(platforms)
         
         for platform, platform_recipients in recipients_by_platform.items():
@@ -876,7 +900,7 @@ class PlatformNotificationService:
                     )
         
         # 统计各平台的结果
-        platforms_used = list(recipients_by_platform.keys())
+        platforms_used = [str(p) for p in recipients_by_platform.keys() if p]
         total_recipients_count = sum(len(recipients) for recipients in recipients_by_platform.values())
         result = {
             "success": total_success_count > 0,
