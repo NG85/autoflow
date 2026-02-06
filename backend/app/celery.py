@@ -21,6 +21,10 @@ app.conf.update(
         {"app.tasks.cron_jobs.generate_crm_weekly_report": {"queue": "cron"}},
         {"app.tasks.cron_jobs.generate_crm_weekly_followup_summary": {"queue": "cron"}},
         {"app.tasks.cron_jobs.crm_visit_records_writeback": {"queue": "cron"}},
+        # Metrics 固化：单独队列，避免与 cron 任务抢资源
+        {"app.tasks.cron_jobs.rebuild_crm_visit_metrics": {"queue": "metrics"}},
+        {"app.tasks.cron_jobs.rebuild_crm_todo_metrics": {"queue": "metrics"}},
+        {"app.tasks.cron_jobs.persist_crm_todo_facts_hourly_stock": {"queue": "metrics"}},
         {"app.tasks.cron_jobs.send_sales_task_summary": {"queue": "cron"}},
         {"app.tasks.bitable_import.*": {"queue": "cron"}},
         {"app.tasks.document_qa.*": {"queue": "llm"}},
@@ -203,4 +207,70 @@ if settings.CRM_SALES_TASK_ENABLED:
     app.conf.beat_schedule['send_sales_task_summary'] = {
         'task': 'app.tasks.cron_jobs.send_sales_task_summary',
         'schedule': sales_task_schedule,
+    }
+
+# CRM拜访指标固化任务（每小时，默认整点）
+if settings.CRM_VISIT_METRICS_ENABLED:
+    cron_expr = settings.CRM_VISIT_METRICS_CRON
+    cron_fields = cron_expr.strip().split()
+    if len(cron_fields) == 5:
+        minute, hour, day_of_month, month_of_year, day_of_week = cron_fields
+        visit_metrics_schedule = crontab(
+            minute=minute,
+            hour=hour,
+            day_of_month=day_of_month,
+            month_of_year=month_of_year,
+            day_of_week=day_of_week,
+        )
+    else:
+        visit_metrics_schedule = crontab(minute=0)
+
+    app.conf.beat_schedule = getattr(app.conf, "beat_schedule", {})
+    app.conf.beat_schedule["rebuild_crm_visit_metrics"] = {
+        "task": "app.tasks.cron_jobs.rebuild_crm_visit_metrics",
+        "schedule": visit_metrics_schedule,
+    }
+
+# CRM销售任务指标固化任务（每小时，默认整点）
+if settings.CRM_TODO_METRICS_ENABLED:
+    cron_expr = settings.CRM_TODO_METRICS_CRON
+    cron_fields = cron_expr.strip().split()
+    if len(cron_fields) == 5:
+        minute, hour, day_of_month, month_of_year, day_of_week = cron_fields
+        todo_metrics_schedule = crontab(
+            minute=minute,
+            hour=hour,
+            day_of_month=day_of_month,
+            month_of_year=month_of_year,
+            day_of_week=day_of_week,
+        )
+    else:
+        todo_metrics_schedule = crontab(minute=0)
+
+    app.conf.beat_schedule = getattr(app.conf, "beat_schedule", {})
+    app.conf.beat_schedule["rebuild_crm_todo_metrics"] = {
+        "task": "app.tasks.cron_jobs.rebuild_crm_todo_metrics",
+        "schedule": todo_metrics_schedule,
+    }
+
+# CRM todo facts hourly snapshot（默认关闭；开启后每小时写入当天 hour 粒度快照）
+if settings.CRM_TODO_FACTS_HOURLY_ENABLED:
+    cron_expr = settings.CRM_TODO_FACTS_HOURLY_CRON
+    cron_fields = cron_expr.strip().split()
+    if len(cron_fields) == 5:
+        minute, hour, day_of_month, month_of_year, day_of_week = cron_fields
+        todo_facts_hourly_schedule = crontab(
+            minute=minute,
+            hour=hour,
+            day_of_month=day_of_month,
+            month_of_year=month_of_year,
+            day_of_week=day_of_week,
+        )
+    else:
+        todo_facts_hourly_schedule = crontab(minute=0)
+
+    app.conf.beat_schedule = getattr(app.conf, "beat_schedule", {})
+    app.conf.beat_schedule["persist_crm_todo_facts_hourly_stock"] = {
+        "task": "app.tasks.cron_jobs.persist_crm_todo_facts_hourly_stock",
+        "schedule": todo_facts_hourly_schedule,
     }
