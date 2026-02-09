@@ -50,6 +50,8 @@ from app.api.admin_routes import (
     langfuse as admin_langfuse,
     user as admin_user,
     crm_task as admin_crm_task,
+    crm_visit_metrics as admin_crm_visit_metrics,
+    crm_todo_metrics as admin_crm_todo_metrics,
 )
 from app.api.admin_routes.evaluation import (
     evaluation_task as admin_evaluation_task,
@@ -98,6 +100,8 @@ api_router.include_router(admin_llm_router, tags=["admin/llm"])
 api_router.include_router(admin_embedding_model_router, tags=["admin/embedding_model"])
 api_router.include_router(admin_reranker_model_router, tags=["admin/reranker_model"])
 api_router.include_router(admin_crm_task.router, tags=["admin/crm_task"])
+api_router.include_router(admin_crm_visit_metrics.router, tags=["admin/crm_visit_metrics"])
+api_router.include_router(admin_crm_todo_metrics.router, tags=["admin/crm_todo_metrics"])
 api_router.include_router(admin_langfuse.router, tags=["admin/langfuse"])
 api_router.include_router(admin_legacy_retrieve.router, tags=["admin/retrieve_old"])
 api_router.include_router(admin_stats.router, tags=["admin/stats"])

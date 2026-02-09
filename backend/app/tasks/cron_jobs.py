@@ -19,6 +19,8 @@ from app.services.platform_notification_service import platform_notification_ser
 from app.services.crm_writeback_service import crm_writeback_service
 from app.services.crm_sales_task_statistics_service import crm_sales_task_statistics_service
 from app.services.crm_weekly_followup_service import crm_weekly_followup_service
+from app.services.crm_visit_metrics_service import crm_visit_metrics_service, default_rebuild_windows
+from app.services.crm_todo_metrics_service import crm_todo_metrics_service, default_todo_metrics_windows
 from app.tasks.knowledge_base import import_documents_from_kb_datasource
 from app.utils.date_utils import beijing_today_date
 
@@ -944,6 +946,207 @@ def crm_visit_records_writeback(self, start_date_str=None, end_date_str=None, wr
             "data": {}
         }
 
+
+@app.task(bind=True, max_retries=3)
+def rebuild_crm_visit_metrics(
+    self,
+    entry_week_start_str: str | None = None,
+    entry_week_end_str: str | None = None,
+    followup_start_str: str | None = None,
+    followup_end_str: str | None = None,
+):
+    """
+    CRM 拜访指标固化任务（写入指标事实表，供下游服务直查 TiDB）。
+
+    默认口径：
+    - entry-week：按北京时间 last_modified_time 归周（周日~周六），默认重算“当前周 + 上一周”
+    - followup：按 visit_communication_date（date），默认重算“最近 N 天”（N=settings.CRM_VISIT_METRICS_FOLLOWUP_DAYS，默认 60）
+
+    手工触发时可传入：
+    - entry_week_start_str / entry_week_end_str：YYYY-MM-DD（任意一天），内部会归一到周日~周六并按周步进
+    - followup_start_str / followup_end_str：YYYY-MM-DD
+    """
+    try:
+        logger.info("开始执行 CRM 拜访指标固化任务")
+
+        windows = default_rebuild_windows()
+
+        # 1) 解析 entry-week 范围
+        if entry_week_start_str and entry_week_end_str:
+            start_d = datetime.strptime(entry_week_start_str, "%Y-%m-%d").date()
+            end_d = datetime.strptime(entry_week_end_str, "%Y-%m-%d").date()
+            # 归一到周日
+            days_since_sunday = (start_d.weekday() + 1) % 7
+            start_week_sun = start_d - timedelta(days=days_since_sunday)
+            days_since_sunday_end = (end_d.weekday() + 1) % 7
+            end_week_sun = end_d - timedelta(days=days_since_sunday_end)
+            entry_week_starts = []
+            cur = start_week_sun
+            while cur <= end_week_sun:
+                entry_week_starts.append(cur)
+                cur = cur + timedelta(days=7)
+        else:
+            entry_week_starts = windows.entry_week_starts
+
+        # 2) 解析 followup 范围
+        if (followup_start_str is None) != (followup_end_str is None):
+            raise ValueError("followup_start_str/followup_end_str 需要同时传或同时不传")
+        if followup_start_str and followup_end_str:
+            followup_start = datetime.strptime(followup_start_str, "%Y-%m-%d").date()
+            followup_end = datetime.strptime(followup_end_str, "%Y-%m-%d").date()
+        else:
+            followup_start = windows.followup_start
+            followup_end = windows.followup_end
+
+        results: dict[str, object] = {
+            "entry_weeks": [],
+            "followup": {},
+        }
+
+        with Session(engine) as session:
+            # entry-week：逐周重算
+            for ws in entry_week_starts:
+                we = ws + timedelta(days=6)
+                r = crm_visit_metrics_service.rebuild_entry_week(session, week_start=ws, week_end=we)
+                results["entry_weeks"].append({"week_start": ws.isoformat(), "week_end": we.isoformat(), **r})
+
+            # followup：按日期范围重算
+            followup_written = crm_visit_metrics_service.rebuild_followup_daily_department_metrics(
+                session,
+                start_date=followup_start,
+                end_date=followup_end,
+            )
+            results["followup"] = {
+                "start_date": followup_start.isoformat(),
+                "end_date": followup_end.isoformat(),
+                "rows": int(followup_written),
+            }
+
+            try:
+                session.commit()
+            except Exception:
+                # TiDB serverless engine 可能 autocommit；commit 失败不一定意味着写入失败
+                session.rollback()
+
+        return {"success": True, "message": "ok", "data": results}
+    except Exception as e:
+        logger.exception(f"CRM 拜访指标固化任务失败: {e}")
+        self.retry(exc=e, countdown=300)
+
+
+@app.task(bind=True, max_retries=3)
+def rebuild_crm_todo_metrics(
+    self,
+    week_start_str: str | None = None,
+    week_end_str: str | None = None,
+):
+    """
+    CRM 销售任务指标固化任务（写入 crm_todos_weekly_metrics，供下游直查）。
+
+    指标：
+    - created（按任务创建时间落周，data_source=MANUAL）
+    - no_due_date_stock（due_date 为空的任务存量快照）
+    - status_*（任务状态存量快照）
+
+    默认：
+    - 重算“当前周 + 上一周”（周日~周六，北京时间口径）
+    - 存量类指标只写入“当前周”key（每次覆盖）
+    """
+    try:
+        logger.info("开始执行 CRM 销售任务指标固化任务")
+
+        windows = default_todo_metrics_windows()
+
+        if (week_start_str is None) != (week_end_str is None):
+            raise ValueError("week_start_str/week_end_str 需要同时传或同时不传")
+
+        if week_start_str and week_end_str:
+            start_d = datetime.strptime(week_start_str, "%Y-%m-%d").date()
+            end_d = datetime.strptime(week_end_str, "%Y-%m-%d").date()
+            # 归一到周日
+            days_since_sunday = (start_d.weekday() + 1) % 7
+            start_week_sun = start_d - timedelta(days=days_since_sunday)
+            days_since_sunday_end = (end_d.weekday() + 1) % 7
+            end_week_sun = end_d - timedelta(days=days_since_sunday_end)
+            week_starts = []
+            cur = start_week_sun
+            while cur <= end_week_sun:
+                week_starts.append(cur)
+                cur = cur + timedelta(days=7)
+        else:
+            week_starts = windows.week_starts
+
+        results: dict[str, object] = {"weeks": []}
+
+        with Session(engine) as session:
+            # 逐周：created（manual）
+            for ws in week_starts:
+                we = ws + timedelta(days=6)
+                r = crm_todo_metrics_service.rebuild_weekly_manual_created(session, week_start=ws, week_end=we)
+                completed_r = crm_todo_metrics_service.rebuild_weekly_completed_by_due_date(session, week_start=ws, week_end=we)
+                results["weeks"].append(
+                    {"week_start": ws.isoformat(), "week_end": we.isoformat(), "created": r, "completed": completed_r}
+                )
+
+            # 存量类：只写当前周
+            today = beijing_today_date()
+            this_ws = today - timedelta(days=(today.weekday() + 1) % 7)
+            this_we = this_ws + timedelta(days=6)
+            stock_r = crm_todo_metrics_service.rebuild_stock_metrics_for_week(session, week_start=this_ws, week_end=this_we)
+            results["stock_week"] = {"week_start": this_ws.isoformat(), "week_end": this_we.isoformat(), **stock_r}
+
+            try:
+                session.commit()
+            except Exception:
+                session.rollback()
+
+        return {"success": True, "message": "ok", "data": results}
+    except Exception as e:
+        logger.exception(f"CRM 销售任务指标固化任务失败: {e}")
+        self.retry(exc=e, countdown=300)
+
+
+@app.task(bind=True, max_retries=3)
+def persist_crm_todo_facts_hourly_stock(self):
+    """
+    CRM 销售任务指标 facts（hour 粒度快照）。
+
+    当前实现：公司级 due_date IS NULL 存量（按 data_source 三条线），写入 crm_todo_metrics_facts：
+    - anchor=stock
+    - grain=hour
+    - period_start/period_end=北京时间当天
+    - hour_of_day=北京时间小时（0..23）
+
+    说明：
+    - 该任务默认关闭（通过 CRM_TODO_FACTS_HOURLY_ENABLED 控制）
+    - 为未来从“周趋势”升级到“当前周/当天小时级”看板预留
+    """
+    try:
+        from zoneinfo import ZoneInfo
+
+        bj_now = datetime.now(ZoneInfo("Asia/Shanghai"))
+        d = bj_now.date()
+        hour = int(bj_now.hour)
+
+        with Session(engine) as session:
+            r = crm_todo_metrics_service.persist_company_no_due_date_stock_by_source_to_facts(
+                session=session,
+                grain="hour",
+                period_start=d,
+                period_end=d,
+                hour_of_day=hour,
+            )
+            try:
+                session.commit()
+            except Exception:
+                session.rollback()
+
+        return {"success": True, "message": "ok", "data": {"date": d.isoformat(), "hour": hour, **r}}
+    except Exception as e:
+        logger.exception(f"CRM 销售任务 facts hourly 快照失败: {e}")
+        self.retry(exc=e, countdown=300)
+
+
 @app.task(bind=True)
 def send_sales_task_summary(self, start_date_str=None, end_date_str=None):
     """
@@ -1004,6 +1207,17 @@ def send_sales_task_summary(self, start_date_str=None, end_date_str=None):
             total_no_due_date = sum(no_due_date_count.values())
             
             logger.info(f"crm_todos 读取到本周已完成 {len(this_week_sales_tasks)} 条，下周待完成 {len(next_week_sales_tasks)} 条，截止到本周的全部逾期任务 {len(overdue_tasks)} 条，本周已取消 {total_cancelled_count} 条(涉及 {len(cancelled_by_assignee_count)} 个负责人)，due_date为空 {total_no_due_date} 条（涉及 {len(no_due_date_count)} 个负责人）")
+
+            # 公司级：due_date IS NULL 存量快照（按任务类型三条线），每周统计任务跑一次即可
+            try:
+                r = crm_todo_metrics_service.persist_company_no_due_date_stock_by_source(
+                    session=session,
+                    week_start=start_date,
+                    week_end=end_date,
+                )
+                logger.info(f"已写入公司级 due_date 空存量快照（按 data_source） {r.get('rows', 0)} 行")
+            except Exception as e:
+                logger.exception(f"写入公司级 due_date 空存量快照失败（不影响推送主流程）: {e}")
             
             # 按负责人统计任务（本周和下周的任务都有due_date，due_date为空的单独统计）
             analyze_results = _analyze_crm_todos(

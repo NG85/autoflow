@@ -217,6 +217,19 @@ class Settings(BaseSettings):
     CRM_SALES_TASK_CRON: str = '0 10 * * 0'  # 每周日上午10点执行
     CRM_SALES_TASK_FEISHU_ENABLED: bool = True  # 是否启用飞书推送
     CRM_SALES_TASK_PAGE_URL: str = "https://test.zhizhenzhihe.com/task/query"
+
+    # CRM visit metrics (固化指标) configuration
+    CRM_VISIT_METRICS_ENABLED: bool = False
+    CRM_VISIT_METRICS_CRON: str = '0 * * * *'  # 每小时执行
+    CRM_VISIT_METRICS_FOLLOWUP_DAYS: int = 60  # 跟进日期分布默认回填窗口（天）
+
+    # CRM todo metrics (固化指标) configuration
+    CRM_TODO_METRICS_ENABLED: bool = False
+    CRM_TODO_METRICS_CRON: str = '5 * * * *'  # 每小时执行
+
+    # CRM todo facts hourly snapshot (可选，默认关闭)
+    CRM_TODO_FACTS_HOURLY_ENABLED: bool = False
+    CRM_TODO_FACTS_HOURLY_CRON: str = '10 * * * *'  # 每小时执行
     
     # Feishu Btable sync configuration
     ENABLE_FEISHU_BTABLE_SYNC: bool = False

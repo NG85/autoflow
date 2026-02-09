@@ -100,6 +100,7 @@ def save_visit_record_to_crm_table(record_schema: SimpleVisitRecordCreate | Comp
     
     # 处理recorder_id字段：确保转换为不带连字符的UUID字符串格式（32字符）
     # 在TiDB/MySQL中，GUID类型存储为不带连字符的32字符字符串
+    recorder_uuid_obj: Optional[UUID] = None
     if 'recorder_id' in fields and fields['recorder_id'] not in ("", None):
         try:
             recorder_id_value = fields['recorder_id']
@@ -107,6 +108,7 @@ def save_visit_record_to_crm_table(record_schema: SimpleVisitRecordCreate | Comp
             if isinstance(recorder_id_value, str):
                 # 验证并标准化UUID字符串格式
                 uuid_obj = UUID(recorder_id_value)
+                recorder_uuid_obj = uuid_obj
                 uuid_str = uuid_obj.hex  # 转换为不带连字符的32字符格式
                 # 标准UUID hex字符串应该是32字符
                 if len(uuid_str) != 32:
@@ -115,6 +117,7 @@ def save_visit_record_to_crm_table(record_schema: SimpleVisitRecordCreate | Comp
                 mapped['recorder_id'] = uuid_str
             elif isinstance(recorder_id_value, UUID):
                 # 如果已经是UUID对象，转换为不带连字符的hex字符串
+                recorder_uuid_obj = recorder_id_value
                 uuid_str = recorder_id_value.hex
                 if len(uuid_str) != 32:
                     logger.error(f"recorder_id string length incorrect: {len(uuid_str)} chars (expected 32): {uuid_str}")
@@ -123,6 +126,7 @@ def save_visit_record_to_crm_table(record_schema: SimpleVisitRecordCreate | Comp
             else:
                 # 其他类型尝试转换为UUID再转换为hex字符串
                 uuid_obj = UUID(str(recorder_id_value))
+                recorder_uuid_obj = uuid_obj
                 uuid_str = uuid_obj.hex
                 if len(uuid_str) != 32:
                     logger.error(f"recorder_id string length incorrect: {len(uuid_str)} chars (expected 32): {uuid_str}")
@@ -133,6 +137,26 @@ def save_visit_record_to_crm_table(record_schema: SimpleVisitRecordCreate | Comp
             logger.error(f"Failed to convert recorder_id to UUID hex string: {fields['recorder_id']}, error: {e}")
             # 如果转换失败，跳过该字段，让数据库使用默认值或报错
             pass
+
+    # 记录人部门快照：在写入时固化，供后续指标统计与下游直查使用
+    try:
+        if recorder_uuid_obj:
+            from app.repositories.user_department_relation import user_department_relation_repo
+            from app.repositories.department_mirror import department_mirror_repo
+
+            user_id_str = str(recorder_uuid_obj)  # uuid36
+            dept_id = user_department_relation_repo.get_primary_department_by_user_ids(db_session, [user_id_str]).get(user_id_str)
+            if dept_id:
+                dept_name = department_mirror_repo.get_department_name_by_id(db_session, dept_id)
+                mapped["recorder_department_id"] = dept_id
+                mapped["recorder_department_name"] = dept_name
+            else:
+                # 兜底：未能解析部门时，写入 UNKNOWN，避免后续统计/下游直查出现 NULL 维度
+                mapped["recorder_department_id"] = "UNKNOWN"
+                mapped["recorder_department_name"] = ""
+    except Exception as e:
+        # 快照字段不应阻塞主流程
+        logger.warning(f"Failed to snapshot recorder department: {e}")
     
     # 处理其他字段（直接使用，但需要过滤空值）
     for field_name, field_value in fields.items():

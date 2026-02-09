@@ -23,6 +23,10 @@ class CRMSalesVisitRecord(SQLModel, table=True):
     contacts: Optional[list[dict]] = Field(default=None, sa_column=Column(JSON, nullable=True), description="联系人列表（支持多个联系人，JSON数组）")
     recorder: Optional[str] = Field(nullable=True, max_length=255, description="记录人")
     recorder_id: Optional[UUID] = Field(nullable=True, description="记录人ID")
+
+    # recorder 部门快照：写入时固化，避免人员换部门导致历史指标漂移
+    recorder_department_id: Optional[str] = Field(nullable=True, max_length=100, description="记录人部门ID（快照）")
+    recorder_department_name: Optional[str] = Field(nullable=True, max_length=255, description="记录人部门名称（快照）")
     collaborative_participants: Optional[str] = Field(
         sa_column=Column(Text, nullable=True), 
         description="协同参与人，TEXT格式存储，支持JSON数组或字符串格式，向后兼容"
@@ -74,5 +78,6 @@ class CRMSalesVisitRecord(SQLModel, table=True):
         Index("idx_visit_date", "visit_communication_date"),
         Index("idx_is_first_visit", "is_first_visit"),
         Index("idx_subject", "subject"),
-        Index("idx_contact_id", "contact_id")
+        Index("idx_contact_id", "contact_id"),
+        Index("idx_recorder_department_id", "recorder_department_id"),
     )
