@@ -408,6 +408,137 @@ class CRMTodoMetricsService:
 
         return {"rows": written}
 
+    def rebuild_weekly_due_week_status_distribution(
+        self,
+        session: Session,
+        week_start: date,
+        week_end: date,
+    ) -> dict[str, int]:
+        """
+        due_date 落在统计周的任务，按 ai_status 分桶数量 + 当周总量（写入 facts，便于算状态占比）。
+
+        落库：
+        - anchor=due_week, grain=week
+        - metric=tasks_by_due_week_status_pending / _in_progress / _completed / _cancelled
+        - metric=tasks_by_due_week_total（当周 due_date 落在周内的任务总数）
+        - subject_type=assignee/company, data_source=''
+        """
+        statuses = ["PENDING", "IN_PROGRESS", "COMPLETED", "CANCELLED"]
+
+        rows = session.exec(
+            text(
+                """
+                SELECT owner_id, owner_name, ai_status, COUNT(1) AS cnt
+                FROM crm_todos
+                WHERE data_source IS NOT NULL
+                  AND due_date IS NOT NULL
+                  AND due_date >= :week_start
+                  AND due_date <= :week_end
+                  AND ai_status IS NOT NULL
+                  AND ai_status IN :statuses
+                  AND (owner_id IS NOT NULL OR owner_name IS NOT NULL)
+                GROUP BY owner_id, owner_name, ai_status
+                """
+            ),
+            params={
+                "week_start": week_start,
+                "week_end": week_end,
+                "statuses": tuple(statuses),
+            },
+        ).fetchall()
+
+        # owner_key -> status -> cnt
+        per_owner: dict[str, dict[str, int]] = {}
+        owner_keys: list[str] = []
+        for r in rows:
+            owner_id = str(getattr(r, "owner_id", None) or (r[0] if len(r) > 0 else "") or "").strip()
+            owner_name = str(getattr(r, "owner_name", None) or (r[1] if len(r) > 1 else "") or "").strip()
+            st = str(getattr(r, "ai_status", None) or (r[2] if len(r) > 2 else "") or "").strip().upper()
+            cnt = int(getattr(r, "cnt", None) or (r[3] if len(r) > 3 else 0) or 0)
+            if st not in statuses:
+                continue
+            key = owner_id or owner_name
+            if not key:
+                continue
+            if key not in per_owner:
+                per_owner[key] = {}
+                owner_keys.append(key)
+            per_owner[key][st] = per_owner[key].get(st, 0) + cnt
+
+        raw_to_resolved, _ = crm_sales_task_statistics_service._map_assignee_to_department_id(session, owner_keys)  # noqa: SLF001
+
+        written = 0
+        company_by_status = {st: 0 for st in statuses}
+
+        for raw_owner, st_map in per_owner.items():
+            resolved = raw_to_resolved.get(raw_owner, raw_owner)
+            total_owner = 0
+            for st in statuses:
+                v = int(st_map.get(st, 0))
+                total_owner += v
+                company_by_status[st] += v
+                self._upsert_fact_metric(
+                    session,
+                    anchor="due_week",
+                    grain="week",
+                    period_start=week_start,
+                    period_end=week_end,
+                    hour_of_day=0,
+                    subject_type="assignee",
+                    subject_id=resolved,
+                    data_source="",
+                    metric=f"tasks_by_due_week_status_{st.lower()}",
+                    value_int=v,
+                )
+                written += 1
+            self._upsert_fact_metric(
+                session,
+                anchor="due_week",
+                grain="week",
+                period_start=week_start,
+                period_end=week_end,
+                hour_of_day=0,
+                subject_type="assignee",
+                subject_id=resolved,
+                data_source="",
+                metric="tasks_by_due_week_total",
+                value_int=int(total_owner),
+            )
+            written += 1
+
+        company_total = sum(company_by_status.get(st, 0) for st in statuses)
+        for st in statuses:
+            self._upsert_fact_metric(
+                session,
+                anchor="due_week",
+                grain="week",
+                period_start=week_start,
+                period_end=week_end,
+                hour_of_day=0,
+                subject_type="company",
+                subject_id=_ASSIGNEE_ALL,
+                data_source="",
+                metric=f"tasks_by_due_week_status_{st.lower()}",
+                value_int=int(company_by_status.get(st, 0)),
+            )
+            written += 1
+        self._upsert_fact_metric(
+            session,
+            anchor="due_week",
+            grain="week",
+            period_start=week_start,
+            period_end=week_end,
+            hour_of_day=0,
+            subject_type="company",
+            subject_id=_ASSIGNEE_ALL,
+            data_source="",
+            metric="tasks_by_due_week_total",
+            value_int=int(company_total),
+        )
+        written += 1
+
+        return {"rows": written}
+
     def rebuild_stock_metrics_for_week(
         self,
         session: Session,
