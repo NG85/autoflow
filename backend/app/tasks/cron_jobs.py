@@ -1084,8 +1084,15 @@ def rebuild_crm_todo_metrics(
                 we = ws + timedelta(days=6)
                 r = crm_todo_metrics_service.rebuild_weekly_manual_created(session, week_start=ws, week_end=we)
                 completed_r = crm_todo_metrics_service.rebuild_weekly_completed_by_due_date(session, week_start=ws, week_end=we)
+                due_week_status_r = crm_todo_metrics_service.rebuild_weekly_due_week_status_distribution(session, week_start=ws, week_end=we)
                 results["weeks"].append(
-                    {"week_start": ws.isoformat(), "week_end": we.isoformat(), "created": r, "completed": completed_r}
+                    {
+                        "week_start": ws.isoformat(),
+                        "week_end": we.isoformat(),
+                        "created": r,
+                        "completed": completed_r,
+                        "due_week_status": due_week_status_r,
+                    }
                 )
 
             # 存量类：只写当前周
