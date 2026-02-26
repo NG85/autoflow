@@ -366,6 +366,84 @@ class PlatformNotificationService:
             "platforms_used": platforms_used,
             "failed_recipients": total_failed_recipients
         }
+
+    def send_text_notification_to_recipients(
+        self,
+        *,
+        recipients: List[Dict[str, Any]],
+        message_text: str,
+        notification_type: str = "text notification",
+    ) -> Dict[str, Any]:
+        """
+        向 recipients 列表发送“文本消息”（跨平台），不依赖卡片模板。
+
+        recipients 元素结构沿用本服务内部约定：
+        - open_id / platform 必填
+        - receive_id_type 可选，默认 open_id
+        """
+        recipients_by_platform = self._group_recipients_by_platform(recipients or [])
+        if not recipients_by_platform:
+            return {
+                "success": False,
+                "message": f"No recipients found for {notification_type}",
+                "recipients_count": 0,
+                "success_count": 0,
+                "platforms_used": [],
+                "failed_recipients": [],
+            }
+
+        total_success_count = 0
+        total_failed_recipients: List[Dict[str, Any]] = []
+
+        platforms = [p for p in recipients_by_platform.keys() if p]
+        platform_tokens = self._get_platform_tokens(platforms)
+
+        for platform, platform_recipients in recipients_by_platform.items():
+            if not self._validate_platform_support(platform):
+                for recipient in platform_recipients:
+                    total_failed_recipients.append(
+                        self._create_failed_recipient_record(recipient, platform, f"Unsupported platform: {platform}")
+                    )
+                continue
+
+            token = platform_tokens.get(platform)
+            if not token:
+                for recipient in platform_recipients:
+                    total_failed_recipients.append(
+                        self._create_failed_recipient_record(recipient, platform, "Failed to get token")
+                    )
+                continue
+
+            for recipient in platform_recipients:
+                try:
+                    receive_id_type = recipient.get("receive_id_type", "open_id")
+                    self._send_message(
+                        recipient["open_id"],
+                        token,
+                        message_text,
+                        platform,
+                        receive_id_type=receive_id_type,
+                        msg_type="text",
+                    )
+                    total_success_count += 1
+                except Exception as e:
+                    total_failed_recipients.append(
+                        self._create_failed_recipient_record(recipient, platform, str(e))
+                    )
+
+        platforms_used = [str(p) for p in recipients_by_platform.keys() if p]
+        total_recipients_count = sum(len(v) for v in recipients_by_platform.values())
+        return {
+            "success": total_success_count > 0,
+            "message": (
+                f"{notification_type} sent to {total_success_count}/{total_recipients_count} "
+                f"recipients across platforms: {', '.join(platforms_used)}"
+            ),
+            "recipients_count": total_recipients_count,
+            "success_count": total_success_count,
+            "platforms_used": platforms_used,
+            "failed_recipients": total_failed_recipients,
+        }
     
     def _get_reporting_chain_leaders(
         self,

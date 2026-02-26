@@ -203,6 +203,11 @@ class Settings(BaseSettings):
     # CRM weekly followup summary (company/department + entity list) configuration
     CRM_WEEKLY_FOLLOWUP_ENABLED: bool = False
     CRM_WEEKLY_FOLLOWUP_CRON: str = '30 9 * * 0'  # 每周日上午9:30执行（需早于周报；周日到周六口径）
+
+    # CRM weekly followup leader engagement report configuration
+    # - 周一早上 9:00（北京时间）统计上一周部门周跟进总结：哪些 leader 已阅已评论/已阅未评论/未阅
+    CRM_WEEKLY_FOLLOWUP_ENGAGEMENT_ENABLED: bool = False
+    CRM_WEEKLY_FOLLOWUP_ENGAGEMENT_CRON: str = '0 9 * * 1'  # 每周一上午9:00执行（统计上一周）
     
     # CRM writeback task configuration
     CRM_WRITEBACK_ENABLED: bool = False

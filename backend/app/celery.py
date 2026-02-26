@@ -20,6 +20,7 @@ app.conf.update(
         {"app.tasks.cron_jobs.generate_crm_daily_statistics": {"queue": "cron"}},
         {"app.tasks.cron_jobs.generate_crm_weekly_report": {"queue": "cron"}},
         {"app.tasks.cron_jobs.generate_crm_weekly_followup_summary": {"queue": "cron"}},
+        {"app.tasks.cron_jobs.send_crm_weekly_followup_leader_engagement_report": {"queue": "cron"}},
         {"app.tasks.cron_jobs.crm_visit_records_writeback": {"queue": "cron"}},
         # Metrics 固化：单独队列，避免与 cron 任务抢资源
         {"app.tasks.cron_jobs.rebuild_crm_visit_metrics": {"queue": "metrics"}},
@@ -152,6 +153,28 @@ if settings.CRM_WEEKLY_FOLLOWUP_ENABLED:
     app.conf.beat_schedule['generate_crm_weekly_followup_summary'] = {
         'task': 'app.tasks.cron_jobs.generate_crm_weekly_followup_summary',
         'schedule': weekly_followup_schedule,
+    }
+
+# CRM周跟进总结 leader 已阅/评论统计（周一 9:00）
+if settings.CRM_WEEKLY_FOLLOWUP_ENGAGEMENT_ENABLED:
+    cron_expr = settings.CRM_WEEKLY_FOLLOWUP_ENGAGEMENT_CRON
+    cron_fields = cron_expr.strip().split()
+    if len(cron_fields) == 5:
+        minute, hour, day_of_month, month_of_year, day_of_week = cron_fields
+        weekly_followup_engagement_schedule = crontab(
+            minute=minute,
+            hour=hour,
+            day_of_month=day_of_month,
+            month_of_year=month_of_year,
+            day_of_week=day_of_week,
+        )
+    else:
+        weekly_followup_engagement_schedule = crontab(hour=9, minute=0, day_of_week=1)
+
+    app.conf.beat_schedule = getattr(app.conf, "beat_schedule", {})
+    app.conf.beat_schedule["send_crm_weekly_followup_leader_engagement_report"] = {
+        "task": "app.tasks.cron_jobs.send_crm_weekly_followup_leader_engagement_report",
+        "schedule": weekly_followup_engagement_schedule,
     }
 
 # CRM拜访记录回写任务

@@ -813,6 +813,205 @@ def generate_crm_weekly_followup_summary(self, start_date_str=None, end_date_str
         self.retry(exc=e, countdown=300)
 
 
+@app.task(bind=True, max_retries=3)
+def send_crm_weekly_followup_leader_engagement_report(self, week_start_str: str | None = None, week_end_str: str | None = None):
+    """
+    周一早上 9 点统计上一周部门周跟进总结的 leader 行为：
+    - 已阅
+    - 已阅 + 评论
+    - 未阅
+
+    说明：
+    - leader 基准名单来自 OAuth departments/leaders
+    - 收件人复用公司周报收件人（permission=weekly_report:company:card:receive；兜底 profiles weekly_report）
+    """
+    try:
+        from zoneinfo import ZoneInfo
+        from app.models.crm_weekly_followup_summary import CRMWeeklyFollowupSummary
+        from app.models.crm_weekly_followup_leader_engagement import CRMWeeklyFollowupLeaderEngagement
+
+        # 计算日期范围：默认上一周（周日~周六）
+        if week_start_str and week_end_str:
+            week_start = datetime.strptime(week_start_str, "%Y-%m-%d").date()
+            week_end = datetime.strptime(week_end_str, "%Y-%m-%d").date()
+        else:
+            today = beijing_today_date()
+            days_since_sunday = (today.weekday() + 1) % 7
+            last_sunday = today - timedelta(days=days_since_sunday + 7)
+            this_saturday = last_sunday + timedelta(days=6)
+            week_start = last_sunday
+            week_end = this_saturday
+
+        bj_now = datetime.now(ZoneInfo("Asia/Shanghai"))
+        logger.info(
+            "开始统计周跟进 leader 已阅/评论覆盖情况: week_start=%s, week_end=%s, now=%s",
+            week_start,
+            week_end,
+            bj_now.isoformat(),
+        )
+
+        with Session(engine) as session:
+            leaders_by_dept = oauth_client.get_departments_with_leaders()
+            if not leaders_by_dept:
+                logger.warning("OAuth departments/leaders 返回为空，跳过统计")
+                return {"success": False, "message": "no leaders from oauth", "data": {}}
+
+            leaders_grouped_by_first_level = oauth_client.get_departments_with_leaders(
+                group_by_first_level_department=True
+            )
+            dept_to_first_level: dict[str, str] = {}
+            for first_level_name, managers in (leaders_grouped_by_first_level or {}).items():
+                if not managers or not isinstance(managers, list):
+                    continue
+                for m in managers:
+                    if not isinstance(m, dict):
+                        continue
+                    dept_name = str(m.get("department") or "").strip()
+                    if not dept_name:
+                        continue
+                    dept_to_first_level[dept_name] = str(first_level_name).strip() or dept_name
+
+            dept_names = [str(k).strip() for k in leaders_by_dept.keys() if k and str(k).strip()]
+            summaries = []
+            if dept_names:
+                summaries = session.exec(
+                    select(CRMWeeklyFollowupSummary).where(
+                        CRMWeeklyFollowupSummary.week_start == week_start,
+                        CRMWeeklyFollowupSummary.week_end == week_end,
+                        CRMWeeklyFollowupSummary.summary_type == "department",
+                        CRMWeeklyFollowupSummary.department_name.in_(dept_names),
+                    )
+                ).all()
+            # 若当周没有生成任何“部门周跟进总结”，则不推送
+            if not summaries:
+                logger.info(
+                    "本周未生成任何部门周跟进总结，跳过 leader 已阅/评论统计推送: week_start=%s, week_end=%s",
+                    week_start,
+                    week_end,
+                )
+                return {"success": True, "message": "no weekly followup summaries, skipped", "data": {}}
+            summary_by_dept = {(s.department_name or "").strip(): s for s in summaries if (s.department_name or "").strip()}
+            summary_ids = [s.id for s in summaries if s and getattr(s, "id", None)]
+
+            engagements = []
+            if summary_ids:
+                engagements = session.exec(
+                    select(CRMWeeklyFollowupLeaderEngagement).where(
+                        CRMWeeklyFollowupLeaderEngagement.summary_id.in_(summary_ids)
+                    )
+                ).all()
+            engagement_by_key = {(e.summary_id, (e.leader_user_id or "").strip()): e for e in engagements}
+
+            STATUS_NONE = 0
+            STATUS_REVIEWED_ONLY = 1
+            STATUS_REVIEWED_AND_COMMENTED = 2
+
+            def _fmt_names(names: list[str]) -> str:
+                xs = [x.strip() for x in names if x and x.strip()]
+                if not xs:
+                    return "无"
+                return "、".join(xs)
+
+            def _status_from_engagement(e: CRMWeeklyFollowupLeaderEngagement | None) -> int:
+                if not e:
+                    return STATUS_NONE
+                reviewed_at = getattr(e, "reviewed_at", None)
+                if reviewed_at is None:
+                    return STATUS_NONE
+                commented_at = getattr(e, "commented_at", None)
+                if commented_at is not None:
+                    return STATUS_REVIEWED_AND_COMMENTED
+                return STATUS_REVIEWED_ONLY
+
+            leader_name_by_id: dict[str, str] = {}
+            leader_status_by_id: dict[str, int] = {}
+            leader_status_by_first_level: dict[str, dict[str, int]] = {}
+
+            for dept_name, summary in summary_by_dept.items():
+                leaders = leaders_by_dept.get(dept_name) or []
+                if not isinstance(leaders, list) or not leaders:
+                    continue
+
+                first_level_name = dept_to_first_level.get(dept_name) or dept_name
+                group_map = leader_status_by_first_level.setdefault(first_level_name, {})
+
+                for leader in leaders:
+                    if not isinstance(leader, dict):
+                        continue
+                    leader_user_id = str(leader.get("userId") or "").strip()
+                    if not leader_user_id:
+                        continue
+                    leader_name = str(leader.get("name") or "").strip() or leader_user_id
+
+                    # keep a stable "best" display name
+                    if leader_user_id not in leader_name_by_id or (
+                        leader_name and leader_name != leader_user_id and len(leader_name) > len(leader_name_by_id[leader_user_id])
+                    ):
+                        leader_name_by_id[leader_user_id] = leader_name
+
+                    st = _status_from_engagement(engagement_by_key.get((summary.id, leader_user_id)))
+                    prev = leader_status_by_id.get(leader_user_id, STATUS_NONE)
+                    if st > prev:
+                        leader_status_by_id[leader_user_id] = st
+
+                    prev_g = group_map.get(leader_user_id, STATUS_NONE)
+                    if st > prev_g:
+                        group_map[leader_user_id] = st
+
+            def _names_by_status(status_map: dict[str, int], target_status: int) -> list[str]:
+                names = [
+                    leader_name_by_id.get(uid, uid)
+                    for uid, st in status_map.items()
+                    if st == target_status
+                ]
+                return sorted(set(names))
+
+            groups_with_leaders = {k: v for k, v in leader_status_by_first_level.items() if v}
+            if len(groups_with_leaders) <= 1:
+                reviewed_and_commented = _names_by_status(leader_status_by_id, STATUS_REVIEWED_AND_COMMENTED)
+                reviewed_only = _names_by_status(leader_status_by_id, STATUS_REVIEWED_ONLY)
+                not_reviewed = _names_by_status(leader_status_by_id, STATUS_NONE)
+
+                message_text = (
+                    "本周各销售团队Leader对“商机跟进总结”的阅读及互动情况统计如下：\n"
+                    f"  - 已确认且添加评论/任务：{_fmt_names(reviewed_and_commented)}\n"
+                    f"  - 仅点击确认：{_fmt_names(reviewed_only)}\n"
+                    f"  - 未确认：{_fmt_names(not_reviewed)}"
+                )
+            else:
+                lines: list[str] = ["本周各销售团队各层级Leader对“商机跟进总结”的阅读及互动情况统计如下："]
+                for first_level_name in sorted(groups_with_leaders.keys()):
+                    status_map = groups_with_leaders[first_level_name]
+                    reviewed_and_commented = _names_by_status(status_map, STATUS_REVIEWED_AND_COMMENTED)
+                    reviewed_only = _names_by_status(status_map, STATUS_REVIEWED_ONLY)
+                    not_reviewed = _names_by_status(status_map, STATUS_NONE)
+                    lines.extend(
+                        [
+                            f"  {first_level_name}",
+                            f"    - 已确认且添加评论/任务：{_fmt_names(reviewed_and_commented)}",
+                            f"    - 仅点击确认：{_fmt_names(reviewed_only)}",
+                            f"    - 未确认：{_fmt_names(not_reviewed)}",
+                        ]
+                    )
+                message_text = "\n".join(lines)
+
+            recipients = platform_notification_service.get_recipients_for_company_weekly_report(session)
+            if not recipients:
+                logger.warning("公司周跟进 leader 统计：未找到公司负责人收件人（复用公司周报收件人）")
+                return {"success": False, "message": "no recipients", "data": {}}
+
+            result = platform_notification_service.send_text_notification_to_recipients(
+                recipients=recipients,
+                message_text=message_text,
+                notification_type="weekly followup leader engagement",
+            )
+            return {"success": bool(result.get("success")), "message": result.get("message"), "data": result}
+
+    except Exception as e:
+        logger.exception(f"周跟进 leader 已阅/评论统计推送失败: {e}")
+        self.retry(exc=e, countdown=300)
+
+
 @app.task(bind=True)
 def crm_visit_records_writeback(self, start_date_str=None, end_date_str=None, writeback_mode=None):
     """

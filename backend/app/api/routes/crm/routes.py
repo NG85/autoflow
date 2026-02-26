@@ -30,6 +30,7 @@ from app.api.routes.crm.models import (
     WeeklyFollowupTriggerTaskIn,
     WeeklyFollowupTriggerTaskOut,
     WeeklyFollowupSummaryItemOut,
+    WeeklyFollowupLeaderEngagementOut,
     WeeklyFollowupEntityPageOut,
     SaveWeeklyFollowupCommentsIn,
 )
@@ -55,6 +56,7 @@ from app.repositories.user_profile import UserProfileRepo
 from app.repositories.visit_record import visit_record_repo
 from app.repositories.user_department_relation import user_department_relation_repo
 from app.services.oauth_service import oauth_client
+from app.services.crm_weekly_followup_engagement_service import crm_weekly_followup_engagement_service
 
 
 logger = logging.getLogger(__name__)
@@ -427,6 +429,31 @@ def trigger_weekly_followup_summary_task(
     )
     return WeeklyFollowupTriggerTaskOut(task_id=task.id, start_date=start_date, end_date=end_date, status="PENDING")
 
+
+@router.post("/crm/weekly-followup/leader-engagement/trigger")
+def trigger_weekly_followup_leader_engagement_report_task(
+    payload: WeeklyFollowupTriggerTaskIn = Body(default=WeeklyFollowupTriggerTaskIn()),
+) -> WeeklyFollowupTriggerTaskOut:
+    """
+    人工触发“周跟进总结 leader 阅读/互动统计推送”任务（异步，返回 task_id）。
+    - 暂时不做权限校验，方便测试
+    - start_date/end_date 可不传；不传时任务内部按默认口径计算（上周日-本周六，北京时间）
+    """
+    start_date = payload.start_date
+    end_date = payload.end_date
+    if (start_date is None) != (end_date is None):
+        raise HTTPException(status_code=400, detail="start_date/end_date 需要同时传或同时不传")
+
+    # 延迟导入，避免路由模块加载时引入 Celery task 依赖
+    from app.tasks.cron_jobs import send_crm_weekly_followup_leader_engagement_report
+
+    task = send_crm_weekly_followup_leader_engagement_report.delay(
+        week_start_str=start_date.isoformat() if start_date else None,
+        week_end_str=end_date.isoformat() if end_date else None,
+    )
+    return WeeklyFollowupTriggerTaskOut(task_id=task.id, start_date=start_date, end_date=end_date, status="PENDING")
+
+
 @router.post("/crm/weekly-followup/query")
 def list_weekly_followup_weekly_summaries(
     db_session: SessionDep,
@@ -500,6 +527,54 @@ def list_weekly_followup_weekly_summaries(
         return WeeklyFollowupWeeklyListOut(total=int(total or 0), page=page, size=size, items=items)
     raise HTTPException(status_code=400, detail="scope must be 'department' or 'company'")
 
+
+@router.post("/crm/weekly-followup/summaries/{summary_id}/reviewed")
+def mark_weekly_followup_summary_reviewed(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    summary_id: UUID,
+) -> WeeklyFollowupLeaderEngagementOut:
+    """
+    团队负责人/公司管理员点击“已阅”，确认该部门周跟进总结。
+    """
+    can_review, is_company_admin, user_dept_id, user_dept_name = _can_edit_weekly_followup_comments(db_session, user)
+    if not can_review:
+        raise HTTPException(status_code=403, detail="权限不足：仅团队负责人或管理者可已阅确认")
+
+    summary = db_session.exec(select(CRMWeeklyFollowupSummary).where(CRMWeeklyFollowupSummary.id == summary_id)).first()
+    if summary is None:
+        raise HTTPException(status_code=404, detail="Weekly followup summary not found")
+    if (summary.summary_type or "").strip() != "department":
+        raise HTTPException(status_code=400, detail="仅支持 department 周总结的已阅确认")
+
+    # leader 只能确认本部门；公司管理员可确认任意部门
+    if not is_company_admin:
+        if user_dept_id and (summary.department_id or "") and summary.department_id != user_dept_id:
+            raise HTTPException(status_code=403, detail="权限不足：只能确认本团队周总结")
+        if (not user_dept_id) and user_dept_name and (summary.department_name or "") != user_dept_name:
+            raise HTTPException(status_code=403, detail="权限不足：只能确认本团队周总结")
+
+    now_bj = datetime.now(ZoneInfo("Asia/Shanghai"))
+    leader_user_id = str(getattr(user, "id", "") or "")
+    eng = crm_weekly_followup_engagement_service.upsert_engagement(
+        db_session,
+        summary=summary,
+        leader_user_id=leader_user_id,
+        reviewed_at=now_bj,
+    )
+
+    return WeeklyFollowupLeaderEngagementOut(
+        summary_id=summary.id,
+        leader_user_id=eng.leader_user_id,
+        week_start=summary.week_start,
+        week_end=summary.week_end,
+        department_id=summary.department_id or "",
+        department_name=summary.department_name or "",
+        reviewed_at=eng.reviewed_at,
+        commented_at=eng.commented_at,
+    )
+
+
 @router.post("/crm/weekly-followup/entities/{entity_id}/comments")
 def save_weekly_followup_comments(
     db_session: SessionDep,
@@ -567,6 +642,40 @@ def save_weekly_followup_comments(
     db_session.add(entity)
     db_session.commit()
     db_session.refresh(entity)
+
+    # leader 参与度：若当前用户是团队负责人，且本次确实提交了评论，则记录 commented_at
+    try:
+        if my_comments:
+            # leader 判定与 _can_view_weekly_followup 保持一致（不依赖 OAuth 权限调用，避免引入额外延迟）
+            user_profile_repo = UserProfileRepo()
+            profile = user_profile_repo.get_by_user_id(db_session, user.id)
+            is_leader_flag = user_department_relation_repo.get_is_leader_by_user_ids(
+                db_session,
+                [current_user_id],
+            ).get(current_user_id)
+            if is_leader_flag is None:
+                is_team_lead = bool(profile and profile.department and not profile.direct_manager_id)
+            else:
+                is_team_lead = bool(is_leader_flag)
+
+            if is_team_lead:
+                summary = db_session.exec(
+                    select(CRMWeeklyFollowupSummary).where(
+                        CRMWeeklyFollowupSummary.week_start == entity.week_start,
+                        CRMWeeklyFollowupSummary.week_end == entity.week_end,
+                        CRMWeeklyFollowupSummary.summary_type == "department",
+                        CRMWeeklyFollowupSummary.department_name == (entity.department_name or ""),
+                    )
+                ).first()
+                if summary is not None:
+                    crm_weekly_followup_engagement_service.upsert_engagement(
+                        db_session,
+                        summary=summary,
+                        leader_user_id=current_user_id,
+                        commented_at=now_bj,
+                    )
+    except Exception as e:
+        logger.warning(f"记录周跟进 leader 评论参与度失败（不影响保存评论）：{e}")
 
     # 保存评论成功后：推送提醒给负责销售（不影响主流程，失败仅记录日志）
     try:

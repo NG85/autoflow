@@ -40,5 +40,6 @@ from .crm_todos_weekly_metrics import CRMTodosWeeklyMetrics
 from .user_department_relation import UserDepartmentRelation
 from .crm_weekly_followup_summary import CRMWeeklyFollowupSummary
 from .crm_weekly_followup_entity_summary import CRMWeeklyFollowupEntitySummary
+from .crm_weekly_followup_leader_engagement import CRMWeeklyFollowupLeaderEngagement
 from .crm_visit_metrics_facts import CRMVisitMetricsFacts
 from .crm_todo_metrics_facts import CRMTodoMetricsFacts

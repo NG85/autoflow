@@ -267,6 +267,31 @@ class CRMVisitMetricsService:
             )
             company_written += 2
 
+        # 3.1) 公司级当周合计（weekday_iso=0），便于下游直接查「每周总拜访数/关键人拜访数」
+        company_total_visits = sum(weekday_map.get(w, (0, 0))[0] for w in range(1, 8))
+        company_total_call_high = sum(weekday_map.get(w, (0, 0))[1] for w in range(1, 8))
+        session.exec(
+            upsert_fact,
+            params={
+                "id": uuid7().hex.replace("-", ""),
+                **base_company,
+                "metric": "total_visits",
+                "weekday_iso": 0,
+                "value_int": int(company_total_visits),
+            },
+        )
+        session.exec(
+            upsert_fact,
+            params={
+                "id": uuid7().hex.replace("-", ""),
+                **base_company,
+                "metric": "call_high_visits",
+                "weekday_iso": 0,
+                "value_int": int(company_total_call_high),
+            },
+        )
+        company_written += 2
+
         # 4) 公司级人数类指标（便于下游直接计算两类人均）
         # - sales_with_visits：当周有拜访记录的销售人数（去重 recorder_id）
         # - sales_headcount：全公司销售总人数（按 user_department_relation 表，去重 crm_user_id）
