@@ -973,13 +973,13 @@ def send_crm_weekly_followup_leader_engagement_report(self, week_start_str: str 
                 not_reviewed = _names_by_status(leader_status_by_id, STATUS_NONE)
 
                 message_text = (
-                    "本周各销售团队 Leader 对“商机跟进总结”的阅读及互动情况统计如下：\n"
+                    "本周各销售团队Leader对“商机跟进总结”的阅读及互动情况统计如下：\n"
                     f"  - 已确认且添加评论/任务：{_fmt_names(reviewed_and_commented)}\n"
                     f"  - 仅点击确认：{_fmt_names(reviewed_only)}\n"
                     f"  - 未确认：{_fmt_names(not_reviewed)}"
                 )
             else:
-                lines: list[str] = ["本周各销售团队 各层级Leader 对“商机跟进总结”的阅读及互动情况统计如下："]
+                lines: list[str] = ["本周各销售团队各层级Leader对“商机跟进总结”的阅读及互动情况统计如下："]
                 for first_level_name in sorted(groups_with_leaders.keys()):
                     status_map = groups_with_leaders[first_level_name]
                     reviewed_and_commented = _names_by_status(status_map, STATUS_REVIEWED_AND_COMMENTED)
@@ -987,7 +987,7 @@ def send_crm_weekly_followup_leader_engagement_report(self, week_start_str: str 
                     not_reviewed = _names_by_status(status_map, STATUS_NONE)
                     lines.extend(
                         [
-                            f"  - {first_level_name}",
+                            f"  {first_level_name}",
                             f"    - 已确认且添加评论/任务：{_fmt_names(reviewed_and_commented)}",
                             f"    - 仅点击确认：{_fmt_names(reviewed_only)}",
                             f"    - 未确认：{_fmt_names(not_reviewed)}",

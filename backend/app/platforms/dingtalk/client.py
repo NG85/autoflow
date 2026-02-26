@@ -307,7 +307,7 @@ class DingTalkClient(BaseClient):
         
         API文档：https://open.dingtalk.com/document/isvapp/send-single-chat-messages-in-bulk
         """
-        url = f"{self.base_url}/v1.0/im/conversations/messages/batchSend"
+        url = f"{self.base_url}/v1.0/robot/oToMessages/batchSend"
         
         msg_param = {
             "content": text
