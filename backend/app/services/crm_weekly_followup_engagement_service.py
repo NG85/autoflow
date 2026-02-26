@@ -6,11 +6,26 @@ from typing import Optional
 
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
+from zoneinfo import ZoneInfo
 
 from app.models.crm_weekly_followup_leader_engagement import CRMWeeklyFollowupLeaderEngagement
 from app.models.crm_weekly_followup_summary import CRMWeeklyFollowupSummary
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_TZ = ZoneInfo("Asia/Shanghai")
+
+
+def _ensure_tz_aware(dt: Optional[datetime]) -> Optional[datetime]:
+    """
+    统一 datetime 的时区形态，避免 naive/aware 混用导致比较异常。
+    约定：若传入 naive datetime，则视为北京时间（Asia/Shanghai）。
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=_DEFAULT_TZ)
+    return dt
 
 
 class CRMWeeklyFollowupEngagementService:
@@ -32,6 +47,9 @@ class CRMWeeklyFollowupEngagementService:
         if not leader_user_id:
             raise ValueError("leader_user_id is required")
 
+        reviewed_at = _ensure_tz_aware(reviewed_at)
+        commented_at = _ensure_tz_aware(commented_at)
+
         existing = session.exec(
             select(CRMWeeklyFollowupLeaderEngagement).where(
                 CRMWeeklyFollowupLeaderEngagement.summary_id == summary.id,
@@ -41,10 +59,13 @@ class CRMWeeklyFollowupEngagementService:
 
         if existing:
             changed = False
-            if reviewed_at is not None and (existing.reviewed_at is None or reviewed_at > existing.reviewed_at):
+            existing_reviewed_at = _ensure_tz_aware(getattr(existing, "reviewed_at", None))
+            existing_commented_at = _ensure_tz_aware(getattr(existing, "commented_at", None))
+
+            if reviewed_at is not None and (existing_reviewed_at is None or reviewed_at > existing_reviewed_at):
                 existing.reviewed_at = reviewed_at
                 changed = True
-            if commented_at is not None and (existing.commented_at is None or commented_at > existing.commented_at):
+            if commented_at is not None and (existing_commented_at is None or commented_at > existing_commented_at):
                 existing.commented_at = commented_at
                 changed = True
             if changed:
@@ -80,10 +101,13 @@ class CRMWeeklyFollowupEngagementService:
             if not existing:
                 raise
             changed = False
-            if reviewed_at is not None and (existing.reviewed_at is None or reviewed_at > existing.reviewed_at):
+            existing_reviewed_at = _ensure_tz_aware(getattr(existing, "reviewed_at", None))
+            existing_commented_at = _ensure_tz_aware(getattr(existing, "commented_at", None))
+
+            if reviewed_at is not None and (existing_reviewed_at is None or reviewed_at > existing_reviewed_at):
                 existing.reviewed_at = reviewed_at
                 changed = True
-            if commented_at is not None and (existing.commented_at is None or commented_at > existing.commented_at):
+            if commented_at is not None and (existing_commented_at is None or commented_at > existing_commented_at):
                 existing.commented_at = commented_at
                 changed = True
             if changed:
