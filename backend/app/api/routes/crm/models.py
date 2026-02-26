@@ -842,6 +842,17 @@ class WeeklyFollowupSummaryItemOut(BaseModel):
     updated_at: Optional[datetime] = None
 
 
+class WeeklyFollowupLeaderEngagementOut(BaseModel):
+    summary_id: UUID
+    leader_user_id: str
+    week_start: date
+    week_end: date
+    department_id: str = ""
+    department_name: str = ""
+    reviewed_at: Optional[datetime] = None
+    commented_at: Optional[datetime] = None
+
+
 class WeeklyFollowupDepartmentOption(BaseModel):
     department_id: Optional[str] = None
     department_name: str

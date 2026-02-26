@@ -52,18 +52,37 @@ class OAuthClient:
     def get_departments_with_leaders(
         self,
         *,
+        level: Optional[int] = None,
+        root_department_id: Optional[str] = None,
+        group_by_first_level_department: bool = False,
         include_leader_identity: bool = True,
         timeout_seconds: int = 10,
     ) -> Dict[str, Optional[List[Dict[str, Any]]]]:
         """
         POST /organization/departments/leaders
 
+        新增可选参数（不传则返回全部）：
+        - level: 按层级过滤部门（ge=0）
+            - root_department_id 未指定时：level 为全局层级，根部门 level=1
+            - root_department_id 指定时：level 为相对层级，level=1 表示根部门的直接子部门，level=0 表示根部门本身
+        - root_department_id: 作为层级计算的根部门ID（对应 department_mirror.unique_id）
+        - group_by_first_level_department: 是否按一级部门分组聚合返回
+            - False（默认）：平铺返回，每个 key 为 department_name
+            - True：按 path 的第一级部门聚合，同一一级部门下的子部门 leaders 合并到同一 key
+
         返回结构：
         - key: department_name
         - value: managers list 或 None
         """
         url = f"{self._base_url}/organization/departments/leaders"
-        payload = {"include_leader_identity": include_leader_identity}
+        payload: Dict[str, Any] = {"include_leader_identity": include_leader_identity}
+        if level is not None:
+            if level < 0:
+                logger.error("OAuth departments/leaders invalid level (must be >= 0): %s", level)
+            else:
+                payload["level"] = level
+        if root_department_id:
+            payload["root_department_id"] = root_department_id
 
         try:
             resp = self._session.post(
@@ -83,6 +102,96 @@ class OAuthClient:
             if not isinstance(result, list):
                 logger.error("OAuth departments/leaders invalid result format: %s", result)
                 return {}
+
+            if group_by_first_level_department:
+                # deptId/path -> deptName lookup for resolving first-level group name
+                dept_id_to_name: Dict[str, str] = {}
+                path_to_name: Dict[str, str] = {}
+                for dept_info in result:
+                    if not isinstance(dept_info, dict):
+                        continue
+                    dept_name = (dept_info.get("departmentName") or "").strip()
+                    if not dept_name:
+                        continue
+                    dept_id = (str(dept_info.get("departmentId")) if dept_info.get("departmentId") is not None else "").strip()
+                    if dept_id:
+                        dept_id_to_name[dept_id] = dept_name
+                    dept_path = (dept_info.get("path") or "").strip()
+                    if dept_path:
+                        path_to_name[dept_path] = dept_name
+
+                grouped: Dict[str, List[Dict[str, Any]]] = {}
+                grouped_seen: Dict[str, set] = {}
+
+                for dept_info in result:
+                    if not isinstance(dept_info, dict):
+                        continue
+                    department_name = dept_info.get("departmentName")
+                    if not department_name:
+                        continue
+                    dept_path = (dept_info.get("path") or "").strip()
+                    first_seg = dept_path.split("/", 1)[0] if dept_path else ""
+
+                    group_name = ""
+                    if first_seg:
+                        group_name = (
+                            path_to_name.get(first_seg)
+                            or dept_id_to_name.get(first_seg)
+                            or first_seg
+                        )
+                    else:
+                        # If path missing, fallback to the department itself
+                        group_name = str(department_name)
+
+                    leaders = dept_info.get("leaders", []) or []
+                    if not isinstance(leaders, list) or not leaders:
+                        grouped.setdefault(group_name, [])
+                        grouped_seen.setdefault(group_name, set())
+                        continue
+
+                    bucket = grouped.setdefault(group_name, [])
+                    seen = grouped_seen.setdefault(group_name, set())
+
+                    for leader in leaders:
+                        if not isinstance(leader, dict):
+                            continue
+                        manager = {
+                            "open_id": leader.get("openId"),
+                            "name": leader.get("name", "") or "",
+                            "crmUserId": leader.get("crmUserId", "") or "",
+                            "userId": leader.get("userId", "") or "",
+                            "platform": leader.get("platform", "feishu"),
+                            "type": "department_manager",
+                            # 保留 leader 的来源部门，避免聚合后丢上下文
+                            "department": department_name,
+                            "receive_id_type": "open_id",
+                        }
+
+                        # Reasonable per-group dedupe (openId/userId/crmUserId/uid/askUserId)
+                        platform = str(manager.get("platform") or "")
+                        ident = (
+                            leader.get("openId")
+                            or leader.get("userId")
+                            or leader.get("crmUserId")
+                            or leader.get("uid")
+                            or leader.get("askUserId")
+                            or ""
+                        )
+                        key = f"{platform}:{ident}" if ident else f"{platform}:{manager.get('name')}"
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        bucket.append(manager)
+
+                grouped_final: Dict[str, Optional[List[Dict[str, Any]]]] = {}
+                for k, v in grouped.items():
+                    grouped_final[k] = v or None
+
+                logger.info(
+                    "OAuth departments/leaders loaded (grouped): %s first-level departments",
+                    len(grouped_final),
+                )
+                return grouped_final
 
             departments_with_managers: Dict[str, Optional[List[Dict[str, Any]]]] = {}
             for dept_info in result:
