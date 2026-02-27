@@ -31,6 +31,7 @@ from app.api.routes.crm.models import (
     WeeklyFollowupTriggerTaskOut,
     WeeklyFollowupSummaryItemOut,
     WeeklyFollowupLeaderEngagementOut,
+    WeeklyFollowupReviewStatusOut,
     WeeklyFollowupEntityPageOut,
     SaveWeeklyFollowupCommentsIn,
 )
@@ -51,6 +52,7 @@ from app.models.crm_accounts import CRMAccount
 from app.models.user_profile import UserProfile
 from app.models.crm_weekly_followup_summary import CRMWeeklyFollowupSummary
 from app.models.crm_weekly_followup_entity_summary import CRMWeeklyFollowupEntitySummary
+from app.models.crm_weekly_followup_leader_engagement import CRMWeeklyFollowupLeaderEngagement
 from uuid import UUID
 from app.repositories.user_profile import UserProfileRepo
 from app.repositories.visit_record import visit_record_repo
@@ -528,6 +530,49 @@ def list_weekly_followup_weekly_summaries(
     raise HTTPException(status_code=400, detail="scope must be 'department' or 'company'")
 
 
+@router.get("/crm/weekly-followup/summaries/{summary_id}/reviewed")
+def get_weekly_followup_summary_reviewed_status(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    summary_id: UUID,
+) -> WeeklyFollowupReviewStatusOut:
+    """
+    查询当前用户对部门周跟进总结的已阅状态，供前端控制按钮 enable/disable。
+    """
+    can_review, is_company_admin, user_dept_id, user_dept_name = _can_edit_weekly_followup_comments(db_session, user)
+
+    summary = db_session.exec(select(CRMWeeklyFollowupSummary).where(CRMWeeklyFollowupSummary.id == summary_id)).first()
+    if summary is None:
+        raise HTTPException(status_code=404, detail="未找到相关周总结")
+    if (summary.summary_type or "").strip() != "department":
+        raise HTTPException(status_code=400, detail="仅支持团队/部门级周总结的已阅状态查询")
+
+    # leader 只能确认本部门；公司管理员可确认任意部门
+    can_review_current_summary = bool(can_review)
+    if can_review_current_summary and not is_company_admin:
+        if user_dept_id and (summary.department_id or "") and summary.department_id != user_dept_id:
+            can_review_current_summary = False
+        if (not user_dept_id) and user_dept_name and (summary.department_name or "") != user_dept_name:
+            can_review_current_summary = False
+
+    leader_user_id = str(getattr(user, "id", "") or "")
+    eng = db_session.exec(
+        select(CRMWeeklyFollowupLeaderEngagement).where(
+            CRMWeeklyFollowupLeaderEngagement.summary_id == summary.id,
+            CRMWeeklyFollowupLeaderEngagement.leader_user_id == leader_user_id,
+        )
+    ).first()
+    reviewed_at = eng.reviewed_at if eng is not None else None
+
+    return WeeklyFollowupReviewStatusOut(
+        summary_id=summary.id,
+        leader_user_id=leader_user_id,
+        can_review=can_review_current_summary,
+        reviewed=bool(reviewed_at),
+        reviewed_at=reviewed_at,
+    )
+
+
 @router.post("/crm/weekly-followup/summaries/{summary_id}/reviewed")
 def mark_weekly_followup_summary_reviewed(
     db_session: SessionDep,
@@ -543,9 +588,9 @@ def mark_weekly_followup_summary_reviewed(
 
     summary = db_session.exec(select(CRMWeeklyFollowupSummary).where(CRMWeeklyFollowupSummary.id == summary_id)).first()
     if summary is None:
-        raise HTTPException(status_code=404, detail="Weekly followup summary not found")
+        raise HTTPException(status_code=404, detail="未找到相关周总结")
     if (summary.summary_type or "").strip() != "department":
-        raise HTTPException(status_code=400, detail="仅支持 department 周总结的已阅确认")
+        raise HTTPException(status_code=400, detail="仅支持团队/部门级周总结的已阅确认")
 
     # leader 只能确认本部门；公司管理员可确认任意部门
     if not is_company_admin:
