@@ -853,6 +853,14 @@ class WeeklyFollowupLeaderEngagementOut(BaseModel):
     commented_at: Optional[datetime] = None
 
 
+class WeeklyFollowupReviewStatusOut(BaseModel):
+    summary_id: UUID
+    leader_user_id: str
+    can_review: bool = False
+    reviewed: bool = False
+    reviewed_at: Optional[datetime] = None
+
+
 class WeeklyFollowupDepartmentOption(BaseModel):
     department_id: Optional[str] = None
     department_name: str
