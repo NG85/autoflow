@@ -703,6 +703,16 @@ class CustomerDocumentUploadResponse(BaseModel):
     document_type: Optional[str] = Field(default=None, description="文档类型")
 
 
+class DocumentQATriggerTaskIn(BaseModel):
+    document_content_id: int = Field(description="文档内容ID（document_contents.id）")
+
+
+class DocumentQATriggerTaskOut(BaseModel):
+    task_id: str
+    document_content_id: int
+    status: str = "PENDING"
+
+
 # =========================
 # CRM Weekly Followup (周跟进总结)
 # =========================

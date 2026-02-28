@@ -34,6 +34,8 @@ from app.api.routes.crm.models import (
     WeeklyFollowupReviewStatusOut,
     WeeklyFollowupEntityPageOut,
     SaveWeeklyFollowupCommentsIn,
+    DocumentQATriggerTaskIn,
+    DocumentQATriggerTaskOut,
 )
 from app.crm.save_engine import (
     save_visit_record_to_crm_table, 
@@ -53,6 +55,7 @@ from app.models.user_profile import UserProfile
 from app.models.crm_weekly_followup_summary import CRMWeeklyFollowupSummary
 from app.models.crm_weekly_followup_entity_summary import CRMWeeklyFollowupEntitySummary
 from app.models.crm_weekly_followup_leader_engagement import CRMWeeklyFollowupLeaderEngagement
+from app.models.document_contents import DocumentContent
 from uuid import UUID
 from app.repositories.user_profile import UserProfileRepo
 from app.repositories.visit_record import visit_record_repo
@@ -454,6 +457,32 @@ def trigger_weekly_followup_leader_engagement_report_task(
         week_end_str=end_date.isoformat() if end_date else None,
     )
     return WeeklyFollowupTriggerTaskOut(task_id=task.id, start_date=start_date, end_date=end_date, status="PENDING")
+
+
+@router.post("/crm/document-qa/trigger")
+def trigger_document_qa_extract_task(
+    db_session: SessionDep,
+    # user: CurrentUserDep,
+    payload: DocumentQATriggerTaskIn,
+) -> DocumentQATriggerTaskOut:
+    """
+    人工触发“文档问答对抽取”任务（异步，返回 task_id）。
+    """
+    document_content = db_session.get(DocumentContent, payload.document_content_id)
+    if document_content is None:
+        raise HTTPException(status_code=404, detail="文档内容不存在")
+
+    # 延迟导入，避免路由模块加载时引入 Celery task 依赖
+    from app.tasks.document_qa import extract_and_save_document_qa
+
+    task = extract_and_save_document_qa.delay(
+        document_content_id=payload.document_content_id,
+    )
+    return DocumentQATriggerTaskOut(
+        task_id=task.id,
+        document_content_id=payload.document_content_id,
+        status="PENDING",
+    )
 
 
 @router.post("/crm/weekly-followup/query")
