@@ -951,11 +951,11 @@ def send_crm_weekly_followup_leader_engagement_report(self, week_start_str: str 
 
                     st = _status_from_engagement(engagement_by_key.get((summary.id, leader_user_id)))
                     prev = leader_status_by_id.get(leader_user_id, STATUS_NONE)
-                    if st > prev:
+                    if leader_user_id not in leader_status_by_id or st > prev:
                         leader_status_by_id[leader_user_id] = st
 
                     prev_g = group_map.get(leader_user_id, STATUS_NONE)
-                    if st > prev_g:
+                    if leader_user_id not in group_map or st > prev_g:
                         group_map[leader_user_id] = st
 
             def _names_by_status(status_map: dict[str, int], target_status: int) -> list[str]:
