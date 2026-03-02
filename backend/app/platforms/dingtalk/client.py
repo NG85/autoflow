@@ -273,8 +273,8 @@ class DingTalkClient(BaseClient):
         支持两种消息类型：
         1. 文本消息：使用批量发送单聊消息API
            API文档：https://open.dingtalk.com/document/isvapp/send-single-chat-messages-in-bulk
-        2. 交互式卡片：使用机器人发送交互式卡片API  
-           API文档：https://open.dingtalk.com/document/orgapp/robots-send-interactive-cards
+        2. 交互式卡片：使用创建并投放卡片API  
+           API文档：https://open.dingtalk.com/document/development/create-and-deliver-cards
         
         Args:
             receive_id: 接收者ID（用户ID或群聊ID）
@@ -348,24 +348,33 @@ class DingTalkClient(BaseClient):
     
     def _send_interactive_card(self, receive_id_type: str, receive_id: str, card_data: str, headers: Dict[str, str]) -> Dict[str, Any]:
         """
-        发送交互式卡片消息
+        发送交互式卡片消息（新版API - 创建并投放卡片）
         
-        API文档：https://open.dingtalk.com/document/orgapp/robots-send-interactive-cards
-        API端点：POST /v1.0/im/v1.0/robot/interactiveCards/send
+        API文档：https://open.dingtalk.com/document/development/create-and-deliver-cards
+        API端点：POST /v1.0/card/instances/createAndDeliver
+        
+        场域类型及openSpaceId格式：
+            dtv1.card//im_group.{openConversationId}   （IM群聊）
+            dtv1.card//im_robot.{userId}               （IM机器人单聊）
         
         Args:
             receive_id_type: 接收者类型（"chat_id"为群聊，其他为单聊）
-            receive_id: 接收者ID（群聊ID或用户ID）
+            receive_id: 接收者ID（群聊openConversationId或用户userId）
             card_data: 卡片数据（JSON字符串），支持两种格式：
-                1. 钉钉API格式（直接）：
+                1. 钉钉新版API格式（直接）：
                    - cardTemplateId: 卡片模板ID（必填）
-                   - cardData: 卡片数据（必填）
-                   - cardBizId: 卡片业务ID，唯一标识卡片的幂等ID（必填，未提供则自动生成）
-                   - callbackUrl: 回调URL（可选）
-                   - openConversationId: 会话ID，用于群聊（可选）
-                   - singleChatReceiver: 单聊接收者，JSON字符串格式 {"userId":"xxx"} 或直接传userId字符串（可选，默认使用receive_id）
-                   - sendOptions: 发送选项（可选）
-                   - pullStrategy: 是否使用拉取策略（可选）
+                   - outTrackId: 外部卡片实例ID，唯一标识卡片（未提供则自动生成）
+                   - cardData: 卡片数据，格式为 {"cardParamMap": {...}}
+                   - userId: 卡片创建者userId（可选）
+                   - callbackRouteKey: 卡片回调路由Key（可选）
+                   - callbackType: 卡片回调模式，"HTTP" 或 "STREAM"（可选）
+                   - openSpaceId: 场域ID（可选，未提供时根据receive_id_type自动构建）
+                   - imGroupOpenSpaceModel: IM群聊场域信息（可选）
+                   - imRobotOpenSpaceModel: IM机器人单聊场域信息（可选）
+                   - imGroupOpenDeliverModel: 群聊投放参数（可选，未提供时自动构建）
+                   - imRobotOpenDeliverModel: 单聊投放参数（可选，未提供时自动构建）
+                   - privateData: 用户私有数据（可选）
+                   - openDynamicDataConfig: 动态数据源配置（可选）
                 2. Service层格式（自动转换）：
                    {
                      "type": "template",
@@ -379,26 +388,39 @@ class DingTalkClient(BaseClient):
         Returns:
             发送结果
         """
-        url = f"{self.base_url}/v1.0/im/v1.0/robot/interactiveCards/send"
+        url = f"{self.base_url}/v1.0/card/instances/createAndDeliver"
         
         try:
-            # 解析卡片数据
             card_json = json.loads(card_data) if isinstance(card_data, str) else card_data
             
-            # 检查是否为service层格式，需要转换
+            # Service层格式 → 钉钉API格式
             if card_json.get("type") == "template" and "data" in card_json:
-                # 转换为钉钉API格式
                 template_data = card_json["data"]
                 card_json = {
                     "cardTemplateId": template_data.get("template_id"),
-                    "cardData": template_data.get("template_variable", {})
+                    "cardData": {"cardParamMap": template_data.get("template_variable", {})}
                 }
                 logger.info(f"转换service层格式到钉钉API格式: template_id={card_json['cardTemplateId']}")
             
-            # 构建请求负载 - 必填字段
-            payload = {
-                "robotCode": self.app_id,  # 机器人code
-            }
+            # 兼容旧版cardData格式：确保包装为 {"cardParamMap": {...}}
+            if "cardData" in card_json:
+                cd = card_json["cardData"]
+                if isinstance(cd, str):
+                    cd = json.loads(cd)
+                if isinstance(cd, dict) and "cardParamMap" not in cd:
+                    card_json["cardData"] = {"cardParamMap": cd}
+                else:
+                    card_json["cardData"] = cd
+            
+            # cardParamMap 的所有值必须为字符串类型
+            param_map = (card_json.get("cardData") or {}).get("cardParamMap")
+            if isinstance(param_map, dict):
+                card_json["cardData"]["cardParamMap"] = {
+                    k: (json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else str(v))
+                    for k, v in param_map.items()
+                }
+            
+            payload: Dict[str, Any] = {}
             
             # 必填：卡片模板ID
             if "cardTemplateId" not in card_json:
@@ -406,84 +428,132 @@ class DingTalkClient(BaseClient):
             payload["cardTemplateId"] = card_json["cardTemplateId"]
             
             # 必填：卡片数据
-            if "cardData" in card_json:
-                # cardData需要是JSON字符串
-                payload["cardData"] = json.dumps(card_json["cardData"], ensure_ascii=False) if isinstance(card_json["cardData"], dict) else card_json["cardData"]
-            else:
+            if "cardData" not in card_json:
                 return {"errcode": -1, "errmsg": "Missing required field: cardData"}
+            payload["cardData"] = card_json["cardData"]
             
-            # 必填：卡片业务ID（唯一标识，卡片幂等ID）
-            # 如果未提供，自动生成UUID（最长不超过100字符，建议64字符以内）
-            if "cardBizId" in card_json:
-                payload["cardBizId"] = card_json["cardBizId"]
+            # 外部卡片实例ID（兼容旧版cardBizId）
+            out_track_id = card_json.get("outTrackId") or card_json.get("cardBizId")
+            if not out_track_id:
+                out_track_id = str(uuid.uuid4())
+                logger.info(f"自动生成outTrackId: {out_track_id}")
+            payload["outTrackId"] = out_track_id
+            
+           
+            # 可选：卡片回调路由Key
+            if "callbackRouteKey" in card_json:
+                payload["callbackRouteKey"] = card_json["callbackRouteKey"]
+            
+            # 可选：卡片回调模式（"HTTP" 或 "STREAM"）
+            if "callbackType" in card_json:
+                payload["callbackType"] = card_json["callbackType"]
+            
+            # --- 构建 openSpaceId 和投放模型 ---
+            # openSpaceId 格式: dtv1.card//im_group.{openConversationId} 或 dtv1.card//im_robot.{userId}
+            if "openSpaceId" in card_json:
+                payload["openSpaceId"] = card_json["openSpaceId"]
             else:
-                # 生成唯一的cardBizId: 使用UUID去掉中划线，保证在64字符以内
-                payload["cardBizId"] = f"card_{uuid.uuid4().hex}"
-                logger.info(f"自动生成cardBizId: {payload['cardBizId']}")
-            
-            # 可选：回调URL
-            if "callbackUrl" in card_json:
-                payload["callbackUrl"] = card_json["callbackUrl"]
-            
-            # 发送目标：优先使用openConversationId（群聊），否则使用singleChatReceiver（单聊）
-            if "openConversationId" in card_json:
-                payload["openConversationId"] = card_json["openConversationId"]
-            elif "singleChatReceiver" in card_json:
-                # singleChatReceiver应该是JSON字符串格式: {"userId":"xxx"}
-                receiver = card_json["singleChatReceiver"]
-                if isinstance(receiver, str):
-                    # 如果已经是字符串，检查是否为JSON格式
-                    try:
-                        json.loads(receiver)  # 验证是否为有效JSON
-                        payload["singleChatReceiver"] = receiver
-                    except json.JSONDecodeError:
-                        # 如果不是JSON格式，假定是userId，转换为JSON格式
-                        payload["singleChatReceiver"] = json.dumps({"userId": receiver}, ensure_ascii=False)
-                elif isinstance(receiver, dict):
-                    # 如果是字典，转换为JSON字符串
-                    payload["singleChatReceiver"] = json.dumps(receiver, ensure_ascii=False)
-                else:
-                    return {"errcode": -1, "errmsg": "Invalid singleChatReceiver format"}
-            else:
-                # 根据receive_id_type判断是群聊还是单聊
                 if not receive_id:
-                    return {"errcode": -1, "errmsg": "Missing receiver: openConversationId or singleChatReceiver required"}
+                    return {"errcode": -1, "errmsg": "Missing receiver: receive_id is required"}
                 
                 if receive_id_type == "chat_id":
-                    # 群聊：使用openConversationId
-                    payload["openConversationId"] = receive_id
+                    conversation_id = card_json.get("openConversationId", receive_id)
+                    payload["openSpaceId"] = f"dtv1.card//im_group.{conversation_id}"
                 else:
-                    # 单聊：使用singleChatReceiver
-                    # 转换为JSON格式: {"userId":"xxx"}
-                    payload["singleChatReceiver"] = json.dumps({"userId": receive_id}, ensure_ascii=False)
+                    target_user_id = receive_id
+                    if "singleChatReceiver" in card_json:
+                        receiver = card_json["singleChatReceiver"]
+                        if isinstance(receiver, str):
+                            try:
+                                target_user_id = json.loads(receiver).get("userId", receive_id)
+                            except json.JSONDecodeError:
+                                target_user_id = receiver
+                        elif isinstance(receiver, dict):
+                            target_user_id = receiver.get("userId", receive_id)
+                    payload["openSpaceId"] = f"dtv1.card//im_robot.{target_user_id}"
             
-            # 可选：用户私有数据映射
-            if "userIdPrivateDataMap" in card_json:
-                payload["userIdPrivateDataMap"] = card_json["userIdPrivateDataMap"]
-            if "unionIdPrivateDataMap" in card_json:
-                payload["unionIdPrivateDataMap"] = card_json["unionIdPrivateDataMap"]
+            # IM群聊投放参数
+            group_deliver_model = card_json.get("imGroupOpenDeliverModel") or {}
+            if isinstance(group_deliver_model, str):
+                try:
+                    group_deliver_model = json.loads(group_deliver_model)
+                except json.JSONDecodeError:
+                    group_deliver_model = {}
+            if not isinstance(group_deliver_model, dict):
+                group_deliver_model = {}
+            group_deliver_model.setdefault("robotCode", self.app_id)
+            payload["imGroupOpenDeliverModel"] = group_deliver_model
             
-            # 可选：发送选项
-            if "sendOptions" in card_json:
-                payload["sendOptions"] = card_json["sendOptions"]
+            # IM机器人单聊投放参数
+            robot_deliver_model = card_json.get("imRobotOpenDeliverModel") or {}
+            if isinstance(robot_deliver_model, str):
+                try:
+                    robot_deliver_model = json.loads(robot_deliver_model)
+                except json.JSONDecodeError:
+                    robot_deliver_model = {}
+            if not isinstance(robot_deliver_model, dict):
+                robot_deliver_model = {}
+            robot_deliver_model.setdefault("spaceType", "IM_ROBOT")
+            robot_deliver_model.setdefault("robotCode", self.app_id)
+            payload["imRobotOpenDeliverModel"] = robot_deliver_model
+
+            # 场域信息（实测接口要求始终携带）
+            group_space = card_json.get("imGroupOpenSpaceModel") or {}
+            if isinstance(group_space, dict):
+                group_space = dict(group_space)
+            else:
+                group_space = {}
+            group_space["supportForward"] = True
+            payload["imGroupOpenSpaceModel"] = group_space
+
+            robot_space = card_json.get("imRobotOpenSpaceModel") or {}
+            if isinstance(robot_space, dict):
+                robot_space = dict(robot_space)
+            else:
+                robot_space = {}
+            robot_space["supportForward"] = True
+            payload["imRobotOpenSpaceModel"] = robot_space
+
+            # 用户私有数据（兼容旧版 userIdPrivateDataMap）
+            if "privateData" in card_json:
+                payload["privateData"] = card_json["privateData"]
+            elif "userIdPrivateDataMap" in card_json:
+                payload["privateData"] = card_json["userIdPrivateDataMap"]
             
-            # 可选：拉取策略
-            if "pullStrategy" in card_json:
-                payload["pullStrategy"] = card_json["pullStrategy"]
+            # 动态数据源配置
+            if "openDynamicDataConfig" in card_json:
+                payload["openDynamicDataConfig"] = card_json["openDynamicDataConfig"]
             
+            payload["userIdType"] = 1 # 1: userId, 2: unionId
+            
+            logger.debug(f"钉钉交互式卡片请求payload: {json.dumps(payload, ensure_ascii=False)}")
             resp = requests.post(url, headers=headers, json=payload)
-            logger.info(f"发送钉钉交互式卡片请求: {resp.text}")
+            logger.info(f"发送钉钉交互式卡片响应: {resp.text}")
             resp.raise_for_status()
             
             result = resp.json()
-            
-            # 检查返回结果
-            if result.get("success") or "processQueryKey" in result:
+
+            # 顶层 success 为 True 且 result.deliverResults 中每一项均为 success 时，才视为成功
+            top_ok = result.get("success")
+            deliver_results = (result.get("result") or {}).get("deliverResults") or []
+            all_deliver_ok = all(
+                isinstance(r, dict) and r.get("success") is True for r in deliver_results
+            )
+            call_ok = top_ok and (all_deliver_ok if deliver_results else True)
+
+            if call_ok:
                 logger.info(f"成功发送钉钉交互式卡片到用户: {receive_id}")
-                return {"errcode": 0, "errmsg": "ok", "result": result}
+                return {"errcode": 0, "errmsg": "ok", "result": result.get("result", result)}
             else:
-                logger.error(f"发送钉钉交互式卡片失败: {result}")
-                return result
+                errmsg = "发送失败"
+                for r in deliver_results:
+                    if isinstance(r, dict) and r.get("success") is False:
+                        errmsg = r.get("errorMsg") or errmsg
+                        break
+                if not deliver_results and not top_ok:
+                    errmsg = result.get("errmsg") or result.get("message") or errmsg
+                logger.error(f"发送钉钉交互式卡片失败: {errmsg}, result={result}")
+                return {"errcode": -1, "errmsg": errmsg, "result": result.get("result", result)}
         except json.JSONDecodeError as e:
             logger.error(f"解析卡片数据失败: {e}")
             return {"errcode": -1, "errmsg": f"Invalid card data format: {str(e)}"}
