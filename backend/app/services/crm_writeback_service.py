@@ -580,23 +580,13 @@ class CrmWritebackService:
                     
                     # 使用原生SQL查询，一次性获取crm_user_id和长亭CRM用户名
                     sql_query = text("""
-                        SELECT up.crm_user_id, cu.name as user_name
+                        SELECT up.crm_user_id, cu.unique_id as user_name
                         FROM user_profiles up
                         LEFT JOIN crm_user cu ON up.crm_user_id = cu.unique_id
                         WHERE up.oauth_user_id = :ask_id
                     """)
                     
                     result = session.exec(sql_query, params={"ask_id": ask_id_str}).first()
-                    if not result:
-                        # 从user表查询fxiaoke_id和长亭CRM用户名(向后兼容，后续user表会下线)
-                        sql_query = text("""
-                            SELECT u.fxiaoke_id as crm_user_id, cu.name as user_name
-                            FROM user u
-                            LEFT JOIN crm_user cu ON u.fxiaoke_id = cu.unique_id
-                            WHERE u.ask_id = :ask_id
-                        """)
-                        result = session.exec(sql_query, params={"ask_id": ask_id_str}).first()
-                        
                     if result:
                         crm_user_id, user_name = result
                         if user_name:
