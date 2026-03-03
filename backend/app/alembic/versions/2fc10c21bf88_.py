@@ -174,32 +174,32 @@ def upgrade():
         sa.Column("after", sa.JSON(), nullable=True),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_table(
-        "users",
-        sa.Column(
-            "created_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
-            nullable=True,
-        ),
-        sa.Column(
-            "updated_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
-            nullable=True,
-        ),
-        sa.Column("id", sqlmodel.sql.sqltypes.GUID(), nullable=False),
-        sa.Column("email", sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-        sa.Column(
-            "hashed_password", sqlmodel.sql.sqltypes.AutoString(), nullable=False
-        ),
-        sa.Column("is_active", sa.Boolean(), nullable=False),
-        sa.Column("is_superuser", sa.Boolean(), nullable=False),
-        sa.Column("is_verified", sa.Boolean(), nullable=False),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index(op.f("ix_users_email"), "users", ["email"], unique=True)
-    op.create_index(op.f("ix_users_id"), "users", ["id"], unique=False)
+    # op.create_table(
+    #     "users",
+    #     sa.Column(
+    #         "created_at",
+    #         sa.DateTime(timezone=True),
+    #         server_default=sa.text("now()"),
+    #         nullable=True,
+    #     ),
+    #     sa.Column(
+    #         "updated_at",
+    #         sa.DateTime(timezone=True),
+    #         server_default=sa.text("now()"),
+    #         nullable=True,
+    #     ),
+    #     sa.Column("id", sqlmodel.sql.sqltypes.GUID(), nullable=False),
+    #     sa.Column("email", sqlmodel.sql.sqltypes.AutoString(), nullable=False),
+    #     sa.Column(
+    #         "hashed_password", sqlmodel.sql.sqltypes.AutoString(), nullable=False
+    #     ),
+    #     sa.Column("is_active", sa.Boolean(), nullable=False),
+    #     sa.Column("is_superuser", sa.Boolean(), nullable=False),
+    #     sa.Column("is_verified", sa.Boolean(), nullable=False),
+    #     sa.PrimaryKeyConstraint("id"),
+    # )
+    # op.create_index(op.f("ix_users_email"), "users", ["email"], unique=True)
+    # op.create_index(op.f("ix_users_id"), "users", ["id"], unique=False)
     op.create_table(
         "api_keys",
         sa.Column(
@@ -450,9 +450,9 @@ def downgrade():
     op.drop_index(op.f("ix_chats_id"), table_name="chats")
     op.drop_table("chats")
     op.drop_table("api_keys")
-    op.drop_index(op.f("ix_users_id"), table_name="users")
-    op.drop_index(op.f("ix_users_email"), table_name="users")
-    op.drop_table("users")
+    # op.drop_index(op.f("ix_users_id"), table_name="users")
+    # op.drop_index(op.f("ix_users_email"), table_name="users")
+    # op.drop_table("users")
     op.drop_table("staff_action_logs")
     op.drop_table("site_settings")
     op.drop_table("semantic_cache")
