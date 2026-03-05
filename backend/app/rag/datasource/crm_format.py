@@ -575,7 +575,7 @@ def format_opportunity_info(opportunity, related_data) -> List[str]:
        
     # 处理基本信息
     content.extend(process_field_group(field_groups["basic"]))
-    content.append("> 说明：季度格式为'FY25Q1'，表示财年2025第一季度。财年从自然年4月1日开始计算，例如2024年4月1日开始的季度为FY25Q1。\n")
+    # content.append("> 说明：季度格式为'FY25Q1'，表示财年2025第一季度。财年从自然年4月1日开始计算，例如2024年4月1日开始的季度为FY25Q1。\n")
     
     # 处理财务信息
     financial_content = []
@@ -1177,7 +1177,7 @@ def format_payment_plan_info(payment_plan) -> List[str]:
     fiscal_content = process_field_group(field_groups["fiscal"])
     if fiscal_content:
         content.extend(fiscal_content)
-        content.append("> 说明：季度格式为'FY25Q1'，表示财年2025第一季度。财年从自然年4月1日开始计算，例如2024年4月1日开始的季度为FY25Q1。\n")
+        # content.append("> 说明：季度格式为'FY25Q1'，表示财年2025第一季度。财年从自然年4月1日开始计算，例如2024年4月1日开始的季度为FY25Q1。\n")
 
     # 处理状态信息
     status_content = process_field_group(field_groups["status"])
