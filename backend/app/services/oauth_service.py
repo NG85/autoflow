@@ -23,7 +23,7 @@ class OAuthClient:
 
 
     # @cached(cache=TTLCache(maxsize=100, ttl=60 * 10), key=methodkey)
-    def query_user_roles_and_permissions(self, *, user_id: UUID, timeout_seconds: int = 5) -> Dict[str, Any]:
+    def query_user_roles_and_permissions(self, *, user_id: UUID, timeout_seconds: int = 30) -> Dict[str, Any]:
         """
         POST /permission/query
 
@@ -56,7 +56,7 @@ class OAuthClient:
         root_department_id: Optional[str] = None,
         group_by_first_level_department: bool = False,
         include_leader_identity: bool = True,
-        timeout_seconds: int = 10,
+        timeout_seconds: int = 30,
     ) -> Dict[str, Optional[List[Dict[str, Any]]]]:
         """
         POST /organization/departments/leaders
@@ -236,7 +236,7 @@ class OAuthClient:
         base_user_id: str,
         max_levels: int = 2,
         include_leader_identity: bool = True,
-        timeout_seconds: int = 5,
+        timeout_seconds: int = 30,
     ) -> List[Dict[str, Any]]:
         """
         POST /permission/reporting-chain/query
@@ -295,7 +295,7 @@ class OAuthClient:
         permission: str,
         role_codes: Optional[List[str]] = None,
         include_identity: bool = True,
-        timeout_seconds: int = 5,
+        timeout_seconds: int = 30,
     ) -> List[Dict[str, Any]]:
         """
         POST /permission/users/by-permission
@@ -342,7 +342,7 @@ class OAuthClient:
         *,
         user_id: UUID,
         include_subordinate_identity: bool = True,
-        timeout_seconds: int = 5,
+        timeout_seconds: int = 30,
     ) -> Dict[str, Any]:
         """
         POST /permission/subordinate-chain/query

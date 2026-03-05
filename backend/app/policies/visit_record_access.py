@@ -4,13 +4,10 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional, List
 from uuid import UUID
 
-from sqlmodel import Session, select, func, String
-from sqlalchemy import and_, exists
+from sqlmodel import Session
 
-from app.models.user_profile import UserProfile
-from app.models.user_department_relation import UserDepartmentRelation
 from app.repositories.user_profile import user_profile_repo
-from app.repositories.user_department_relation import user_department_relation_repo
+from app.services.oauth_service import oauth_client
 
 
 RolesAndPermissionsProvider = Callable[[UUID], Dict[str, Any]]
@@ -20,11 +17,9 @@ IsAdminUserFn = Callable[[UUID, Session, Optional[List[str]]], bool]
 @dataclass
 class VisitRecordAccessPolicy:
     """
-    Visit record access policy.
-
-    Owns the authorization rules, separate from query construction.
-    - Primary rule: user_department_relation (dept view / leader).
-    - Fallback rule: profiles direct manager relationship (virtual reporting line).
+    拜访记录访问策略：仅按汇报关系控制（与通知对称）。
+    - 本人：可查看自己的拜访记录。
+    - 汇报下属：可查看所有汇报给自己的下属的拜访记录（OAuth 下属链）。
     """
 
     session: Session
@@ -34,9 +29,8 @@ class VisitRecordAccessPolicy:
 
     _permissions: Optional[List[str]] = None
     _is_admin: Optional[bool] = None
-    _is_leader: Optional[bool] = None
-    _my_department_id: Optional[str] = None
     _my_oauth_user_id: Optional[str] = None
+    _my_subordinate_user_ids: Optional[List[UUID]] = None
 
     @property
     def permissions(self) -> List[str]:
@@ -71,42 +65,37 @@ class VisitRecordAccessPolicy:
         return self._my_oauth_user_id
 
     @property
-    def has_dept_view(self) -> bool:
-        return "report51:dept:view" in (self.permissions or [])
-
-    @property
-    def is_leader(self) -> bool:
-        if self._is_leader is not None:
-            return self._is_leader
+    def my_subordinate_user_ids(self) -> List[UUID]:
+        """汇报给当前用户的所有下属（OAuth 下属链），用于「可查看下属的拜访记录」."""
+        if self._my_subordinate_user_ids is not None:
+            return self._my_subordinate_user_ids
         if not self.current_user_id:
-            self._is_leader = False
-            return self._is_leader
-        self._is_leader = bool(
-            user_department_relation_repo.get_is_leader_by_user_ids(
-                self.session,
-                [str(self.current_user_id)],
-            ).get(str(self.current_user_id), False)
-        )
-        return self._is_leader
-
-    @property
-    def my_department_id(self) -> Optional[str]:
-        if self._my_department_id is not None:
-            return self._my_department_id
-        if not self.current_user_id:
-            self._my_department_id = None
-            return None
-        if not (self.has_dept_view or self.is_leader):
-            self._my_department_id = None
-            return None
-        self._my_department_id = user_department_relation_repo.get_primary_department_by_user_ids(
-            self.session,
-            [str(self.current_user_id)],
-        ).get(str(self.current_user_id))
-        return self._my_department_id
+            self._my_subordinate_user_ids = []
+            return self._my_subordinate_user_ids
+        try:
+            result = oauth_client.get_subordinate_chain(
+                user_id=self.current_user_id,
+                include_subordinate_identity=True,
+            )
+            subordinates = (result or {}).get("subordinates") or []
+            ids: List[UUID] = []
+            for item in subordinates:
+                if not isinstance(item, dict):
+                    continue
+                uid = item.get("userId")
+                if not uid:
+                    continue
+                try:
+                    ids.append(UUID(str(uid)))
+                except (ValueError, TypeError):
+                    continue
+            self._my_subordinate_user_ids = ids
+        except Exception:
+            self._my_subordinate_user_ids = []
+        return self._my_subordinate_user_ids
 
     def can_access_single_recorder(self, recorder_id: Optional[UUID]) -> bool:
-        """Single-record check to avoid building large IN lists."""
+        """单条判断：当前用户是否可查看该记录人的拜访记录（本人或汇报下属）。"""
         if not self.current_user_id:
             # backward compatible: no user provided -> allow
             return True
@@ -116,23 +105,7 @@ class VisitRecordAccessPolicy:
             return True
         if self.current_user_id == recorder_id:
             return True
-
-        # Fallback: direct manager can view direct subordinate records
-        my_oid = self.my_oauth_user_id
-        if my_oid:
-            target = self.session.exec(select(UserProfile).where(UserProfile.user_id == recorder_id)).first()
-            if target and target.direct_manager_id and str(target.direct_manager_id).strip() == str(my_oid).strip():
-                return True
-
-        # Dept rule (only if leader/dept:view)
-        dept_id = self.my_department_id
-        if not dept_id:
-            return False
-        dept_map = user_department_relation_repo.get_primary_department_by_user_ids(
-            self.session,
-            [str(self.current_user_id), str(recorder_id)],
-        )
-        return bool(dept_map.get(str(self.current_user_id)) and dept_map.get(str(self.current_user_id)) == dept_map.get(str(recorder_id)))
+        return recorder_id in self.my_subordinate_user_ids
 
     def list_access_predicate(self, record_model) -> Optional[Any]:
         """
@@ -147,40 +120,10 @@ class VisitRecordAccessPolicy:
 
         predicate = (record_model.recorder_id == self.current_user_id)
 
-        # Dept visibility: match department_id via EXISTS on user_department_relation
-        dept_id = self.my_department_id
-        if dept_id:
-            # recorder_id is GUID stored as 32-hex; user_id is CHAR(36).
-            recorder_id_expr = func.cast(record_model.recorder_id, String)
-            recorder_id_uuid36 = func.concat(
-                func.substr(recorder_id_expr, 1, 8), "-",
-                func.substr(recorder_id_expr, 9, 4), "-",
-                func.substr(recorder_id_expr, 13, 4), "-",
-                func.substr(recorder_id_expr, 17, 4), "-",
-                func.substr(recorder_id_expr, 21, 12),
-            )
-            predicate = predicate | exists(
-                select(1).where(
-                    and_(
-                        UserDepartmentRelation.department_id == dept_id,
-                        UserDepartmentRelation.is_active == True,
-                        UserDepartmentRelation.user_id == recorder_id_uuid36,
-                    )
-                )
-            )
-
-        # Fallback: direct manager -> direct subordinate
-        my_oid = self.my_oauth_user_id
-        if my_oid:
-            predicate = predicate | exists(
-                select(1).where(
-                    and_(
-                        UserProfile.user_id == record_model.recorder_id,
-                        UserProfile.direct_manager_id == my_oid,
-                        UserProfile.is_active == True,
-                    )
-                )
-            )
+        # 汇报下属：可查看所有下属的拜访记录（OAuth 下属链）
+        subordinate_ids = self.my_subordinate_user_ids
+        if subordinate_ids:
+            predicate = predicate | (record_model.recorder_id.in_(subordinate_ids))
 
         return predicate
 
