@@ -91,7 +91,7 @@ def _can_view_weekly_followup(db_session: SessionDep, user: CurrentUserDep) -> t
     roles_and_permissions = oauth_client.query_user_roles_and_permissions(user_id=user.id)
     permissions = roles_and_permissions.get("permissions", []) if isinstance(roles_and_permissions, dict) else []
 
-    is_company_admin = "report51:company:view" in permissions or visit_record_repo._is_admin_user(user.id, db_session, permissions)
+    is_company_admin = visit_record_repo._is_admin_user(user.id, db_session, permissions)
     # leader 判定：优先使用 user_department_relation.is_leader；兜底再用 profiles 的“无直属上级”口径
     is_leader_flag = user_department_relation_repo.get_is_leader_by_user_ids(
         db_session,
