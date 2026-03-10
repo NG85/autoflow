@@ -59,6 +59,7 @@ from app.models.document_contents import DocumentContent
 from uuid import UUID
 from app.repositories.user_profile import UserProfileRepo
 from app.repositories.visit_record import visit_record_repo
+from app.repositories.department_mirror import department_mirror_repo
 from app.repositories.user_department_relation import user_department_relation_repo
 from app.services.oauth_service import oauth_client
 from app.services.crm_weekly_followup_engagement_service import crm_weekly_followup_engagement_service
@@ -184,6 +185,8 @@ def get_weekly_followup_detail(
     # 解析部门过滤（仅 department scope）
     dept_id = None
     dept_name = None
+    # 本部门 + 所有子部门的 department_id 列表，用于匹配 summary/entities（含子部门数据）
+    subtree_dept_ids: List[str] = []
     if scope == "department":
         if is_company_admin:
             dept_id = (payload.department_id or "").strip() or None
@@ -195,6 +198,16 @@ def get_weekly_followup_detail(
             dept_name = user_dept_name
             if dept_id is None and dept_name is None:
                 raise HTTPException(status_code=403, detail="无法获取本团队信息")
+        if dept_id:
+            subtree_dept_ids = department_mirror_repo.get_subtree_department_ids(db_session, dept_id)
+        elif dept_name:
+            ids_with_name = department_mirror_repo.get_department_ids_by_name(db_session, dept_name)
+            seen: set[str] = set()
+            for did in ids_with_name:
+                for sid in department_mirror_repo.get_subtree_department_ids(db_session, did):
+                    if sid not in seen:
+                        seen.add(sid)
+                        subtree_dept_ids.append(sid)
 
     # summary（company/department）
     summary_out: Optional[WeeklyFollowupSummaryItemOut] = None
@@ -207,6 +220,7 @@ def get_weekly_followup_detail(
         if scope == "company":
             stmt = stmt.where(CRMWeeklyFollowupSummary.department_name == "")
         else:
+            # summary 只取当前选中部门的一条
             if dept_id:
                 stmt = stmt.where(CRMWeeklyFollowupSummary.department_id == dept_id)
             elif dept_name:
@@ -237,7 +251,10 @@ def get_weekly_followup_detail(
     if scope == "my":
         conds.append(CRMWeeklyFollowupEntitySummary.owner_user_id == str(user.id))
     elif scope == "department":
-        if dept_id:
+        # 匹配本部门及所有子部门的实体
+        if subtree_dept_ids:
+            conds.append(CRMWeeklyFollowupEntitySummary.department_id.in_(subtree_dept_ids))
+        elif dept_id:
             conds.append(CRMWeeklyFollowupEntitySummary.department_id == dept_id)
         elif dept_name:
             conds.append(CRMWeeklyFollowupEntitySummary.department_name == dept_name)

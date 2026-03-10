@@ -13,10 +13,10 @@ from app.models.crm_sales_visit_records import CRMSalesVisitRecord
 from app.models.crm_opportunities import CRMOpportunity
 from app.models.crm_accounts import CRMAccount
 from app.models.crm_user import CRMUser
-from app.models.user_profile import UserProfile
 from app.models.user_department_relation import UserDepartmentRelation
 from app.models.crm_weekly_followup_entity_summary import CRMWeeklyFollowupEntitySummary
 from app.models.crm_weekly_followup_summary import CRMWeeklyFollowupSummary
+from app.repositories.department_mirror import department_mirror_repo
 from app.repositories.user_department_relation import user_department_relation_repo
 from app.services.crm_writeback_service import crm_writeback_service
 from app.utils.ark_llm import call_ark_llm
@@ -680,17 +680,33 @@ class CRMWeeklyFollowupService:
             persisted_entities.append(persisted)
 
         # 生成部门/公司汇总（仅 LLM）
-        by_dept: Dict[str, List[Tuple[_EntityKey, List[CRMSalesVisitRecord]]]] = defaultdict(list)
-        for key, rs in grouped.items():
-            by_dept[key.department_name].append((key, rs))
+        # 按部门组织架构：为负责人直接部门及所有上级部门生成汇总
+        owner_dept_ids = {
+            dept_by_user_id.get(owner_user_id_by_key[k])
+            for k in grouped
+            if dept_by_user_id.get(owner_user_id_by_key.get(k))
+        }
+        ancestor_chains = department_mirror_repo.get_ancestor_chains_bulk(
+            session, owner_dept_ids
+        )
 
-        # 用实体行补齐 department_id（汇总内容不再依赖实体行）
-        dept_id_by_name: Dict[str, str] = {}
-        for e in persisted_entities:
-            dn = (e.department_name or "").strip()
-            did = str(getattr(e, "department_id", "") or "").strip()
-            if dn and did and dn not in dept_id_by_name:
-                dept_id_by_name[dn] = did
+        by_dept_id_full: Dict[str, List[Tuple[_EntityKey, List[CRMSalesVisitRecord]]]] = defaultdict(list)
+        by_dept_name_fallback: Dict[str, List[Tuple[_EntityKey, List[CRMSalesVisitRecord]]]] = defaultdict(list)
+        for key in grouped:
+            owner_user_id = owner_user_id_by_key.get(key)
+            dept_id = dept_by_user_id.get(owner_user_id) if owner_user_id else None
+            dept_id_norm = str(dept_id).strip() if dept_id else None
+            # 有部门 ID 且能解析出祖先链时，当前部门及每一层上级部门都会收到该 key 的汇总
+            if dept_id_norm and dept_id_norm in ancestor_chains:
+                for did, _ in ancestor_chains[dept_id_norm]:
+                    by_dept_id_full[did].append((key, grouped[key]))
+            else:
+                by_dept_name_fallback[key.department_name].append((key, grouped[key]))
+
+        dept_name_by_id = department_mirror_repo.get_department_names_by_ids(
+            session, by_dept_id_full.keys()
+        )
+        names_covered_by_id = set(dept_name_by_id.values())
 
         def _llm_rollup_text(
             scope: str,
@@ -717,22 +733,71 @@ class CRMWeeklyFollowupService:
                 logger.warning(f"LLM 汇总生成失败 scope={scope} dept={dept}: {e}")
                 return ""
 
-        # upsert department summaries
-        for dept, record_groups in by_dept.items():
-            dept_id = dept_id_by_name.get(dept, "")
+        # upsert department summaries（按部门 ID 的层级 + 无 dept_id 的 fallback）
+        # 表唯一约束为 (week_start, week_end, summary_type, department_name)，多个未在 mirror 的
+        # dept_id 都会得到 department_name="未知部门"，需合并为一条汇总再 upsert，避免冲突
+        unknown_department_record_groups: List[Tuple[_EntityKey, List[CRMSalesVisitRecord]]] = []
+        seen_keys_unknown: set = set()
+
+        for dept_id, record_groups in by_dept_id_full.items():
+            department_name = dept_name_by_id.get(dept_id, "未知部门")
+            if department_name != "未知部门":
+                summary_obj = CRMWeeklyFollowupSummary(
+                    week_start=week_start,
+                    week_end=week_end,
+                    summary_type="department",
+                    department_id=dept_id,
+                    department_name=department_name,
+                    title=self._build_summary_title(
+                        week_start=week_start,
+                        week_end=week_end,
+                        summary_type="department",
+                        department_name=department_name,
+                    ),
+                    summary_content=_llm_rollup_text("department", department_name, record_groups),
+                )
+                self._upsert_summary(session, summary_obj)
+            else:
+                for k, rs in record_groups:
+                    if k not in seen_keys_unknown:
+                        seen_keys_unknown.add(k)
+                        unknown_department_record_groups.append((k, rs))
+
+        if unknown_department_record_groups:
             summary_obj = CRMWeeklyFollowupSummary(
                 week_start=week_start,
                 week_end=week_end,
                 summary_type="department",
-                department_id=dept_id,
-                department_name=dept,
+                department_id="",
+                department_name="未知部门",
                 title=self._build_summary_title(
                     week_start=week_start,
                     week_end=week_end,
                     summary_type="department",
-                    department_name=dept,
+                    department_name="未知部门",
                 ),
-                summary_content=_llm_rollup_text("department", dept, record_groups),
+                summary_content=_llm_rollup_text(
+                    "department", "未知部门", unknown_department_record_groups
+                ),
+            )
+            self._upsert_summary(session, summary_obj)
+
+        for dept_name, record_groups in by_dept_name_fallback.items():
+            if not dept_name or dept_name in names_covered_by_id:
+                continue
+            summary_obj = CRMWeeklyFollowupSummary(
+                week_start=week_start,
+                week_end=week_end,
+                summary_type="department",
+                department_id="",
+                department_name=dept_name,
+                title=self._build_summary_title(
+                    week_start=week_start,
+                    week_end=week_end,
+                    summary_type="department",
+                    department_name=dept_name,
+                ),
+                summary_content=_llm_rollup_text("department", dept_name, record_groups),
             )
             self._upsert_summary(session, summary_obj)
 
@@ -755,14 +820,24 @@ class CRMWeeklyFollowupService:
         )
         self._upsert_summary(session, company_obj)
 
+        known_dept_count = sum(
+            1 for did in by_dept_id_full if dept_name_by_id.get(did, "未知部门") != "未知部门"
+        )
+        dept_count = (
+            known_dept_count
+            + (1 if unknown_department_record_groups else 0)
+            + sum(
+                1 for n in by_dept_name_fallback if n and n not in names_covered_by_id
+            )
+        )
         logger.info(
-            f"周跟进总结生成完成：实体 {len(persisted_entities)} 条，部门 {len(by_dept)} 个"
+            f"周跟进总结生成完成：实体 {len(persisted_entities)} 条，部门 {dept_count} 个（含上级）"
         )
         return {
             "week_start": week_start.isoformat(),
             "week_end": week_end.isoformat(),
             "entity_count": len(persisted_entities),
-            "departments": len(by_dept),
+            "departments": dept_count,
         }
 
 
