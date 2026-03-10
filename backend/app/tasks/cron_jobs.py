@@ -1005,6 +1005,14 @@ def send_crm_weekly_followup_leader_engagement_report(self, week_start_str: str 
                 message_text=message_text,
                 notification_type="weekly followup leader engagement",
             )
+
+            failed = result.get("failed_recipients") or []
+            if failed:
+                logger.error(
+                    "发送周跟进统计通知失败",
+                    f"success_count={result.get('success_count', 0)}, recipients_count={result.get('recipients_count', 0)}, failed_recipients={failed}",
+                )
+
             return {"success": bool(result.get("success")), "message": result.get("message"), "data": result}
 
     except Exception as e:
