@@ -82,7 +82,7 @@ class VisitRecordAccessPolicy:
             for item in subordinates:
                 if not isinstance(item, dict):
                     continue
-                uid = item.get("userId")
+                uid = item.get("user_id") or item.get("userId")
                 if not uid:
                     continue
                 try:
