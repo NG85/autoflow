@@ -120,3 +120,11 @@ upload:
     data_type: int
     description: "Max body size (in bytes) of upload file."
     client: true
+
+# 部门与群聊对应关系
+notification:
+  department_group_chats:
+    default: []
+    data_type: list
+    description: "部门与群聊对应关系。每条含 department_id、department_name（可选）、chat_id、platform、client_id、notification_type（visit_record/department_review/all）。可选 include_children=true 表示该群包含子部门，填写人所在部门为该部门或其任意子部门时都会推送到此群。"
+    client: false

@@ -113,5 +113,29 @@ class RedisClient:
             logger.error(f"Failed to get {platform} access token for user {user_id}: {e}")
             return None
 
+    def get_tenant_access_token(self, platform: str) -> Optional[str]:
+        """
+        获取应用级 tenant_access_token（飞书/钉钉等推送用）。
+        Key: notification:tenant_token:{platform}，与用户级 token 隔离。
+        """
+        try:
+            key = f"notification:tenant_token:{platform}"
+            return self.redis_client.get(key)
+        except Exception as e:
+            logger.debug("Redis get_tenant_access_token %s: %s", platform, e)
+            return None
+
+    def set_tenant_access_token(self, platform: str, token: str, ttl_seconds: int) -> bool:
+        """存储应用级 tenant_access_token，ttl_seconds 后过期（建议略小于 2 小时）。"""
+        try:
+            key = f"notification:tenant_token:{platform}"
+            self.redis_client.setex(key, ttl_seconds, token)
+            logger.debug("Redis set_tenant_access_token %s ttl=%s", platform, ttl_seconds)
+            return True
+        except Exception as e:
+            logger.warning("Redis set_tenant_access_token %s failed: %s", platform, e)
+            return False
+
+
 # 全局Redis客户端实例
 redis_client = RedisClient() 

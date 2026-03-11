@@ -1,8 +1,10 @@
 import logging
-from typing import List, Dict, Any, Optional
+from collections import defaultdict
+from typing import List, Dict, Any, Optional, Tuple
 
-import requests
 from uuid import UUID
+
+from app.utils.redis_client import redis_client
 
 from app.platforms.notification_types import (
     NOTIFICATION_TYPE_DAILY_REPORT,
@@ -10,7 +12,13 @@ from app.platforms.notification_types import (
 )
 from sqlmodel import Session
 from app.repositories.user_profile import user_profile_repo
-from app.platforms.constants import DEFAULT_INTERNAL_GROUP_CHATS, INTERNAL_APP_IDS, PLATFORM_DINGTALK, PLATFORM_FEISHU, PLATFORM_LARK
+from app.repositories.department_mirror import department_mirror_repo
+from app.platforms.constants import (
+    PLATFORM_DINGTALK,
+    PLATFORM_FEISHU,
+    PLATFORM_LARK,
+)
+from app.site_settings import SiteSetting
 from app.platforms.feishu.client import feishu_client
 from app.platforms.lark.client import lark_client
 from app.platforms.dingtalk.client import dingtalk_client
@@ -24,6 +32,9 @@ class PlatformNotificationService:
 
     # Ops backdoor allowlist: only CC company-level daily/weekly reports.
     _OPS_CC_FEISHU_ALLOWED_SOURCES = {"company daily report", "company weekly report"}
+
+    # tenant_access_token 有效期约 2 小时（飞书/钉钉文档），Redis 缓存 110 分钟，多进程/多实例共享
+    _TOKEN_CACHE_TTL_SECONDS = 110 * 60
 
     def _ops_cc_feishu_card(self, card_content: Dict[str, Any], *, source: str) -> None:
         """
@@ -75,42 +86,227 @@ class PlatformNotificationService:
             )
         except Exception as e:
             logger.error("Ops CC Feishu unexpected error. source=%s, error=%s", source, e)
-    
-    def _get_matching_group_chats(self, platform: str = PLATFORM_FEISHU) -> List[Dict[str, str]]:
-        """获取当前应用匹配的群聊 - 仅限内部应用"""
-        matching_groups = []
-        
-        if platform == PLATFORM_FEISHU:
-            current_app_id = settings.FEISHU_APP_ID
-        elif platform == PLATFORM_LARK:
-            current_app_id = settings.LARK_APP_ID
-        elif platform == PLATFORM_DINGTALK:
-            current_app_id = settings.DINGTALK_APP_ID
-        else:
-            logger.warning(f"Unsupported platform: {platform}")
-            return matching_groups
-        
-        # 只有内部应用才返回群聊
-        if current_app_id not in INTERNAL_APP_IDS:
-            logger.info(f"Current app ID {current_app_id} is not in internal app list, no group chats will be returned")
-            return matching_groups
-        
-        for group in DEFAULT_INTERNAL_GROUP_CHATS:
-            if group["client_id"] == current_app_id:
-                matching_groups.append(group)
-        
-        return matching_groups
+
+    def _get_current_app_id(self, platform: Optional[str]) -> Optional[str]:
+        """按平台返回当前应用使用的 client_id（用于部门群配置 client_id 过滤）。"""
+        if not platform:
+            return None
+        p = (platform or "").strip().lower()
+        if p == PLATFORM_FEISHU:
+            return getattr(settings, "FEISHU_APP_ID", None) or None
+        if p == PLATFORM_LARK:
+            return getattr(settings, "LARK_APP_ID", None) or None
+        if p == PLATFORM_DINGTALK:
+            return getattr(settings, "DINGTALK_APP_ID", None) or None
+        return None
+
+    def _get_department_group_chats_config(self) -> List[Dict[str, Any]]:
+        """从站点配置读取部门-群映射（每家客户可独立配置），非 list 或未配置时返回 []。"""
+        try:
+            val = SiteSetting.get_setting("department_group_chats")
+            if isinstance(val, list):
+                return val
+        except Exception as e:
+            logger.debug("department_group_chats not from site settings: %s", e)
+        return []
+
+    def _get_group_chats_by_department(
+        self,
+        department_id: Optional[str] = None,
+        department_name: Optional[str] = None,
+        notification_type: Optional[str] = None,
+        db_session: Optional[Session] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        按部门解析要推送的群列表。优先用 department_id 匹配，否则用 department_name。
+        只返回当前应用（client_id）可用的群。
+        notification_type 用于区分消息类型，仅返回配置了该类型或 "all" 的群：
+          "visit_record" - 部门简报群（收文本，部门leader+销售）
+          "department_review" - 部门review群（收拜访上级卡片、部门日报卡片、部门周报卡片）
+        若配置项含 include_children=true 且传入 db_session，则填写人所在部门为配置部门的任意子部门时也会匹配该群（父部门一个群包住所有子部门）。
+        数据来源：站点配置 department_group_chats（每家客户可独立配置）。
+        """
+        department_group_chats = self._get_department_group_chats_config()
+        if not department_group_chats:
+            return []
+        dept_id = (department_id or "").strip() if department_id else ""
+        dept_name = (department_name or "").strip() if department_name else ""
+        if not dept_id and not dept_name:
+            return []
+        if dept_id == "UNKNOWN" and not dept_name:
+            return []
+
+        # 用于 include_children：填写人部门的祖先链 id 集合（含自身），仅当提供 db_session 时计算
+        ancestor_ids: set = set()
+        if db_session:
+            if dept_id:
+                chains = department_mirror_repo.get_ancestor_chains_bulk(db_session, [dept_id])
+                for (aid, _) in chains.get(dept_id, []):
+                    ancestor_ids.add(aid)
+            elif dept_name:
+                resolved_ids = department_mirror_repo.get_department_ids_by_name(db_session, dept_name)
+                if resolved_ids:
+                    chains = department_mirror_repo.get_ancestor_chains_bulk(db_session, resolved_ids)
+                    for did, chain in chains.items():
+                        for (aid, _) in chain:
+                            ancestor_ids.add(aid)
+
+        seen_key: set = set()
+        matching: List[Dict[str, Any]] = []
+        for entry in department_group_chats:
+            entry_client_id = entry.get("client_id")
+            if not entry_client_id:
+                continue
+            current_app_id = self._get_current_app_id(entry.get("platform"))
+            if current_app_id is None or current_app_id != entry_client_id:
+                continue
+            if notification_type:
+                entry_type = (entry.get("notification_type") or "all").strip().lower()
+                if entry_type != "all" and entry_type != notification_type.lower():
+                    continue
+            entry_dept_id = (entry.get("department_id") or "").strip()
+            entry_dept_name = (entry.get("department_name") or "").strip()
+            include_children = entry.get("include_children") is True
+
+            matched = False
+            if include_children and db_session and ancestor_ids and entry_dept_id:
+                if entry_dept_id in ancestor_ids:
+                    matched = True
+            if not matched and dept_id and entry_dept_id == dept_id:
+                matched = True
+            if not matched and dept_name and entry_dept_name == dept_name:
+                matched = True
+
+            if matched:
+                key = (entry.get("chat_id"), entry.get("platform"))
+                if key not in seen_key:
+                    seen_key.add(key)
+                    matching.append(dict(entry))
+        return matching
+
+    def _send_card_to_group_chats(
+        self,
+        platform: str,
+        group_chats: List[Dict[str, Any]],
+        template_id: str,
+        template_vars: Dict[str, Any],
+        msg_type: str = "interactive",
+    ) -> int:
+        """
+        向群列表发送卡片。每个 chat_id 发一条；失败仅打日志，不抛错。
+        返回成功发送的群数量。
+        """
+        if not group_chats or not template_id:
+            return 0
+        if not self._validate_platform_support(platform):
+            logger.warning("_send_card_to_group_chats: unsupported platform %s", platform)
+            return 0
+        try:
+            token = self._get_tenant_access_token(platform)
+        except Exception as e:
+            logger.warning("_send_card_to_group_chats: get token failed for %s: %s", platform, e)
+            return 0
+        card_content = {
+            "type": "template",
+            "data": {"template_id": template_id, "template_variable": template_vars},
+        }
+        success = 0
+        for group in group_chats:
+            chat_id = group.get("chat_id")
+            name = group.get("name") or chat_id or "group"
+            if not chat_id:
+                continue
+            try:
+                self._send_message(
+                    chat_id,
+                    token,
+                    card_content,
+                    platform,
+                    receive_id_type="chat_id",
+                    msg_type=msg_type,
+                )
+                success += 1
+                logger.info("Sent card to group %s on %s", name, platform)
+            except Exception as e:
+                logger.warning("Failed to send card to group %s on %s: %s", name, platform, e)
+        return success
+
+    def _send_text_to_group_chats(
+        self,
+        platform: str,
+        group_chats: List[Dict[str, Any]],
+        text: str,
+    ) -> int:
+        """
+        向群列表发送文本消息。每个 chat_id 发一条；失败仅打日志，不抛错。
+        返回成功发送的群数量。
+        """
+        if not group_chats or not (text or "").strip():
+            return 0
+        if not self._validate_platform_support(platform):
+            logger.warning("_send_text_to_group_chats: unsupported platform %s", platform)
+            return 0
+        try:
+            token = self._get_tenant_access_token(platform)
+        except Exception as e:
+            logger.warning("_send_text_to_group_chats: get token failed for %s: %s", platform, e)
+            return 0
+        success = 0
+        for group in group_chats:
+            chat_id = group.get("chat_id")
+            name = group.get("name") or chat_id or "group"
+            if not chat_id:
+                continue
+            try:
+                self._send_message(
+                    chat_id,
+                    token,
+                    text,
+                    platform,
+                    receive_id_type="chat_id",
+                    msg_type="text",
+                )
+                success += 1
+                logger.info("Sent text to group %s on %s", name, platform)
+            except Exception as e:
+                logger.warning("Failed to send text to group %s on %s: %s", name, platform, e)
+        return success
+
+    def _format_visit_record_group_message(
+        self,
+        recorder_name: Optional[str],
+        visit_record: Optional[Dict[str, Any]],
+    ) -> str:
+        """
+        格式化拜访记录群推送的文本消息。
+        模板：【销售姓名】完成了一次【跟进方式】的客户跟进，并提交了跟进记录。
+        """
+        rec = visit_record or {}
+        sales_name = (recorder_name or rec.get("recorder") or "").strip() or "--"
+        method = (rec.get("visit_communication_method") or "").strip() or "--"
+        return (
+            f"{sales_name}完成了一次{method}的客户跟进，并提交了跟进记录。"
+        )
     
     def _get_tenant_access_token(self, platform: str = PLATFORM_FEISHU, external: bool = False) -> str:
-        """获取指定平台的租户访问令牌"""
+        """
+        获取指定平台的租户访问令牌。
+        优先从 Redis 读取（key: notification:tenant_token:{platform}，TTL 110 分钟）；
+        未命中则请求平台 API 并写入 Redis，多进程/多实例共享同一 token。
+        """
+        token = redis_client.get_tenant_access_token(platform)
+        if token:
+            return token
         if platform == PLATFORM_FEISHU:
-            return feishu_client.get_tenant_access_token()
+            token = feishu_client.get_tenant_access_token()
         elif platform == PLATFORM_LARK:
-            return lark_client.get_tenant_access_token()
+            token = lark_client.get_tenant_access_token()
         elif platform == PLATFORM_DINGTALK:
-            return dingtalk_client.get_tenant_access_token()
+            token = dingtalk_client.get_tenant_access_token()
         else:
             raise ValueError(f"Unsupported platform: {platform}")
+        redis_client.set_tenant_access_token(platform, token, self._TOKEN_CACHE_TTL_SECONDS)
+        return token
     
     def _send_message(self, open_id: str, token: str, content: Dict[str, Any], platform: str = PLATFORM_FEISHU, receive_id_type: str = "open_id", **kwargs) -> Dict[str, Any]:
         """发送消息到指定平台"""
@@ -708,7 +904,226 @@ class PlatformNotificationService:
             logger.warning(f"Recorder {recorder_name} (profile: {recorder_profile.name}) has no {recorder_profile.oauth_user.provider} open_id, cannot send daily report")
         
         return recipients
-    
+
+    def _collect_visit_record_recipients_and_groups(
+        self,
+        db_session: Session,
+        recorder_name: Optional[str],
+        recorder_id: Optional[str],
+        visit_record: Optional[Dict[str, Any]],
+    ) -> Tuple[Dict[str, List[Dict[str, Any]]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """
+        汇总拜访记录推送的接收者与部门群配置。
+        若配置了 department_review 群，则从个人接收者中移除 leader/管理层，仅保留记录人与协同人。
+        返回 (recipients_by_platform, department_groups_review, department_groups_brief)。
+        """
+        recipients_by_platform = self.get_recipients_for_recorder(
+            db_session, recorder_name=recorder_name, recorder_id=recorder_id
+        )
+        collaborative = self._get_collaborative_participants_recipients(db_session, visit_record)
+        if collaborative:
+            for platform, recipients in collaborative.items():
+                if platform in recipients_by_platform:
+                    recipients_by_platform[platform].extend(recipients)
+                else:
+                    recipients_by_platform[platform] = recipients
+
+        recorder_dept_id = (visit_record or {}).get("recorder_department_id")
+        recorder_dept_name = (visit_record or {}).get("recorder_department_name")
+        department_groups_review = self._get_group_chats_by_department(
+            department_id=recorder_dept_id,
+            department_name=recorder_dept_name,
+            notification_type="department_review",
+            db_session=db_session,
+        )
+        department_groups_brief = self._get_group_chats_by_department(
+            department_id=recorder_dept_id,
+            department_name=recorder_dept_name,
+            notification_type="visit_record",
+            db_session=db_session,
+        )
+
+        if department_groups_review:
+            for platform in list(recipients_by_platform.keys()):
+                recipients_by_platform[platform] = [
+                    r for r in recipients_by_platform[platform]
+                    if r.get("type") in ("recorder", "collaborative_participant")
+                ]
+            recipients_by_platform = {p: rs for p, rs in recipients_by_platform.items() if rs}
+
+        return recipients_by_platform, department_groups_review, department_groups_brief
+
+    def _prepare_visit_record_template_vars(
+        self,
+        record_id: str,
+        recorder_name: Optional[str],
+        visit_record: Optional[Dict[str, Any]],
+        meeting_notes: Optional[str],
+        risk_info: Optional[str],
+    ) -> Dict[str, Any]:
+        """
+        准备拜访记录卡片/文案的公共模板变量；会原地格式化 visit_record 中的协同人、动态字段等。
+        """
+        if visit_record:
+            from app.utils.participants_utils import format_collaborative_participants_names
+            text = format_collaborative_participants_names(visit_record.get("collaborative_participants")) or "--"
+            visit_record["collaborative_participants"] = text
+            logger.info("Replaced collaborative participants: %s -> %s", visit_record.get("collaborative_participants"), text)
+
+        dynamic_fields = []
+        if visit_record:
+            from app.crm.save_engine import generate_dynamic_fields_for_visit_record
+            dynamic_fields = generate_dynamic_fields_for_visit_record(visit_record)
+
+        return {
+            "visit_date": (visit_record or {}).get("last_modified_time", "--"),
+            "recorder": recorder_name or "--",
+            "department": (visit_record or {}).get("department", "--"),
+            "sales_visit_records": [visit_record] if visit_record else [],
+            "meeting_notes": meeting_notes,
+            "risk_info": risk_info or "--",
+            "dynamic_fields": dynamic_fields,
+            "comment_page_url": f"{settings.REVIEW_REPORT_HOST}/registerVisitRecord/addComment?record_id={record_id}",
+        }
+
+    def _get_visit_record_template_id(
+        self,
+        recipient_type: str,
+        platform: str,
+        visit_type: str,
+        form_type: Optional[str] = None,
+    ) -> Optional[str]:
+        """按接收者类型、平台、拜访类型与表单类型返回拜访记录卡片模板 ID。"""
+        if platform not in (PLATFORM_FEISHU, PLATFORM_LARK, PLATFORM_DINGTALK):
+            logger.warning("Unsupported platform: %s", platform)
+            return None
+        if platform == PLATFORM_DINGTALK:
+            if visit_type == "form":
+                if recipient_type in ("recorder", "collaborative_participant"):
+                    return "ceda714f-6862-4f42-a77f-7f6d6f95f06d.schema"
+                return "1ea96d75-f14a-4dbc-87e5-baf3f893f5b5.schema"
+            return "28dd4d85-7f38-4a5c-9bdb-8156bdff4d20.schema"
+        if platform in (PLATFORM_FEISHU, PLATFORM_LARK):
+            if visit_type == "form":
+                form_type = form_type or settings.CRM_VISIT_RECORD_FORM_TYPE.value
+                if form_type == "simple":
+                    if recipient_type in ("recorder", "collaborative_participant"):
+                        return "AAqzQK6iUiK2k"
+                    return "AAqzQKvKzOW1z"
+                if recipient_type in ("recorder", "collaborative_participant"):
+                    return "AAqv2BVqurMLn"
+                return "AAqv2BIB41oor"
+            return "AAqv2BCd4MmZW"
+        return None
+
+    def _send_visit_record_to_individual_recipients(
+        self,
+        recipients_by_platform: Dict[str, List[Dict[str, Any]]],
+        base_template_vars: Dict[str, Any],
+        visit_type: str,
+        visit_record: Optional[Dict[str, Any]],
+    ) -> Tuple[int, List[Dict[str, Any]]]:
+        """向个人接收者发送拜访记录卡片，返回 (成功数, 失败列表)。"""
+        if not recipients_by_platform:
+            return 0, []
+        platforms = [p for p in recipients_by_platform.keys() if p]
+        platform_tokens = self._get_platform_tokens(platforms)
+        success_count = 0
+        failed_recipients: List[Dict[str, Any]] = []
+        form_type = (visit_record or {}).get("form_type") if visit_record else None
+
+        for platform, platform_recipients in recipients_by_platform.items():
+            if not self._validate_platform_support(platform):
+                for r in platform_recipients:
+                    failed_recipients.append(self._create_failed_recipient_record(r, platform, f"Unsupported platform: {platform}"))
+                continue
+            if platform not in platform_tokens:
+                for r in platform_recipients:
+                    failed_recipients.append(self._create_failed_recipient_record(r, platform, "Failed to get token"))
+                continue
+
+            token = platform_tokens[platform]
+            for recipient in platform_recipients:
+                template_id = self._get_visit_record_template_id(recipient["type"], platform, visit_type, form_type)
+                if not template_id:
+                    failed_recipients.append(
+                        self._create_failed_recipient_record(recipient, platform, "No template available for platform")
+                    )
+                    continue
+                card_content = {"type": "template", "data": {"template_id": template_id, "template_variable": base_template_vars}}
+                try:
+                    self._send_message(
+                        recipient["open_id"],
+                        token,
+                        card_content,
+                        platform,
+                        receive_id_type=recipient.get("receive_id_type", "open_id"),
+                        msg_type="interactive",
+                    )
+                    success_count += 1
+                    logger.info(
+                        "Pushed visit record to %s (%s) on %s",
+                        recipient.get("name"), recipient.get("type"), platform,
+                    )
+                except Exception as e:
+                    logger.error("Failed to push visit record to %s on %s: %s", recipient.get("name"), platform, e)
+                    failed_recipients.append(self._create_failed_recipient_record(recipient, platform, str(e)))
+
+        return success_count, failed_recipients
+
+    def _send_visit_record_to_review_groups(
+        self,
+        department_groups_review: List[Dict[str, Any]],
+        base_template_vars: Dict[str, Any],
+        visit_type: str,
+        visit_record: Optional[Dict[str, Any]],
+    ) -> None:
+        """将上级/管理层卡片推送到部门 review 群。"""
+        if not department_groups_review:
+            return
+        by_platform = defaultdict(list)
+        for g in department_groups_review:
+            p = g.get("platform")
+            if p:
+                by_platform[p].append(g)
+        form_type = (visit_record or {}).get("form_type") if visit_record else None
+        for platform, group_chats in by_platform.items():
+            if not self._validate_platform_support(platform):
+                continue
+            template_id = self._get_visit_record_template_id("leader", platform, visit_type, form_type)
+            if template_id:
+                n = self._send_card_to_group_chats(
+                    platform=platform,
+                    group_chats=group_chats,
+                    template_id=template_id,
+                    template_vars=base_template_vars,
+                    msg_type="interactive",
+                )
+                if n:
+                    logger.info("Visit record review group push: sent leader card to %s groups on %s", n, platform)
+
+    def _send_visit_record_to_brief_groups(
+        self,
+        department_groups_brief: List[Dict[str, Any]],
+        recorder_name: Optional[str],
+        visit_record: Optional[Dict[str, Any]],
+    ) -> None:
+        """向部门简报群发送拜访记录文本。"""
+        if not department_groups_brief:
+            return
+        by_platform = defaultdict(list)
+        for g in department_groups_brief:
+            p = g.get("platform")
+            if p:
+                by_platform[p].append(g)
+        message_text = self._format_visit_record_group_message(recorder_name, visit_record)
+        for platform, group_chats in by_platform.items():
+            if not self._validate_platform_support(platform):
+                continue
+            n = self._send_text_to_group_chats(platform=platform, group_chats=group_chats, text=message_text)
+            if n:
+                logger.info("Visit record group push: sent text to %s groups on %s", n, platform)
+
     # 发送拜访记录通知 - 实时推送给记录人、直属上级、部门负责人
     def send_visit_record_notification(
         self,
@@ -722,227 +1137,53 @@ class PlatformNotificationService:
         risk_info: str = None
     ) -> Dict[str, Any]:
         """
-        发送拜访记录通知
-        
-        支持通过recorder_name或recorder_id查找记录人
-        对于link类型的拜访记录，会包含会议纪要总结
+        发送拜访记录通知。
+        支持通过 recorder_name 或 recorder_id 查找记录人；link 类型会包含会议纪要总结。
         """
-        
-        # 获取推送接收者（已按平台分组）
-        recipients_by_platform = self.get_recipients_for_recorder(
-            db_session, 
-            recorder_name=recorder_name, 
-            recorder_id=recorder_id
+        recipients_by_platform, department_groups_review, department_groups_brief = (
+            self._collect_visit_record_recipients_and_groups(
+                db_session, recorder_name, recorder_id, visit_record
+            )
         )
-        
-        # 新增：获取协同参与人的推送接收者
-        collaborative_recipients_by_platform = self._get_collaborative_participants_recipients(
-            db_session, visit_record
+        base_template_vars = self._prepare_visit_record_template_vars(
+            record_id, recorder_name, visit_record, meeting_notes, risk_info
         )
-        
-        # 合并两个接收者列表
-        if collaborative_recipients_by_platform:
-            for platform, recipients in collaborative_recipients_by_platform.items():
-                if platform in recipients_by_platform:
-                    recipients_by_platform[platform].extend(recipients)
-                else:
-                    recipients_by_platform[platform] = recipients
-        
-        if not recipients_by_platform:
-            logger.warning(f"No recipients found for recorder: name={recorder_name}, id={recorder_id}")
+
+        if not recipients_by_platform and not department_groups_review and not department_groups_brief:
+            logger.warning(
+                "No recipients and no department groups for recorder: name=%s, id=%s",
+                recorder_name, recorder_id,
+            )
             return {
                 "success": False,
                 "message": "No recipients found",
                 "recipients_count": 0,
-                "success_count": 0
+                "success_count": 0,
             }
-        
-        # 准备基础消息内容
-        # 处理协同参与人参数，转换为用name拼接的文本
-        if visit_record:
-            from app.utils.participants_utils import format_collaborative_participants_names
-            collaborative_participants_text = format_collaborative_participants_names(
-                visit_record.get("collaborative_participants")
-            ) or "--"
-            # 替换visit_record中的collaborative_participants字段为格式化后的文本
-            visit_record["collaborative_participants"] = collaborative_participants_text
-            logger.info(f"Replaced collaborative participants: {visit_record.get('collaborative_participants')} -> {collaborative_participants_text}")
-        
-        # 生成dynamic_fields作为独立的模板参数
-        dynamic_fields = []
-        if visit_record:
-            from app.crm.save_engine import generate_dynamic_fields_for_visit_record
-            dynamic_fields = generate_dynamic_fields_for_visit_record(visit_record)
-        
-        base_template_vars = {
-            "visit_date": visit_record.get("last_modified_time", "--") if visit_record else "--",
-            "recorder": recorder_name or "--",
-            "department": visit_record.get("department", "--") if visit_record else "--",
-            "sales_visit_records": [visit_record] if visit_record else [],
-            "meeting_notes": meeting_notes,
-            "risk_info": risk_info or '--',
-            "dynamic_fields": dynamic_fields,  # 新增：动态字段数组参数
-            "comment_page_url": f"{settings.REVIEW_REPORT_HOST}/registerVisitRecord/addComment?record_id={record_id}", # 新增：评论页面链接
-        }
-        
-        # 根据拜访类型、接收者类型和平台确定模板ID
-        def get_template_id(recipient_type: str, platform: str, form_type: Optional[str] = None) -> str:
-            # 验证平台支持
-            if platform not in [PLATFORM_FEISHU, PLATFORM_LARK, PLATFORM_DINGTALK]:
-                logger.warning(f"Unsupported platform: {platform}")
-                return None
-            
-            if platform == PLATFORM_DINGTALK:
-                if visit_type == "form":
-                    # 钉钉目前只支持完整版表单模板
-                    if recipient_type == "recorder":
-                        return "ceda714f-6862-4f42-a77f-7f6d6f95f06d.schema"  # 销售个人卡片：填报无评估版V2
-                    elif recipient_type == "collaborative_participant":
-                        return "ceda714f-6862-4f42-a77f-7f6d6f95f06d.schema"  # 协同参与人卡片：填报无评估版V2
-                    else:
-                        return "1ea96d75-f14a-4dbc-87e5-baf3f893f5b5.schema"  # leader和管理者卡片：填报版V2
-                else:
-                    return "28dd4d85-7f38-4a5c-9bdb-8156bdff4d20.schema"  # link类型使用通用卡片：链接或文件版V2
-            elif platform == PLATFORM_FEISHU or platform == PLATFORM_LARK:
-                if visit_type == "form":
-                    # 检查是否为简易版表单
-                    form_type = form_type or settings.CRM_VISIT_RECORD_FORM_TYPE.value
-                    
-                    if form_type == "simple":
-                        # 简易版表单模板
-                        if recipient_type == "recorder":
-                            return "AAqzQK6iUiK2k"  # 销售个人卡片：简易版
-                        elif recipient_type == "collaborative_participant":
-                            return "AAqzQK6iUiK2k"  # 协同参与人卡片：简易版
-                        else:
-                            return "AAqzQKvKzOW1z"  # leader和管理者卡片：简易版
-                    else:
-                        # 完整版表单模板
-                        if recipient_type == "recorder":
-                            return "AAqv2BVqurMLn"  # 销售个人卡片：填报无评估版
-                        elif recipient_type == "collaborative_participant":
-                            return "AAqv2BVqurMLn"  # 协同参与人卡片：填报无评估版
-                        else:
-                            return "AAqv2BIB41oor"  # leader和管理者卡片：填报版
-                else:
-                    return "AAqv2BCd4MmZW"  # link类型使用通用卡片：链接或文件版
 
-        # # Ops backdoor: CC management-view Feishu card once per event (best-effort)
-        # try:
-        #     form_type_for_template = None
-        #     if visit_record and isinstance(visit_record, dict):
-        #         form_type_for_template = visit_record.get("form_type")
-        #     management_template_id = get_template_id("leader", PLATFORM_FEISHU, form_type_for_template)
-        #     if management_template_id:
-        #         cc_card_content = {
-        #             "type": "template",
-        #             "data": {
-        #                 "template_id": management_template_id,
-        #                 "template_variable": base_template_vars,
-        #             },
-        #         }
-        #         self._ops_cc_feishu_card(cc_card_content, source="visit record")
-        # except Exception as e:
-        #     logger.error("Ops CC Feishu visit-record failed. record_id=%s, error=%s", record_id, e)
-        
-        # 逐个平台推送消息（因为需要根据接收者类型选择不同模板）
-        total_success_count = 0
-        total_failed_recipients = []
-        
-        # 获取所有需要的平台token
-        platforms = [p for p in recipients_by_platform.keys() if p]
-        platform_tokens = self._get_platform_tokens(platforms)
-        
-        for platform, platform_recipients in recipients_by_platform.items():
-            # 验证平台支持
-            if not self._validate_platform_support(platform):
-                logger.warning(f"Skipping unsupported platform: {platform}")
-                # 记录该平台所有接收人的失败
-                for recipient in platform_recipients:
-                    total_failed_recipients.append(
-                        self._create_failed_recipient_record(
-                            recipient, platform, f"Unsupported platform: {platform}"
-                        )
-                    )
-                continue
-            
-            # 检查是否有token
-            if platform not in platform_tokens:
-                logger.error(f"No token available for platform: {platform}")
-                # 记录该平台所有接收人的失败
-                for recipient in platform_recipients:
-                    total_failed_recipients.append(
-                        self._create_failed_recipient_record(
-                            recipient, platform, "Failed to get token"
-                        )
-                    )
-                continue
-            
-            # 为当前平台的所有接收人推送消息（使用同一个token）
-            token = platform_tokens[platform]
-            for recipient in platform_recipients:
-                try:
-                    # 根据接收者类型和平台选择模板ID
-                    template_id = get_template_id(recipient["type"], platform, visit_record.get("form_type"))
-                    
-                    # 如果模板ID为None，跳过该接收人
-                    if template_id is None:
-                        logger.warning(f"No template available for recipient {recipient['name']} on platform {platform}")
-                        total_failed_recipients.append(
-                            self._create_failed_recipient_record(
-                                recipient, platform, f"No template available for platform: {platform}"
-                            )
-                        )
-                        continue
-                    
-                    # 构建卡片内容
-                    card_content = {
-                        "type": "template",
-                        "data": {
-                            "template_id": template_id,
-                            "template_variable": base_template_vars
-                        }
-                    }
-                    
-                    # 发送消息
-                    receive_id_type = recipient.get("receive_id_type", "open_id")
-                    self._send_message(
-                        recipient["open_id"],
-                        token,
-                        card_content,
-                        platform,
-                        receive_id_type=receive_id_type,
-                        msg_type="interactive"
-                    )
-                    
-                    logger.info(
-                        f"Successfully pushed visit record to {recipient['name']} "
-                        f"({recipient['type']}) in {recipient.get('department', 'Unknown')} "
-                        f"using template {template_id} on {platform}"
-                    )
-                    total_success_count += 1
-                    
-                except Exception as e:
-                    logger.error(f"Failed to push message to {recipient['name']} on {platform}: {e}")
-                    total_failed_recipients.append(
-                        self._create_failed_recipient_record(recipient, platform, str(e))
-                    )
-        
-        # 统计各平台的结果
+        total_success_count, total_failed_recipients = self._send_visit_record_to_individual_recipients(
+            recipients_by_platform, base_template_vars, visit_type, visit_record
+        )
+        self._send_visit_record_to_review_groups(
+            department_groups_review, base_template_vars, visit_type, visit_record
+        )
+        self._send_visit_record_to_brief_groups(
+            department_groups_brief, recorder_name, visit_record
+        )
+
         platforms_used = [str(p) for p in recipients_by_platform.keys() if p]
-        total_recipients_count = sum(len(recipients) for recipients in recipients_by_platform.values())
+        total_recipients_count = sum(len(rs) for rs in recipients_by_platform.values())
         result = {
             "success": total_success_count > 0,
             "message": f"Pushed to {total_success_count}/{total_recipients_count} recipients across platforms: {', '.join(platforms_used)}",
             "recipients_count": total_recipients_count,
             "success_count": total_success_count,
             "platforms_used": platforms_used,
-            "failed_recipients": total_failed_recipients
+            "failed_recipients": total_failed_recipients,
         }
-        
-        logger.info(f"Visit record notification result: {result}")
+        logger.info("Visit record notification result: %s", result)
         return result
-    
+
     def send_sales_daily_report_notification(
         self,
         db_session: Session,
@@ -1031,7 +1272,72 @@ class PlatformNotificationService:
             logger.warning(f"No department manager found for department: {department_name}")
         
         return recipients
-    
+
+    def _send_report_to_department_review_groups_or_recipients(
+        self,
+        db_session: Session,
+        department_name: str,
+        recipients: Optional[List[Dict[str, Any]]],
+        template_id_by_platform: Dict[str, str],
+        template_vars: Dict[str, Any],
+        notification_type: str,
+        report_kind: str = "department report",
+    ) -> Dict[str, Any]:
+        """
+        部门类报告推送：优先推送到 department_review 群；若未配置群则推送给个人接收者。
+        notification_type 用于 _send_notifications_by_platform 的日志；report_kind 用于无接收人时的错误文案。
+        """
+        department_groups_review = self._get_group_chats_by_department(
+            department_id=None,
+            department_name=department_name,
+            notification_type="department_review",
+            db_session=db_session,
+        )
+        if not recipients and not department_groups_review:
+            logger.warning(
+                "No recipients and no review group for %s of %s",
+                report_kind, department_name,
+            )
+            return {
+                "success": False,
+                "message": f"No recipients found for {report_kind} of {department_name}",
+                "recipients_count": 0,
+                "success_count": 0,
+            }
+        if department_groups_review:
+            by_platform = defaultdict(list)
+            for g in department_groups_review:
+                p = g.get("platform")
+                if p:
+                    by_platform[p].append(g)
+            success_count = 0
+            for platform, group_chats in by_platform.items():
+                if not self._validate_platform_support(platform):
+                    continue
+                template_id = template_id_by_platform.get(platform)
+                if template_id:
+                    n = self._send_card_to_group_chats(
+                        platform=platform,
+                        group_chats=group_chats,
+                        template_id=template_id,
+                        template_vars=template_vars,
+                        msg_type="interactive",
+                    )
+                    success_count += n
+            return {
+                "success": success_count > 0,
+                "message": f"Pushed {report_kind} to {success_count} review group(s)" if success_count else "No review groups sent",
+                "recipients_count": success_count,
+                "success_count": success_count,
+            }
+        recipients_by_platform = self._group_recipients_by_platform(recipients)
+        return self._send_notifications_by_platform(
+            recipients_by_platform=recipients_by_platform,
+            template_id_by_platform=template_id_by_platform,
+            template_vars=template_vars,
+            notification_type=notification_type,
+        )
+
     def send_department_daily_report_notification(
         self,
         db_session: Session,
@@ -1039,7 +1345,6 @@ class PlatformNotificationService:
         recipients: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
         """发送部门日报飞书卡片通知"""
-        
         department_name = department_report_data.get("department_name")
         if not department_name:
             logger.warning("Department report data missing department name")
@@ -1049,43 +1354,27 @@ class PlatformNotificationService:
                 "recipients_count": 0,
                 "success_count": 0
             }
-        
-        # 获取推送对象 - 如果未提供，则从profile中获取部门负责人(向后兼容)
         if not recipients:
             recipients = self.get_recipients_for_department_report_from_profile(
                 db_session=db_session,
                 department_name=department_name
             )
-        
-        if not recipients:
-            logger.warning(f"No recipients found for department report of {department_name}")
-            return {
-                "success": False,
-                "message": f"No recipients found for department report of {department_name}",
-                "recipients_count": 0,
-                "success_count": 0
-            }
-        
         template_vars = self._convert_daily_report_data_for_feishu(db_session, department_report_data)
-        # 确保日期字段是字符串格式
-        if 'report_date' in template_vars and hasattr(template_vars['report_date'], 'isoformat'):
-            template_vars['report_date'] = template_vars['report_date'].isoformat()
-        # 部门日报卡片模板
+        if "report_date" in template_vars and hasattr(template_vars["report_date"], "isoformat"):
+            template_vars["report_date"] = template_vars["report_date"].isoformat()
         template_id_by_platform = {
             PLATFORM_DINGTALK: "caae8019-62c5-4f3d-9387-0616b365039b.schema",
             PLATFORM_FEISHU: "AAqvGxezuuhGD",
             PLATFORM_LARK: "AAqvGxezuuhGD",
         }
-        
-        # 按平台分组接收者
-        recipients_by_platform = self._group_recipients_by_platform(recipients)
-        
-        # 使用公共方法发送通知
-        return self._send_notifications_by_platform(
-            recipients_by_platform=recipients_by_platform,
+        return self._send_report_to_department_review_groups_or_recipients(
+            db_session=db_session,
+            department_name=department_name,
+            recipients=recipients,
             template_id_by_platform=template_id_by_platform,
             template_vars=template_vars,
-            notification_type="department report"
+            notification_type="department report",
+            report_kind="department daily report",
         )
     
     def get_recipients_for_company_daily_report(self, db_session: Session) -> List[Dict[str, Any]]:
@@ -1202,7 +1491,6 @@ class PlatformNotificationService:
         recipients: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """发送部门周报飞书卡片通知"""
-        
         department_name = department_report_data.get("department_name")
         if not department_name:
             logger.warning("Department weekly report data missing department name")
@@ -1212,40 +1500,25 @@ class PlatformNotificationService:
                 "recipients_count": 0,
                 "success_count": 0
             }
-        
-        # 获取推送对象 - 如果未提供，则从profile中获取部门负责人(向后兼容)
         if not recipients:
             recipients = self.get_recipients_for_department_report_from_profile(
                 db_session=db_session,
                 department_name=department_name,
             )
-        
-        if not recipients:
-            logger.warning(f"No department manager found for department weekly report of {department_name}")
-            return {
-                "success": False,
-                "message": f"No department manager found for {department_name}",
-                "recipients_count": 0,
-                "success_count": 0
-            }
-        
         template_vars = self._convert_weekly_report_data_for_feishu(db_session, department_report_data)
-        # 部门周报卡片模板 - 从配置文件读取，支持不同公司使用不同的模板
         template_id_by_platform = {
             PLATFORM_DINGTALK: settings.DINGTALK_DEPT_WEEKLY_REPORT_TEMPLATE_ID,
             PLATFORM_FEISHU: settings.FEISHU_DEPT_WEEKLY_REPORT_TEMPLATE_ID,
             PLATFORM_LARK: settings.FEISHU_DEPT_WEEKLY_REPORT_TEMPLATE_ID,
         }
-        
-        # 按平台分组接收者
-        recipients_by_platform = self._group_recipients_by_platform(recipients)
-        
-        # 使用公共方法发送通知
-        return self._send_notifications_by_platform(
-            recipients_by_platform=recipients_by_platform,
+        return self._send_report_to_department_review_groups_or_recipients(
+            db_session=db_session,
+            department_name=department_name,
+            recipients=recipients,
             template_id_by_platform=template_id_by_platform,
             template_vars=template_vars,
-            notification_type="weekly report"
+            notification_type="weekly report",
+            report_kind="department weekly report",
         )
     
     def get_recipients_for_company_weekly_report(
