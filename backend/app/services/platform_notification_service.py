@@ -247,12 +247,26 @@ class PlatformNotificationService:
         """
         department_group_chats = self._get_department_group_chats_config()
         if not department_group_chats:
+            logger.debug(
+                "No department_group_chats configured when matching groups: dept_id=%s, dept_name=%s, type=%s",
+                department_id,
+                department_name,
+                notification_type,
+            )
             return []
         dept_id = (department_id or "").strip() if department_id else ""
         dept_name = (department_name or "").strip() if department_name else ""
         if not dept_id and not dept_name:
+            logger.debug(
+                "Skip department group matching due to empty dept_id and dept_name, type=%s",
+                notification_type,
+            )
             return []
         if dept_id == "UNKNOWN" and not dept_name:
+            logger.debug(
+                "Skip department group matching due to UNKNOWN dept_id and empty dept_name, type=%s",
+                notification_type,
+            )
             return []
 
         # 用于 include_children：填写人部门的祖先链 id 集合（含自身），仅当提供 db_session 时计算
@@ -301,6 +315,14 @@ class PlatformNotificationService:
                 if key not in seen_key:
                     seen_key.add(key)
                     matching.append(dict(entry))
+        logger.info(
+            "Matched department group chats: count=%s, dept_id=%s, dept_name=%s, type=%s, platforms=%s",
+            len(matching),
+            dept_id,
+            dept_name,
+            notification_type,
+            sorted({(g.get('platform') or '') for g in matching}),
+        )
         return matching
 
     def _send_card_to_group_chats(
