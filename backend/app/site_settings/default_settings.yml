@@ -121,10 +121,62 @@ upload:
     description: "Max body size (in bytes) of upload file."
     client: true
 
-# 部门与群聊对应关系
+# 部门与群聊对应关系、推送卡片模板
 notification:
   department_group_chats:
     default: []
     data_type: list
     description: "部门与群聊对应关系。每条含 department_id、department_name（可选）、chat_id、platform、client_id、notification_type（visit_record/department_review/all）。可选 include_children=true 表示该群包含子部门，填写人所在部门为该部门或其任意子部门时都会推送到此群。"
+    client: false
+  # 按报告类型与平台配置卡片模板 ID（feishu/lark/dingtalk），未配置或缺失键时使用代码默认值
+  card_templates:
+    default:
+      sales_daily_report:
+        feishu: "AAqvGwEs503C4"
+        lark: "AAqvGwEs503C4"
+        dingtalk: "40452d31-c1fa-46b3-b0ea-28921bcf52ae.schema"
+      department_daily_report:
+        feishu: "AAqvGxezuuhGD"
+        lark: "AAqvGxezuuhGD"
+        dingtalk: "caae8019-62c5-4f3d-9387-0616b365039b.schema"
+      company_daily_report:
+        feishu: "AAqvGhJJNR59v"
+        lark: "AAqvGhJJNR59v"
+        dingtalk: "6618eed4-1d1a-4536-9625-61e99cb14837.schema"
+      department_weekly_report:
+        feishu: "AAqX5j2jPq2Cn"
+        lark: "AAqX5j2jPq2Cn"
+        dingtalk: "349394d8-33ad-4be5-9f7e-bac33494ee42.schema"
+      company_weekly_report:
+        feishu: "AAqvMFGD8n8bZ"
+        lark: "AAqvMFGD8n8bZ"
+        dingtalk: "daa13a1a-f064-4512-968c-0a1f101d3222.schema"
+      sales_task:
+        feishu: "AAqXTV4URg1ib"
+        lark: "AAqXTV4URg1ib"
+        dingtalk: "6e587206-a1fb-418f-9980-b67cd94d2e31.schema"
+    data_type: dict
+    description: "推送卡片模板 ID。键为报告类型（sales_daily_report/department_daily_report/company_daily_report/department_weekly_report/company_weekly_report/sales_task），值为 { feishu, lark, dingtalk } 的模板 ID。"
+    client: false
+  # 拜访记录卡片按平台与变体配置模板 ID。dingtalk: form_recorder/form_leader/link；feishu/lark: form_simple_recorder/form_simple_leader/form_complete_recorder/form_complete_leader/link
+  visit_record_templates:
+    default:
+      dingtalk:
+        form_recorder: "ceda714f-6862-4f42-a77f-7f6d6f95f06d.schema"
+        form_leader: "1ea96d75-f14a-4dbc-87e5-baf3f893f5b5.schema"
+        link: "28dd4d85-7f38-4a5c-9bdb-8156bdff4d20.schema"
+      feishu:
+        form_simple_recorder: "AAqzQK6iUiK2k"
+        form_simple_leader: "AAqzQKvKzOW1z"
+        form_complete_recorder: "AAqv2BVqurMLn"
+        form_complete_leader: "AAqv2BIB41oor"
+        link: "AAqv2BCd4MmZW"
+      lark:
+        form_simple_recorder: "AAqzQK6iUiK2k"
+        form_simple_leader: "AAqzQKvKzOW1z"
+        form_complete_recorder: "AAqv2BVqurMLn"
+        form_complete_leader: "AAqv2BIB41oor"
+        link: "AAqv2BCd4MmZW"
+    data_type: dict
+    description: "拜访记录卡片模板 ID。按平台（dingtalk/feishu/lark）与变体（form_recorder/form_leader/link 或 form_simple_* /form_complete_*/link）配置。"
     client: false

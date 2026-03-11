@@ -27,6 +27,64 @@ from app.services.oauth_service import oauth_client
 
 logger = logging.getLogger(__name__)
 
+# 站点未配置或缺失键时的默认卡片模板 ID（与 default_settings.yml 中 notification.card_templates 一致）
+_DEFAULT_CARD_TEMPLATES: Dict[str, Dict[str, str]] = {
+    "sales_daily_report": {
+        PLATFORM_FEISHU: "AAqvGwEs503C4",
+        PLATFORM_LARK: "AAqvGwEs503C4",
+        PLATFORM_DINGTALK: "40452d31-c1fa-46b3-b0ea-28921bcf52ae.schema",
+    },
+    "department_daily_report": {
+        PLATFORM_FEISHU: "AAqvGxezuuhGD",
+        PLATFORM_LARK: "AAqvGxezuuhGD",
+        PLATFORM_DINGTALK: "caae8019-62c5-4f3d-9387-0616b365039b.schema",
+    },
+    "company_daily_report": {
+        PLATFORM_FEISHU: "AAqvGhJJNR59v",
+        PLATFORM_LARK: "AAqvGhJJNR59v",
+        PLATFORM_DINGTALK: "6618eed4-1d1a-4536-9625-61e99cb14837.schema",
+    },
+    "department_weekly_report": {
+        PLATFORM_FEISHU: "AAqX5j2jPq2Cn",
+        PLATFORM_LARK: "AAqX5j2jPq2Cn",
+        PLATFORM_DINGTALK: "349394d8-33ad-4be5-9f7e-bac33494ee42.schema",
+    },
+    "company_weekly_report": {
+        PLATFORM_FEISHU: "AAqvMFGD8n8bZ",
+        PLATFORM_LARK: "AAqvMFGD8n8bZ",
+        PLATFORM_DINGTALK: "daa13a1a-f064-4512-968c-0a1f101d3222.schema",
+    },
+    "sales_task": {
+        PLATFORM_FEISHU: "AAqXTV4URg1ib",
+        PLATFORM_LARK: "AAqXTV4URg1ib",
+        PLATFORM_DINGTALK: "6e587206-a1fb-418f-9980-b67cd94d2e31.schema",
+    },
+}
+
+# 拜访记录卡片默认模板（与 default_settings.yml 中 notification.visit_record_templates 一致）
+_DEFAULT_VISIT_RECORD_TEMPLATES: Dict[str, Dict[str, str]] = {
+    PLATFORM_DINGTALK: {
+        "form_recorder": "ceda714f-6862-4f42-a77f-7f6d6f95f06d.schema",
+        "form_leader": "1ea96d75-f14a-4dbc-87e5-baf3f893f5b5.schema",
+        "link": "28dd4d85-7f38-4a5c-9bdb-8156bdff4d20.schema",
+    },
+    PLATFORM_FEISHU: {
+        "form_simple_recorder": "AAqzQK6iUiK2k",
+        "form_simple_leader": "AAqzQKvKzOW1z",
+        "form_complete_recorder": "AAqv2BVqurMLn",
+        "form_complete_leader": "AAqv2BIB41oor",
+        "link": "AAqv2BCd4MmZW",
+    },
+    PLATFORM_LARK: {
+        "form_simple_recorder": "AAqzQK6iUiK2k",
+        "form_simple_leader": "AAqzQKvKzOW1z",
+        "form_complete_recorder": "AAqv2BVqurMLn",
+        "form_complete_leader": "AAqv2BIB41oor",
+        "link": "AAqv2BCd4MmZW",
+    },
+}
+
+
 class PlatformNotificationService:
     """多平台推送服务 - 基于用户档案进行消息推送，支持飞书和Lark"""
 
@@ -109,6 +167,67 @@ class PlatformNotificationService:
         except Exception as e:
             logger.debug("department_group_chats not from site settings: %s", e)
         return []
+
+    def _get_template_id_by_platform(self, report_type: str) -> Dict[str, str]:
+        """
+        从站点配置 notification.card_templates 读取指定报告类型的各平台模板 ID。
+        优先级：站点配置 > 环境变量（config，仅部门/公司周报）> 代码默认值。
+        部门/公司周报支持通过 .env 覆盖 FEISHU_*_WEEKLY_REPORT_TEMPLATE_ID、DINGTALK_*_WEEKLY_REPORT_TEMPLATE_ID。
+        """
+        try:
+            ct = SiteSetting.get_setting("card_templates")
+            if not isinstance(ct, dict):
+                ct = {}
+        except Exception:
+            ct = {}
+        by_type = ct.get(report_type) or {}
+        defaults = _DEFAULT_CARD_TEMPLATES.get(report_type) or {}
+
+        def _get(platform: str, env_key: Optional[str]) -> str:
+            key = "feishu" if platform == PLATFORM_FEISHU else "lark" if platform == PLATFORM_LARK else "dingtalk" if platform == PLATFORM_DINGTALK else None
+            val = by_type.get(key) if key else None
+            if val:
+                return val
+            if env_key and hasattr(settings, env_key):
+                env_val = getattr(settings, env_key, None)
+                if env_val:
+                    return env_val
+            return defaults.get(platform) or ""
+
+        # 部门/公司周报：支持 .env 覆盖（config 中对应变量）
+        env_fallback = {
+            "department_weekly_report": {
+                PLATFORM_FEISHU: "FEISHU_DEPT_WEEKLY_REPORT_TEMPLATE_ID",
+                PLATFORM_LARK: "FEISHU_DEPT_WEEKLY_REPORT_TEMPLATE_ID",
+                PLATFORM_DINGTALK: "DINGTALK_DEPT_WEEKLY_REPORT_TEMPLATE_ID",
+            },
+            "company_weekly_report": {
+                PLATFORM_FEISHU: "FEISHU_COMPANY_WEEKLY_REPORT_TEMPLATE_ID",
+                PLATFORM_LARK: "FEISHU_COMPANY_WEEKLY_REPORT_TEMPLATE_ID",
+                PLATFORM_DINGTALK: "DINGTALK_COMPANY_WEEKLY_REPORT_TEMPLATE_ID",
+            },
+        }.get(report_type)
+
+        return {
+            PLATFORM_FEISHU: _get(PLATFORM_FEISHU, env_fallback.get(PLATFORM_FEISHU) if env_fallback else None),
+            PLATFORM_LARK: _get(PLATFORM_LARK, env_fallback.get(PLATFORM_LARK) if env_fallback else None),
+            PLATFORM_DINGTALK: _get(PLATFORM_DINGTALK, env_fallback.get(PLATFORM_DINGTALK) if env_fallback else None),
+        }
+
+    def _get_visit_record_templates_config(self) -> Dict[str, Dict[str, str]]:
+        """从站点配置 notification.visit_record_templates 读取拜访记录模板，缺失键用代码默认值。"""
+        try:
+            vrt = SiteSetting.get_setting("visit_record_templates")
+            if not isinstance(vrt, dict):
+                vrt = {}
+        except Exception:
+            vrt = {}
+        result: Dict[str, Dict[str, str]] = {}
+        for platform in (PLATFORM_DINGTALK, PLATFORM_FEISHU, PLATFORM_LARK):
+            result[platform] = dict(_DEFAULT_VISIT_RECORD_TEMPLATES.get(platform, {}))
+            if isinstance(vrt.get(platform), dict):
+                result[platform].update(vrt[platform])
+        return result
 
     def _get_group_chats_by_department(
         self,
@@ -993,27 +1112,24 @@ class PlatformNotificationService:
         visit_type: str,
         form_type: Optional[str] = None,
     ) -> Optional[str]:
-        """按接收者类型、平台、拜访类型与表单类型返回拜访记录卡片模板 ID。"""
+        """按接收者类型、平台、拜访类型与表单类型返回拜访记录卡片模板 ID，优先从站点配置读取。"""
         if platform not in (PLATFORM_FEISHU, PLATFORM_LARK, PLATFORM_DINGTALK):
             logger.warning("Unsupported platform: %s", platform)
             return None
+        templates = self._get_visit_record_templates_config()
+        platform_tpl = templates.get(platform) or {}
         if platform == PLATFORM_DINGTALK:
-            if visit_type == "form":
-                if recipient_type in ("recorder", "collaborative_participant"):
-                    return "ceda714f-6862-4f42-a77f-7f6d6f95f06d.schema"
-                return "1ea96d75-f14a-4dbc-87e5-baf3f893f5b5.schema"
-            return "28dd4d85-7f38-4a5c-9bdb-8156bdff4d20.schema"
+            if visit_type != "form":
+                return platform_tpl.get("link")
+            key = "form_recorder" if recipient_type in ("recorder", "collaborative_participant") else "form_leader"
+            return platform_tpl.get(key)
         if platform in (PLATFORM_FEISHU, PLATFORM_LARK):
-            if visit_type == "form":
-                form_type = form_type or settings.CRM_VISIT_RECORD_FORM_TYPE.value
-                if form_type == "simple":
-                    if recipient_type in ("recorder", "collaborative_participant"):
-                        return "AAqzQK6iUiK2k"
-                    return "AAqzQKvKzOW1z"
-                if recipient_type in ("recorder", "collaborative_participant"):
-                    return "AAqv2BVqurMLn"
-                return "AAqv2BIB41oor"
-            return "AAqv2BCd4MmZW"
+            if visit_type != "form":
+                return platform_tpl.get("link")
+            form_type = form_type or settings.CRM_VISIT_RECORD_FORM_TYPE.value
+            prefix = "form_simple_" if form_type == "simple" else "form_complete_"
+            key = prefix + ("recorder" if recipient_type in ("recorder", "collaborative_participant") else "leader")
+            return platform_tpl.get(key)
         return None
 
     def _send_visit_record_to_individual_recipients(
@@ -1223,17 +1339,8 @@ class PlatformNotificationService:
             }
         
         template_vars = self._convert_daily_report_data_for_feishu(db_session, daily_report_data)
-        # 个人日报卡片模板
-        template_id_by_platform = {
-            PLATFORM_DINGTALK: "40452d31-c1fa-46b3-b0ea-28921bcf52ae.schema",
-            PLATFORM_FEISHU: "AAqvGwEs503C4",
-            PLATFORM_LARK: "AAqvGwEs503C4",
-        }
-        
-        # 按平台分组接收者
+        template_id_by_platform = self._get_template_id_by_platform("sales_daily_report")
         recipients_by_platform = self._group_recipients_by_platform(recipients)
-        
-        # 使用公共方法发送通知
         return self._send_notifications_by_platform(
             recipients_by_platform=recipients_by_platform,
             template_id_by_platform=template_id_by_platform,
@@ -1362,11 +1469,7 @@ class PlatformNotificationService:
         template_vars = self._convert_daily_report_data_for_feishu(db_session, department_report_data)
         if "report_date" in template_vars and hasattr(template_vars["report_date"], "isoformat"):
             template_vars["report_date"] = template_vars["report_date"].isoformat()
-        template_id_by_platform = {
-            PLATFORM_DINGTALK: "caae8019-62c5-4f3d-9387-0616b365039b.schema",
-            PLATFORM_FEISHU: "AAqvGxezuuhGD",
-            PLATFORM_LARK: "AAqvGxezuuhGD",
-        }
+        template_id_by_platform = self._get_template_id_by_platform("department_daily_report")
         return self._send_report_to_department_review_groups_or_recipients(
             db_session=db_session,
             department_name=department_name,
@@ -1463,20 +1566,10 @@ class PlatformNotificationService:
             }
         
         template_vars = self._convert_daily_report_data_for_feishu(db_session, company_report_data)
-        # 确保日期字段是字符串格式
-        if 'report_date' in template_vars and hasattr(template_vars['report_date'], 'isoformat'):
-            template_vars['report_date'] = template_vars['report_date'].isoformat()
-        # 公司日报卡片模板
-        template_id_by_platform = {
-            PLATFORM_DINGTALK: "6618eed4-1d1a-4536-9625-61e99cb14837.schema",
-            PLATFORM_FEISHU: "AAqvGhJJNR59v",
-            PLATFORM_LARK: "AAqvGhJJNR59v",
-        }
-        
-        # 按平台分组接收者
+        if "report_date" in template_vars and hasattr(template_vars["report_date"], "isoformat"):
+            template_vars["report_date"] = template_vars["report_date"].isoformat()
+        template_id_by_platform = self._get_template_id_by_platform("company_daily_report")
         recipients_by_platform = self._group_recipients_by_platform(recipients)
-        
-        # 使用公共方法发送通知
         return self._send_notifications_by_platform(
             recipients_by_platform=recipients_by_platform,
             template_id_by_platform=template_id_by_platform,
@@ -1506,11 +1599,7 @@ class PlatformNotificationService:
                 department_name=department_name,
             )
         template_vars = self._convert_weekly_report_data_for_feishu(db_session, department_report_data)
-        template_id_by_platform = {
-            PLATFORM_DINGTALK: settings.DINGTALK_DEPT_WEEKLY_REPORT_TEMPLATE_ID,
-            PLATFORM_FEISHU: settings.FEISHU_DEPT_WEEKLY_REPORT_TEMPLATE_ID,
-            PLATFORM_LARK: settings.FEISHU_DEPT_WEEKLY_REPORT_TEMPLATE_ID,
-        }
+        template_id_by_platform = self._get_template_id_by_platform("department_weekly_report")
         return self._send_report_to_department_review_groups_or_recipients(
             db_session=db_session,
             department_name=department_name,
@@ -1620,17 +1709,8 @@ class PlatformNotificationService:
             }
         
         template_vars = self._convert_weekly_report_data_for_feishu(db_session, company_weekly_report_data)
-        # 公司周报卡片模板 - 从配置文件读取，支持不同公司使用不同的模板
-        template_id_by_platform = {
-            PLATFORM_DINGTALK: settings.DINGTALK_COMPANY_WEEKLY_REPORT_TEMPLATE_ID,
-            PLATFORM_FEISHU: settings.FEISHU_COMPANY_WEEKLY_REPORT_TEMPLATE_ID,
-            PLATFORM_LARK: settings.FEISHU_COMPANY_WEEKLY_REPORT_TEMPLATE_ID,
-        }
-        
-        # 按平台分组接收者
+        template_id_by_platform = self._get_template_id_by_platform("company_weekly_report")
         recipients_by_platform = self._group_recipients_by_platform(all_recipients)
-        
-        # 使用公共方法发送通知
         return self._send_notifications_by_platform(
             recipients_by_platform=recipients_by_platform,
             template_id_by_platform=template_id_by_platform,
@@ -1990,19 +2070,9 @@ class PlatformNotificationService:
                 "success_count": 0
             }
         
-        # 构建模板变量
         template_vars = self._convert_sales_task_data_for_feishu(db_session, task_data)
-        # 销售任务卡片模板
-        template_id_by_platform = {
-            PLATFORM_DINGTALK: "6e587206-a1fb-418f-9980-b67cd94d2e31.schema",
-            PLATFORM_FEISHU: "AAqXTV4URg1ib",
-            PLATFORM_LARK: "AAqXTV4URg1ib",
-        }
-        
-        # 按平台分组接收者
+        template_id_by_platform = self._get_template_id_by_platform("sales_task")
         recipients_by_platform = self._group_recipients_by_platform(recipients)
-        
-        # 使用公共方法发送通知
         return self._send_notifications_by_platform(
             recipients_by_platform=recipients_by_platform,
             template_id_by_platform=template_id_by_platform,
