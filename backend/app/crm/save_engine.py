@@ -444,6 +444,33 @@ def push_visit_record_message(record_id: str, sales_visit_record, visit_type, db
             should_close_session = True
         
         sales_visit_record = fill_sales_visit_record_fields(sales_visit_record, db_session)
+        # 补充记录人部门快照信息（从已落库的拜访记录中读取），供后续部门群匹配使用
+        try:
+            from sqlmodel import select
+            from app.models.crm_sales_visit_records import CRMSalesVisitRecord
+
+            stmt = select(CRMSalesVisitRecord).where(CRMSalesVisitRecord.record_id == record_id)
+            db_row = db_session.exec(stmt).first()
+            if not db_row:
+                logger.debug("No CRMSalesVisitRecord found when enriching department snapshot, record_id=%s", record_id)
+            else:
+                before_id = sales_visit_record.get("recorder_department_id")
+                before_name = sales_visit_record.get("recorder_department_name")
+                # 仅在上游未显式提供时补充，避免覆盖调用方传入的数据
+                if "recorder_department_id" not in sales_visit_record:
+                    sales_visit_record["recorder_department_id"] = db_row.recorder_department_id
+                if "recorder_department_name" not in sales_visit_record:
+                    sales_visit_record["recorder_department_name"] = db_row.recorder_department_name
+                logger.info(
+                    "Enriched visit record department snapshot: record_id=%s, before=(%s,%s), after=(%s,%s)",
+                    record_id,
+                    before_id,
+                    before_name,
+                    sales_visit_record.get("recorder_department_id"),
+                    sales_visit_record.get("recorder_department_name"),
+                )
+        except Exception as e:
+            logger.warning(f"Failed to enrich visit record with department snapshot: {e}")
         
         # 处理时间字段：将saved_time转换为本地时区字符串
         from app.utils.date_utils import convert_utc_to_local_timezone
