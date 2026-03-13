@@ -717,21 +717,31 @@ class CRMStatisticsService:
         # 从 OAuth 服务获取所有部门及其负责人
         all_departments_with_managers = oauth_client.get_departments_with_leaders()
         
-        # 只处理有负责人的部门（先拿部门&负责人，再取报告）
+        # 有负责人的部门
         department_names_with_managers = [
             department_name
             for department_name, managers in (all_departments_with_managers or {}).items()
             if department_name and managers
         ]
+        # 配置了 department_review 群的部门（无论有没有负责人都要推送到群）
+        department_names_with_review_group = platform_notification_service.get_department_names_with_review_group(
+            db_session=session
+        )
+        # 合并：有负责人 或 有配置群 的部门均需处理
+        department_names_to_process = sorted(
+            set(department_names_with_managers) | set(department_names_with_review_group)
+        )
 
-        if not department_names_with_managers:
-            logger.warning(f"{target_date} 未找到任何有负责人的部门，跳过部门日报推送")
+        if not department_names_to_process:
+            logger.warning(
+                f"{target_date} 未找到任何有负责人或配置了 review 群的部门，跳过部门日报推送"
+            )
             return
 
         department_reports_with_data = self.aggregate_department_reports(
             session=session,
             target_date=target_date,
-            department_names=department_names_with_managers,
+            department_names=department_names_to_process,
         )
         department_reports_with_data_by_name = {
             report.get("department_name"): report
@@ -740,10 +750,10 @@ class CRMStatisticsService:
         }
         departments_with_data = set(department_reports_with_data_by_name.keys())
 
-        # 为没有数据的部门生成空数据的报告（仅限有负责人的部门）
+        # 为没有数据的部门生成空数据的报告
         department_reports_no_data = []
         all_department_reports: List[Dict[str, Any]] = []
-        for department_name in department_names_with_managers:
+        for department_name in department_names_to_process:
             existing_report = department_reports_with_data_by_name.get(department_name)
             if existing_report:
                 all_department_reports.append(existing_report)
@@ -780,18 +790,12 @@ class CRMStatisticsService:
                     continue
 
                 has_data = department_name in departments_with_data
-                # 只推送给负责人；无负责人的部门忽略
-                if not managers:
-                    logger.info(f"[部门日报] 部门 {department_name} 未找到负责人，忽略该部门推送")
-                    continue
-                
-                # 发送部门日报飞书通知
+                # 有配置 review 群则推送到群（无论是否有负责人）；无群时推送给负责人
                 result = platform_notification_service.send_department_daily_report_notification(
                     db_session=session,
                     department_report_data=department_report,
-                    recipients=managers
+                    recipients=managers,
                 )
-                
                 total_departments += 1
                 
                 if result["success"]:

@@ -498,8 +498,15 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                                 "platform": platform,
                             }]
 
+            # 配置了 department_review 群的部门（无论有没有负责人都要推送到群）
+            department_names_with_review_group = platform_notification_service.get_department_names_with_review_group(
+                db_session=session
+            )
+            dept_names = sorted(
+                set(departments_with_managers.keys()) | set(department_names_with_review_group)
+            )
+
             # 预取周跟进总结的 summary_content（避免每个部门单独查库）
-            dept_names = list(departments_with_managers.keys())
             dept_weekly_followup_summary_by_dept: dict[str, str] = {}
             if dept_names:
                 dept_summaries = session.exec(
@@ -526,11 +533,9 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
             if company_summary:
                 company_weekly_followup_summary = company_summary.summary_content or ""
 
-            # 2) 逐部门获取周报：即使接口失败/无数据，也要推送空周报
+            # 2) 逐部门获取周报：即使接口失败/无数据，也要推送空周报（有负责人或配置了 review 群的部门均处理）
             if not report_type or report_type == "department":
-                for department_name, managers in departments_with_managers.items():
-                    if not managers:
-                        continue
+                for department_name in dept_names:
                     try:
                         dept_report = aldebaran_client.fetch_weekly_report(
                             report_year=report_year,
