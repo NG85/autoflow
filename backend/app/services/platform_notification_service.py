@@ -168,11 +168,44 @@ class PlatformNotificationService:
             logger.debug("department_group_chats not from site settings: %s", e)
         return []
 
+    def get_department_names_with_review_group(
+        self, db_session: Optional[Session] = None
+    ) -> List[str]:
+        """
+        返回配置了 department_review（或 all）群的部门名称列表，用于部门日报/周报：有群则无论是否有负责人都要推送。
+        配置中仅有 department_id 时通过 department_mirror 解析为名称。
+        """
+        department_group_chats = self._get_department_group_chats_config()
+        if not department_group_chats:
+            return []
+        names: List[str] = []
+        for entry in department_group_chats:
+            entry_client_id = (entry.get("client_id") or "").strip()
+            if not entry_client_id:
+                continue
+            current_app_id = self._get_current_app_id(entry.get("platform"))
+            if current_app_id is None or current_app_id != entry_client_id:
+                continue
+            entry_type = (entry.get("notification_type") or "all").strip().lower()
+            if entry_type not in ("department_review", "all"):
+                continue
+            entry_dept_name = (entry.get("department_name") or "").strip()
+            if entry_dept_name:
+                names.append(entry_dept_name)
+                continue
+            entry_dept_id = (entry.get("department_id") or "").strip()
+            if entry_dept_id and db_session:
+                resolved = department_mirror_repo.get_department_name_by_id(
+                    db_session, entry_dept_id
+                )
+                if resolved:
+                    names.append(resolved)
+        return list(dict.fromkeys(names))
+
     def _get_template_id_by_platform(self, report_type: str) -> Dict[str, str]:
         """
         从站点配置 notification.card_templates 读取指定报告类型的各平台模板 ID。
-        优先级：站点配置 > 环境变量（config，仅部门/公司周报）> 代码默认值。
-        部门/公司周报支持通过 .env 覆盖 FEISHU_*_WEEKLY_REPORT_TEMPLATE_ID、DINGTALK_*_WEEKLY_REPORT_TEMPLATE_ID。
+        优先级：站点配置 > 代码默认值。
         """
         try:
             ct = SiteSetting.get_setting("card_templates")
@@ -183,35 +216,17 @@ class PlatformNotificationService:
         by_type = ct.get(report_type) or {}
         defaults = _DEFAULT_CARD_TEMPLATES.get(report_type) or {}
 
-        def _get(platform: str, env_key: Optional[str]) -> str:
+        def _get(platform: str) -> str:
             key = "feishu" if platform == PLATFORM_FEISHU else "lark" if platform == PLATFORM_LARK else "dingtalk" if platform == PLATFORM_DINGTALK else None
             val = by_type.get(key) if key else None
             if val:
                 return val
-            if env_key and hasattr(settings, env_key):
-                env_val = getattr(settings, env_key, None)
-                if env_val:
-                    return env_val
             return defaults.get(platform) or ""
 
-        # 部门/公司周报：支持 .env 覆盖（config 中对应变量）
-        env_fallback = {
-            "department_weekly_report": {
-                PLATFORM_FEISHU: "FEISHU_DEPT_WEEKLY_REPORT_TEMPLATE_ID",
-                PLATFORM_LARK: "FEISHU_DEPT_WEEKLY_REPORT_TEMPLATE_ID",
-                PLATFORM_DINGTALK: "DINGTALK_DEPT_WEEKLY_REPORT_TEMPLATE_ID",
-            },
-            "company_weekly_report": {
-                PLATFORM_FEISHU: "FEISHU_COMPANY_WEEKLY_REPORT_TEMPLATE_ID",
-                PLATFORM_LARK: "FEISHU_COMPANY_WEEKLY_REPORT_TEMPLATE_ID",
-                PLATFORM_DINGTALK: "DINGTALK_COMPANY_WEEKLY_REPORT_TEMPLATE_ID",
-            },
-        }.get(report_type)
-
         return {
-            PLATFORM_FEISHU: _get(PLATFORM_FEISHU, env_fallback.get(PLATFORM_FEISHU) if env_fallback else None),
-            PLATFORM_LARK: _get(PLATFORM_LARK, env_fallback.get(PLATFORM_LARK) if env_fallback else None),
-            PLATFORM_DINGTALK: _get(PLATFORM_DINGTALK, env_fallback.get(PLATFORM_DINGTALK) if env_fallback else None),
+            PLATFORM_FEISHU: _get(PLATFORM_FEISHU),
+            PLATFORM_LARK: _get(PLATFORM_LARK),
+            PLATFORM_DINGTALK: _get(PLATFORM_DINGTALK),
         }
 
     def _get_visit_record_templates_config(self) -> Dict[str, Dict[str, str]]:
