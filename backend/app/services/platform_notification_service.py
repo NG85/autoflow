@@ -440,8 +440,11 @@ class PlatformNotificationService:
         rec = visit_record or {}
         sales_name = (recorder_name or rec.get("recorder") or "").strip() or "--"
         method = (rec.get("visit_communication_method") or "").strip() or "--"
+        # 记录质量来自跟进记录质量 followup_quality，计划质量来自 next_steps_quality
+        followup_quality = (rec.get("followup_quality_level_zh") or "").strip() or "--"
+        next_step_quality = (rec.get("next_steps_quality_level_zh") or "").strip() or "--"
         return (
-            f"{sales_name}完成了一次{method}的客户跟进，并提交了跟进记录。"
+            f"{sales_name}完成了一次{method}的客户跟进，并提交了跟进记录，AI质检结果为【记录质量：{followup_quality}｜计划质量：{next_step_quality}】。"
         )
     
     def _get_tenant_access_token(self, platform: str = PLATFORM_FEISHU, external: bool = False) -> str:

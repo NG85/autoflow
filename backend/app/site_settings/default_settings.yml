@@ -16,9 +16,10 @@ website:
     client: true
   homepage_example_questions:
     default:
-      - "你是谁"
-      - "你能做什么"
-      - "你是个知识库吗"
+      - "我司产品最大竞争优势，及其适用场景是什么？"
+      - "快速传递产品价值的销售话术是什么？"
+      - "首次拜访客户，判断客户是否有真实需求的提问都有哪些？"
+      - "面对客户已在使用竞品，我该如何切入，并给出竞品替换成功案例"
     data_type: list
     description: "The example questions on the homepage."
     client: true
@@ -65,9 +66,10 @@ website:
 custom_js:
   custom_js_example_questions:
     default:
-      - "你是谁"
-      - "你能做什么"
-      - "你是个知识库吗"
+      - "我司产品最大竞争优势，及其适用场景是什么？"
+      - "快速传递产品价值的销售话术是什么？"
+      - "首次拜访客户，判断客户是否有真实需求的提问都有哪些？"
+      - "面对客户已在使用竞品，我该如何切入，并给出竞品替换成功案例"
     data_type: list
     description: "The example questions on the custom_js."
     client: true

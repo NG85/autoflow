@@ -125,6 +125,57 @@ def trigger_daily_statistics_task(
         }
 
 
+@router.post("/crm/daily-reports/send-department")
+def send_department_daily_report(
+    user: CurrentSuperuserDep,
+    department_name: str = Body(..., embed=True, description="部门名称"),
+    target_date: Optional[str] = Body(None, description="目标日期 YYYY-MM-DD，不传则昨天"),
+):
+    """
+    仅对指定部门重新推送一次部门日报（同步执行，立即返回推送结果）。
+    用于补发/重推单个部门，例如华东销售。
+    """
+    if not user.is_superuser:
+        return {"code": 403, "message": "权限不足", "data": {}}
+    from datetime import datetime, timedelta
+    from app.services.crm_statistics_service import crm_statistics_service
+
+    try:
+        if target_date:
+            try:
+                parsed_date = datetime.strptime(target_date, "%Y-%m-%d").date()
+            except ValueError:
+                return {"code": 400, "message": "日期格式请使用 YYYY-MM-DD", "data": {}}
+        else:
+            parsed_date = (datetime.now() - timedelta(days=1)).date()
+
+        with Session(engine) as session:
+            result = crm_statistics_service.send_department_daily_report_for_department(
+                session=session,
+                target_date=parsed_date,
+                department_name=department_name.strip(),
+            )
+        success = result.get("success", False)
+        return {
+            "code": 0 if success else 500,
+            "message": "推送成功" if success else (result.get("message") or "推送失败"),
+            "data": {
+                "department_name": department_name.strip(),
+                "target_date": parsed_date.isoformat(),
+                "success": success,
+                "recipients_count": result.get("recipients_count", 0),
+                "success_count": result.get("success_count", 0),
+            },
+        }
+    except Exception as e:
+        logger.exception(f"推送部门日报失败: {e}")
+        return {
+            "code": 500,
+            "message": str(e),
+            "data": {},
+        }
+
+
 @router.post("/crm/weekly-reports/trigger-task")
 def trigger_weekly_report_task(
     user: CurrentSuperuserDep,

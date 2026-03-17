@@ -820,7 +820,56 @@ class CRMStatisticsService:
             f"CRM部门日报飞书通知发送完成: {successful_departments}/{total_departments} 个部门的通知发送成功 "
             f"(有数据: {len(departments_with_data)}, 无数据: {len(department_reports_no_data)})"
         )
-    
+
+    def send_department_daily_report_for_department(
+        self,
+        session: Session,
+        target_date: date,
+        department_name: str,
+    ) -> Dict[str, Any]:
+        """
+        仅针对指定部门生成并推送一次部门日报（用于补发/重推）。
+        有数据则用汇总表数据，无数据则发空日报；推送逻辑与定时任务一致（review 群或负责人）。
+        """
+        from app.core.config import settings
+
+        department_name = (department_name or "").strip()
+        if not department_name:
+            return {
+                "success": False,
+                "message": "部门名称不能为空",
+                "recipients_count": 0,
+                "success_count": 0,
+            }
+        if not settings.CRM_DAILY_REPORT_FEISHU_ENABLED:
+            return {
+                "success": False,
+                "message": "CRM日报飞书推送已关闭",
+                "recipients_count": 0,
+                "success_count": 0,
+            }
+        reports = self.aggregate_department_reports(
+            session=session,
+            target_date=target_date,
+            department_names=[department_name],
+        )
+        report = next((r for r in reports if (r.get("department_name") or "").strip() == department_name), None)
+        if not report:
+            report = self._aggregate_single_department(
+                department_name=department_name,
+                target_date=target_date,
+            )
+        managers = None
+        all_departments_with_managers = oauth_client.get_departments_with_leaders()
+        if all_departments_with_managers:
+            managers = all_departments_with_managers.get(department_name)
+        result = platform_notification_service.send_department_daily_report_notification(
+            db_session=session,
+            department_report_data=report,
+            recipients=managers,
+        )
+        return result
+
     def _generate_and_send_company_daily_report(self, session: Session, target_date: date) -> None:
         """
         生成并推送公司日报
