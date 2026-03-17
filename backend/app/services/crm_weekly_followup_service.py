@@ -369,6 +369,46 @@ class CRMWeeklyFollowupService:
                 raise
             return existing
 
+    def _upsert_empty_department_summary(
+        self, session: Session, week_start: date, week_end: date, dept_id: str, dept_name: str
+    ) -> None:
+        """为指定部门写入 summary_content=\"本周没有跟进记录\" 的部门总结（无 entity 明细）。"""
+        summary_obj = CRMWeeklyFollowupSummary(
+            week_start=week_start,
+            week_end=week_end,
+            summary_type="department",
+            department_id=dept_id,
+            department_name=dept_name,
+            title=self._build_summary_title(
+                week_start=week_start,
+                week_end=week_end,
+                summary_type="department",
+                department_name=dept_name,
+            ),
+            summary_content="本周没有跟进记录",
+        )
+        self._upsert_summary(session, summary_obj)
+
+    def _upsert_empty_company_summary(
+        self, session: Session, week_start: date, week_end: date
+    ) -> None:
+        """写入 summary_content=\"本周没有跟进记录\" 的公司级总结。"""
+        company_obj = CRMWeeklyFollowupSummary(
+            week_start=week_start,
+            week_end=week_end,
+            summary_type="company",
+            department_id="",
+            department_name="",
+            title=self._build_summary_title(
+                week_start=week_start,
+                week_end=week_end,
+                summary_type="company",
+                department_name="",
+            ),
+            summary_content="本周没有跟进记录",
+        )
+        self._upsert_summary(session, company_obj)
+
     def generate_weekly_followup(
         self,
         session: Session,
@@ -394,8 +434,20 @@ class CRMWeeklyFollowupService:
         )
         records = session.exec(stmt).all()
         if not records:
-            logger.warning("该周没有任何拜访记录，跳过生成")
-            return {"week_start": week_start.isoformat(), "week_end": week_end.isoformat(), "entity_count": 0, "departments": 0}
+            logger.warning("该周没有任何拜访记录，仍为各部门生成空总结")
+            active_departments = department_mirror_repo.list_active_departments(session)
+            for dept_id, dept_name in active_departments:
+                self._upsert_empty_department_summary(
+                    session, week_start, week_end, dept_id, dept_name
+                )
+            self._upsert_empty_company_summary(session, week_start, week_end)
+            logger.info(f"周跟进总结生成完成（无拜访记录）：部门 {len(active_departments)} 个")
+            return {
+                "week_start": week_start.isoformat(),
+                "week_end": week_end.isoformat(),
+                "entity_count": 0,
+                "departments": len(active_departments),
+            }
 
         # 批量准备：CRM 商机/客户，用于获取负责人（不是拜访记录填写人）
         opportunity_ids = {str(r.opportunity_id).strip() for r in records if r.opportunity_id}
@@ -820,6 +872,18 @@ class CRMWeeklyFollowupService:
         )
         self._upsert_summary(session, company_obj)
 
+        # 补全无拜访记录的部门：仍生成 summary_content="本周没有跟进记录"
+        # 注意：by_dept_id_full 已按祖先链展开（见上文 ancestor_chains），子部门有记录时其父部门也在
+        # by_dept_id_full 中并已写入 LLM 汇总，此处不会对父部门误写空总结
+        active_departments = department_mirror_repo.list_active_departments(session)
+        empty_dept_count = 0
+        for dept_id, dept_name in active_departments:
+            if dept_id not in by_dept_id_full:
+                self._upsert_empty_department_summary(
+                    session, week_start, week_end, dept_id, dept_name
+                )
+                empty_dept_count += 1
+
         known_dept_count = sum(
             1 for did in by_dept_id_full if dept_name_by_id.get(did, "未知部门") != "未知部门"
         )
@@ -829,9 +893,10 @@ class CRMWeeklyFollowupService:
             + sum(
                 1 for n in by_dept_name_fallback if n and n not in names_covered_by_id
             )
+            + empty_dept_count
         )
         logger.info(
-            f"周跟进总结生成完成：实体 {len(persisted_entities)} 条，部门 {dept_count} 个（含上级）"
+            f"周跟进总结生成完成：实体 {len(persisted_entities)} 条，部门 {dept_count} 个（含上级，其中无记录 {empty_dept_count} 个）"
         )
         return {
             "week_start": week_start.isoformat(),

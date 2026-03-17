@@ -154,6 +154,17 @@ class DepartmentMirrorRepo(BaseRepo):
         ).all()
         return {uid: name for uid, name in rows if uid and name}
 
+    def list_active_departments(
+        self, db_session: Session
+    ) -> List[Tuple[str, str]]:
+        """返回所有有效部门的 (unique_id, department_name) 列表，用于无拜访记录时生成空跟进汇总。"""
+        rows = db_session.exec(
+            select(DepartmentMirror.unique_id, DepartmentMirror.department_name).where(
+                DepartmentMirror.is_active == True,
+            )
+        ).all()
+        return [(str(uid).strip(), (name or "").strip() or "未知部门") for uid, name in rows if uid]
+
 
 department_mirror_repo = DepartmentMirrorRepo()
 
