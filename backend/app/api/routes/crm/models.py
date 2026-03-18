@@ -806,6 +806,9 @@ class WeeklyFollowupWeeklyListQueryIn(BaseModel):
     # department scope 下：公司管理员可指定；非公司管理员忽略该字段，固定为本人团队
     department_id: Optional[str] = None
     department_name: Optional[str] = None
+    # 可选的起止日期过滤，按照 week_start 进行筛选
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
     page: int = 1
     page_size: int = 20
 

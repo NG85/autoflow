@@ -552,6 +552,12 @@ def list_weekly_followup_weekly_summaries(
             if dept_name:
                 conds.append(CRMWeeklyFollowupSummary.department_name == dept_name)
 
+        # 按照周起始日期进行可选的起止日期过滤
+        if payload.start_date:
+            conds.append(CRMWeeklyFollowupSummary.week_start >= payload.start_date)
+        if payload.end_date:
+            conds.append(CRMWeeklyFollowupSummary.week_end <= payload.end_date)
+
         total = db_session.exec(select(func.count()).select_from(CRMWeeklyFollowupSummary).where(*conds)).one()
         rows = db_session.exec(
             select(CRMWeeklyFollowupSummary)
