@@ -309,14 +309,18 @@ class DingTalkClient(BaseClient):
         """
         url = f"{self.base_url}/v1.0/robot/oToMessages/batchSend"
         
+        msg_key = "sampleMarkdown" if "https://" in text else "sampleText"
         msg_param = {
             "content": text
+        } if msg_key == "sampleText" else {
+            "title": "新的互动提醒",
+            "text": text.replace("\n", "\n\n")
         }
         
         payload = {
             "robotCode": self.app_id,  # 机器人code
             "userIds": [receive_id],   # 用户ID列表
-            "msgKey": "sampleText",  # 消息模板key
+            "msgKey": msg_key,  # 消息模板key
             "msgParam": json.dumps(msg_param, ensure_ascii=False)  # 消息参数
         }
         
@@ -325,7 +329,7 @@ class DingTalkClient(BaseClient):
             payload={
                 "robotCode": self.app_id,  # 机器人code
                 "openConversationId": receive_id,   # 群聊ID
-                "msgKey": "sampleText",  # 消息模板key
+                "msgKey": msg_key,  # 消息模板key
                 "msgParam": json.dumps(msg_param, ensure_ascii=False)  # 消息参数
             }
             
