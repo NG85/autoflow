@@ -923,15 +923,16 @@ def create_visit_record(
             logger.info(f"Fill in recorder id with current user id: {user.id}")
             record.recorder_id = str(user.id)
 
-        if not record.recorder or record.recorder == '未知用户':
-            logger.info(f"Fill in recorder name with recorder id: {record.recorder_id}")
-            user_profile = UserProfileRepo().get_by_recorder_id(db_session, record.recorder_id)
-            logger.info(f"User profile: {user_profile}")
-            if user_profile:
-                record.recorder = user_profile.name
-                logger.info(f"Filled in recorder name: {user_profile.name}")
-            else:
-                logger.warning(f"Could not find user profile for recorder_id: {record.recorder_id}")
+        # if not record.recorder or record.recorder == '未知用户':
+        logger.info(f"Fill in recorder name with recorder id: {record.recorder_id}")
+        user_profile = UserProfileRepo().get_by_recorder_id(db_session, record.recorder_id)
+        logger.info(f"User profile: {user_profile}")
+        if user_profile:
+            record.recorder = user_profile.name
+            logger.info(f"Filled in recorder name: {user_profile.name}")
+        else:
+            logger.warning(f"Could not find user profile for recorder_id: {record.recorder_id}, use payload recorder name: {record.recorder}")
+            record.recorder = record.recorder or '未知用户'
 
         # 根据拜访类型处理
         if record.visit_type == "link":
