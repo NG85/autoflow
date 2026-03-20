@@ -1,5 +1,9 @@
 import logging
+from datetime import datetime
 from typing import Optional, List
+
+import pytz
+
 from app.api.deps import CurrentSuperuserDep
 from app.core.config import settings, WritebackMode
 from fastapi import APIRouter, Body
@@ -522,7 +526,18 @@ def trigger_sales_task_summary(
 def trigger_bitable_writeback_task(
     user: CurrentSuperuserDep,
     start_date: Optional[str] = Body(None, description="开始日期，格式YYYY-MM-DD，不传则根据CRM_WRITEBACK_FREQUENCY配置自动计算"),
-    end_date: Optional[str] = Body(None, description="结束日期，格式YYYY-MM-DD，不传则根据CRM_WRITEBACK_FREQUENCY配置自动计算")
+    end_date: Optional[str] = Body(None, description="结束日期，格式YYYY-MM-DD，不传则根据CRM_WRITEBACK_FREQUENCY配置自动计算"),
+    start_datetime: Optional[str] = Body(
+        None,
+        description=(
+            "开始时间（执行窗口口径）。支持 ISO8601（含时区/Z）或无时区的 "
+            "`YYYY-MM-DD HH:MM:SS`（按 CRM_WRITEBACK_TIMEZONE 解释）。须与 end_datetime 成对出现，且不能与 start_date/end_date 同时传"
+        ),
+    ),
+    end_datetime: Optional[str] = Body(
+        None,
+        description="结束时间，格式与 start_datetime 相同；查询为半开区间 [start, end)",
+    ),
 ):
     """
     手动触发多维表格回写任务
@@ -530,9 +545,11 @@ def trigger_bitable_writeback_task(
     用于测试或手动执行CRM拜访记录写入到飞书/Lark多维表格的功能
     
     时间范围说明：
-    - 如果同时提供start_date和end_date，则使用指定的日期范围
+    - 如果同时提供start_date和end_date，则使用指定的日期范围（日历天口径）
+    - 如果同时提供start_datetime和end_datetime，则使用指定的时间窗口（半开区间 [start, end)，与任务内逻辑一致）
+    - 上述两组参数互斥，且每组须成对出现
     - 如果都不提供，则根据settings.CRM_WRITEBACK_FREQUENCY配置自动计算：
-      - DAILY：处理昨天的数据
+      - DAILY：按“滚动窗口”处理（回写前1天到当前任务执行时刻）
       - WEEKLY：处理上周日到本周六的数据
     
     工作流程：
@@ -549,52 +566,107 @@ def trigger_bitable_writeback_task(
 
     try:
         from app.tasks.bitable_import import sync_bitable_visit_records
-        from datetime import datetime
-        
-        # 解析日期范围
+
+        def _parse_dt_for_bitable(s: str) -> datetime:
+            raw = s.strip()
+            if raw.endswith("Z"):
+                raw = raw[:-1] + "+00:00"
+            dt = datetime.fromisoformat(raw)
+            tz = pytz.timezone(settings.CRM_WRITEBACK_TIMEZONE)
+            if dt.tzinfo is None:
+                return tz.localize(dt)
+            return dt.astimezone(tz)
+
+        date_pair = bool(start_date and end_date)
+        date_partial = bool(start_date or end_date) and not date_pair
+        dt_pair = bool(start_datetime and end_datetime)
+        dt_partial = bool(start_datetime or end_datetime) and not dt_pair
+
+        if date_partial:
+            return {
+                "code": 400,
+                "message": "开始日期和结束日期必须同时提供，或都不提供以使用配置的频率自动计算",
+                "data": {},
+            }
+        if dt_partial:
+            return {
+                "code": 400,
+                "message": "开始时间与结束时间必须同时提供，或都不提供",
+                "data": {},
+            }
+        if date_pair and (start_datetime or end_datetime):
+            return {
+                "code": 400,
+                "message": "不能同时指定日期范围（start_date/end_date）与时间窗口（start_datetime/end_datetime）",
+                "data": {},
+            }
+
         parsed_start_date = None
         parsed_end_date = None
-        
-        if start_date and end_date:
+        normalized_start_dt: Optional[str] = None
+        normalized_end_dt: Optional[str] = None
+
+        if date_pair:
             try:
-                parsed_start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
-                parsed_end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
-                
+                parsed_start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
+                parsed_end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
                 if parsed_start_date > parsed_end_date:
                     return {
                         "code": 400,
                         "message": "开始日期不能晚于结束日期",
-                        "data": {}
+                        "data": {},
                     }
             except ValueError:
                 return {
                     "code": 400,
                     "message": "日期格式错误，请使用YYYY-MM-DD格式",
-                    "data": {}
+                    "data": {},
                 }
-        elif start_date or end_date:
-            return {
-                "code": 400,
-                "message": "开始日期和结束日期必须同时提供，或都不提供以使用配置的频率自动计算",
-                "data": {}
-            }
-        
+
+        if dt_pair:
+            try:
+                s_loc = _parse_dt_for_bitable(start_datetime)
+                e_loc = _parse_dt_for_bitable(end_datetime)
+            except ValueError:
+                return {
+                    "code": 400,
+                    "message": "日期时间格式错误，请使用 ISO8601 或 YYYY-MM-DD HH:MM:SS（无时区则按 CRM_WRITEBACK_TIMEZONE）",
+                    "data": {},
+                }
+            if s_loc > e_loc:
+                return {
+                    "code": 400,
+                    "message": "开始时间不能晚于结束时间",
+                    "data": {},
+                }
+            normalized_start_dt = s_loc.isoformat()
+            normalized_end_dt = e_loc.isoformat()
+
+        if date_pair:
+            range_desc = f"{parsed_start_date.isoformat()} 到 {parsed_end_date.isoformat()}（日历天）"
+        elif dt_pair:
+            range_desc = f"{normalized_start_dt} 到 {normalized_end_dt}（时间窗口 [start,end)）"
+        else:
+            range_desc = "根据配置自动计算"
+
         logger.info(
-            f"用户 {user.id} 手动触发多维表格回写任务，"
-            f"日期范围: {parsed_start_date.isoformat() if parsed_start_date else '自动计算'} 到 {parsed_end_date.isoformat() if parsed_end_date else '自动计算'}"
+            f"用户 {user.id} 手动触发多维表格回写任务，范围: {range_desc}"
         )
-        
+
         # 触发异步任务
-        if parsed_start_date and parsed_end_date:
+        if date_pair:
             task = sync_bitable_visit_records.delay(
                 start_date_str=parsed_start_date.isoformat(),
-                end_date_str=parsed_end_date.isoformat()
+                end_date_str=parsed_end_date.isoformat(),
             )
-            date_range_desc = f"{parsed_start_date.isoformat()} 到 {parsed_end_date.isoformat()}"
+        elif dt_pair:
+            task = sync_bitable_visit_records.delay(
+                start_datetime_str=start_datetime.strip(),
+                end_datetime_str=end_datetime.strip(),
+            )
         else:
             task = sync_bitable_visit_records.delay()
-            date_range_desc = "根据配置自动计算"
-        
+
         return {
             "code": 0,
             "message": "多维表格回写任务已触发",
@@ -602,9 +674,11 @@ def trigger_bitable_writeback_task(
                 "task_id": task.id,
                 "start_date": parsed_start_date.isoformat() if parsed_start_date else None,
                 "end_date": parsed_end_date.isoformat() if parsed_end_date else None,
+                "start_datetime": normalized_start_dt,
+                "end_datetime": normalized_end_dt,
                 "status": "PENDING",
-                "description": f"已提交 {date_range_desc} 的多维表格回写任务到队列，任务ID: {task.id}"
-            }
+                "description": f"已提交 {range_desc} 的多维表格回写任务到队列，任务ID: {task.id}",
+            },
         }
         
     except Exception as e:
