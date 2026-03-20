@@ -407,12 +407,23 @@ def batch_create_bitable_records(token: str, app_token: str, table_id: str, reco
     return created_ids
 
 @app.task(bind=True)
-def sync_bitable_visit_records(self, start_date_str: str | None = None, end_date_str: str | None = None):
+def sync_bitable_visit_records(
+    self,
+    start_date_str: str | None = None,
+    end_date_str: str | None = None,
+    # 可选：手动按任意时间窗口回补（口径由传入的 datetime 决定）
+    # 例如：2026-03-19 20:00:00 / 2026-03-19T20:00:00+08:00
+    start_datetime_str: str | None = None,
+    end_datetime_str: str | None = None,
+):
     """
     批量写入拜访记录到多维表格（飞书/Lark）。
     时间范围与CRM回写任务一致：
-      - 当未传入起止日期时，按 settings.CRM_WRITEBACK_FREQUENCY 计算（DAILY: 昨天；WEEKLY: 上周日-本周六）。
-      - 也可手动指定 start_date_str/end_date_str（YYYY-MM-DD）。
+      - 当未传入起止日期时，按 settings.CRM_WRITEBACK_FREQUENCY 计算：
+          - DAILY：按“滚动窗口”回写（例如每天20:00跑，则回写前一天20:00到今天20:00）
+          - WEEKLY：上周日到本周六（保持原逻辑）
+      - 可手动指定 start_date_str/end_date_str（YYYY-MM-DD）来按“日历天口径”回补
+      - 也可手动指定 start_datetime_str/end_datetime_str 来按“任意执行窗口口径”回补
     返回创建后的 bitable record_id 列表。
     """
     try:
@@ -429,7 +440,29 @@ def sync_bitable_visit_records(self, start_date_str: str | None = None, end_date
             logger.error("无法获取平台client，无法批量写入")
             return []
 
-        # 计算日期范围
+        writeback_tz = pytz.timezone(settings.CRM_WRITEBACK_TIMEZONE)
+
+        def _parse_datetime_in_writeback_tz(v: str) -> datetime:
+            """
+            解析传入的 datetime 字符串：
+            - 若带时区偏移，则按偏移解析并转换到 writeback_tz 进行后续计算
+            - 若不带时区，则直接视作 writeback_tz 本地时间
+            """
+            # 支持 ISO：末尾 Z / 带偏移格式
+            s = v.strip()
+            if s.endswith("Z"):
+                s = s[:-1] + "+00:00"
+            dt = datetime.fromisoformat(s)
+            if dt.tzinfo is None:
+                return writeback_tz.localize(dt)
+            return dt.astimezone(writeback_tz)
+
+        # 计算时间范围
+        # - 日历天口径：start_date_str/end_date_str
+        # - 窗口口径：start_datetime_str/end_datetime_str 或 DAILY 默认滚动窗口
+        using_datetime_window = False
+        range_desc = ""
+
         if start_date_str and end_date_str:
             try:
                 start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
@@ -438,15 +471,40 @@ def sync_bitable_visit_records(self, start_date_str: str | None = None, end_date
             except ValueError:
                 logger.error(f"无效的日期格式: start_date={start_date_str}, end_date={end_date_str}")
                 return []
+            using_datetime_window = False
+            range_desc = f"{start_date.isoformat()} 到 {end_date.isoformat()}"
+        elif start_datetime_str and end_datetime_str:
+            # 任意窗口口径（由传入的 datetime 决定）
+            try:
+                start_local = _parse_datetime_in_writeback_tz(start_datetime_str)
+                end_local = _parse_datetime_in_writeback_tz(end_datetime_str)
+            except ValueError:
+                logger.error(
+                    f"无效的日期时间格式: start_datetime={start_datetime_str}, end_datetime={end_datetime_str}"
+                )
+                return []
+
+            if start_local > end_local:
+                logger.error(
+                    f"无效的日期时间范围: start={start_local}, end={end_local}（start 必须 <= end）"
+                )
+                return []
+
+            using_datetime_window = True
+            range_desc = f"{start_local.isoformat()} 到 {end_local.isoformat()}"
         else:
-            tz = pytz.timezone(settings.CRM_WRITEBACK_TIMEZONE)
-            today = datetime.now(tz).date()
+            today = datetime.now(writeback_tz).date()
             frequency = settings.CRM_WRITEBACK_FREQUENCY
             from app.core.config import WritebackFrequency
             if frequency == WritebackFrequency.DAILY:
-                start_date = today - timedelta(days=1)
-                end_date = start_date
-                logger.info(f"Bitable写入任务，按天模式，处理昨天: {start_date} (时区: {settings.CRM_WRITEBACK_TIMEZONE})")
+                # DAILY：按“滚动窗口”回写（以任务实际执行时刻为 end）
+                end_local = datetime.now(writeback_tz)
+                start_local = end_local - timedelta(days=1)
+                using_datetime_window = True
+                range_desc = f"{start_local.isoformat()} 到 {end_local.isoformat()}"
+                logger.info(
+                    f"Bitable写入任务，按天模式（滚动窗口），处理区间: {range_desc}（时区: {settings.CRM_WRITEBACK_TIMEZONE}）"
+                )
             else:
                 # WEEKLY: 上周日到本周六
                 days_since_sunday = (today.weekday() + 1) % 7
@@ -454,21 +512,25 @@ def sync_bitable_visit_records(self, start_date_str: str | None = None, end_date
                 this_saturday = last_sunday + timedelta(days=6)
                 start_date = last_sunday
                 end_date = this_saturday
-                logger.info(f"Bitable写入任务，按周模式，处理上周日到本周六: {start_date} 到 {end_date} (时区: {settings.CRM_WRITEBACK_TIMEZONE})")
+                range_desc = f"{start_date.isoformat()} 到 {end_date.isoformat()}"
+                logger.info(
+                    f"Bitable写入任务，按周模式，处理上周日到本周六: {start_date} 到 {end_date}（时区: {settings.CRM_WRITEBACK_TIMEZONE}）"
+                )
+                using_datetime_window = False
 
-        # 将本地时区的日期范围转换为UTC时间（数据库中last_modified_time是UTC时间）
-        writeback_tz = pytz.timezone(settings.CRM_WRITEBACK_TIMEZONE)
-        # 构建本地时区的开始和结束时间
-        start_local = datetime.combine(start_date, datetime.min.time())
-        end_local = datetime.combine(end_date, datetime.max.time())
-        # 添加时区信息并转换为UTC
-        start_local = writeback_tz.localize(start_local)
-        end_local = writeback_tz.localize(end_local)
-        start_dt_utc = start_local.astimezone(pytz.UTC)
-        end_dt_utc = end_local.astimezone(pytz.UTC)
-        # 移除时区信息（数据库中的datetime字段通常以naive UTC存储）
-        start_dt = start_dt_utc.replace(tzinfo=None)
-        end_dt = end_dt_utc.replace(tzinfo=None)
+        # 将本地时区的范围转换为UTC时间（数据库中 last_modified_time 是UTC时间，通常以naive形式存储）
+        if using_datetime_window:
+            # start_local/end_local 已经是带 tz 的 datetime（来自解析/滚动窗口）
+            start_dt = start_local.astimezone(pytz.UTC).replace(tzinfo=None)
+            end_dt = end_local.astimezone(pytz.UTC).replace(tzinfo=None)
+        else:
+            # 日历天口径：start_date/end_date -> 00:00 ~ 23:59:59.999999（闭区间）
+            start_local = datetime.combine(start_date, datetime.min.time())
+            end_local = datetime.combine(end_date, datetime.max.time())
+            start_local = writeback_tz.localize(start_local)
+            end_local = writeback_tz.localize(end_local)
+            start_dt = start_local.astimezone(pytz.UTC).replace(tzinfo=None)
+            end_dt = end_local.astimezone(pytz.UTC).replace(tzinfo=None)
 
         # 查询指定时间范围内的CRM拜访记录
         with Session(engine) as session:
@@ -483,7 +545,7 @@ def sync_bitable_visit_records(self, start_date_str: str | None = None, end_date
                 SELECT {cols}, up.department AS recorder_department, up.open_id AS recorder_open_id
                 FROM {CRM_TABLE}
                 LEFT JOIN user_profiles up ON up.user_id = {CRM_TABLE}.recorder_id
-                WHERE {CRM_TABLE}.last_modified_time BETWEEN :start AND :end
+                WHERE {CRM_TABLE}.last_modified_time {"BETWEEN :start AND :end" if not using_datetime_window else ">= :start AND < :end"}
             """)
             logger.info(f"查询指定时间范围内的CRM拜访记录: {sql}")
             rows = session.exec(sql, params={"start": start_dt, "end": end_dt}).fetchall()
@@ -519,7 +581,7 @@ def sync_bitable_visit_records(self, start_date_str: str | None = None, end_date
             platform=platform,
         )
         logger.info(
-            f"已在{platform}多维表格批量创建记录: {len(record_ids)} 条，范围 {start_date} 到 {end_date}"
+            f"已在{platform}多维表格批量创建记录: {len(record_ids)} 条，范围 {range_desc}"
         )
         return record_ids
     except Exception as e:
