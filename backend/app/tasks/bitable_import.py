@@ -545,7 +545,7 @@ def sync_bitable_visit_records(
                 SELECT {cols}, up.department AS recorder_department, up.open_id AS recorder_open_id
                 FROM {CRM_TABLE}
                 LEFT JOIN user_profiles up ON up.user_id = {CRM_TABLE}.recorder_id
-                WHERE {CRM_TABLE}.last_modified_time {"BETWEEN :start AND :end" if not using_datetime_window else ">= :start AND < :end"}
+                WHERE {CRM_TABLE}.last_modified_time {"BETWEEN :start AND :end" if not using_datetime_window else f">= :start AND {CRM_TABLE}.last_modified_time < :end"}
             """)
             logger.info(f"查询指定时间范围内的CRM拜访记录: {sql}")
             rows = session.exec(sql, params={"start": start_dt, "end": end_dt}).fetchall()
