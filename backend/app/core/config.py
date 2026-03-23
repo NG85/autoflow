@@ -80,6 +80,9 @@ class Settings(BaseSettings):
         env_file=".env", env_ignore_empty=True, extra="ignore"
     )
     API_V1_STR: str = "/api/v1"
+    # Path prefix where the app is mounted behind a reverse proxy (e.g. Ingress /backend).
+    # Must match the external prefix so Swagger/ReDoc load openapi.json from the right URL.
+    ROOT_PATH: str = ""
     SECRET_KEY: str
     DOMAIN: str = "localhost"
     ENVIRONMENT: Environment = Environment.LOCAL

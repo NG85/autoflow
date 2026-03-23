@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.routing import APIRoute
 from starlette.middleware.cors import CORSMiddleware
 from app.api.main import api_router
-from app.core.config import settings
+from app.core.config import Environment, settings
 from app.site_settings import SiteSetting
 from app.utils.uuid6 import uuid7
 
@@ -34,9 +34,14 @@ async def lifespan(app: FastAPI):
     yield
 
 
+_root_path = settings.ROOT_PATH.rstrip("/") if settings.ROOT_PATH else ""
+_enable_api_docs = settings.ENVIRONMENT != Environment.PRODUCTION
 app = FastAPI(
     title=settings.PROJECT_NAME,
-    openapi_url=f"{settings.API_V1_STR}/openapi.json",
+    openapi_url=(
+        f"{settings.API_V1_STR}/openapi.json" if _enable_api_docs else None
+    ),
+    root_path=_root_path,
     generate_unique_id_function=custom_generate_unique_id,
     lifespan=lifespan,
 )
