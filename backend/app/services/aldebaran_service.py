@@ -27,6 +27,7 @@ class AldebaranClient:
         session: Optional[requests.Session] = None,
         weekly_report_path: Optional[str] = None,
         cvgg_path: Optional[str] = None,
+        review_session_recalc_path: Optional[str] = None,
     ) -> None:
         self._base_url = (base_url or settings.ALDEBARAN_BASE_URL).rstrip("/")
         self._tenant_id = tenant_id or getattr(settings, "ALDEBARAN_TENANT_ID", "PINGCAP")
@@ -38,6 +39,10 @@ class AldebaranClient:
         self._cvgg_path = _normalize_path(
             cvgg_path or getattr(settings, "ALDEBARAN_CVGG_URL", "/api/v1/previsit/create_v4"),
             default="/api/v1/previsit/create_v4",
+        )
+        self._review_session_recalc_path = _normalize_path(
+            review_session_recalc_path or getattr(settings, "ALDEBARAN_REVIEW_SESSION_RECALC_PATH", ""),
+            default="/api/v1/review/session/recalculate-forecast-aggregates",
         )
 
     def fetch_weekly_report(
@@ -136,6 +141,49 @@ class AldebaranClient:
             raise RuntimeError(f"Aldebaran cvgg invalid json: {result}")
 
         return result["data"]
+
+    def trigger_review_session_forecast_recalc(
+        self,
+        *,
+        session_id: str,
+        period: str,
+        recalc_scope: str,
+        owner_id: Optional[str] = None,
+        timeout_seconds: int = 60,
+    ) -> dict[str, Any]:
+        """
+        通知 Aldebaran 按 review session 重算 forecast 聚合；结果仅以接口返回为准，调用方不做本地 DB 兜底。
+
+        - recalc_scope: ``full_session``（leader 全量）或 ``self_only``（单人）。
+        - self_only 时建议传 owner_id（参会人 crm_user_id）。
+        """
+        path = self._review_session_recalc_path
+        if not path:
+            raise RuntimeError("ALDEBARAN_REVIEW_SESSION_RECALC_PATH is not configured")
+        url = f"{self._base_url}{_normalize_path(path, default=path)}"
+        payload: dict[str, Any] = {
+            "tenant_id": self._tenant_id,
+            "session_id": session_id,
+            "period": period,
+            "recalc_scope": recalc_scope,
+        }
+        if owner_id:
+            payload["owner_id"] = owner_id
+        logger.info(
+            "调用 Aldebaran review session 重算: %s, session_id=%s period=%s",
+            url,
+            session_id,
+            period,
+        )
+        resp = self._session.post(
+            url,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=timeout_seconds,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, dict) else {"raw": data}
 
 
 aldebaran_client = AldebaranClient()

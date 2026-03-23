@@ -178,6 +178,7 @@ class Settings(BaseSettings):
     ALDEBARAN_CVGG_URL: str = "/api/v1/previsit/create_v4"
     ALDEBARAN_WEEKLY_REPORT_URL: str = "/api/v1/report/weekly"
     ALDEBARAN_TENANT_ID: str = "PINGCAP"
+    ALDEBARAN_REVIEW_SESSION_RECALC_PATH: str = ""
     
     EMBEDDING_THRESHOLD: float = 0.92
 

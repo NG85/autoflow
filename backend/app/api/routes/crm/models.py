@@ -881,3 +881,103 @@ class WeeklyFollowupDepartmentOption(BaseModel):
 
 class SaveWeeklyFollowupCommentsIn(BaseModel):
     comments: List[CRMComment] = []
+
+
+# ----------------- CRM Review Session (branch snapshot edit) -----------------
+
+class ReviewBranchSnapshotUpdateIn(BaseModel):
+    """
+    按 branch snapshot 行更新：使用 ``unique_id`` 定位行（同 opportunity_id + period 可能多分支时以行为准）。
+    """
+
+    unique_id: str = Field(..., description="crm_review_opp_branch_snapshot.unique_id")
+    version: int = Field(
+        ...,
+        ge=0,
+        description="Optimistic lock version from query response (crm_review_opp_branch_snapshot.modification_count)",
+    )
+    forecast_type: Optional[str] = None
+    forecast_amount: Optional[float] = None
+    opportunity_stage: Optional[str] = None
+    expected_closing_date: Optional[str] = None
+
+
+class ReviewSessionSubmitStatsOut(BaseModel):
+    total: int
+    submitted: int
+    not_submitted: int
+
+
+class ReviewBranchSnapshotSubmitOut(BaseModel):
+    updated_count: int
+    submit_stats: ReviewSessionSubmitStatsOut
+
+
+class ReviewBranchSnapshotSubmitIn(BaseModel):
+    updates: List[ReviewBranchSnapshotUpdateIn] = Field(default_factory=list)
+
+
+class ReviewSessionPhaseUpdateIn(BaseModel):
+    review_phase: Literal["edit", "closed"] = Field(
+        ...,
+        description="Review phase transition controlled by UI: edit/closed",
+    )
+
+
+class ReviewOppBranchSnapshotsQueryIn(BaseModel):
+    page: int = Field(default=1, ge=1)
+    size: int = Field(default=20, ge=1, le=100)
+
+
+class ReviewSessionKpiMetricOut(BaseModel):
+    unique_id: str
+    session_id: str
+    scope_type: str
+    scope_id: Optional[str] = None
+    scope_name: Optional[str] = None
+    parent_scope_id: Optional[str] = None
+    metric_category: str
+    metric_name: str
+    metric_value: Optional[float] = None
+    metric_value_prev: Optional[float] = None
+    metric_delta: Optional[float] = None
+    metric_rate: Optional[float] = None
+    metric_unit: Optional[str] = None
+    metric_content: Optional[str] = None
+    metric_content_en: Optional[str] = None
+    calc_phase: Optional[str] = None
+    period_type: Optional[str] = None
+    period: Optional[str] = None
+    report_date: Optional[date] = None
+    report_year: Optional[int] = None
+    report_week_of_year: Optional[int] = None
+
+
+class ReviewSessionKpiMetricsOut(BaseModel):
+    session_id: str
+    total: int
+    items: List[ReviewSessionKpiMetricOut]
+
+
+class OwnerForecastAggregateOut(BaseModel):
+    """某参会人（owner = crm_user_id）按 forecast_type 汇总的 forecast_amount。"""
+
+    owner_id: str
+    owner_name: str = ""
+    by_forecast_type: Dict[str, float] = Field(default_factory=dict)
+
+
+class ReviewSessionForecastRecalcOut(BaseModel):
+    """
+    聚合字段来自 Aldebaran 返回（解析 ``by_owner`` / ``totals_by_forecast_type``），非本地计算。
+    recalc_scope: full_session=leader 全量；self_only=普通成员仅本人。
+    """
+
+    session_id: str
+    period: str
+    recalc_scope: Literal["full_session", "self_only"] = "full_session"
+    aldebaran_invoked: bool = False
+    aldebaran_response: Optional[Dict[str, Any]] = None
+    aldebaran_error: Optional[str] = None
+    by_owner: List[OwnerForecastAggregateOut]
+    totals_by_forecast_type: Dict[str, float] = Field(default_factory=dict)
