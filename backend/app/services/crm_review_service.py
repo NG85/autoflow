@@ -7,11 +7,12 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
-from sqlmodel import Session, select
+from sqlmodel import Session, select, func
 
 from app.models.crm_review import (
     CRMReviewAttendee,
     CRMReviewOppAuditLog,
+    CRMReviewOppBranchSnapshot,
     REVIEW_BRANCH_SNAPSHOT_EDITABLE_FIELDS,
 )
 from app.repositories.crm_review_attendee import crm_review_attendee_repo
@@ -40,21 +41,18 @@ def _build_forecast_recalc_out_from_aldebaran(
     session_id: str,
 ) -> Dict[str, Any]:
     """将 Aldebaran 返回统一归一化为固定结构：total + attendees + pagination。"""
-    if not isinstance(body, dict):
-        raise ValueError("Aldebaran performance response must be a JSON object")
-
     node = _aldebaran_performance_payload_root(body)
     if not isinstance(node, dict):
-        raise ValueError("Aldebaran performance response must be a JSON object")
+        raise ValueError("Aldebaran recalculate response must be a JSON object")
 
     sid = str(node.get("session_id") or session_id or "").strip()
     if not sid:
-        raise ValueError("Aldebaran response missing session_id")
+        raise ValueError("Aldebaran recalculate response missing session_id")
 
     attendees_raw = node.get("attendees")
     if not isinstance(attendees_raw, list) and not str(node.get("owner_id", "") or "").strip():
         raise ValueError(
-            "Aldebaran performance response must include `attendees` (full session) or `owner_id` (single owner)"
+            "Aldebaran recalculate response must include `attendees` (full session) or `owner_id` (single owner)"
         )
 
     def _s(v: Any, default: str = "0") -> str:
@@ -120,22 +118,24 @@ def _build_forecast_recalc_out_from_aldebaran(
 
 
 class CRMReviewService:
-    def get_my_edit_page_data(
+    @staticmethod
+    def _group_field_and_label(group_by: str):
+        gb = str(group_by or "owner").strip()
+        if gb == "owner":
+            return gb, CRMReviewOppBranchSnapshot.owner_id, CRMReviewOppBranchSnapshot.owner_name
+        if gb == "forecast_type":
+            return gb, CRMReviewOppBranchSnapshot.forecast_type, CRMReviewOppBranchSnapshot.forecast_type
+        if gb == "opportunity_stage":
+            return gb, CRMReviewOppBranchSnapshot.opportunity_stage, CRMReviewOppBranchSnapshot.opportunity_stage
+        raise HTTPException(status_code=422, detail="group_by must be one of: owner, forecast_type, opportunity_stage")
+
+    def _resolve_session_scope(
         self,
         db_session: Session,
         *,
         session_id: str,
         user_id: str,
-        page: int = 1,
-        size: int = 20,
     ) -> dict:
-        page = int(page or 1)
-        size = int(size or 20)
-        if page < 1:
-            page = 1
-        if size < 1:
-            size = 20
-        offset = (page - 1) * size
         session = crm_review_session_repo.get_by_unique_id(db_session, session_id)
         if not session:
             raise HTTPException(status_code=404, detail="review session not found")
@@ -146,46 +146,107 @@ class CRMReviewService:
         if not attendee:
             raise HTTPException(status_code=403, detail="user is not attendee of this review session")
 
-        snapshot_period = session.period
-        owner_crm_user_id = attendee.crm_user_id
-
         is_leader = bool(getattr(attendee, "is_leader", False))
         if is_leader:
-            owner_crm_user_ids = crm_review_attendee_repo.get_crm_user_ids_by_session(
+            owner_ids = crm_review_attendee_repo.get_crm_user_ids_by_session(
                 db_session, session_id=session_id
             )
-            total = crm_review_opp_branch_snapshot_repo.count_by_owner_ids_and_period(
-                db_session,
-                owner_crm_user_ids=owner_crm_user_ids,
-                snapshot_period=snapshot_period,
-            )
-            items = crm_review_opp_branch_snapshot_repo.list_by_owner_ids_and_period_paginated(
-                db_session,
-                owner_crm_user_ids=owner_crm_user_ids,
-                snapshot_period=snapshot_period,
-                offset=offset,
-                limit=size,
-            )
         else:
-            total = crm_review_opp_branch_snapshot_repo.count_by_owner_and_period(
-                db_session,
-                owner_crm_user_id=owner_crm_user_id,
-                snapshot_period=snapshot_period,
-            )
-            items = crm_review_opp_branch_snapshot_repo.list_by_owner_and_period_paginated(
-                db_session,
-                owner_crm_user_id=owner_crm_user_id,
-                snapshot_period=snapshot_period,
-                offset=offset,
-                limit=size,
-            )
+            owner_id = str(attendee.crm_user_id or "").strip()
+            if not owner_id:
+                raise HTTPException(status_code=422, detail="attendee has no crm_user_id")
+            owner_ids = [owner_id]
+
+        snapshot_period = str(session.period or "").strip()
+        if not snapshot_period:
+            raise HTTPException(status_code=500, detail="review session period is empty")
 
         submit_stats = crm_review_attendee_repo.get_submit_stats(db_session, session_id=session_id)
-
         editable = bool(
             session.stage == "initial_edit"
             or (session.stage == "lead_review" and session.review_phase == "edit")
         )
+
+        return {
+            "session": session,
+            "is_leader": is_leader,
+            "owner_ids": owner_ids,
+            "snapshot_period": snapshot_period,
+            "submit_stats": submit_stats,
+            "editable": editable,
+        }
+
+    def _base_snapshot_stmt(self, *, owner_ids: List[str], snapshot_period: str):
+        return select(CRMReviewOppBranchSnapshot).where(
+            CRMReviewOppBranchSnapshot.owner_id.in_(owner_ids),
+            CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
+        )
+
+    def get_my_edit_page_data(
+        self,
+        db_session: Session,
+        *,
+        session_id: str,
+        user_id: str,
+        page: int = 1,
+        size: int = 20,
+        group_by: str = "owner",
+    ) -> dict:
+        page = int(page or 1)
+        size = int(size or 20)
+        if page < 1:
+            page = 1
+        if size < 1:
+            size = 20
+        offset = (page - 1) * size
+        scope = self._resolve_session_scope(db_session, session_id=session_id, user_id=user_id)
+        session = scope["session"]
+        owner_ids = [str(x).strip() for x in (scope["owner_ids"] or []) if str(x or "").strip()]
+        if not owner_ids:
+            raise HTTPException(status_code=422, detail="no attendee crm_user_id in this review session")
+        snapshot_period = scope["snapshot_period"]
+
+        total = crm_review_opp_branch_snapshot_repo.count_by_owner_ids_and_period(
+            db_session,
+            owner_crm_user_ids=owner_ids,
+            snapshot_period=snapshot_period,
+        )
+        items = crm_review_opp_branch_snapshot_repo.list_by_owner_ids_and_period_paginated(
+            db_session,
+            owner_crm_user_ids=owner_ids,
+            snapshot_period=snapshot_period,
+            offset=offset,
+            limit=size,
+        )
+
+        group_by = str(group_by or "owner").strip()
+        if group_by not in {"owner", "forecast_type", "opportunity_stage"}:
+            raise HTTPException(status_code=422, detail="group_by must be one of: owner, forecast_type, opportunity_stage")
+
+        if group_by == "owner":
+            key_getter = lambda x: str(getattr(x, "owner_id", "") or "")
+            label_getter = lambda x: str(getattr(x, "owner_name", "") or "")
+        elif group_by == "forecast_type":
+            key_getter = lambda x: str(getattr(x, "forecast_type", "") or "")
+            label_getter = lambda x: str(getattr(x, "forecast_type", "") or "")
+        else:
+            key_getter = lambda x: str(getattr(x, "opportunity_stage", "") or "")
+            label_getter = lambda x: str(getattr(x, "opportunity_stage", "") or "")
+
+        sorted_items = sorted(items, key=lambda x: (key_getter(x), str(getattr(x, "opportunity_name", "") or "")))
+        groups: Dict[str, Dict[str, Any]] = {}
+        for item in sorted_items:
+            gk = key_getter(item).strip() or "__EMPTY__"
+            if gk not in groups:
+                groups[gk] = {
+                    "group_key": gk,
+                    "group_label": label_getter(item).strip() or "",
+                    "count": 0,
+                    "items": [],
+                }
+            groups[gk]["count"] += 1
+            groups[gk]["items"].append(item)
+        grouped_items = list(groups.values())
 
         return {
             "session": {
@@ -194,9 +255,115 @@ class CRMReviewService:
                 "stage": session.stage,
                 "review_phase": session.review_phase,
             },
-            "is_leader": is_leader,
-            "editable": editable,
-            "submit_stats": submit_stats,
+            "is_leader": scope["is_leader"],
+            "editable": scope["editable"],
+            "submit_stats": scope["submit_stats"],
+            "page": page,
+            "size": size,
+            "total": total,
+            "group_by": group_by,
+            "items": sorted_items,
+            "grouped_items": grouped_items,
+        }
+
+    def list_snapshot_groups(
+        self,
+        db_session: Session,
+        *,
+        session_id: str,
+        user_id: str,
+        group_by: str = "owner",
+    ) -> dict:
+        scope = self._resolve_session_scope(db_session, session_id=session_id, user_id=user_id)
+        gb, field_col, label_col = self._group_field_and_label(group_by)
+
+        stmt = (
+            select(
+                func.coalesce(field_col, "").label("group_key"),
+                func.coalesce(func.max(label_col), "").label("group_label"),
+                func.count().label("cnt"),
+            )
+            .where(
+                CRMReviewOppBranchSnapshot.owner_id.in_(scope["owner_ids"]),
+                CRMReviewOppBranchSnapshot.snapshot_period == scope["snapshot_period"],
+            )
+            .group_by(func.coalesce(field_col, ""))
+            .order_by(func.coalesce(field_col, ""))
+        )
+        rows = db_session.exec(stmt).all()
+        groups = [
+            {
+                "group_key": str(k or ""),
+                "group_label": str(lbl or ""),
+                "count": int(cnt or 0),
+            }
+            for k, lbl, cnt in rows
+        ]
+        return {
+            "session_id": str(scope["session"].unique_id),
+            "group_by": gb,
+            "total_groups": len(groups),
+            "groups": groups,
+        }
+
+    def query_snapshot_group_data(
+        self,
+        db_session: Session,
+        *,
+        session_id: str,
+        user_id: str,
+        group_by: str,
+        group_key: str,
+        page: int = 1,
+        size: int = 20,
+    ) -> dict:
+        page = int(page or 1)
+        size = int(size or 20)
+        if page < 1:
+            page = 1
+        if size < 1:
+            size = 20
+        offset = (page - 1) * size
+
+        scope = self._resolve_session_scope(db_session, session_id=session_id, user_id=user_id)
+        gb, field_col, _ = self._group_field_and_label(group_by)
+        group_key = str(group_key or "")
+
+        base_where = [
+            CRMReviewOppBranchSnapshot.owner_id.in_(scope["owner_ids"]),
+            CRMReviewOppBranchSnapshot.snapshot_period == scope["snapshot_period"],
+        ]
+        if group_key == "__EMPTY__":
+            base_where.append(func.coalesce(field_col, "") == "")
+        else:
+            base_where.append(func.coalesce(field_col, "") == group_key)
+
+        total = int(
+            db_session.exec(
+                select(func.count()).select_from(CRMReviewOppBranchSnapshot).where(*base_where)
+            ).one()
+        )
+        items = db_session.exec(
+            select(CRMReviewOppBranchSnapshot)
+            .where(*base_where)
+            .order_by(CRMReviewOppBranchSnapshot.owner_id, CRMReviewOppBranchSnapshot.opportunity_name)
+            .offset(offset)
+            .limit(size)
+        ).all()
+
+        session = scope["session"]
+        return {
+            "session": {
+                "session_id": session.unique_id,
+                "period": session.period,
+                "stage": session.stage,
+                "review_phase": session.review_phase,
+            },
+            "is_leader": scope["is_leader"],
+            "editable": scope["editable"],
+            "submit_stats": scope["submit_stats"],
+            "group_by": gb,
+            "group_key": group_key,
             "page": page,
             "size": size,
             "total": total,

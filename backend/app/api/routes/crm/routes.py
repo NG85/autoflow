@@ -70,6 +70,9 @@ from app.services.crm_review_service import crm_review_service
 from app.api.routes.crm.models import (
     ReviewBranchSnapshotSubmitIn,
     ReviewBranchSnapshotSubmitOut,
+    ReviewSnapshotGroupDataQueryIn,
+    ReviewSnapshotGroupsOut,
+    ReviewSnapshotGroupsQueryIn,
     ReviewOppBranchSnapshotsQueryIn,
     ReviewSessionPhaseUpdateIn,
 )
@@ -145,7 +148,7 @@ def _can_edit_weekly_followup_comments(db_session: SessionDep, user: CurrentUser
     return bool(is_team_lead_fallback), False, dept_id, dept_name
 
 
-@router.post("/crm/review/sessions/{session_id}/my-opp-branch-snapshots")
+@router.post("/crm/review/sessions/{session_id}/my-opp-branch-snapshots", deprecated=True)
 def query_my_review_opp_branch_snapshots(
     session_id: str,
     request: ReviewOppBranchSnapshotsQueryIn,
@@ -153,14 +156,64 @@ def query_my_review_opp_branch_snapshots(
     user: CurrentUserDep,
 ):
     """
-    Review 页面数据（POST）：
+    [DEPRECATED] Review 页面数据（POST）：
     - session.period / stage / review_phase、editable、submit_stats、分页 items
     - owner 范围：普通成员仅本人；leader 可见本会话全部参会人 owner 的 snapshot
+    - 支持 ``group_by``: owner / forecast_type / opportunity_stage，返回 ``grouped_items`` 供前端分组展示
+    请迁移到：
+    - ``POST /crm/review/sessions/{session_id}/snapshot-groups``
+    - ``POST /crm/review/sessions/{session_id}/snapshot-group-data``
     """
     return crm_review_service.get_my_edit_page_data(
         db_session,
         session_id=session_id,
         user_id=str(user.id),
+        page=request.page,
+        size=request.size,
+        group_by=request.group_by,
+    )
+
+
+@router.post("/crm/review/sessions/{session_id}/snapshot-groups")
+def query_review_snapshot_groups(
+    session_id: str,
+    request: ReviewSnapshotGroupsQueryIn,
+    db_session: SessionDep,
+    user: CurrentUserDep,
+) -> ReviewSnapshotGroupsOut:
+    """
+    查询分组集合（仅返回分组，不返回具体 snapshot 行）：
+    - 权限范围：普通成员仅自己；leader 为本 session 全员
+    - group_by: owner / forecast_type / opportunity_stage
+    """
+    data = crm_review_service.list_snapshot_groups(
+        db_session,
+        session_id=session_id,
+        user_id=str(user.id),
+        group_by=request.group_by,
+    )
+    return ReviewSnapshotGroupsOut.model_validate(data)
+
+
+@router.post("/crm/review/sessions/{session_id}/snapshot-group-data")
+def query_review_snapshot_group_data(
+    session_id: str,
+    request: ReviewSnapshotGroupDataQueryIn,
+    db_session: SessionDep,
+    user: CurrentUserDep,
+):
+    """
+    查询指定分组值下的 snapshot 明细：
+    - group_by=owner 时 group_key 传 owner_id
+    - group_by=forecast_type/opportunity_stage 时 group_key 传字段值
+    - 为空分组可传 __EMPTY__
+    """
+    return crm_review_service.query_snapshot_group_data(
+        db_session,
+        session_id=session_id,
+        user_id=str(user.id),
+        group_by=request.group_by,
+        group_key=request.group_key,
         page=request.page,
         size=request.size,
     )

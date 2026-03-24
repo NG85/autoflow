@@ -927,6 +927,40 @@ class ReviewSessionPhaseUpdateIn(BaseModel):
 class ReviewOppBranchSnapshotsQueryIn(BaseModel):
     page: int = Field(default=1, ge=1)
     size: int = Field(default=20, ge=1, le=100)
+    group_by: Literal["owner", "forecast_type", "opportunity_stage"] = Field(
+        default="owner",
+        description="分组维度：人员 / 预测类型 / 商机阶段",
+    )
+
+
+class ReviewSnapshotGroupsQueryIn(BaseModel):
+    group_by: Literal["owner", "forecast_type", "opportunity_stage"] = Field(
+        default="owner",
+        description="分组维度：人员 / 预测类型 / 商机阶段",
+    )
+
+
+class ReviewSnapshotGroupItemOut(BaseModel):
+    group_key: str
+    group_label: str
+    count: int
+
+
+class ReviewSnapshotGroupsOut(BaseModel):
+    session_id: str
+    group_by: Literal["owner", "forecast_type", "opportunity_stage"]
+    total_groups: int
+    groups: List[ReviewSnapshotGroupItemOut]
+
+
+class ReviewSnapshotGroupDataQueryIn(BaseModel):
+    group_by: Literal["owner", "forecast_type", "opportunity_stage"] = Field(
+        default="owner",
+        description="分组维度：人员 / 预测类型 / 商机阶段",
+    )
+    group_key: str = Field(..., description="分组值。owner=owner_id；其他为字段原值；空值可传 __EMPTY__")
+    page: int = Field(default=1, ge=1)
+    size: int = Field(default=20, ge=1, le=100)
 
 
 class ReviewSessionKpiMetricOut(BaseModel):
