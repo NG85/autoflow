@@ -41,6 +41,7 @@ from app.api.routes.crm.models import (
     ReviewSessionKpiMetricOut,
     ReviewSessionForecastRecalcOut,
     ReviewSnapshotFilterEnumsOut,
+    MyLatestReviewSessionOut,
 )
 from app.crm.save_engine import (
     save_visit_record_to_crm_table, 
@@ -82,6 +83,7 @@ from app.repositories.crm_review_session import crm_review_session_repo
 from app.repositories.crm_review_attendee import crm_review_attendee_repo
 from app.repositories.crm_review_kpi_metrics import crm_review_kpi_metrics_repo
 from app.models.crm_system_configurations import CRMSystemConfiguration
+from app.models.crm_review import CRMReviewAttendee, CRMReviewSession
 from sqlalchemy import text
 
 
@@ -223,6 +225,50 @@ def query_review_snapshot_group_data(
     )
 
 
+@router.get("/crm/review/my/latest-session")
+def query_my_latest_review_session(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+) -> MyLatestReviewSessionOut:
+    """
+    查询当前用户参与的最新一个 review session：
+    - 通过 CRMReviewAttendee.user_id 关联参与会话
+    - 按 CRMReviewSession.report_date 倒序（同日再按 create_time 倒序）取最新
+    """
+    row = db_session.exec(
+        select(
+            CRMReviewSession.unique_id,
+            CRMReviewSession.stage,
+            CRMReviewSession.review_phase,
+            CRMReviewAttendee.is_leader,
+        )
+        .join(
+            CRMReviewAttendee,
+            CRMReviewAttendee.session_id == CRMReviewSession.unique_id,
+        )
+        .where(CRMReviewAttendee.user_id == str(user.id))
+        .order_by(CRMReviewSession.report_date.desc(), CRMReviewSession.create_time.desc())
+        .limit(1)
+    ).first()
+    if not row:
+        return MyLatestReviewSessionOut(
+            review_session_id=None,
+            is_leader=None,
+            editable=None,
+        )
+
+    session_id, stage, review_phase, is_leader = row
+    editable = bool(
+        str(stage) == "initial_edit"
+        or (str(stage) == "lead_review" and str(review_phase or "") == "edit")
+    )
+    return MyLatestReviewSessionOut(
+        review_session_id=str(session_id),
+        is_leader=bool(is_leader),
+        editable=editable,
+    )
+
+
 @router.get("/crm/review/snapshot-filter-enums")
 def query_review_snapshot_filter_enums(
     db_session: SessionDep,
@@ -287,6 +333,11 @@ def query_review_snapshot_filter_enums(
 
     return ReviewSnapshotFilterEnumsOut.model_validate(
         {
+            "group_by_options": [
+                {"key": "owner", "label": "人员"},
+                {"key": "forecast_type", "label": "预测类型"},
+                {"key": "opportunity_stage", "label": "商机阶段"},
+            ],
             "forecast_types": forecast_types,
             "opportunity_stages": opportunity_stages,
         }

@@ -1037,6 +1037,18 @@ class ReviewOpportunityStageGroupOut(BaseModel):
     sales_stages: List[str] = Field(default_factory=list)
 
 
+class ReviewSnapshotGroupByOptionOut(BaseModel):
+    key: Literal["owner", "forecast_type", "opportunity_stage"]
+    label: str
+
+
 class ReviewSnapshotFilterEnumsOut(BaseModel):
+    group_by_options: List[ReviewSnapshotGroupByOptionOut] = Field(default_factory=list)
     forecast_types: List[str] = Field(default_factory=list)
     opportunity_stages: List[ReviewOpportunityStageGroupOut] = Field(default_factory=list)
+
+
+class MyLatestReviewSessionOut(BaseModel):
+    review_session_id: Optional[str] = None
+    is_leader: Optional[bool] = None
+    editable: Optional[bool] = None
