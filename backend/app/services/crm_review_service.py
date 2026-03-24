@@ -301,6 +301,15 @@ class CRMReviewService:
         ]
         return {
             "session_id": str(scope["session"].unique_id),
+            "session": {
+                "session_id": scope["session"].unique_id,
+                "period": scope["session"].period,
+                "stage": scope["session"].stage,
+                "review_phase": scope["session"].review_phase,
+            },
+            "is_leader": scope["is_leader"],
+            "editable": scope["editable"],
+            "submit_stats": scope["submit_stats"],
             "group_by": gb,
             "total_groups": len(groups),
             "groups": groups,
@@ -351,17 +360,8 @@ class CRMReviewService:
             .limit(size)
         ).all()
 
-        session = scope["session"]
         return {
-            "session": {
-                "session_id": session.unique_id,
-                "period": session.period,
-                "stage": session.stage,
-                "review_phase": session.review_phase,
-            },
-            "is_leader": scope["is_leader"],
-            "editable": scope["editable"],
-            "submit_stats": scope["submit_stats"],
+            "session_id": str(scope["session"].unique_id),
             "group_by": gb,
             "group_key": group_key,
             "page": page,

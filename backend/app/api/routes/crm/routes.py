@@ -236,12 +236,7 @@ def query_my_latest_review_session(
     - 按 CRMReviewSession.report_date 倒序（同日再按 create_time 倒序）取最新
     """
     row = db_session.exec(
-        select(
-            CRMReviewSession.unique_id,
-            CRMReviewSession.stage,
-            CRMReviewSession.review_phase,
-            CRMReviewAttendee.is_leader,
-        )
+        select(CRMReviewSession.unique_id)
         .join(
             CRMReviewAttendee,
             CRMReviewAttendee.session_id == CRMReviewSession.unique_id,
@@ -250,23 +245,7 @@ def query_my_latest_review_session(
         .order_by(CRMReviewSession.report_date.desc(), CRMReviewSession.create_time.desc())
         .limit(1)
     ).first()
-    if not row:
-        return MyLatestReviewSessionOut(
-            review_session_id=None,
-            is_leader=None,
-            editable=None,
-        )
-
-    session_id, stage, review_phase, is_leader = row
-    editable = bool(
-        str(stage) == "initial_edit"
-        or (str(stage) == "lead_review" and str(review_phase or "") == "edit")
-    )
-    return MyLatestReviewSessionOut(
-        review_session_id=str(session_id),
-        is_leader=bool(is_leader),
-        editable=editable,
-    )
+    return MyLatestReviewSessionOut(review_session_id=str(row) if row else None)
 
 
 @router.get("/crm/review/snapshot-filter-enums")

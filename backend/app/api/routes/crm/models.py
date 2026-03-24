@@ -946,8 +946,19 @@ class ReviewSnapshotGroupItemOut(BaseModel):
     count: int
 
 
+class ReviewSessionMetaOut(BaseModel):
+    session_id: str
+    period: str
+    stage: str
+    review_phase: Optional[str] = None
+
+
 class ReviewSnapshotGroupsOut(BaseModel):
     session_id: str
+    session: ReviewSessionMetaOut
+    is_leader: bool
+    editable: bool
+    submit_stats: ReviewSessionSubmitStatsOut
     group_by: Literal["owner", "forecast_type", "opportunity_stage"]
     total_groups: int
     groups: List[ReviewSnapshotGroupItemOut]
@@ -1050,5 +1061,3 @@ class ReviewSnapshotFilterEnumsOut(BaseModel):
 
 class MyLatestReviewSessionOut(BaseModel):
     review_session_id: Optional[str] = None
-    is_leader: Optional[bool] = None
-    editable: Optional[bool] = None
