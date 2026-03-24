@@ -1030,3 +1030,13 @@ class ReviewSessionForecastRecalcOut(BaseModel):
     total: ReviewPerformanceMetricsOut = Field(default_factory=ReviewPerformanceMetricsOut)
     attendees: List[ReviewPerformanceAttendeeOut] = Field(default_factory=list)
     pagination: ReviewSessionPerformancePaginationOut = Field(default_factory=ReviewSessionPerformancePaginationOut)
+
+
+class ReviewOpportunityStageGroupOut(BaseModel):
+    handbook_id: str
+    sales_stages: List[str] = Field(default_factory=list)
+
+
+class ReviewSnapshotFilterEnumsOut(BaseModel):
+    forecast_types: List[str] = Field(default_factory=list)
+    opportunity_stages: List[ReviewOpportunityStageGroupOut] = Field(default_factory=list)

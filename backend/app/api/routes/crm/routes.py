@@ -1,6 +1,7 @@
 import logging
 import io
 import hashlib
+import json
 from typing import List, Literal, Optional
 from zoneinfo import ZoneInfo
 from app.api.deps import CurrentUserDep, SessionDep
@@ -39,6 +40,7 @@ from app.api.routes.crm.models import (
     ReviewSessionKpiMetricsOut,
     ReviewSessionKpiMetricOut,
     ReviewSessionForecastRecalcOut,
+    ReviewSnapshotFilterEnumsOut,
 )
 from app.crm.save_engine import (
     save_visit_record_to_crm_table, 
@@ -79,6 +81,8 @@ from app.api.routes.crm.models import (
 from app.repositories.crm_review_session import crm_review_session_repo
 from app.repositories.crm_review_attendee import crm_review_attendee_repo
 from app.repositories.crm_review_kpi_metrics import crm_review_kpi_metrics_repo
+from app.models.crm_system_configurations import CRMSystemConfiguration
+from sqlalchemy import text
 
 
 logger = logging.getLogger(__name__)
@@ -216,6 +220,76 @@ def query_review_snapshot_group_data(
         group_key=request.group_key,
         page=request.page,
         size=request.size,
+    )
+
+
+@router.get("/crm/review/snapshot-filter-enums")
+def query_review_snapshot_filter_enums(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+) -> ReviewSnapshotFilterEnumsOut:
+    """
+    查询 Review 页面筛选枚举配置：
+    1) forecast_types: 来自 crm_system_configurations(config_type='ForecastTypeMapping')，
+       每条 config_value(JSON array) 取第一个元素。
+    2) opportunity_stages: 来自 diagnostic_playbook(handbook_id, sales_stage)。
+    """
+    # 需要登录态；不额外限制角色（仅提供筛选枚举）
+    _ = user
+
+    forecast_rows = db_session.exec(
+        select(CRMSystemConfiguration.config_key, CRMSystemConfiguration.config_value)
+        .where(CRMSystemConfiguration.config_type == "ForecastTypeMapping")
+        .order_by(CRMSystemConfiguration.config_key)
+    ).all()
+    forecast_types: list[str] = []
+    for _config_key, config_value in forecast_rows:
+        first = ""
+        raw = str(config_value or "").strip()
+        if raw:
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list) and parsed:
+                    first = str(parsed[0] or "").strip()
+                else:
+                    first = raw
+            except Exception:
+                first = raw
+        if first:
+            forecast_types.append(first)
+    # 去重并保持顺序
+    forecast_types = list(dict.fromkeys(forecast_types))
+
+    # TODO: support multiple handbook_ids (or configurable handbook set) for sales_stage options.
+    target_handbook_id = "pb_EXEC-RPT-SALES-PLAYBOOK-20250219-001-001"
+    stage_rows = db_session.exec(
+        text(
+            "select handbook_id, sales_stage "
+            "from diagnostic_playbook "
+            "where handbook_id = :handbook_id "
+            "and sales_stage is not null and sales_stage <> ''"
+        )
+        .bindparams(handbook_id=target_handbook_id)
+    ).all()
+    stage_by_handbook: dict[str, list[str]] = {}
+    for r in stage_rows:
+        hb = str(getattr(r, "handbook_id", "") or "").strip()
+        stage = str(getattr(r, "sales_stage", "") or "").strip()
+        if not hb or not stage:
+            continue
+        stage_by_handbook.setdefault(hb, [])
+        if stage not in stage_by_handbook[hb]:
+            stage_by_handbook[hb].append(stage)
+    opportunity_stages = [
+        {"handbook_id": hb, "sales_stages": stages}
+        for hb, stages in sorted(stage_by_handbook.items(), key=lambda x: x[0])
+    ]
+
+    return ReviewSnapshotFilterEnumsOut.model_validate(
+        {
+            "forecast_types": forecast_types,
+            "opportunity_stages": opportunity_stages,
+        }
     )
 
 
