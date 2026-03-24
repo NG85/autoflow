@@ -307,7 +307,8 @@ def recalculate_review_session_forecast_aggregates(
     参会人可调用；聚合结果**仅**来自 Aldebaran ``POST /api/v1/review/performance/query``（可用 ``ALDEBARAN_REVIEW_SESSION_RECALC_PATH`` 覆盖），不做本地 DB 兜底。
     - Leader：请求体仅 ``session_id``（全量）。
     - 普通成员：请求体 ``session_id`` + ``owner_id``（crm_user_id）。
-    成功时响应体与 Aldebaran ``/review/performance/query`` 一致，仅多一个字段 ``recalc_scope``（``full_session`` / ``self_only``）。
+    成功时返回固定结构：``total`` + ``attendees`` + ``pagination``，并带 ``recalc_scope``。
+    单人查询会归一化为 ``attendees`` 仅 1 条。
     """
     data = crm_review_service.recalculate_forecast_aggregates(
         db_session,

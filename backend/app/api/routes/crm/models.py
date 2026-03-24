@@ -2,7 +2,7 @@ from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Annotated, Union
 from datetime import date, datetime
 from uuid import UUID
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, Field, field_validator
 import json
 
 # 定义响应模型
@@ -959,12 +959,40 @@ class ReviewSessionKpiMetricsOut(BaseModel):
     items: List[ReviewSessionKpiMetricOut]
 
 
+class ReviewPerformanceMetricsOut(BaseModel):
+    target: str = "0"
+    closed_amount: str = "0"
+    commit_amount: str = "0"
+    upside_amount: str = "0"
+    gap: str = "0"
+    achievement_rate: float = 0.0
+    opportunity_count: int = 0
+
+
+class ReviewPerformanceAttendeeOut(ReviewPerformanceMetricsOut):
+    owner_id: str = ""
+    owner_name: str = ""
+    department_id: Optional[str] = None
+    department_name: Optional[str] = None
+    opportunities: Optional[Any] = None
+
+
+class ReviewSessionPerformancePaginationOut(BaseModel):
+    page: int = 1
+    page_size: int = 50
+    total_pages: int = 1
+    total_items: int = 0
+
+
 class ReviewSessionForecastRecalcOut(BaseModel):
     """
-    与 Aldebaran ``POST .../review/performance/query`` 响应体一致，仅额外附加 ``recalc_scope``（本服务写入，便于前端区分全量/单人）。
-    其余字段随上游接口演进，不做二次包装。
+    固定返回结构：全量/单人统一为 ``total + attendees + pagination``。
+    单人场景会将 Aldebaran 单人响应归一化为 ``attendees`` 仅 1 条。
     """
 
-    model_config = ConfigDict(extra="allow")
-
+    session_id: str
+    fy_quarter: Optional[str] = None
     recalc_scope: Literal["full_session", "self_only"]
+    total: ReviewPerformanceMetricsOut = Field(default_factory=ReviewPerformanceMetricsOut)
+    attendees: List[ReviewPerformanceAttendeeOut] = Field(default_factory=list)
+    pagination: ReviewSessionPerformancePaginationOut = Field(default_factory=ReviewSessionPerformancePaginationOut)

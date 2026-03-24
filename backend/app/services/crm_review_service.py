@@ -39,9 +39,7 @@ def _build_forecast_recalc_out_from_aldebaran(
     recalc_scope: str,
     session_id: str,
 ) -> Dict[str, Any]:
-    """
-    透传 Aldebaran ``/review/performance/query`` 的 JSON（支持顶层或 ``data`` 包裹），仅附加 ``recalc_scope``。
-    """
+    """将 Aldebaran 返回统一归一化为固定结构：total + attendees + pagination。"""
     if not isinstance(body, dict):
         raise ValueError("Aldebaran performance response must be a JSON object")
 
@@ -53,18 +51,72 @@ def _build_forecast_recalc_out_from_aldebaran(
     if not sid:
         raise ValueError("Aldebaran response missing session_id")
 
-    if isinstance(node.get("attendees"), list):
-        pass
-    elif str(node.get("owner_id", "") or "").strip():
-        pass
-    else:
+    attendees_raw = node.get("attendees")
+    if not isinstance(attendees_raw, list) and not str(node.get("owner_id", "") or "").strip():
         raise ValueError(
             "Aldebaran performance response must include `attendees` (full session) or `owner_id` (single owner)"
         )
 
-    out = dict(node)
-    out["recalc_scope"] = recalc_scope
-    return out
+    def _s(v: Any, default: str = "0") -> str:
+        return default if v is None else str(v)
+
+    def _f(v: Any, default: float = 0.0) -> float:
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return default
+
+    def _i(v: Any, default: int = 0) -> int:
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return default
+
+    def _metrics(d: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "target": _s(d.get("target")),
+            "closed_amount": _s(d.get("closed_amount")),
+            "commit_amount": _s(d.get("commit_amount")),
+            "upside_amount": _s(d.get("upside_amount")),
+            "gap": _s(d.get("gap")),
+            "achievement_rate": _f(d.get("achievement_rate"), 0.0),
+            "opportunity_count": _i(d.get("opportunity_count"), 0),
+        }
+
+    def _attendee(d: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "owner_id": str(d.get("owner_id", "") or "").strip(),
+            "owner_name": str(d.get("owner_name", "") or "").strip(),
+            "department_id": (str(d.get("department_id")).strip() if d.get("department_id") is not None else None),
+            "department_name": (str(d.get("department_name")).strip() if d.get("department_name") is not None else None),
+            "opportunities": d.get("opportunities"),
+            **_metrics(d),
+        }
+
+    if isinstance(attendees_raw, list):
+        attendees = [_attendee(a) for a in attendees_raw if isinstance(a, dict)]
+        total = _metrics(node.get("total") if isinstance(node.get("total"), dict) else {})
+        p = node.get("pagination") if isinstance(node.get("pagination"), dict) else {}
+        pagination = {
+            "page": _i(p.get("page"), 1),
+            "page_size": _i(p.get("page_size"), 50),
+            "total_pages": _i(p.get("total_pages"), 1),
+            "total_items": _i(p.get("total_items"), len(attendees)),
+        }
+    else:
+        one = _attendee(node)
+        attendees = [one]
+        total = _metrics(node)
+        pagination = {"page": 1, "page_size": 50, "total_pages": 1, "total_items": 1}
+
+    return {
+        "session_id": sid,
+        "fy_quarter": (str(node.get("fy_quarter")).strip() if node.get("fy_quarter") is not None else None),
+        "recalc_scope": recalc_scope,
+        "total": total,
+        "attendees": attendees,
+        "pagination": pagination,
+    }
 
 
 class CRMReviewService:
