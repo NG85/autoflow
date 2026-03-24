@@ -304,10 +304,10 @@ def recalculate_review_session_forecast_aggregates(
     user: CurrentUserDep,
 ) -> ReviewSessionForecastRecalcOut:
     """
-    参会人可调用；聚合结果**仅**来自 Aldebaran（需配置 ``ALDEBARAN_REVIEW_SESSION_RECALC_PATH``），不做本地 DB 兜底。
-    - Leader：``recalc_scope=full_session``。
-    - 普通成员：``recalc_scope=self_only``，并带 ``owner_id=crm_user_id``。
-    成功时 Aldebaran 返回体须含 ``by_owner`` 与 ``totals_by_forecast_type``（可在 ``data`` 下）。
+    参会人可调用；聚合结果**仅**来自 Aldebaran ``POST /api/v1/review/performance/query``（可用 ``ALDEBARAN_REVIEW_SESSION_RECALC_PATH`` 覆盖），不做本地 DB 兜底。
+    - Leader：请求体仅 ``session_id``（全量）。
+    - 普通成员：请求体 ``session_id`` + ``owner_id``（crm_user_id）。
+    成功时响应体与 Aldebaran ``/review/performance/query`` 一致，仅多一个字段 ``recalc_scope``（``full_session`` / ``self_only``）。
     """
     data = crm_review_service.recalculate_forecast_aggregates(
         db_session,

@@ -2,7 +2,7 @@ from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Annotated, Union
 from datetime import date, datetime
 from uuid import UUID
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 import json
 
 # 定义响应模型
@@ -959,25 +959,12 @@ class ReviewSessionKpiMetricsOut(BaseModel):
     items: List[ReviewSessionKpiMetricOut]
 
 
-class OwnerForecastAggregateOut(BaseModel):
-    """某参会人（owner = crm_user_id）按 forecast_type 汇总的 forecast_amount。"""
-
-    owner_id: str
-    owner_name: str = ""
-    by_forecast_type: Dict[str, float] = Field(default_factory=dict)
-
-
 class ReviewSessionForecastRecalcOut(BaseModel):
     """
-    聚合字段来自 Aldebaran 返回（解析 ``by_owner`` / ``totals_by_forecast_type``），非本地计算。
-    recalc_scope: full_session=leader 全量；self_only=普通成员仅本人。
+    与 Aldebaran ``POST .../review/performance/query`` 响应体一致，仅额外附加 ``recalc_scope``（本服务写入，便于前端区分全量/单人）。
+    其余字段随上游接口演进，不做二次包装。
     """
 
-    session_id: str
-    period: str
-    recalc_scope: Literal["full_session", "self_only"] = "full_session"
-    aldebaran_invoked: bool = False
-    aldebaran_response: Optional[Dict[str, Any]] = None
-    aldebaran_error: Optional[str] = None
-    by_owner: List[OwnerForecastAggregateOut]
-    totals_by_forecast_type: Dict[str, float] = Field(default_factory=dict)
+    model_config = ConfigDict(extra="allow")
+
+    recalc_scope: Literal["full_session", "self_only"]

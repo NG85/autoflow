@@ -40,9 +40,10 @@ class AldebaranClient:
             cvgg_path or getattr(settings, "ALDEBARAN_CVGG_URL", "/api/v1/previsit/create_v4"),
             default="/api/v1/previsit/create_v4",
         )
+        # Aldebaran：review 数据计算（全量仅 session_id；单人加 owner_id）
         self._review_session_recalc_path = _normalize_path(
-            review_session_recalc_path or getattr(settings, "ALDEBARAN_REVIEW_SESSION_RECALC_PATH", ""),
-            default="/api/v1/review/session/recalculate-forecast-aggregates",
+            review_session_recalc_path or getattr(settings, "ALDEBARAN_REVIEW_SESSION_RECALC_PATH", "/api/v1/review/performance/query"),
+            default="/api/v1/review/performance/query",
         )
 
     def fetch_weekly_report(
@@ -146,34 +147,26 @@ class AldebaranClient:
         self,
         *,
         session_id: str,
-        period: str,
-        recalc_scope: str,
         owner_id: Optional[str] = None,
         timeout_seconds: int = 60,
     ) -> dict[str, Any]:
         """
-        通知 Aldebaran 按 review session 重算 forecast 聚合；结果仅以接口返回为准，调用方不做本地 DB 兜底。
+        调用 Aldebaran ``POST .../review/performance/query``；结果仅以接口返回为准。
 
-        - recalc_scope: ``full_session``（leader 全量）或 ``self_only``（单人）。
-        - self_only 时建议传 owner_id（参会人 crm_user_id）。
+        请求体：
+        - 全量：``{"session_id": "<uuid>"}``
+        - 单人：``{"session_id": "<uuid>", "owner_id": "<crm_user_id>"}``
         """
         path = self._review_session_recalc_path
-        if not path:
-            raise RuntimeError("ALDEBARAN_REVIEW_SESSION_RECALC_PATH is not configured")
-        url = f"{self._base_url}{_normalize_path(path, default=path)}"
-        payload: dict[str, Any] = {
-            "tenant_id": self._tenant_id,
-            "session_id": session_id,
-            "period": period,
-            "recalc_scope": recalc_scope,
-        }
+        url = f"{self._base_url}{_normalize_path(path, default='/api/v1/review/performance/query')}"
+        payload: dict[str, Any] = {"session_id": session_id}
         if owner_id:
             payload["owner_id"] = owner_id
         logger.info(
-            "调用 Aldebaran review session 重算: %s, session_id=%s period=%s",
+            "调用 Aldebaran review performance query: %s, session_id=%s owner_id=%s",
             url,
             session_id,
-            period,
+            owner_id or "(full session)",
         )
         resp = self._session.post(
             url,

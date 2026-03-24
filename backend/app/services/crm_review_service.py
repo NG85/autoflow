@@ -26,65 +26,45 @@ logger = logging.getLogger(__name__)
 EDITABLE_FIELDS = REVIEW_BRANCH_SNAPSHOT_EDITABLE_FIELDS
 
 
-def _parse_aldebaran_forecast_recalc_payload(body: Dict[str, Any]) -> tuple[List[Dict[str, Any]], Dict[str, float]]:
-    """
-    从 Aldebaran 返回体中解析与 ReviewSessionForecastRecalcOut 对齐的字段。
-    支持顶层或 ``data`` 下包含 ``by_owner``、``totals_by_forecast_type``。
-    """
-    candidates: List[Dict[str, Any]] = []
+def _aldebaran_performance_payload_root(body: Dict[str, Any]) -> Dict[str, Any]:
     data = body.get("data")
     if isinstance(data, dict):
-        candidates.append(data)
-    candidates.append(body)
+        return data
+    return body
 
-    by_owner_raw: Any = None
-    totals_raw: Any = None
-    for node in candidates:
-        if not isinstance(node, dict):
-            continue
-        bo = node.get("by_owner")
-        tt = node.get("totals_by_forecast_type")
-        if isinstance(bo, list) and isinstance(tt, dict):
-            by_owner_raw = bo
-            totals_raw = tt
-            break
 
-    if by_owner_raw is None or totals_raw is None:
+def _build_forecast_recalc_out_from_aldebaran(
+    body: Dict[str, Any],
+    *,
+    recalc_scope: str,
+    session_id: str,
+) -> Dict[str, Any]:
+    """
+    透传 Aldebaran ``/review/performance/query`` 的 JSON（支持顶层或 ``data`` 包裹），仅附加 ``recalc_scope``。
+    """
+    if not isinstance(body, dict):
+        raise ValueError("Aldebaran performance response must be a JSON object")
+
+    node = _aldebaran_performance_payload_root(body)
+    if not isinstance(node, dict):
+        raise ValueError("Aldebaran performance response must be a JSON object")
+
+    sid = str(node.get("session_id") or session_id or "").strip()
+    if not sid:
+        raise ValueError("Aldebaran response missing session_id")
+
+    if isinstance(node.get("attendees"), list):
+        pass
+    elif str(node.get("owner_id", "") or "").strip():
+        pass
+    else:
         raise ValueError(
-            "Aldebaran forecast recalc response must include by_owner (array) and "
-            "totals_by_forecast_type (object), under root or under data"
+            "Aldebaran performance response must include `attendees` (full session) or `owner_id` (single owner)"
         )
 
-    by_owner_list: List[Dict[str, Any]] = []
-    for item in by_owner_raw:
-        if not isinstance(item, dict):
-            continue
-        oid = str(item.get("owner_id", "") or "").strip()
-        raw_ft = item.get("by_forecast_type") or {}
-        if not isinstance(raw_ft, dict):
-            raw_ft = {}
-        by_ft: Dict[str, float] = {}
-        for k, v in raw_ft.items():
-            try:
-                by_ft[str(k)] = float(v)
-            except (TypeError, ValueError):
-                by_ft[str(k)] = 0.0
-        by_owner_list.append(
-            {
-                "owner_id": oid,
-                "owner_name": str(item.get("owner_name", "") or ""),
-                "by_forecast_type": dict(sorted(by_ft.items(), key=lambda x: x[0])),
-            }
-        )
-
-    totals: Dict[str, float] = {}
-    for k, v in totals_raw.items():
-        try:
-            totals[str(k)] = float(v)
-        except (TypeError, ValueError):
-            totals[str(k)] = 0.0
-
-    return by_owner_list, dict(sorted(totals.items(), key=lambda x: x[0]))
+    out = dict(node)
+    out["recalc_scope"] = recalc_scope
+    return out
 
 
 class CRMReviewService:
@@ -428,9 +408,9 @@ class CRMReviewService:
         user_id: str,
     ) -> dict:
         """
-        forecast 聚合仅以 Aldebaran 返回为准，不做本地 DB 汇总兜底。
-        - Leader：``recalc_scope=full_session``（全量）。
-        - 普通参会人：``recalc_scope=self_only``，并传 ``owner_id=crm_user_id``。
+        forecast 聚合仅以 Aldebaran ``POST .../review/performance/query`` 返回为准。
+        - Leader：请求仅 ``session_id``（全量）。
+        - 普通参会人：``session_id`` + ``owner_id``（crm_user_id）。
         """
         session = crm_review_session_repo.get_by_unique_id(db_session, session_id)
         if not session:
@@ -441,10 +421,6 @@ class CRMReviewService:
         )
         if not attendee:
             raise HTTPException(status_code=403, detail="user is not attendee of this review session")
-
-        period = str(session.period or "").strip()
-        if not period:
-            raise HTTPException(status_code=500, detail="review session period is empty")
 
         is_leader = bool(getattr(attendee, "is_leader", False))
         owner_id_arg: Optional[str] = None
@@ -467,17 +443,14 @@ class CRMReviewService:
         try:
             resp = aldebaran_client.trigger_review_session_forecast_recalc(
                 session_id=str(session.unique_id),
-                period=period,
-                recalc_scope=recalc_scope,
                 owner_id=owner_id_arg,
             )
         except RuntimeError as e:
             raise HTTPException(status_code=503, detail=str(e)) from e
         except Exception as e:  # noqa: BLE001
             logger.warning(
-                "Aldebaran review session recalc failed: session_id=%s period=%s err=%s",
+                "Aldebaran review session recalc failed: session_id=%s err=%s",
                 session_id,
-                period,
                 e,
                 exc_info=True,
             )
@@ -487,20 +460,13 @@ class CRMReviewService:
             ) from e
 
         try:
-            by_owner_list, totals = _parse_aldebaran_forecast_recalc_payload(resp)
+            return _build_forecast_recalc_out_from_aldebaran(
+                resp,
+                recalc_scope=recalc_scope,
+                session_id=str(session.unique_id),
+            )
         except ValueError as e:
             raise HTTPException(status_code=502, detail=str(e)) from e
-
-        return {
-            "session_id": str(session.unique_id),
-            "period": period,
-            "recalc_scope": recalc_scope,
-            "aldebaran_invoked": True,
-            "aldebaran_response": resp,
-            "aldebaran_error": None,
-            "by_owner": by_owner_list,
-            "totals_by_forecast_type": totals,
-        }
 
 
 crm_review_service = CRMReviewService()

@@ -671,10 +671,6 @@ class CRMReviewOppBranchSnapshot(SQLModel, table=True):
         default=None,
         sa_column=Column(String(255)),
     )
-    last_modified_time: Optional[datetime] = Field(
-        default=None,
-        sa_column=Column(DateTime),
-    )
     modification_count: Optional[int] = Field(
         default=0,
         sa_column=Column(Integer, default=0),
