@@ -384,7 +384,7 @@ class CRMReviewService:
                 "create_time": _to_beijing_datetime(scope["session"].create_time),
                 "review_phase": scope["session"].review_phase,
             },
-            "can_review": bool(scope["is_leader"]) and str(scope["session"].stage or "").strip() == "lead_view",
+            "can_review": bool(scope["is_leader"]) and str(scope["session"].stage or "").strip() == "lead_review",
             "is_leader": scope["is_leader"],
             "editable": scope["editable"],
             "submit_stats": scope["submit_stats"],
