@@ -5,6 +5,7 @@ import logging
 import threading
 import time
 import uuid
+from decimal import Decimal
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
@@ -27,6 +28,21 @@ from app.repositories.crm_review_session import crm_review_session_repo
 from app.services.aldebaran_service import aldebaran_client
 
 logger = logging.getLogger(__name__)
+
+
+def _audit_json_default(obj: Any) -> str:
+    """Best-effort JSON fallback for audit payloads.
+
+    DB fields like `Decimal` are not JSON-serializable by default.
+    We stringify them to keep audit logs durable.
+    """
+
+    if isinstance(obj, Decimal):
+        return str(obj)
+    if isinstance(obj, datetime):
+        # Keep timezone info when present.
+        return obj.isoformat()
+    return str(obj)
 
 
 EDITABLE_FIELDS = REVIEW_BRANCH_SNAPSHOT_EDITABLE_FIELDS
@@ -690,6 +706,7 @@ class CRMReviewService:
                     "unchanged_snapshot_unique_ids": sorted(unchanged_snapshot_unique_ids),
                 },
                 ensure_ascii=False,
+                default=_audit_json_default,
             ),
             new_value=json.dumps(
                 {
@@ -699,6 +716,7 @@ class CRMReviewService:
                     "unchanged_snapshot_unique_ids": sorted(unchanged_snapshot_unique_ids),
                 },
                 ensure_ascii=False,
+                default=_audit_json_default,
             ),
             change_type="UPDATE",
             edit_phase=str(session.stage),
