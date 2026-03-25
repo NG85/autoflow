@@ -627,7 +627,7 @@ class CRMReviewService:
                 updated_count += 1
                 changed_snapshot_unique_ids.add(snapshot_unique_id)
                 now = datetime.now(timezone.utc)
-                row.last_modified_time = now
+                row.update_time = now
                 row.last_modified_by_id = str(user_id)
                 row.last_modified_by = str(attendee.user_name or "unknown")
                 row.was_modified = True
