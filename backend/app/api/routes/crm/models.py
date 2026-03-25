@@ -927,10 +927,6 @@ class ReviewSessionPhaseUpdateIn(BaseModel):
 class ReviewOppBranchSnapshotsQueryIn(BaseModel):
     page: int = Field(default=1, ge=1)
     size: int = Field(default=20, ge=1, le=100)
-    group_by: Literal["owner", "forecast_type", "opportunity_stage"] = Field(
-        default="owner",
-        description="分组维度：人员 / 预测类型 / 商机阶段",
-    )
 
 
 class ReviewSnapshotGroupsQueryIn(BaseModel):
@@ -949,13 +945,18 @@ class ReviewSnapshotGroupItemOut(BaseModel):
 class ReviewSessionMetaOut(BaseModel):
     session_id: str
     period: str
+    period_start: date
+    period_end: date
     stage: str
+    report_date: date
+    create_time: Optional[datetime] = None
     review_phase: Optional[str] = None
 
 
 class ReviewSnapshotGroupsOut(BaseModel):
     session_id: str
     session: ReviewSessionMetaOut
+    can_review: bool
     is_leader: bool
     editable: bool
     submit_stats: ReviewSessionSubmitStatsOut

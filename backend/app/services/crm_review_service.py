@@ -7,6 +7,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 from sqlalchemy import case
@@ -58,6 +59,18 @@ def _parse_forecast_type_aliases_from_config_value(raw: Optional[str]) -> List[s
 _FORECAST_RANK_ALIASES_CACHE_TTL_SEC = 120.0
 _forecast_rank_aliases_cache_lock = threading.Lock()
 _forecast_rank_aliases_cache: Optional[Tuple[float, Tuple[Tuple[str, ...], Tuple[str, ...], Tuple[str, ...]]]] = None
+
+_SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+
+
+def _to_beijing_datetime(dt: Optional[datetime]) -> Optional[datetime]:
+    """Convert datetime to Asia/Shanghai for API response."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        # Assume DB stores UTC when tzinfo is missing.
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_SHANGHAI_TZ)
 
 
 def _load_forecast_type_rank_alias_tuples(db_session: Session) -> Tuple[Tuple[str, ...], Tuple[str, ...], Tuple[str, ...]]:
@@ -364,9 +377,14 @@ class CRMReviewService:
             "session": {
                 "session_id": scope["session"].unique_id,
                 "period": scope["session"].period,
+                "period_start": scope["session"].period_start,
+                "period_end": scope["session"].period_end,
                 "stage": scope["session"].stage,
+                "report_date": scope["session"].report_date,
+                "create_time": _to_beijing_datetime(scope["session"].create_time),
                 "review_phase": scope["session"].review_phase,
             },
+            "can_review": bool(scope["is_leader"]) and str(scope["session"].stage or "").strip() == "lead_view",
             "is_leader": scope["is_leader"],
             "editable": scope["editable"],
             "submit_stats": scope["submit_stats"],
