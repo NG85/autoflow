@@ -949,7 +949,7 @@ class ReviewSessionMetaOut(BaseModel):
     period_end: date
     stage: str
     report_date: date
-    create_time: Optional[datetime] = None
+    create_time: Optional[str] = None
     review_phase: Optional[str] = None
 
 

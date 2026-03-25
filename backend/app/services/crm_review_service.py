@@ -73,6 +73,14 @@ def _to_beijing_datetime(dt: Optional[datetime]) -> Optional[datetime]:
     return dt.astimezone(_SHANGHAI_TZ)
 
 
+def _format_beijing_datetime(dt: Optional[datetime]) -> Optional[str]:
+    """Format datetime to `YYYY-MM-DD HH:MM:SS` in Asia/Shanghai."""
+    beijing = _to_beijing_datetime(dt)
+    if beijing is None:
+        return None
+    return beijing.strftime("%Y-%m-%d %H:%M:%S")
+
+
 def _load_forecast_type_rank_alias_tuples(db_session: Session) -> Tuple[Tuple[str, ...], Tuple[str, ...], Tuple[str, ...]]:
     rows = db_session.exec(
         select(CRMSystemConfiguration.config_key, CRMSystemConfiguration.config_value).where(
@@ -381,7 +389,7 @@ class CRMReviewService:
                 "period_end": scope["session"].period_end,
                 "stage": scope["session"].stage,
                 "report_date": scope["session"].report_date,
-                "create_time": _to_beijing_datetime(scope["session"].create_time),
+                "create_time": _format_beijing_datetime(scope["session"].create_time),
                 "review_phase": scope["session"].review_phase,
             },
             "can_review": bool(scope["is_leader"]) and str(scope["session"].stage or "").strip() == "lead_review",
