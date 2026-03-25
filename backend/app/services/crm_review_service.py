@@ -544,7 +544,19 @@ class CRMReviewService:
                 updated_by=str(attendee.user_name or "unknown"),
                 updated_by_id=str(user_id),
             )
-            crm_review_opp_audit_log_repo.create_audit(db_session, audit)
+            try:
+                crm_review_opp_audit_log_repo.create_audit(db_session, audit)
+            except Exception as e:  # noqa: BLE001
+                # Audit writing must never break the submit main flow.
+                # (e.g. audit table schema/constraints temporarily mismatched)
+                logger.warning(
+                    "crm_review_opp_audit_log write failed (ignored): session_id=%s user_id=%s err=%s",
+                    session_id,
+                    user_id,
+                    e,
+                    exc_info=True,
+                )
+                db_session.rollback()
 
             submit_stats = crm_review_attendee_repo.get_submit_stats(
                 db_session, session_id=session_id
@@ -725,7 +737,18 @@ class CRMReviewService:
             updated_by=str(attendee.user_name or "unknown"),
             updated_by_id=str(user_id),
         )
-        crm_review_opp_audit_log_repo.create_audit(db_session, audit)
+        try:
+            crm_review_opp_audit_log_repo.create_audit(db_session, audit)
+        except Exception as e:  # noqa: BLE001
+            # Audit writing must never break the submit main flow.
+            logger.warning(
+                "crm_review_opp_audit_log write failed (ignored): session_id=%s user_id=%s err=%s",
+                session_id,
+                user_id,
+                e,
+                exc_info=True,
+            )
+            db_session.rollback()
 
         submit_stats = crm_review_attendee_repo.get_submit_stats(db_session, session_id=session_id)
         return {"updated_count": updated_count, "submit_stats": submit_stats}
