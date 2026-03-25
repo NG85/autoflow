@@ -369,6 +369,17 @@ class CRMWeeklyFollowupService:
                 raise
             return existing
 
+    def _list_active_departments_for_empty_summary(
+        self, session: Session
+    ) -> List[Tuple[str, str]]:
+        """仅包含有 leader（user_department_relation.is_leader）的有效部门，用于生成「本周没有跟进记录」的部门总结。"""
+        leader_dept_ids = user_department_relation_repo.list_department_ids_with_leader(session)
+        return [
+            (did, name)
+            for did, name in department_mirror_repo.list_active_departments(session)
+            if did in leader_dept_ids
+        ]
+
     def _upsert_empty_department_summary(
         self, session: Session, week_start: date, week_end: date, dept_id: str, dept_name: str
     ) -> None:
@@ -434,8 +445,8 @@ class CRMWeeklyFollowupService:
         )
         records = session.exec(stmt).all()
         if not records:
-            logger.warning("该周没有任何拜访记录，仍为各部门生成空总结")
-            active_departments = department_mirror_repo.list_active_departments(session)
+            logger.warning("该周没有任何拜访记录，仍为有 leader 的部门生成空总结")
+            active_departments = self._list_active_departments_for_empty_summary(session)
             for dept_id, dept_name in active_departments:
                 self._upsert_empty_department_summary(
                     session, week_start, week_end, dept_id, dept_name
@@ -872,10 +883,10 @@ class CRMWeeklyFollowupService:
         )
         self._upsert_summary(session, company_obj)
 
-        # 补全无拜访记录的部门：仍生成 summary_content="本周没有跟进记录"
+        # 补全无拜访记录的部门：仍生成 summary_content="本周没有跟进记录"（仅含在 relation 中有 leader 的部门）
         # 注意：by_dept_id_full 已按祖先链展开（见上文 ancestor_chains），子部门有记录时其父部门也在
         # by_dept_id_full 中并已写入 LLM 汇总，此处不会对父部门误写空总结
-        active_departments = department_mirror_repo.list_active_departments(session)
+        active_departments = self._list_active_departments_for_empty_summary(session)
         empty_dept_count = 0
         for dept_id, dept_name in active_departments:
             if dept_id not in by_dept_id_full:
