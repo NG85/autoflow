@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable, List
+from typing import Any, Iterable, List
 
 from sqlmodel import Session, select, func
 
@@ -74,6 +74,7 @@ class CRMReviewOppBranchSnapshotRepo(BaseRepo):
         snapshot_period: str,
         offset: int,
         limit: int,
+        forecast_type_rank_case: Any,
     ) -> List[CRMReviewOppBranchSnapshot]:
         ids = [str(x).strip() for x in (owner_crm_user_ids or []) if x and str(x).strip()]
         if not ids or not snapshot_period or limit <= 0:
@@ -86,8 +87,9 @@ class CRMReviewOppBranchSnapshotRepo(BaseRepo):
                 CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
             )
             .order_by(
-                CRMReviewOppBranchSnapshot.owner_id,
-                CRMReviewOppBranchSnapshot.opportunity_name,
+                func.coalesce(CRMReviewOppBranchSnapshot.owner_name, ""),
+                forecast_type_rank_case,
+                CRMReviewOppBranchSnapshot.forecast_amount.desc(),
             )
             .offset(offset)
             .limit(limit)

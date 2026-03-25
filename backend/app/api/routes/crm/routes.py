@@ -164,7 +164,7 @@ def query_my_review_opp_branch_snapshots(
     """
     Review 分页列表（不分组），返回形态与 ``snapshot-group-data`` 一致（仅无 ``group_by`` / ``group_key``）：
     ``session_id``、``page``、``size``、``total``、``items``。
-    会话元数据与提交统计见 ``snapshot-groups``。
+    Review session 元数据与提交统计见 ``snapshot-groups``。
     """
     return crm_review_service.get_my_edit_page_data(
         db_session,

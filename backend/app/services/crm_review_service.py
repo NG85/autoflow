@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
+from sqlalchemy import case
 from sqlmodel import Session, select, func
 
 from app.models.crm_review import (
@@ -15,6 +18,7 @@ from app.models.crm_review import (
     CRMReviewOppBranchSnapshot,
     REVIEW_BRANCH_SNAPSHOT_EDITABLE_FIELDS,
 )
+from app.models.crm_system_configurations import CRMSystemConfiguration
 from app.repositories.crm_review_attendee import crm_review_attendee_repo
 from app.repositories.crm_review_audit import crm_review_opp_audit_log_repo
 from app.repositories.crm_review_branch_snapshot import crm_review_opp_branch_snapshot_repo
@@ -25,6 +29,75 @@ logger = logging.getLogger(__name__)
 
 
 EDITABLE_FIELDS = REVIEW_BRANCH_SNAPSHOT_EDITABLE_FIELDS
+
+_FORECAST_TYPE_RANK_BY_CONFIG_KEY: Dict[str, int] = {
+    "commit": 0,
+    "upside": 1,
+    "closed_won": 2,
+}
+
+
+def _parse_forecast_type_aliases_from_config_value(raw: Optional[str]) -> List[str]:
+    """Parse ForecastTypeMapping.config_value (JSON array or plain string) into display aliases."""
+    raw = str(raw or "").strip()
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return [str(x).strip() for x in parsed if str(x or "").strip()]
+        if isinstance(parsed, str):
+            s = parsed.strip()
+            return [s] if s else []
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return [raw]
+
+
+# ForecastTypeMapping 变更极少：短时缓存避免每条列表请求都打配置表（仅影响排序 CASE 的 IN 列表）。
+_FORECAST_RANK_ALIASES_CACHE_TTL_SEC = 120.0
+_forecast_rank_aliases_cache_lock = threading.Lock()
+_forecast_rank_aliases_cache: Optional[Tuple[float, Tuple[Tuple[str, ...], Tuple[str, ...], Tuple[str, ...]]]] = None
+
+
+def _load_forecast_type_rank_alias_tuples(db_session: Session) -> Tuple[Tuple[str, ...], Tuple[str, ...], Tuple[str, ...]]:
+    rows = db_session.exec(
+        select(CRMSystemConfiguration.config_key, CRMSystemConfiguration.config_value).where(
+            CRMSystemConfiguration.config_type == "ForecastTypeMapping",
+            CRMSystemConfiguration.is_active.is_(True),
+        )
+    ).all()
+    rank_to_aliases: Dict[int, List[str]] = {0: [], 1: [], 2: []}
+    for config_key, config_value in rows:
+        ck = str(config_key or "").strip().lower()
+        rank = _FORECAST_TYPE_RANK_BY_CONFIG_KEY.get(ck)
+        if rank is None:
+            continue
+        seen = set(rank_to_aliases[rank])
+        for alias in _parse_forecast_type_aliases_from_config_value(config_value):
+            if alias not in seen:
+                seen.add(alias)
+                rank_to_aliases[rank].append(alias)
+    return (
+        tuple(rank_to_aliases[0]),
+        tuple(rank_to_aliases[1]),
+        tuple(rank_to_aliases[2]),
+    )
+
+
+def _get_forecast_type_rank_alias_tuples_cached(
+    db_session: Session,
+) -> Tuple[Tuple[str, ...], Tuple[str, ...], Tuple[str, ...]]:
+    global _forecast_rank_aliases_cache
+    now = time.monotonic()
+    with _forecast_rank_aliases_cache_lock:
+        if _forecast_rank_aliases_cache is not None:
+            deadline, triple = _forecast_rank_aliases_cache
+            if now < deadline:
+                return triple
+        triple = _load_forecast_type_rank_alias_tuples(db_session)
+        _forecast_rank_aliases_cache = (now + _FORECAST_RANK_ALIASES_CACHE_TTL_SEC, triple)
+        return triple
 
 
 def _aldebaran_performance_payload_root(body: Dict[str, Any]) -> Dict[str, Any]:
@@ -119,6 +192,32 @@ def _build_forecast_recalc_out_from_aldebaran(
 
 class CRMReviewService:
     @staticmethod
+    def _build_forecast_type_rank_case(db_session: Session):
+        """
+        Sort key for forecast_type: commit (0) > upside (1) > closed_won (2).
+        Aliases come from crm_system_configurations ForecastTypeMapping (config_value JSON arrays).
+        snapshot.forecast_type matches one of those strings (e.g. 确定成单 -> commit).
+        """
+        a0, a1, a2 = _get_forecast_type_rank_alias_tuples_cached(db_session)
+        ft_col = CRMReviewOppBranchSnapshot.forecast_type
+        whens: List[Any] = []
+        if a0:
+            whens.append((ft_col.in_(a0), 0))
+        if a1:
+            whens.append((ft_col.in_(a1), 1))
+        if a2:
+            whens.append((ft_col.in_(a2), 2))
+        if not whens:
+            ft_lower = func.lower(func.coalesce(ft_col, ""))
+            return case(
+                (ft_lower == "commit", 0),
+                (ft_lower == "upside", 1),
+                (ft_lower == "closed_won", 2),
+                else_=99,
+            )
+        return case(*whens, else_=99)
+
+    @staticmethod
     def _group_field_and_label(group_by: str):
         gb = str(group_by or "owner").strip()
         if gb == "owner":
@@ -209,12 +308,14 @@ class CRMReviewService:
             owner_crm_user_ids=owner_ids,
             snapshot_period=snapshot_period,
         )
+        ft_rank = self._build_forecast_type_rank_case(db_session)
         items = crm_review_opp_branch_snapshot_repo.list_by_owner_ids_and_period_paginated(
             db_session,
             owner_crm_user_ids=owner_ids,
             snapshot_period=snapshot_period,
             offset=offset,
             limit=size,
+            forecast_type_rank_case=ft_rank,
         )
 
         return {
@@ -311,10 +412,15 @@ class CRMReviewService:
                 select(func.count()).select_from(CRMReviewOppBranchSnapshot).where(*base_where)
             ).one()
         )
+        ft_rank = self._build_forecast_type_rank_case(db_session)
         items = db_session.exec(
             select(CRMReviewOppBranchSnapshot)
             .where(*base_where)
-            .order_by(CRMReviewOppBranchSnapshot.owner_id, CRMReviewOppBranchSnapshot.opportunity_name)
+            .order_by(
+                func.coalesce(CRMReviewOppBranchSnapshot.owner_name, ""),
+                ft_rank,
+                CRMReviewOppBranchSnapshot.forecast_amount.desc(),
+            )
             .offset(offset)
             .limit(size)
         ).all()
