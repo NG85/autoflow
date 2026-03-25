@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable
+from typing import Iterable, Set
 
 from sqlmodel import Session, select
 
@@ -38,6 +38,19 @@ class UserDepartmentRelationRepo(BaseRepo):
             # 只要出现 True 就锁定为 True
             result[user_id] = bool(result.get(user_id, False) or bool(is_leader))
         return result
+
+    def list_department_ids_with_leader(self, db_session: Session) -> Set[str]:
+        """
+        返回至少有一条有效关系且 is_leader=True 的部门 department_id 集合。
+        与 DepartmentMirror.unique_id 对齐，用于仅向「有负责人」的部门生成空周跟进总结等。
+        """
+        rows = db_session.exec(
+            select(UserDepartmentRelation.department_id).where(
+                UserDepartmentRelation.is_leader == True,  # noqa: E712
+                UserDepartmentRelation.is_active == True,  # noqa: E712
+            )
+        ).all()
+        return {str(did).strip() for did in rows if did and str(did).strip()}
 
     def get_primary_department_by_user_ids(
         self,

@@ -81,9 +81,14 @@ async def lifespan(app: FastAPI):
     yield
 
 
+_root_path = settings.ROOT_PATH.rstrip("/") if settings.ROOT_PATH else ""
+_enable_api_docs = settings.ENVIRONMENT != Environment.PRODUCTION
 app = FastAPI(
     title=settings.PROJECT_NAME,
-    openapi_url=f"{settings.API_V1_STR}/openapi.json",
+    openapi_url=(
+        f"{settings.API_V1_STR}/openapi.json" if _enable_api_docs else None
+    ),
+    root_path=_root_path,
     generate_unique_id_function=custom_generate_unique_id,
     lifespan=lifespan,
 )
