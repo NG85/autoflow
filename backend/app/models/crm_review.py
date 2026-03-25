@@ -13,6 +13,8 @@ from sqlmodel import (
     func,
 )
 
+from app.models.base import UUIDBaseModel, UpdatableBaseModel
+
 
 class CRMReviewDepartment(SQLModel, table=True):
     """List of departments that require review sessions"""
@@ -867,7 +869,7 @@ class CRMReviewKpiMetrics(SQLModel, table=True):
     )
 
 
-class CRMReviewOppAuditLog(SQLModel, table=True):
+class CRMReviewOppAuditLog(UUIDBaseModel, UpdatableBaseModel, table=True):
     """Audit log for branch snapshot modifications.
     约定：一次“整体提交/批量提交”对应一条审计记录；old_value/new_value 以 Text 存放结构化 JSON。
     """
@@ -877,21 +879,12 @@ class CRMReviewOppAuditLog(SQLModel, table=True):
 
     __tablename__ = "crm_review_opp_audit_log"
 
-    id: Optional[int] = Field(
-        default=None,
-        primary_key=True,
-        description="主键ID（自增序列）",
-    )
-    unique_id: str = Field(
-        sa_column=Column(String(255), nullable=False),
-    )
-
     session_id: str = Field(
         sa_column=Column(String(255), nullable=False),
     )
 
     change_scope: str = Field(
-        sa_column=Column(String(32), nullable=False),
+        sa_column=Column(String(64), nullable=False),
     )
     
     old_value: Optional[str] = Field(
@@ -914,23 +907,16 @@ class CRMReviewOppAuditLog(SQLModel, table=True):
         sa_column=Column(String(32)),
     )
 
-    changed_by: str = Field(
+    updated_by: str = Field(
         sa_column=Column(String(255), nullable=False),
     )
-    changed_by_id: str = Field(
+    updated_by_id: str = Field(
         sa_column=Column(String(255), nullable=False),
-    )
-
-    changed_at: Optional[datetime] = Field(
-        default=None,
-        sa_column=Column(
-            DateTime, nullable=False, server_default=func.now()
-        ),
     )
 
     __table_args__ = (
-        Index("idx_review_opp_audit_session_id", "session_id"),
-        Index("idx_review_opp_audit_changed_by_id", "changed_by_id"),
-        Index("idx_review_opp_audit_changed_at", "changed_at"),
+        Index("idx_session_id", "session_id"),
+        Index("idx_updated_by_id", "updated_by_id"),
+        Index("idx_updated_at", "updated_at"),
     )
 

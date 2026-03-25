@@ -517,9 +517,10 @@ class CRMReviewService:
             db_session.commit()
 
             audit = CRMReviewOppAuditLog(
-                unique_id=str(uuid.uuid4()),
                 session_id=str(session.unique_id),
                 change_scope="submit_empty_updates",
+                updated_at=datetime.now(timezone.utc),
+                created_at=datetime.now(timezone.utc),
                 old_value=json.dumps(
                     {
                         "period": snapshot_period,
@@ -540,8 +541,8 @@ class CRMReviewService:
                 ),
                 change_type="UPDATE",
                 edit_phase=str(session.stage),
-                changed_by=str(attendee.user_name or "unknown"),
-                changed_by_id=str(user_id),
+                updated_by=str(attendee.user_name or "unknown"),
+                updated_by_id=str(user_id),
             )
             crm_review_opp_audit_log_repo.create_audit(db_session, audit)
 
@@ -695,9 +696,10 @@ class CRMReviewService:
         else:
             change_scope = "batch_submit_no_field_changes"
         audit = CRMReviewOppAuditLog(
-            unique_id=str(uuid.uuid4()),
             session_id=str(session.unique_id),
             change_scope=change_scope,
+            updated_at=datetime.now(timezone.utc),
+            created_at=datetime.now(timezone.utc),
             old_value=json.dumps(
                 {
                     "period": snapshot_period,
@@ -720,8 +722,8 @@ class CRMReviewService:
             ),
             change_type="UPDATE",
             edit_phase=str(session.stage),
-            changed_by=str(attendee.user_name or "unknown"),
-            changed_by_id=str(user_id),
+            updated_by=str(attendee.user_name or "unknown"),
+            updated_by_id=str(user_id),
         )
         crm_review_opp_audit_log_repo.create_audit(db_session, audit)
 
