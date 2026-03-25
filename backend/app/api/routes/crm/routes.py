@@ -154,7 +154,7 @@ def _can_edit_weekly_followup_comments(db_session: SessionDep, user: CurrentUser
     return bool(is_team_lead_fallback), False, dept_id, dept_name
 
 
-@router.post("/crm/review/sessions/{session_id}/my-opp-branch-snapshots", deprecated=True)
+@router.post("/crm/review/sessions/{session_id}/my-opp-branch-snapshots")
 def query_my_review_opp_branch_snapshots(
     session_id: str,
     request: ReviewOppBranchSnapshotsQueryIn,
@@ -162,13 +162,9 @@ def query_my_review_opp_branch_snapshots(
     user: CurrentUserDep,
 ):
     """
-    [DEPRECATED] Review 页面数据（POST）：
-    - session.period / stage / review_phase、editable、submit_stats、分页 items
-    - owner 范围：普通成员仅本人；leader 可见本会话全部参会人 owner 的 snapshot
-    - 支持 ``group_by``: owner / forecast_type / opportunity_stage，返回 ``grouped_items`` 供前端分组展示
-    请迁移到：
-    - ``POST /crm/review/sessions/{session_id}/snapshot-groups``
-    - ``POST /crm/review/sessions/{session_id}/snapshot-group-data``
+    Review 分页列表（不分组），返回形态与 ``snapshot-group-data`` 一致（仅无 ``group_by`` / ``group_key``）：
+    ``session_id``、``page``、``size``、``total``、``items``。
+    会话元数据与提交统计见 ``snapshot-groups``。
     """
     return crm_review_service.get_my_edit_page_data(
         db_session,
@@ -176,7 +172,6 @@ def query_my_review_opp_branch_snapshots(
         user_id=str(user.id),
         page=request.page,
         size=request.size,
-        group_by=request.group_by,
     )
 
 

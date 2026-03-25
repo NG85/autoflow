@@ -80,9 +80,14 @@ class CRMReviewOppBranchSnapshotRepo(BaseRepo):
             return []
         offset = max(offset, 0)
         return db_session.exec(
-            select(CRMReviewOppBranchSnapshot).where(
+            select(CRMReviewOppBranchSnapshot)
+            .where(
                 CRMReviewOppBranchSnapshot.owner_id.in_(ids),
                 CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
+            )
+            .order_by(
+                CRMReviewOppBranchSnapshot.owner_id,
+                CRMReviewOppBranchSnapshot.opportunity_name,
             )
             .offset(offset)
             .limit(limit)

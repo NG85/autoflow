@@ -190,7 +190,6 @@ class CRMReviewService:
         user_id: str,
         page: int = 1,
         size: int = 20,
-        group_by: str = "owner",
     ) -> dict:
         page = int(page or 1)
         size = int(size or 20)
@@ -200,7 +199,6 @@ class CRMReviewService:
             size = 20
         offset = (page - 1) * size
         scope = self._resolve_session_scope(db_session, session_id=session_id, user_id=user_id)
-        session = scope["session"]
         owner_ids = [str(x).strip() for x in (scope["owner_ids"] or []) if str(x or "").strip()]
         if not owner_ids:
             raise HTTPException(status_code=422, detail="no attendee crm_user_id in this review session")
@@ -219,51 +217,12 @@ class CRMReviewService:
             limit=size,
         )
 
-        group_by = str(group_by or "owner").strip()
-        if group_by not in {"owner", "forecast_type", "opportunity_stage"}:
-            raise HTTPException(status_code=422, detail="group_by must be one of: owner, forecast_type, opportunity_stage")
-
-        if group_by == "owner":
-            key_getter = lambda x: str(getattr(x, "owner_id", "") or "")
-            label_getter = lambda x: str(getattr(x, "owner_name", "") or "")
-        elif group_by == "forecast_type":
-            key_getter = lambda x: str(getattr(x, "forecast_type", "") or "")
-            label_getter = lambda x: str(getattr(x, "forecast_type", "") or "")
-        else:
-            key_getter = lambda x: str(getattr(x, "opportunity_stage", "") or "")
-            label_getter = lambda x: str(getattr(x, "opportunity_stage", "") or "")
-
-        sorted_items = sorted(items, key=lambda x: (key_getter(x), str(getattr(x, "opportunity_name", "") or "")))
-        groups: Dict[str, Dict[str, Any]] = {}
-        for item in sorted_items:
-            gk = key_getter(item).strip() or "__EMPTY__"
-            if gk not in groups:
-                groups[gk] = {
-                    "group_key": gk,
-                    "group_label": label_getter(item).strip() or "",
-                    "count": 0,
-                    "items": [],
-                }
-            groups[gk]["count"] += 1
-            groups[gk]["items"].append(item)
-        grouped_items = list(groups.values())
-
         return {
-            "session": {
-                "session_id": session.unique_id,
-                "period": session.period,
-                "stage": session.stage,
-                "review_phase": session.review_phase,
-            },
-            "is_leader": scope["is_leader"],
-            "editable": scope["editable"],
-            "submit_stats": scope["submit_stats"],
+            "session_id": str(scope["session"].unique_id),
             "page": page,
             "size": size,
             "total": total,
-            "group_by": group_by,
-            "items": sorted_items,
-            "grouped_items": grouped_items,
+            "items": items,
         }
 
     def list_snapshot_groups(
