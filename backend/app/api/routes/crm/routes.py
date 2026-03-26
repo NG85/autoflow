@@ -1,6 +1,7 @@
 import logging
 import io
 import hashlib
+import json
 from typing import List, Literal, Optional
 from zoneinfo import ZoneInfo
 from app.api.deps import CurrentUserDep, SessionDep
@@ -36,6 +37,11 @@ from app.api.routes.crm.models import (
     SaveWeeklyFollowupCommentsIn,
     DocumentQATriggerTaskIn,
     DocumentQATriggerTaskOut,
+    ReviewSessionKpiMetricsOut,
+    ReviewSessionKpiMetricOut,
+    ReviewSessionForecastRecalcOut,
+    ReviewSnapshotFilterEnumsOut,
+    MyLatestReviewSessionOut,
 )
 from app.crm.save_engine import (
     save_visit_record_to_crm_table, 
@@ -63,6 +69,22 @@ from app.repositories.department_mirror import department_mirror_repo
 from app.repositories.user_department_relation import user_department_relation_repo
 from app.services.oauth_service import oauth_client
 from app.services.crm_weekly_followup_engagement_service import crm_weekly_followup_engagement_service
+from app.services.crm_review_service import crm_review_service
+from app.api.routes.crm.models import (
+    ReviewBranchSnapshotSubmitIn,
+    ReviewBranchSnapshotSubmitOut,
+    ReviewSnapshotGroupDataQueryIn,
+    ReviewSnapshotGroupsOut,
+    ReviewSnapshotGroupsQueryIn,
+    ReviewOppBranchSnapshotsQueryIn,
+    ReviewSessionPhaseUpdateIn,
+)
+from app.repositories.crm_review_session import crm_review_session_repo
+from app.repositories.crm_review_attendee import crm_review_attendee_repo
+from app.repositories.crm_review_kpi_metrics import crm_review_kpi_metrics_repo
+from app.models.crm_system_configurations import CRMSystemConfiguration
+from app.models.crm_review import CRMReviewAttendee, CRMReviewSession
+from sqlalchemy import text
 
 
 logger = logging.getLogger(__name__)
@@ -130,6 +152,323 @@ def _can_edit_weekly_followup_comments(db_session: SessionDep, user: CurrentUser
     profile = user_profile_repo.get_by_user_id(db_session, user.id)
     is_team_lead_fallback = bool(profile and profile.department and not profile.direct_manager_id)
     return bool(is_team_lead_fallback), False, dept_id, dept_name
+
+
+@router.post("/crm/review/sessions/{session_id}/my-opp-branch-snapshots")
+def query_my_review_opp_branch_snapshots(
+    session_id: str,
+    request: ReviewOppBranchSnapshotsQueryIn,
+    db_session: SessionDep,
+    user: CurrentUserDep,
+):
+    """
+    Review 分页列表（不分组），返回形态与 ``snapshot-group-data`` 一致（仅无 ``group_by`` / ``group_key``）：
+    ``session_id``、``page``、``size``、``total``、``items``。
+    Review session 元数据与提交统计见 ``snapshot-groups``。
+    """
+    return crm_review_service.get_my_edit_page_data(
+        db_session,
+        session_id=session_id,
+        user_id=str(user.id),
+        page=request.page,
+        size=request.size,
+    )
+
+
+@router.post("/crm/review/sessions/{session_id}/snapshot-groups")
+def query_review_snapshot_groups(
+    session_id: str,
+    request: ReviewSnapshotGroupsQueryIn,
+    db_session: SessionDep,
+    user: CurrentUserDep,
+) -> ReviewSnapshotGroupsOut:
+    """
+    查询分组集合（仅返回分组，不返回具体 snapshot 行）：
+    - 权限范围：普通成员仅自己；leader 为本 session 全员
+    - group_by: owner / forecast_type / opportunity_stage
+    """
+    data = crm_review_service.list_snapshot_groups(
+        db_session,
+        session_id=session_id,
+        user_id=str(user.id),
+        group_by=request.group_by,
+    )
+    return ReviewSnapshotGroupsOut.model_validate(data)
+
+
+@router.post("/crm/review/sessions/{session_id}/snapshot-group-data")
+def query_review_snapshot_group_data(
+    session_id: str,
+    request: ReviewSnapshotGroupDataQueryIn,
+    db_session: SessionDep,
+    user: CurrentUserDep,
+):
+    """
+    查询指定分组值下的 snapshot 明细：
+    - group_by=owner 时 group_key 传 owner_id
+    - group_by=forecast_type/opportunity_stage 时 group_key 传字段值
+    - 为空分组可传 __EMPTY__
+    """
+    return crm_review_service.query_snapshot_group_data(
+        db_session,
+        session_id=session_id,
+        user_id=str(user.id),
+        group_by=request.group_by,
+        group_key=request.group_key,
+        page=request.page,
+        size=request.size,
+    )
+
+
+@router.get("/crm/review/my/latest-session")
+def query_my_latest_review_session(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+) -> MyLatestReviewSessionOut:
+    """
+    查询当前用户参与的最新一个 review session：
+    - 通过 CRMReviewAttendee.user_id 关联参与会话
+    - 按 CRMReviewSession.report_date 倒序（同日再按 create_time 倒序）取最新
+    """
+    row = db_session.exec(
+        select(CRMReviewSession.unique_id)
+        .join(
+            CRMReviewAttendee,
+            CRMReviewAttendee.session_id == CRMReviewSession.unique_id,
+        )
+        .where(CRMReviewAttendee.user_id == str(user.id))
+        .order_by(CRMReviewSession.report_date.desc(), CRMReviewSession.create_time.desc())
+        .limit(1)
+    ).first()
+    return MyLatestReviewSessionOut(review_session_id=str(row) if row else None)
+
+
+@router.get("/crm/review/snapshot-filter-enums")
+def query_review_snapshot_filter_enums(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+) -> ReviewSnapshotFilterEnumsOut:
+    """
+    查询 Review 页面筛选枚举配置：
+    1) forecast_types: 来自 crm_system_configurations(config_type='ForecastTypeMapping')，
+       每条 config_value(JSON array) 取第一个元素。
+    2) opportunity_stages: 来自 diagnostic_playbook(handbook_id, sales_stage)。
+    """
+    # 需要登录态；不额外限制角色（仅提供筛选枚举）
+    _ = user
+
+    forecast_rows = db_session.exec(
+        select(CRMSystemConfiguration.config_key, CRMSystemConfiguration.config_value)
+        .where(CRMSystemConfiguration.config_type == "ForecastTypeMapping")
+        .order_by(CRMSystemConfiguration.config_key)
+    ).all()
+    forecast_types: list[str] = []
+    for _config_key, config_value in forecast_rows:
+        first = ""
+        raw = str(config_value or "").strip()
+        if raw:
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list) and parsed:
+                    first = str(parsed[0] or "").strip()
+                else:
+                    first = raw
+            except Exception:
+                first = raw
+        if first:
+            forecast_types.append(first)
+    # 去重并保持顺序
+    forecast_types = list(dict.fromkeys(forecast_types))
+
+    # TODO: support multiple handbook_ids (or configurable handbook set) for sales_stage options.
+    target_handbook_id = "pb_EXEC-RPT-SALES-PLAYBOOK-20250219-001-001"
+    stage_rows = db_session.exec(
+        text(
+            "select handbook_id, sales_stage "
+            "from diagnostic_playbook "
+            "where handbook_id = :handbook_id "
+            "and sales_stage is not null and sales_stage <> ''"
+        )
+        .bindparams(handbook_id=target_handbook_id)
+    ).all()
+    stage_by_handbook: dict[str, list[str]] = {}
+    for r in stage_rows:
+        hb = str(getattr(r, "handbook_id", "") or "").strip()
+        stage = str(getattr(r, "sales_stage", "") or "").strip()
+        if not hb or not stage:
+            continue
+        stage_by_handbook.setdefault(hb, [])
+        if stage not in stage_by_handbook[hb]:
+            stage_by_handbook[hb].append(stage)
+    opportunity_stages = [
+        {"handbook_id": hb, "sales_stages": stages}
+        for hb, stages in sorted(stage_by_handbook.items(), key=lambda x: x[0])
+    ]
+
+    return ReviewSnapshotFilterEnumsOut.model_validate(
+        {
+            "group_by_options": [
+                {"key": "owner", "label": "人员"},
+                {"key": "forecast_type", "label": "预测类型"},
+                {"key": "opportunity_stage", "label": "商机阶段"},
+            ],
+            "forecast_types": forecast_types,
+            "opportunity_stages": opportunity_stages,
+        }
+    )
+
+
+@router.post(
+    "/crm/review/sessions/{session_id}/submit",
+    response_model=ReviewBranchSnapshotSubmitOut,
+)
+def submit_my_review_branch_snapshot_changes(
+    session_id: str,
+    payload: ReviewBranchSnapshotSubmitIn,
+    db_session: SessionDep,
+    user: CurrentUserDep,
+):
+    """
+    提交保存（一次提交更新多条记录）：
+    - 仅更新白名单字段（见 ``REVIEW_BRANCH_SNAPSHOT_EDITABLE_FIELDS``）
+    - 写回 crm_review_opp_branch_snapshot；一次提交写 1 条 CRMReviewOppAuditLog（old/new JSON）
+    """
+    return crm_review_service.submit_my_snapshot_changes(
+        db_session,
+        session_id=session_id,
+        user_id=str(user.id),
+        updates=[u.model_dump(exclude_unset=True) for u in (payload.updates or [])],
+    )
+
+
+@router.post("/crm/review/sessions/{session_id}/review-phase")
+def update_review_session_phase(
+    session_id: str,
+    payload: ReviewSessionPhaseUpdateIn,
+    db_session: SessionDep,
+    user: CurrentUserDep,
+):
+    """
+    更新 review session.review_phase（仅 stage=lead_review 时允许）：
+    - 仅允许 leader 在前端切换 edit/closed（可反复切换）
+    - not_started 由后端任务在进入 lead_review 时初始化
+    - 非 lead_review 阶段不允许修改
+    """
+    session = crm_review_session_repo.get_by_unique_id(db_session, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="review session not found")
+
+    attendee = crm_review_attendee_repo.get_by_session_and_user_id(
+        db_session, session_id=session_id, user_id=str(user.id)
+    )
+    if not attendee:
+        raise HTTPException(status_code=403, detail="user is not attendee of this review session")
+    if not bool(getattr(attendee, "is_leader", False)):
+        raise HTTPException(status_code=403, detail="only session leader can update review_phase")
+
+    if str(session.stage) != "lead_review":
+        raise HTTPException(
+            status_code=409,
+            detail="review_phase can only be updated when session.stage is lead_review",
+        )
+
+    session.review_phase = payload.review_phase
+    db_session.add(session)
+    db_session.commit()
+    db_session.refresh(session)
+    return {
+        "session_id": str(session.unique_id),
+        "stage": str(session.stage),
+        "review_phase": str(session.review_phase or ""),
+    }
+
+
+@router.get("/crm/review/sessions/{session_id}/kpi-metrics")
+def query_review_session_kpi_metrics(
+    session_id: str,
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    scope_type: Optional[str] = None,
+    calc_phase: Optional[str] = None,
+) -> ReviewSessionKpiMetricsOut:
+    """
+    查询某个 review session 的 KPI metrics，供前端展示指标卡片/列表。
+    可选筛选：scope_type、calc_phase。
+    """
+    session = crm_review_session_repo.get_by_unique_id(db_session, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="review session not found")
+
+    attendee = crm_review_attendee_repo.get_by_session_and_user_id(
+        db_session, session_id=session_id, user_id=str(user.id)
+    )
+    if not attendee:
+        raise HTTPException(status_code=403, detail="user is not attendee of this review session")
+    if not bool(getattr(attendee, "is_leader", False)):
+        raise HTTPException(status_code=403, detail="only session leader can view kpi metrics")
+
+    rows = crm_review_kpi_metrics_repo.list_by_session(
+        db_session,
+        session_id=session_id,
+        scope_type=(scope_type or "").strip() or None,
+        calc_phase=(calc_phase or "").strip() or None,
+    )
+
+    items: List[ReviewSessionKpiMetricOut] = []
+    for r in rows:
+        items.append(
+            ReviewSessionKpiMetricOut(
+                unique_id=str(r.unique_id),
+                session_id=str(r.session_id),
+                scope_type=str(r.scope_type),
+                scope_id=r.scope_id,
+                scope_name=r.scope_name,
+                parent_scope_id=r.parent_scope_id,
+                metric_category=str(r.metric_category),
+                metric_name=str(r.metric_name),
+                metric_value=float(r.metric_value) if r.metric_value is not None else None,
+                metric_value_prev=float(r.metric_value_prev) if r.metric_value_prev is not None else None,
+                metric_delta=float(r.metric_delta) if r.metric_delta is not None else None,
+                metric_rate=float(r.metric_rate) if r.metric_rate is not None else None,
+                metric_unit=r.metric_unit,
+                metric_content=r.metric_content,
+                metric_content_en=r.metric_content_en,
+                calc_phase=r.calc_phase,
+                period_type=r.period_type,
+                period=r.period,
+                report_date=r.report_date,
+                report_year=r.report_year,
+                report_week_of_year=r.report_week_of_year,
+            )
+        )
+
+    return ReviewSessionKpiMetricsOut(
+        session_id=session_id,
+        total=len(items),
+        items=items,
+    )
+
+
+@router.post("/crm/review/sessions/{session_id}/recalculate-forecast-aggregates")
+def recalculate_review_session_forecast_aggregates(
+    session_id: str,
+    db_session: SessionDep,
+    user: CurrentUserDep,
+) -> ReviewSessionForecastRecalcOut:
+    """
+    参会人可调用；聚合结果**仅**来自 Aldebaran ``POST /api/v1/review/performance/query``（可用 ``ALDEBARAN_REVIEW_SESSION_RECALC_PATH`` 覆盖），不做本地 DB 兜底。
+    - Leader：请求体仅 ``session_id``（全量）。
+    - 普通成员：请求体 ``session_id`` + ``owner_id``（crm_user_id）。
+    成功时返回固定结构：``total`` + ``attendees`` + ``pagination``，并带 ``recalc_scope``。
+    单人查询会归一化为 ``attendees`` 仅 1 条。
+    """
+    data = crm_review_service.recalculate_forecast_aggregates(
+        db_session,
+        session_id=session_id,
+        user_id=str(user.id),
+    )
+    return ReviewSessionForecastRecalcOut.model_validate(data)
+
 
 def _to_comments(v: object) -> list[CRMComment]:
     if not isinstance(v, list):

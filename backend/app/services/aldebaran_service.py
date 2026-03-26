@@ -27,6 +27,7 @@ class AldebaranClient:
         session: Optional[requests.Session] = None,
         weekly_report_path: Optional[str] = None,
         cvgg_path: Optional[str] = None,
+        review_session_recalc_path: Optional[str] = None,
     ) -> None:
         self._base_url = (base_url or settings.ALDEBARAN_BASE_URL).rstrip("/")
         self._tenant_id = tenant_id or getattr(settings, "ALDEBARAN_TENANT_ID", "PINGCAP")
@@ -38,6 +39,11 @@ class AldebaranClient:
         self._cvgg_path = _normalize_path(
             cvgg_path or getattr(settings, "ALDEBARAN_CVGG_URL", "/api/v1/previsit/create_v4"),
             default="/api/v1/previsit/create_v4",
+        )
+        # Aldebaran：review 数据计算（全量仅 session_id；单人加 owner_id）
+        self._review_session_recalc_path = _normalize_path(
+            review_session_recalc_path or getattr(settings, "ALDEBARAN_REVIEW_SESSION_RECALC_PATH", "/api/v1/review/performance/query"),
+            default="/api/v1/review/performance/query",
         )
 
     def fetch_weekly_report(
@@ -136,6 +142,41 @@ class AldebaranClient:
             raise RuntimeError(f"Aldebaran cvgg invalid json: {result}")
 
         return result["data"]
+
+    def trigger_review_session_forecast_recalc(
+        self,
+        *,
+        session_id: str,
+        owner_id: Optional[str] = None,
+        timeout_seconds: int = 60,
+    ) -> dict[str, Any]:
+        """
+        调用 Aldebaran ``POST .../review/performance/query``；结果仅以接口返回为准。
+
+        请求体：
+        - 全量：``{"session_id": "<uuid>"}``
+        - 单人：``{"session_id": "<uuid>", "owner_id": "<crm_user_id>"}``
+        """
+        path = self._review_session_recalc_path
+        url = f"{self._base_url}{_normalize_path(path, default='/api/v1/review/performance/query')}"
+        payload: dict[str, Any] = {"session_id": session_id}
+        if owner_id:
+            payload["owner_id"] = owner_id
+        logger.info(
+            "调用 Aldebaran review performance query: %s, session_id=%s owner_id=%s",
+            url,
+            session_id,
+            owner_id or "(full session)",
+        )
+        resp = self._session.post(
+            url,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=timeout_seconds,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, dict) else {"raw": data}
 
 
 aldebaran_client = AldebaranClient()
