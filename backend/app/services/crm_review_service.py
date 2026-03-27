@@ -18,6 +18,8 @@ from app.models.crm_review import (
     CRMReviewAttendee,
     CRMReviewOppAuditLog,
     CRMReviewOppBranchSnapshot,
+    CRMReviewOppBranchSnapshotBasicOut,
+    CRMReviewOppRiskProgress,
     REVIEW_BRANCH_SNAPSHOT_EDITABLE_FIELDS,
 )
 from app.models.crm_system_configurations import CRMSystemConfiguration
@@ -229,6 +231,111 @@ def _build_forecast_recalc_out_from_aldebaran(
 
 class CRMReviewService:
     @staticmethod
+    def _model_to_dict(model_obj: Any) -> Dict[str, Any]:
+        if hasattr(model_obj, "model_dump"):
+            return model_obj.model_dump()
+        if hasattr(model_obj, "dict"):
+            return model_obj.dict()
+        return dict(model_obj)
+
+    def _query_risk_progress_by_opportunity_ids(
+        self,
+        db_session: Session,
+        *,
+        session_id: str,
+        snapshot_period: str,
+        opportunity_ids: List[str],
+    ) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
+        normalized_opp_ids = [
+            str(opp_id).strip()
+            for opp_id in (opportunity_ids or [])
+            if str(opp_id or "").strip()
+        ]
+        if not normalized_opp_ids:
+            return {}
+        risk_rows = db_session.exec(
+            select(CRMReviewOppRiskProgress)
+            .where(
+                CRMReviewOppRiskProgress.session_id == session_id,
+                CRMReviewOppRiskProgress.snapshot_period == snapshot_period,
+                CRMReviewOppRiskProgress.opportunity_id.in_(normalized_opp_ids),
+                CRMReviewOppRiskProgress.record_type.in_(("RISK", "PROGRESS")),
+            )
+            .order_by(CRMReviewOppRiskProgress.detected_at.desc())
+        ).all()
+
+        by_opp: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
+        for row in risk_rows:
+            opp_id = str(getattr(row, "opportunity_id") or "").strip()
+            if not opp_id:
+                continue
+            rtype = str(getattr(row, "record_type") or "").strip().upper()
+            if rtype not in ("RISK", "PROGRESS"):
+                continue
+            bucket = by_opp.setdefault(opp_id, {"RISK": [], "PROGRESS": []})
+            bucket[rtype].append(self._model_to_dict(row))
+        return by_opp
+
+    def _attach_risk_progress_to_items(
+        self,
+        db_session: Session,
+        *,
+        session_id: str,
+        snapshot_period: str,
+        items: List[CRMReviewOppBranchSnapshot],
+    ) -> List[Dict[str, Any]]:
+        if not items:
+            return []
+
+        opportunity_ids = [
+            str(getattr(item, "opportunity_id") or "").strip()
+            for item in items
+            if str(getattr(item, "opportunity_id") or "").strip()
+        ]
+        by_opp = self._query_risk_progress_by_opportunity_ids(
+            db_session,
+            session_id=session_id,
+            snapshot_period=snapshot_period,
+            opportunity_ids=opportunity_ids,
+        )
+
+        enriched: List[Dict[str, Any]] = []
+        for item in items:
+            row = self._model_to_dict(item)
+            opp_id = str(getattr(item, "opportunity_id") or "").strip()
+            opp_bucket = by_opp.get(opp_id, {"RISK": [], "PROGRESS": []})
+            row["risk_count"] = len(opp_bucket["RISK"])
+            row["progress_count"] = len(opp_bucket["PROGRESS"])
+            enriched.append(row)
+        return enriched
+
+    def _project_snapshot_items(
+        self,
+        *,
+        items: List[Dict[str, Any]],
+        fields_level: str,
+    ) -> List[Dict[str, Any]]:
+        level = str(fields_level or "basic").strip().lower()
+        full_fields = tuple(CRMReviewOppBranchSnapshot.model_fields.keys())
+        if level == "full":
+            projected_full: List[Dict[str, Any]] = []
+            for row in items:
+                item = {k: row.get(k) for k in full_fields}
+                item["risk_count"] = int(row.get("risk_count") or 0)
+                item["progress_count"] = int(row.get("progress_count") or 0)
+                projected_full.append(item)
+            return projected_full
+
+        basic_fields = tuple(CRMReviewOppBranchSnapshotBasicOut.model_fields.keys())
+        projected: List[Dict[str, Any]] = []
+        for row in items:
+            item = {k: row.get(k) for k in basic_fields}
+            item["risk_count"] = int(row.get("risk_count") or 0)
+            item["progress_count"] = int(row.get("progress_count") or 0)
+            projected.append(item)
+        return projected
+
+    @staticmethod
     def _build_forecast_type_rank_case(db_session: Session):
         """
         Sort key for forecast_type: commit (0) > upside (1) > closed_won (2).
@@ -326,6 +433,7 @@ class CRMReviewService:
         user_id: str,
         page: int = 1,
         size: int = 20,
+        fields_level: str = "basic",
     ) -> dict:
         page = int(page or 1)
         size = int(size or 20)
@@ -354,13 +462,23 @@ class CRMReviewService:
             limit=size,
             forecast_type_rank_case=ft_rank,
         )
+        enriched_items = self._attach_risk_progress_to_items(
+            db_session,
+            session_id=session_id,
+            snapshot_period=snapshot_period,
+            items=items,
+        )
+        output_items = self._project_snapshot_items(
+            items=enriched_items,
+            fields_level=fields_level,
+        )
 
         return {
             "session_id": str(scope["session"].unique_id),
             "page": page,
             "size": size,
             "total": total,
-            "items": items,
+            "items": output_items,
         }
 
     def list_snapshot_groups(
@@ -427,6 +545,7 @@ class CRMReviewService:
         group_key: str,
         page: int = 1,
         size: int = 20,
+        fields_level: str = "basic",
     ) -> dict:
         page = int(page or 1)
         size = int(size or 20)
@@ -466,6 +585,16 @@ class CRMReviewService:
             .offset(offset)
             .limit(size)
         ).all()
+        enriched_items = self._attach_risk_progress_to_items(
+            db_session,
+            session_id=session_id,
+            snapshot_period=scope["snapshot_period"],
+            items=items,
+        )
+        output_items = self._project_snapshot_items(
+            items=enriched_items,
+            fields_level=fields_level,
+        )
 
         return {
             "session_id": str(scope["session"].unique_id),
@@ -474,7 +603,50 @@ class CRMReviewService:
             "page": page,
             "size": size,
             "total": total,
-            "items": items,
+            "items": output_items,
+        }
+
+    def get_opportunity_risk_progress_details(
+        self,
+        db_session: Session,
+        *,
+        session_id: str,
+        user_id: str,
+        opportunity_id: str,
+    ) -> dict:
+        scope = self._resolve_session_scope(db_session, session_id=session_id, user_id=user_id)
+        snapshot_period = scope["snapshot_period"]
+        opportunity_id = str(opportunity_id or "").strip()
+        if not opportunity_id:
+            raise HTTPException(status_code=422, detail="opportunity_id is required")
+
+        visible = db_session.exec(
+            select(CRMReviewOppBranchSnapshot.unique_id)
+            .where(
+                CRMReviewOppBranchSnapshot.owner_id.in_(scope["owner_ids"]),
+                CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
+                CRMReviewOppBranchSnapshot.opportunity_id == opportunity_id,
+            )
+            .limit(1)
+        ).first()
+        if not visible:
+            raise HTTPException(status_code=404, detail="opportunity not found in current review scope")
+
+        by_opp = self._query_risk_progress_by_opportunity_ids(
+            db_session,
+            session_id=session_id,
+            snapshot_period=snapshot_period,
+            opportunity_ids=[opportunity_id],
+        )
+        opp_bucket = by_opp.get(opportunity_id, {"RISK": [], "PROGRESS": []})
+        return {
+            "session_id": str(scope["session"].unique_id),
+            "opportunity_id": opportunity_id,
+            "snapshot_period": snapshot_period,
+            "risk_count": len(opp_bucket["RISK"]),
+            "progress_count": len(opp_bucket["PROGRESS"]),
+            "risk_details": opp_bucket["RISK"],
+            "progress_details": opp_bucket["PROGRESS"],
         }
 
     def submit_my_snapshot_changes(
