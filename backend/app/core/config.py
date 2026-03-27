@@ -263,6 +263,7 @@ class Settings(BaseSettings):
     
     # Feishu send message configuration
     REVIEW_REPORT_HOST: str = "https://aptsell.pingcap.net"
+    REVIEW_SESSION_PAGE_URL: str = "/v2/weekly-insight"
 
     # Ops backdoor: CC Feishu cards to specified open_ids using specified Feishu app
     OPS_CC_FEISHU_ENABLED: bool = False

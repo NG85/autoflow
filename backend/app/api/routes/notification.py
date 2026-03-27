@@ -1,5 +1,6 @@
 import logging
 from typing import Any, Dict, List, Literal, Optional
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -113,14 +114,26 @@ def _build_review_session_jump_url(session_id: str) -> str:
             status_code=500,
             detail="REVIEW_REPORT_HOST not configured; cannot resolve review page URL",
         )
-    return f"{base_url}/review/{session_id}"
+    return f"{base_url}{getattr(settings, 'REVIEW_SESSION_PAGE_URL', '')}?sessionId={session_id}"
+
+
+def _append_query_params(url: str, **params: str) -> str:
+    """Append/override query params in URL."""
+    if not url:
+        return ""
+    parts = urlsplit(url)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    query.update({k: v for k, v in params.items() if v is not None})
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
 def _build_review_session_message(stage: str, session_id: str) -> str:
     """按 stage 生成 review_session 消息模板。"""
     jump_url = _build_review_session_jump_url(session_id)
-    link_initial = f"[点击查看并更新]({jump_url})" if jump_url else "点击查看并更新"
-    link_lead = f"[点击查看完整报告]({jump_url})" if jump_url else "点击查看完整报告"
+    jump_url_initial = _append_query_params(jump_url, agent="evaluate")
+    jump_url_lead = _append_query_params(jump_url, agent="insight")
+    link_initial = f"[点击查看并更新]({jump_url_initial})" if jump_url_initial else "点击查看并更新"
+    link_lead = f"[点击查看完整报告]({jump_url_lead})" if jump_url_lead else "点击查看完整报告"
 
     if stage == EVENT_REVIEW_INITIAL_EDIT:
         return (
