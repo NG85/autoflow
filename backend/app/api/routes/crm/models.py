@@ -927,6 +927,10 @@ class ReviewSessionPhaseUpdateIn(BaseModel):
 class ReviewOppBranchSnapshotsQueryIn(BaseModel):
     page: int = Field(default=1, ge=1)
     size: int = Field(default=20, ge=1, le=100)
+    fields_level: Literal["basic", "full"] = Field(
+        default="basic",
+        description="返回字段级别：basic=核心字段，full=完整字段",
+    )
 
 
 class ReviewSnapshotGroupsQueryIn(BaseModel):
@@ -973,6 +977,10 @@ class ReviewSnapshotGroupDataQueryIn(BaseModel):
     group_key: str = Field(..., description="分组值。owner=owner_id；其他为字段原值；空值可传 __EMPTY__")
     page: int = Field(default=1, ge=1)
     size: int = Field(default=20, ge=1, le=100)
+    fields_level: Literal["basic", "full"] = Field(
+        default="basic",
+        description="返回字段级别：basic=核心字段，full=完整字段",
+    )
 
 
 class ReviewSessionKpiMetricOut(BaseModel):

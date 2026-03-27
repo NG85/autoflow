@@ -172,6 +172,7 @@ def query_my_review_opp_branch_snapshots(
         user_id=str(user.id),
         page=request.page,
         size=request.size,
+        fields_level=request.fields_level,
     )
 
 
@@ -217,6 +218,27 @@ def query_review_snapshot_group_data(
         group_key=request.group_key,
         page=request.page,
         size=request.size,
+        fields_level=request.fields_level,
+    )
+
+
+@router.get("/crm/review/sessions/{session_id}/opportunities/{opportunity_id}/risk-progress")
+def query_review_opportunity_risk_progress_details(
+    session_id: str,
+    opportunity_id: str,
+    db_session: SessionDep,
+    user: CurrentUserDep,
+):
+    """
+    查询单个商机的风险/进展详情（含数量）：
+    - 权限范围：普通成员仅自己可见商机；leader 为本 session 全员
+    - 返回：risk_count/progress_count + risk_details/progress_details
+    """
+    return crm_review_service.get_opportunity_risk_progress_details(
+        db_session,
+        session_id=session_id,
+        user_id=str(user.id),
+        opportunity_id=opportunity_id,
     )
 
 

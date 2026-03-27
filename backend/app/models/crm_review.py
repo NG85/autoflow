@@ -1,7 +1,14 @@
 from datetime import datetime, date
 from typing import Optional
 
-from sqlalchemy import Boolean, Numeric, String, Integer
+from sqlalchemy import (
+    Boolean,
+    Numeric,
+    String,
+    Integer,
+    JSON,
+    UniqueConstraint,
+)
 from sqlmodel import (
     SQLModel,
     Field,
@@ -447,28 +454,30 @@ REVIEW_BRANCH_SNAPSHOT_EDITABLE_FIELDS: tuple[str, ...] = (
 )
 
 
-class CRMReviewOppBranchSnapshot(SQLModel, table=True):
-    """Owner-based branch snapshot (shared across sessions via owner_id)"""
+class CRMReviewOppBranchSnapshotBasicOut(SQLModel):
+    """Basic fields for review snapshot list response."""
 
-    class Config:
-        orm_mode = True
-
-    __tablename__ = "crm_review_opp_branch_snapshot"
-
-    id: Optional[int] = Field(
-        default=None,
-        primary_key=True,
-        description="主键ID（自增序列）",
-    )
     unique_id: str = Field(
         sa_column=Column(String(255), nullable=False),
         description="Unique record ID",
     )
-
-    # Owner-based identification (not session-bound)
     opportunity_id: str = Field(
         sa_column=Column(String(255), nullable=False),
     )
+    opportunity_name: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+    # Account info
+    account_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+    account_name: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+    # Owner-based identification (not session-bound)
     owner_id: str = Field(
         sa_column=Column(String(255), nullable=False),
         description="Owner crm_user_id",
@@ -490,25 +499,8 @@ class CRMReviewOppBranchSnapshot(SQLModel, table=True):
         sa_column=Column(String(32), nullable=False),
         description="Period (e.g., 2026-W10)",
     )
-    snapshot_date: date = Field(
-        sa_column=Column(Date, nullable=False),
-    )
 
-    # Opportunity info
-    account_id: Optional[str] = Field(
-        default=None,
-        sa_column=Column(String(255)),
-    )
-    account_name: Optional[str] = Field(
-        default=None,
-        sa_column=Column(String(255)),
-    )
-    opportunity_name: Optional[str] = Field(
-        default=None,
-        sa_column=Column(String(255)),
-    )
-
-    # Current values (editable)
+    # Editable fields
     forecast_type: Optional[str] = Field(
         default=None,
         sa_column=Column(String(255)),
@@ -516,10 +508,6 @@ class CRMReviewOppBranchSnapshot(SQLModel, table=True):
     forecast_amount: Optional[float] = Field(
         default=None,
         sa_column=Column(Numeric(18, 2)),
-    )
-    forecast_amount_source: Optional[str] = Field(
-        default=None,
-        sa_column=Column(String(64)),
     )
     opportunity_stage: Optional[str] = Field(
         default=None,
@@ -529,9 +517,54 @@ class CRMReviewOppBranchSnapshot(SQLModel, table=True):
         default=None,
         sa_column=Column(String(255)),
     )
+
     stage_stay: int = Field(
         default=0,
         sa_column=Column(Integer),
+    )
+    
+    # AI fields
+    ai_commit: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(32)),
+    )
+    ai_stage: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+    ai_expected_closing_date: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+
+    # Optimistic lock version
+    modification_count: Optional[int] = Field(
+        default=0,
+        sa_column=Column(Integer, default=0),
+    )
+
+
+class CRMReviewOppBranchSnapshot(CRMReviewOppBranchSnapshotBasicOut, table=True):
+    """Owner-based branch snapshot (shared across sessions via owner_id)"""
+
+    class Config:
+        orm_mode = True
+
+    __tablename__ = "crm_review_opp_branch_snapshot"
+
+    id: Optional[int] = Field(
+        default=None,
+        primary_key=True,
+        description="主键ID（自增序列）",
+    )
+    snapshot_date: date = Field(
+        sa_column=Column(Date, nullable=False),
+    )
+
+
+    forecast_amount_source: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(64)),
     )
 
     # Baseline (frozen at T2)
@@ -583,18 +616,6 @@ class CRMReviewOppBranchSnapshot(SQLModel, table=True):
     )
 
     # AI Evaluation    
-    ai_commit: Optional[str] = Field(
-        default=None,
-        sa_column=Column(String(32)),
-    )
-    ai_stage: Optional[str] = Field(
-        default=None,
-        sa_column=Column(String(255)),
-    )
-    ai_expected_closing_date: Optional[str] = Field(
-        default=None,
-        sa_column=Column(String(255)),
-    )
     ai_evaluated_at: Optional[datetime] = Field(
         default=None,
         sa_column=Column(DateTime),
@@ -673,10 +694,6 @@ class CRMReviewOppBranchSnapshot(SQLModel, table=True):
         default=None,
         sa_column=Column(String(255)),
     )
-    modification_count: Optional[int] = Field(
-        default=0,
-        sa_column=Column(Integer, default=0),
-    )
     initial_edit_modification_count: Optional[int] = Field(
         default=0,
         sa_column=Column(Integer, default=0),
@@ -725,7 +742,6 @@ class CRMReviewOppBranchSnapshot(SQLModel, table=True):
             "was_changed_to_commit",
         ),
     )
-
 
 class CRMReviewKpiMetrics(SQLModel, table=True):
     """Structured KPI metrics per scope per review session with delta/rate"""
@@ -866,6 +882,233 @@ class CRMReviewKpiMetrics(SQLModel, table=True):
             "scope_type",
             "metric_name",
         ),
+    )
+
+
+class CRMReviewOppRiskProgress(SQLModel, table=True):
+    """Risk and progress tracking with scope_type pattern."""
+
+    class Config:
+        orm_mode = True
+
+    __tablename__ = "crm_review_opp_risk_progress"
+
+    id: Optional[int] = Field(
+        default=None,
+        primary_key=True,
+        description="主键ID（自增序列）",
+    )
+    unique_id: str = Field(
+        sa_column=Column(String(255), nullable=False),
+        description="Risk/Progress record UUID",
+    )
+    session_id: str = Field(
+        sa_column=Column(String(255), nullable=False),
+        description="FK to crm_review_session.unique_id",
+    )
+    scope_type: str = Field(
+        sa_column=Column(String(32), nullable=False),
+        description="opportunity/owner/department/company",
+    )
+    scope_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+        description="opp_id, owner_id, or dept_id; NULL for company scope",
+    )
+    department_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+        description="Department ID for direct queries without JOIN",
+    )
+    snapshot_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+        description="FK to crm_review_opp_branch_snapshot (opp-level only)",
+    )
+    opportunity_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+        description="CRM opportunity ID (opp-level only)",
+    )
+    owner_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+        description="Owner crm_user_id (opp-level only)",
+    )
+    record_type: str = Field(
+        sa_column=Column(String(32), nullable=False),
+        description="RISK or PROGRESS",
+    )
+    type_code: str = Field(
+        sa_column=Column(String(64), nullable=False),
+        description="Risk/Progress code: STAGE_LAG, COMMIT_REDUCTION, etc.",
+    )
+    type_name: str = Field(
+        sa_column=Column(String(128), nullable=False),
+        description="Display name: 阶段滞后风险, Commit减少",
+    )
+    category: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(64)),
+        description="BRD: 分类",
+    )
+    level: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(32)),
+        description="BRD: 层级 - opportunity/owner/department/company",
+    )
+    severity: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(16)),
+        description="BRD: 等级 - High/Medium/Low (or 高/中/低)",
+    )
+    source: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(128)),
+        description="BRD: 来源 - 业绩统计, 跟进记录, 任务完成情况, AI阶段评估, etc.",
+    )
+    metric_name: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(64)),
+        description="BRD: 指标 - AI commit, GAP, commit, upside, opportunity_stage, etc.",
+    )
+    ai_assessment: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+        description="AI evaluated value",
+    )
+    sales_assessment: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+        description="Sales filled value",
+    )
+    judgment_rule: Optional[str] = Field(
+        default=None,
+        sa_column=Column(Text),
+        description="BRD: 风险判断规则",
+    )
+    gap_description: Optional[str] = Field(
+        default=None,
+        sa_column=Column(Text),
+        description="Human-readable gap summary for card display",
+    )
+    detail_description: Optional[str] = Field(
+        default=None,
+        sa_column=Column(Text),
+        description="BRD: 详情描述",
+    )
+    solution: Optional[str] = Field(
+        default=None,
+        sa_column=Column(Text),
+        description="BRD: 解决建议",
+    )
+    evidence: Optional[dict] = Field(
+        default=None,
+        sa_column=Column(JSON),
+        description="Supporting evidence",
+    )
+    financial_impact: Optional[float] = Field(
+        default=None,
+        sa_column=Column(Numeric(18, 2)),
+        description="Financial amount impact",
+    )
+    previous_value: Optional[float] = Field(
+        default=None,
+        sa_column=Column(Numeric(18, 2)),
+        description="Previous period value for WoW comparison",
+    )
+    current_value: Optional[float] = Field(
+        default=None,
+        sa_column=Column(Numeric(18, 2)),
+        description="Current period value",
+    )
+    rate_of_change: Optional[float] = Field(
+        default=None,
+        sa_column=Column(Numeric(8, 4)),
+        description="Rate of change (-0.20 = -20%)",
+    )
+    status: Optional[str] = Field(
+        default="ACTIVE",
+        sa_column=Column(String(32), default="ACTIVE"),
+        description="ACTIVE, ACKNOWLEDGED, MITIGATING, RESOLVED, CLOSED",
+    )
+    detected_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime, nullable=False, server_default=func.now()),
+    )
+    resolved_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime),
+        description="When risk was resolved",
+    )
+    resolved_by: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+        description="User who resolved (if manual)",
+    )
+    resolution_type: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(32)),
+        description="AUTO_RESOLVED, MANUAL_RESOLVED, EXPIRED",
+    )
+    resolution_note: Optional[str] = Field(
+        default=None,
+        sa_column=Column(Text),
+        description="Note about resolution reason",
+    )
+    calc_phase: str = Field(
+        sa_column=Column(String(16), nullable=False),
+        description="first or second calculation",
+    )
+    snapshot_period: str = Field(
+        sa_column=Column(String(32), nullable=False),
+        description="e.g., 2026-W10",
+    )
+    metadata_: Optional[dict] = Field(
+        default=None,
+        sa_column=Column("metadata", JSON),
+        description="Additional extensible attributes",
+    )
+    created_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime, nullable=False, server_default=func.now()),
+    )
+    updated_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(
+            DateTime,
+            nullable=False,
+            server_default=func.now(),
+            onupdate=func.now(),
+        ),
+    )
+    created_by: Optional[str] = Field(
+        default="system",
+        sa_column=Column(String(255), default="system"),
+    )
+    updated_by: Optional[str] = Field(
+        default="system",
+        sa_column=Column(String(255), default="system"),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "scope_type",
+            "scope_id",
+            "type_code",
+            "snapshot_period",
+            "calc_phase",
+            name="uk_scope_type_period",
+        ),
+        Index("idx_department", "department_id"),
+        Index("idx_detected_at", "detected_at"),
+        Index("idx_opportunity", "opportunity_id"),
+        Index("idx_owner", "owner_id"),
+        Index("idx_record_type", "record_type"),
+        Index("idx_session_scope", "session_id", "scope_type", "scope_id"),
+        Index("idx_snapshot_period", "snapshot_period"),
+        Index("idx_status", "status"),
+        Index("idx_type_code", "type_code"),
     )
 
 
