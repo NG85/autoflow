@@ -1170,3 +1170,23 @@ class ReviewSnapshotFilterEnumsOut(BaseModel):
 
 class MyLatestReviewSessionOut(BaseModel):
     review_session_id: Optional[str] = None
+
+
+class ReviewSessionHistoryItemOut(BaseModel):
+    session_id: str
+    session_name: Optional[str] = None
+    department_name: Optional[str] = None
+    period: str
+    period_start: date
+    period_end: date
+    stage: str
+    review_phase: Optional[str] = None
+    report_date: date
+    create_time: Optional[str] = None
+
+
+class ReviewSessionHistoryListOut(BaseModel):
+    total: int
+    page: int
+    size: int
+    items: List[ReviewSessionHistoryItemOut] = Field(default_factory=list)

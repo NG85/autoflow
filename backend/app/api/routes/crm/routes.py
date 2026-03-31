@@ -43,6 +43,8 @@ from app.api.routes.crm.models import (
     ReviewSessionForecastRecalcOut,
     ReviewSnapshotFilterEnumsOut,
     MyLatestReviewSessionOut,
+    ReviewSessionHistoryListOut,
+    ReviewSessionHistoryItemOut,
     ReviewSessionInsightsOut,
     ReviewSessionInsightsBasicOut,
     ReviewSessionInsightItemOut,
@@ -50,7 +52,6 @@ from app.api.routes.crm.models import (
     ReviewSessionProgressCategoryGroupOut,
     ReviewSessionProgressCategoryGroupBasicOut,
     ReviewSessionInsightDetailOut,
-    ReviewSessionInsightDetailBasicOut,
     ReviewSessionInsightRiskOpportunityOut,
 )
 from app.crm.save_engine import (
@@ -280,6 +281,63 @@ def query_my_latest_review_session(
         .limit(1)
     ).first()
     return MyLatestReviewSessionOut(review_session_id=str(row) if row else None)
+
+
+@router.get("/crm/review/my/sessions/history")
+def query_my_review_session_history(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    page: int = 1,
+    size: int = 20,
+) -> ReviewSessionHistoryListOut:
+    """
+    查询当前用户参与过的历史 review session 基础列表（分页）。
+    """
+    page = max(int(page or 1), 1)
+    size = max(min(int(size or 20), 200), 1)
+    offset = (page - 1) * size
+
+    total = int(
+        db_session.exec(
+            select(func.count(distinct(CRMReviewSession.unique_id)))
+            .select_from(CRMReviewSession)
+            .join(
+                CRMReviewAttendee,
+                CRMReviewAttendee.session_id == CRMReviewSession.unique_id,
+            )
+            .where(CRMReviewAttendee.user_id == str(user.id))
+        ).one()
+        or 0
+    )
+
+    rows = db_session.exec(
+        select(CRMReviewSession)
+        .join(
+            CRMReviewAttendee,
+            CRMReviewAttendee.session_id == CRMReviewSession.unique_id,
+        )
+        .where(CRMReviewAttendee.user_id == str(user.id))
+        .order_by(CRMReviewSession.report_date.desc(), CRMReviewSession.create_time.desc())
+        .offset(offset)
+        .limit(size)
+    ).all()
+
+    items: List[ReviewSessionHistoryItemOut] = [
+        ReviewSessionHistoryItemOut(
+            session_id=str(r.unique_id),
+            session_name=r.session_name,
+            department_name=r.department_name,
+            period=str(r.period),
+            period_start=r.period_start,
+            period_end=r.period_end,
+            stage=str(r.stage),
+            review_phase=r.review_phase,
+            report_date=r.report_date,
+            create_time=r.create_time.strftime("%Y-%m-%d %H:%M:%S") if r.create_time else None,
+        )
+        for r in rows
+    ]
+    return ReviewSessionHistoryListOut(total=total, page=page, size=size, items=items)
 
 
 @router.get("/crm/review/snapshot-filter-enums")
