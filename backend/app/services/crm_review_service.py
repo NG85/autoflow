@@ -434,20 +434,50 @@ class CRMReviewService:
         Normalize extensible snapshot filters.
         Current supported fields:
         - opportunity_ids: List[str]
+        - forecast_types: List[str]
+        - stages: List[str]
+        - expected_closing_date_start: str (YYYY-MM-DD)
+        - expected_closing_date_end: str (YYYY-MM-DD)
         """
         raw = snapshot_filters if isinstance(snapshot_filters, dict) else {}
-        opportunity_ids_raw = raw.get("opportunity_ids")
-        normalized_opportunity_ids: List[str] = []
-        if isinstance(opportunity_ids_raw, list):
-            seen: set[str] = set()
-            for v in opportunity_ids_raw:
-                s = str(v or "").strip()
-                if not s or s in seen:
-                    continue
-                seen.add(s)
-                normalized_opportunity_ids.append(s)
+
+        def _normalize_string_list(values: Any) -> List[str]:
+            out: List[str] = []
+            if isinstance(values, list):
+                seen: set[str] = set()
+                for v in values:
+                    s = str(v or "").strip()
+                    if not s or s in seen:
+                        continue
+                    seen.add(s)
+                    out.append(s)
+            return out
+
+        expected_closing_date_start = str(raw.get("expected_closing_date_start") or "").strip()
+        expected_closing_date_end = str(raw.get("expected_closing_date_end") or "").strip()
+
+        def _normalize_date_or_raise(value: str, field_name: str) -> Optional[str]:
+            if not value:
+                return None
+            try:
+                # Keep canonical YYYY-MM-DD to match DB STR_TO_DATE format.
+                return datetime.strptime(value, "%Y-%m-%d").strftime("%Y-%m-%d")
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"invalid {field_name}, expected YYYY-MM-DD",
+                ) from e
+
         return {
-            "opportunity_ids": normalized_opportunity_ids,
+            "opportunity_ids": _normalize_string_list(raw.get("opportunity_ids")),
+            "forecast_types": _normalize_string_list(raw.get("forecast_types")),
+            "stages": _normalize_string_list(raw.get("stages")),
+            "expected_closing_date_start": _normalize_date_or_raise(
+                expected_closing_date_start, "expected_closing_date_start"
+            ),
+            "expected_closing_date_end": _normalize_date_or_raise(
+                expected_closing_date_end, "expected_closing_date_end"
+            ),
         }
 
     @staticmethod
@@ -458,6 +488,24 @@ class CRMReviewService:
         opportunity_ids = normalized_filters.get("opportunity_ids") or []
         if opportunity_ids:
             base_where.append(CRMReviewOppBranchSnapshot.opportunity_id.in_(opportunity_ids))
+        forecast_types = normalized_filters.get("forecast_types") or []
+        if forecast_types:
+            base_where.append(CRMReviewOppBranchSnapshot.forecast_type.in_(forecast_types))
+        stages = normalized_filters.get("stages") or []
+        if stages:
+            base_where.append(CRMReviewOppBranchSnapshot.opportunity_stage.in_(stages))
+        expected_closing_date_start = normalized_filters.get("expected_closing_date_start")
+        if expected_closing_date_start:
+            base_where.append(
+                func.str_to_date(CRMReviewOppBranchSnapshot.expected_closing_date, "%Y-%m-%d")
+                >= func.str_to_date(expected_closing_date_start, "%Y-%m-%d")
+            )
+        expected_closing_date_end = normalized_filters.get("expected_closing_date_end")
+        if expected_closing_date_end:
+            base_where.append(
+                func.str_to_date(CRMReviewOppBranchSnapshot.expected_closing_date, "%Y-%m-%d")
+                <= func.str_to_date(expected_closing_date_end, "%Y-%m-%d")
+            )
 
     def get_my_edit_page_data(
         self,
