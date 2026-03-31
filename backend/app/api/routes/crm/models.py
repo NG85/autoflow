@@ -931,11 +931,30 @@ class ReviewOppBranchSnapshotsQueryIn(BaseModel):
         default="basic",
         description="返回字段级别：basic=核心字段，full=完整字段",
     )
+    sort_by: Optional[
+        Literal[
+            "forecast_type",
+            "ai_commit",
+            "opportunity_stage",
+            "ai_stage",
+            "forecast_amount",
+            "expected_closing_date",
+            "ai_expected_closing_date",
+            "progress_count",
+            "risk_count",
+        ]
+    ] = Field(default=None, description="可选排序字段")
+    sort_direction: Literal["asc", "desc"] = Field(default="asc", description="排序方向")
     snapshot_filters: Optional[Dict[str, Any]] = Field(
         default=None,
         description=(
-            "可选筛选器，支持 opportunity_ids/forecast_types/opportunity_stages: string[]；"
-            "以及 expected_closing_date_start/end: YYYY-MM-DD"
+            "可选筛选器，支持 opportunity_ids/opportunity_names/owner_ids/owner_names/"
+            "forecast_types/opportunity_stages: string[]；"
+            "expected_closing_date_start/end: YYYY-MM-DD；"
+            "forecast_amount_min/max: number；"
+            "ai_commits/ai_stages: string[]；"
+            "ai_expected_closing_date_start/end: YYYY-MM-DD；"
+            "has_risk/has_progress: boolean"
         ),
     )
 
@@ -944,6 +963,32 @@ class ReviewSnapshotGroupsQueryIn(BaseModel):
     group_by: Literal["owner", "forecast_type", "opportunity_stage", "risk_type"] = Field(
         default="owner",
         description="分组维度：人员 / 预测类型 / 商机阶段 / 风险类型",
+    )
+    sort_by: Optional[
+        Literal[
+            "forecast_type",
+            "ai_commit",
+            "opportunity_stage",
+            "ai_stage",
+            "forecast_amount",
+            "expected_closing_date",
+            "ai_expected_closing_date",
+            "progress_count",
+            "risk_count",
+        ]
+    ] = Field(default=None, description="可选排序字段（用于分组结果排序）")
+    sort_direction: Literal["asc", "desc"] = Field(default="asc", description="排序方向")
+    snapshot_filters: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "可选筛选器，支持 opportunity_ids/opportunity_names/owner_ids/owner_names/"
+            "forecast_types/opportunity_stages: string[]；"
+            "expected_closing_date_start/end: YYYY-MM-DD；"
+            "forecast_amount_min/max: number；"
+            "ai_commits/ai_stages: string[]；"
+            "ai_expected_closing_date_start/end: YYYY-MM-DD；"
+            "has_risk/has_progress: boolean"
+        ),
     )
 
 
@@ -988,11 +1033,30 @@ class ReviewSnapshotGroupDataQueryIn(BaseModel):
         default="basic",
         description="返回字段级别：basic=核心字段，full=完整字段",
     )
+    sort_by: Optional[
+        Literal[
+            "forecast_type",
+            "ai_commit",
+            "opportunity_stage",
+            "ai_stage",
+            "forecast_amount",
+            "expected_closing_date",
+            "ai_expected_closing_date",
+            "progress_count",
+            "risk_count",
+        ]
+    ] = Field(default=None, description="可选排序字段")
+    sort_direction: Literal["asc", "desc"] = Field(default="asc", description="排序方向")
     snapshot_filters: Optional[Dict[str, Any]] = Field(
         default=None,
         description=(
-            "可选筛选器，支持 opportunity_ids/forecast_types/opportunity_stages: string[]；"
-            "以及 expected_closing_date_start/end: YYYY-MM-DD"
+            "可选筛选器，支持 opportunity_ids/opportunity_names/owner_ids/owner_names/"
+            "forecast_types/opportunity_stages: string[]；"
+            "expected_closing_date_start/end: YYYY-MM-DD；"
+            "forecast_amount_min/max: number；"
+            "ai_commits/ai_stages: string[]；"
+            "ai_expected_closing_date_start/end: YYYY-MM-DD；"
+            "has_risk/has_progress: boolean"
         ),
     )
 

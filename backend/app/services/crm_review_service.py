@@ -365,6 +365,96 @@ class CRMReviewService:
         return case(*whens, else_=99)
 
     @staticmethod
+    def _build_forecast_rank_case_for_col(db_session: Session, col: Any):
+        a0, a1, a2 = _get_forecast_type_rank_alias_tuples_cached(db_session)
+        whens: List[Any] = []
+        if a0:
+            whens.append((col.in_(a0), 0))
+        if a1:
+            whens.append((col.in_(a1), 1))
+        if a2:
+            whens.append((col.in_(a2), 2))
+        if not whens:
+            c_lower = func.lower(func.coalesce(col, ""))
+            return case(
+                (c_lower == "commit", 0),
+                (c_lower == "upside", 1),
+                (c_lower == "closed_won", 2),
+                else_=99,
+            )
+        return case(*whens, else_=99)
+
+    @staticmethod
+    def _date_parse_expr(col: Any):
+        return func.coalesce(
+            func.str_to_date(col, "%Y-%m-%d %H:%i:%s"),
+            func.str_to_date(col, "%Y-%m-%d"),
+        )
+
+    def _build_snapshot_sort_order(
+        self,
+        db_session: Session,
+        *,
+        sort_by: Optional[str],
+        sort_direction: str,
+        session_id: str,
+        snapshot_period: str,
+    ) -> List[Any]:
+        direction_desc = str(sort_direction or "asc").strip().lower() == "desc"
+        key = str(sort_by or "").strip()
+        if not key:
+            ft_rank = self._build_forecast_type_rank_case(db_session)
+            return [
+                func.coalesce(CRMReviewOppBranchSnapshot.owner_name, ""),
+                ft_rank,
+                CRMReviewOppBranchSnapshot.forecast_amount.desc(),
+            ]
+
+        def _dir(expr: Any) -> Any:
+            return expr.desc() if direction_desc else expr.asc()
+
+        if key == "forecast_type":
+            expr = self._build_forecast_rank_case_for_col(db_session, CRMReviewOppBranchSnapshot.forecast_type)
+        elif key == "ai_commit":
+            expr = self._build_forecast_rank_case_for_col(db_session, CRMReviewOppBranchSnapshot.ai_commit)
+        elif key == "opportunity_stage":
+            expr = func.lower(func.coalesce(CRMReviewOppBranchSnapshot.opportunity_stage, ""))
+        elif key == "ai_stage":
+            expr = func.lower(func.coalesce(CRMReviewOppBranchSnapshot.ai_stage, ""))
+        elif key == "forecast_amount":
+            expr = func.coalesce(CRMReviewOppBranchSnapshot.forecast_amount, 0)
+        elif key == "expected_closing_date":
+            expr = self._date_parse_expr(CRMReviewOppBranchSnapshot.expected_closing_date)
+        elif key == "ai_expected_closing_date":
+            expr = self._date_parse_expr(CRMReviewOppBranchSnapshot.ai_expected_closing_date)
+        elif key in {"risk_count", "progress_count"}:
+            record_type = "RISK" if key == "risk_count" else "PROGRESS"
+            expr = (
+                select(func.count())
+                .where(
+                    CRMReviewOppRiskProgress.session_id == session_id,
+                    CRMReviewOppRiskProgress.snapshot_period == snapshot_period,
+                    CRMReviewOppRiskProgress.record_type == record_type,
+                    CRMReviewOppRiskProgress.opportunity_id == CRMReviewOppBranchSnapshot.opportunity_id,
+                )
+                .correlate(CRMReviewOppBranchSnapshot)
+                .scalar_subquery()
+            )
+        else:
+            ft_rank = self._build_forecast_type_rank_case(db_session)
+            return [
+                func.coalesce(CRMReviewOppBranchSnapshot.owner_name, ""),
+                ft_rank,
+                CRMReviewOppBranchSnapshot.forecast_amount.desc(),
+            ]
+
+        return [
+            _dir(expr),
+            func.coalesce(CRMReviewOppBranchSnapshot.owner_name, "").asc(),
+            CRMReviewOppBranchSnapshot.id.desc(),
+        ]
+
+    @staticmethod
     def _group_field_and_label(group_by: str):
         gb = str(group_by or "owner").strip()
         if gb == "owner":
@@ -434,10 +524,21 @@ class CRMReviewService:
         Normalize extensible snapshot filters.
         Current supported fields:
         - opportunity_ids: List[str]
+        - opportunity_names: List[str]
+        - owner_ids: List[str]
+        - owner_names: List[str]
         - forecast_types: List[str]
         - opportunity_stages: List[str]
         - expected_closing_date_start: str (YYYY-MM-DD)
         - expected_closing_date_end: str (YYYY-MM-DD)
+        - forecast_amount_min: number
+        - forecast_amount_max: number
+        - ai_commits: List[str]
+        - ai_stages: List[str]
+        - ai_expected_closing_date_start: str (YYYY-MM-DD)
+        - ai_expected_closing_date_end: str (YYYY-MM-DD)
+        - has_risk: bool
+        - has_progress: bool
         """
         raw = snapshot_filters if isinstance(snapshot_filters, dict) else {}
 
@@ -455,57 +556,203 @@ class CRMReviewService:
 
         expected_closing_date_start = str(raw.get("expected_closing_date_start") or "").strip()
         expected_closing_date_end = str(raw.get("expected_closing_date_end") or "").strip()
+        ai_expected_closing_date_start = str(raw.get("ai_expected_closing_date_start") or "").strip()
+        ai_expected_closing_date_end = str(raw.get("ai_expected_closing_date_end") or "").strip()
+        forecast_amount_min_raw = raw.get("forecast_amount_min")
+        forecast_amount_max_raw = raw.get("forecast_amount_max")
+        has_risk_raw = raw.get("has_risk")
+        has_progress_raw = raw.get("has_progress")
 
         def _normalize_date_or_raise(value: str, field_name: str) -> Optional[str]:
             if not value:
                 return None
+            # Accept both date and datetime inputs.
+            for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S"):
+                try:
+                    return datetime.strptime(value, fmt).strftime("%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    continue
+            raise HTTPException(
+                status_code=422,
+                detail=f"invalid {field_name}, expected YYYY-MM-DD or YYYY-MM-DD HH:MM:SS",
+            )
+
+        def _normalize_float_or_raise(value: Any, field_name: str) -> Optional[float]:
+            if value is None or value == "":
+                return None
             try:
-                # Keep canonical YYYY-MM-DD to match DB STR_TO_DATE format.
-                return datetime.strptime(value, "%Y-%m-%d").strftime("%Y-%m-%d")
-            except ValueError as e:
+                return float(value)
+            except (TypeError, ValueError) as e:
                 raise HTTPException(
                     status_code=422,
-                    detail=f"invalid {field_name}, expected YYYY-MM-DD",
+                    detail=f"invalid {field_name}, expected number",
                 ) from e
+
+        def _normalize_bool_or_raise(value: Any, field_name: str) -> Optional[bool]:
+            if value is None or value == "":
+                return None
+            if isinstance(value, bool):
+                return value
+            text = str(value).strip().lower()
+            if text in {"true", "1", "yes", "y"}:
+                return True
+            if text in {"false", "0", "no", "n"}:
+                return False
+            raise HTTPException(
+                status_code=422,
+                detail=f"invalid {field_name}, expected boolean",
+            )
 
         return {
             "opportunity_ids": _normalize_string_list(raw.get("opportunity_ids")),
+            "opportunity_names": _normalize_string_list(raw.get("opportunity_names")),
+            "owner_ids": _normalize_string_list(raw.get("owner_ids")),
+            "owner_names": _normalize_string_list(raw.get("owner_names")),
             "forecast_types": _normalize_string_list(raw.get("forecast_types")),
             "opportunity_stages": _normalize_string_list(raw.get("opportunity_stages")),
+            "ai_commits": _normalize_string_list(raw.get("ai_commits")),
+            "ai_stages": _normalize_string_list(raw.get("ai_stages")),
             "expected_closing_date_start": _normalize_date_or_raise(
                 expected_closing_date_start, "expected_closing_date_start"
             ),
             "expected_closing_date_end": _normalize_date_or_raise(
                 expected_closing_date_end, "expected_closing_date_end"
             ),
+            "ai_expected_closing_date_start": _normalize_date_or_raise(
+                ai_expected_closing_date_start, "ai_expected_closing_date_start"
+            ),
+            "ai_expected_closing_date_end": _normalize_date_or_raise(
+                ai_expected_closing_date_end, "ai_expected_closing_date_end"
+            ),
+            "forecast_amount_min": _normalize_float_or_raise(
+                forecast_amount_min_raw, "forecast_amount_min"
+            ),
+            "forecast_amount_max": _normalize_float_or_raise(
+                forecast_amount_max_raw, "forecast_amount_max"
+            ),
+            "has_risk": _normalize_bool_or_raise(has_risk_raw, "has_risk"),
+            "has_progress": _normalize_bool_or_raise(has_progress_raw, "has_progress"),
         }
 
     @staticmethod
-    def _append_snapshot_filters(base_where: List[Any], normalized_filters: Dict[str, Any]) -> None:
+    def _append_snapshot_filters(
+        base_where: List[Any],
+        normalized_filters: Dict[str, Any],
+        *,
+        session_id: str,
+        snapshot_period: str,
+    ) -> None:
         """
         Apply normalized filters onto snapshot query conditions.
         """
         opportunity_ids = normalized_filters.get("opportunity_ids") or []
         if opportunity_ids:
             base_where.append(CRMReviewOppBranchSnapshot.opportunity_id.in_(opportunity_ids))
+        opportunity_names = normalized_filters.get("opportunity_names") or []
+        if opportunity_names:
+            base_where.append(CRMReviewOppBranchSnapshot.opportunity_name.in_(opportunity_names))
+        owner_ids = normalized_filters.get("owner_ids") or []
+        if owner_ids:
+            base_where.append(CRMReviewOppBranchSnapshot.owner_id.in_(owner_ids))
+        owner_names = normalized_filters.get("owner_names") or []
+        if owner_names:
+            base_where.append(CRMReviewOppBranchSnapshot.owner_name.in_(owner_names))
         forecast_types = normalized_filters.get("forecast_types") or []
         if forecast_types:
             base_where.append(CRMReviewOppBranchSnapshot.forecast_type.in_(forecast_types))
         opportunity_stages = normalized_filters.get("opportunity_stages") or []
         if opportunity_stages:
             base_where.append(CRMReviewOppBranchSnapshot.opportunity_stage.in_(opportunity_stages))
+        ai_commits = normalized_filters.get("ai_commits") or []
+        if ai_commits:
+            base_where.append(CRMReviewOppBranchSnapshot.ai_commit.in_(ai_commits))
+        ai_stages = normalized_filters.get("ai_stages") or []
+        if ai_stages:
+            base_where.append(CRMReviewOppBranchSnapshot.ai_stage.in_(ai_stages))
         expected_closing_date_start = normalized_filters.get("expected_closing_date_start")
         if expected_closing_date_start:
             base_where.append(
-                func.str_to_date(CRMReviewOppBranchSnapshot.expected_closing_date, "%Y-%m-%d")
-                >= func.str_to_date(expected_closing_date_start, "%Y-%m-%d")
+                func.coalesce(
+                    func.str_to_date(CRMReviewOppBranchSnapshot.expected_closing_date, "%Y-%m-%d %H:%i:%s"),
+                    func.str_to_date(CRMReviewOppBranchSnapshot.expected_closing_date, "%Y-%m-%d"),
+                )
+                >= func.coalesce(
+                    func.str_to_date(expected_closing_date_start, "%Y-%m-%d %H:%i:%s"),
+                    func.str_to_date(expected_closing_date_start, "%Y-%m-%d"),
+                )
             )
         expected_closing_date_end = normalized_filters.get("expected_closing_date_end")
         if expected_closing_date_end:
             base_where.append(
-                func.str_to_date(CRMReviewOppBranchSnapshot.expected_closing_date, "%Y-%m-%d")
-                <= func.str_to_date(expected_closing_date_end, "%Y-%m-%d")
+                func.coalesce(
+                    func.str_to_date(CRMReviewOppBranchSnapshot.expected_closing_date, "%Y-%m-%d %H:%i:%s"),
+                    func.str_to_date(CRMReviewOppBranchSnapshot.expected_closing_date, "%Y-%m-%d"),
+                )
+                <= func.coalesce(
+                    func.str_to_date(expected_closing_date_end, "%Y-%m-%d %H:%i:%s"),
+                    func.str_to_date(expected_closing_date_end, "%Y-%m-%d"),
+                )
             )
+        ai_expected_closing_date_start = normalized_filters.get("ai_expected_closing_date_start")
+        if ai_expected_closing_date_start:
+            base_where.append(
+                func.coalesce(
+                    func.str_to_date(CRMReviewOppBranchSnapshot.ai_expected_closing_date, "%Y-%m-%d %H:%i:%s"),
+                    func.str_to_date(CRMReviewOppBranchSnapshot.ai_expected_closing_date, "%Y-%m-%d"),
+                )
+                >= func.coalesce(
+                    func.str_to_date(ai_expected_closing_date_start, "%Y-%m-%d %H:%i:%s"),
+                    func.str_to_date(ai_expected_closing_date_start, "%Y-%m-%d"),
+                )
+            )
+        ai_expected_closing_date_end = normalized_filters.get("ai_expected_closing_date_end")
+        if ai_expected_closing_date_end:
+            base_where.append(
+                func.coalesce(
+                    func.str_to_date(CRMReviewOppBranchSnapshot.ai_expected_closing_date, "%Y-%m-%d %H:%i:%s"),
+                    func.str_to_date(CRMReviewOppBranchSnapshot.ai_expected_closing_date, "%Y-%m-%d"),
+                )
+                <= func.coalesce(
+                    func.str_to_date(ai_expected_closing_date_end, "%Y-%m-%d %H:%i:%s"),
+                    func.str_to_date(ai_expected_closing_date_end, "%Y-%m-%d"),
+                )
+            )
+        forecast_amount_min = normalized_filters.get("forecast_amount_min")
+        if forecast_amount_min is not None:
+            base_where.append(CRMReviewOppBranchSnapshot.forecast_amount >= forecast_amount_min)
+        forecast_amount_max = normalized_filters.get("forecast_amount_max")
+        if forecast_amount_max is not None:
+            base_where.append(CRMReviewOppBranchSnapshot.forecast_amount <= forecast_amount_max)
+        has_risk = normalized_filters.get("has_risk")
+        if has_risk is not None:
+            risk_opp_subq = (
+                select(CRMReviewOppRiskProgress.opportunity_id)
+                .where(
+                    CRMReviewOppRiskProgress.session_id == session_id,
+                    CRMReviewOppRiskProgress.snapshot_period == snapshot_period,
+                    CRMReviewOppRiskProgress.record_type == "RISK",
+                )
+                .distinct()
+            )
+            if has_risk:
+                base_where.append(CRMReviewOppBranchSnapshot.opportunity_id.in_(risk_opp_subq))
+            else:
+                base_where.append(CRMReviewOppBranchSnapshot.opportunity_id.not_in(risk_opp_subq))
+        has_progress = normalized_filters.get("has_progress")
+        if has_progress is not None:
+            progress_opp_subq = (
+                select(CRMReviewOppRiskProgress.opportunity_id)
+                .where(
+                    CRMReviewOppRiskProgress.session_id == session_id,
+                    CRMReviewOppRiskProgress.snapshot_period == snapshot_period,
+                    CRMReviewOppRiskProgress.record_type == "PROGRESS",
+                )
+                .distinct()
+            )
+            if has_progress:
+                base_where.append(CRMReviewOppBranchSnapshot.opportunity_id.in_(progress_opp_subq))
+            else:
+                base_where.append(CRMReviewOppBranchSnapshot.opportunity_id.not_in(progress_opp_subq))
 
     def get_my_edit_page_data(
         self,
@@ -516,6 +763,8 @@ class CRMReviewService:
         page: int = 1,
         size: int = 20,
         fields_level: str = "basic",
+        sort_by: Optional[str] = None,
+        sort_direction: str = "asc",
         snapshot_filters: Optional[Dict[str, Any]] = None,
     ) -> dict:
         page = int(page or 1)
@@ -535,22 +784,29 @@ class CRMReviewService:
             CRMReviewOppBranchSnapshot.owner_id.in_(owner_ids),
             CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
         ]
-        self._append_snapshot_filters(base_where, normalized_filters)
+        self._append_snapshot_filters(
+            base_where,
+            normalized_filters,
+            session_id=session_id,
+            snapshot_period=snapshot_period,
+        )
 
         total = int(
             db_session.exec(
                 select(func.count()).select_from(CRMReviewOppBranchSnapshot).where(*base_where)
             ).one()
         )
-        ft_rank = self._build_forecast_type_rank_case(db_session)
+        order_by = self._build_snapshot_sort_order(
+            db_session,
+            sort_by=sort_by,
+            sort_direction=sort_direction,
+            session_id=session_id,
+            snapshot_period=snapshot_period,
+        )
         items = db_session.exec(
             select(CRMReviewOppBranchSnapshot)
             .where(*base_where)
-            .order_by(
-                func.coalesce(CRMReviewOppBranchSnapshot.owner_name, ""),
-                ft_rank,
-                CRMReviewOppBranchSnapshot.forecast_amount.desc(),
-            )
+            .order_by(*order_by)
             .offset(offset)
             .limit(size)
         ).all()
@@ -580,23 +836,50 @@ class CRMReviewService:
         session_id: str,
         user_id: str,
         group_by: str = "owner",
+        sort_by: Optional[str] = None,
+        sort_direction: str = "asc",
+        snapshot_filters: Optional[Dict[str, Any]] = None,
     ) -> dict:
         scope = self._resolve_session_scope(db_session, session_id=session_id, user_id=user_id)
         gb = str(group_by or "owner").strip()
+        normalized_filters = self._normalize_snapshot_filters(snapshot_filters)
+        direction_desc = str(sort_direction or "asc").strip().lower() == "desc"
+
+        base_where: List[Any] = [
+            CRMReviewOppBranchSnapshot.owner_id.in_(scope["owner_ids"]),
+            CRMReviewOppBranchSnapshot.snapshot_period == scope["snapshot_period"],
+        ]
+        self._append_snapshot_filters(
+            base_where,
+            normalized_filters,
+            session_id=session_id,
+            snapshot_period=scope["snapshot_period"],
+        )
+
+        def _group_order_by(cnt_expr: Any, key_expr: Any) -> List[Any]:
+            # 分组结果排序：
+            # - 显式按 risk/progress count 排序时用 count
+            # - 其他场景按分组 key 排序
+            if str(sort_by or "").strip() in {"risk_count", "progress_count"}:
+                primary = cnt_expr.desc() if direction_desc else cnt_expr.asc()
+            else:
+                primary = key_expr.desc() if direction_desc else key_expr.asc()
+            return [primary, key_expr.asc()]
+
         if gb == "risk_type":
             visible_opp_subq = (
                 select(CRMReviewOppBranchSnapshot.opportunity_id)
-                .where(
-                    CRMReviewOppBranchSnapshot.owner_id.in_(scope["owner_ids"]),
-                    CRMReviewOppBranchSnapshot.snapshot_period == scope["snapshot_period"],
-                )
+                .where(*base_where)
                 .distinct()
             )
+            group_key_expr = func.coalesce(CRMReviewOppRiskProgress.type_code, "")
+            group_label_expr = func.coalesce(func.max(CRMReviewOppRiskProgress.type_name), "")
+            cnt_expr = func.count(func.distinct(CRMReviewOppRiskProgress.opportunity_id))
             stmt = (
                 select(
-                    func.coalesce(CRMReviewOppRiskProgress.type_code, "").label("group_key"),
-                    func.coalesce(func.max(CRMReviewOppRiskProgress.type_name), "").label("group_label"),
-                    func.count(func.distinct(CRMReviewOppRiskProgress.opportunity_id)).label("cnt"),
+                    group_key_expr.label("group_key"),
+                    group_label_expr.label("group_label"),
+                    cnt_expr.label("cnt"),
                 )
                 .where(
                     CRMReviewOppRiskProgress.session_id == session_id,
@@ -604,8 +887,8 @@ class CRMReviewService:
                     CRMReviewOppRiskProgress.record_type == "RISK",
                     CRMReviewOppRiskProgress.opportunity_id.in_(visible_opp_subq),
                 )
-                .group_by(func.coalesce(CRMReviewOppRiskProgress.type_code, ""))
-                .order_by(func.coalesce(CRMReviewOppRiskProgress.type_code, ""))
+                .group_by(group_key_expr)
+                .order_by(*_group_order_by(cnt_expr, group_key_expr))
             )
             rows = db_session.exec(stmt).all()
             groups = [
@@ -628,11 +911,9 @@ class CRMReviewService:
             )
             no_risk_count = int(
                 db_session.exec(
-                    select(func.count(func.distinct(CRMReviewOppBranchSnapshot.opportunity_id))).where(
-                        CRMReviewOppBranchSnapshot.owner_id.in_(scope["owner_ids"]),
-                        CRMReviewOppBranchSnapshot.snapshot_period == scope["snapshot_period"],
-                        CRMReviewOppBranchSnapshot.opportunity_id.not_in(risk_opp_subq),
-                    )
+                    select(func.count(func.distinct(CRMReviewOppBranchSnapshot.opportunity_id)))
+                    .where(*base_where)
+                    .where(CRMReviewOppBranchSnapshot.opportunity_id.not_in(risk_opp_subq))
                 ).one()
                 or 0
             )
@@ -645,18 +926,18 @@ class CRMReviewService:
             )
         else:
             gb, field_col, label_col = self._group_field_and_label(group_by)
+            group_key_expr = func.coalesce(field_col, "")
+            group_label_expr = func.coalesce(func.max(label_col), "")
+            cnt_expr = func.count()
             stmt = (
                 select(
-                    func.coalesce(field_col, "").label("group_key"),
-                    func.coalesce(func.max(label_col), "").label("group_label"),
-                    func.count().label("cnt"),
+                    group_key_expr.label("group_key"),
+                    group_label_expr.label("group_label"),
+                    cnt_expr.label("cnt"),
                 )
-                .where(
-                    CRMReviewOppBranchSnapshot.owner_id.in_(scope["owner_ids"]),
-                    CRMReviewOppBranchSnapshot.snapshot_period == scope["snapshot_period"],
-                )
-                .group_by(func.coalesce(field_col, ""))
-                .order_by(func.coalesce(field_col, ""))
+                .where(*base_where)
+                .group_by(group_key_expr)
+                .order_by(*_group_order_by(cnt_expr, group_key_expr))
             )
             rows = db_session.exec(stmt).all()
             groups = [
@@ -699,6 +980,8 @@ class CRMReviewService:
         page: int = 1,
         size: int = 20,
         fields_level: str = "basic",
+        sort_by: Optional[str] = None,
+        sort_direction: str = "asc",
         snapshot_filters: Optional[Dict[str, Any]] = None,
     ) -> dict:
         page = int(page or 1)
@@ -761,22 +1044,29 @@ class CRMReviewService:
                 base_where.append(func.coalesce(field_col, "") == "")
             else:
                 base_where.append(func.coalesce(field_col, "") == group_key)
-        self._append_snapshot_filters(base_where, normalized_filters)
+        self._append_snapshot_filters(
+            base_where,
+            normalized_filters,
+            session_id=session_id,
+            snapshot_period=scope["snapshot_period"],
+        )
 
         total = int(
             db_session.exec(
                 select(func.count()).select_from(CRMReviewOppBranchSnapshot).where(*base_where)
             ).one()
         )
-        ft_rank = self._build_forecast_type_rank_case(db_session)
+        order_by = self._build_snapshot_sort_order(
+            db_session,
+            sort_by=sort_by,
+            sort_direction=sort_direction,
+            session_id=session_id,
+            snapshot_period=scope["snapshot_period"],
+        )
         items = db_session.exec(
             select(CRMReviewOppBranchSnapshot)
             .where(*base_where)
-            .order_by(
-                func.coalesce(CRMReviewOppBranchSnapshot.owner_name, ""),
-                ft_rank,
-                CRMReviewOppBranchSnapshot.forecast_amount.desc(),
-            )
+            .order_by(*order_by)
             .offset(offset)
             .limit(size)
         ).all()

@@ -189,6 +189,8 @@ def query_my_review_opp_branch_snapshots(
         page=request.page,
         size=request.size,
         fields_level=request.fields_level,
+        sort_by=request.sort_by,
+        sort_direction=request.sort_direction,
         snapshot_filters=request.snapshot_filters,
     )
 
@@ -210,6 +212,9 @@ def query_review_snapshot_groups(
         session_id=session_id,
         user_id=str(user.id),
         group_by=request.group_by,
+        sort_by=request.sort_by,
+        sort_direction=request.sort_direction,
+        snapshot_filters=request.snapshot_filters,
     )
     return ReviewSnapshotGroupsOut.model_validate(data)
 
@@ -236,6 +241,8 @@ def query_review_snapshot_group_data(
         page=request.page,
         size=request.size,
         fields_level=request.fields_level,
+        sort_by=request.sort_by,
+        sort_direction=request.sort_direction,
         snapshot_filters=request.snapshot_filters,
     )
 
