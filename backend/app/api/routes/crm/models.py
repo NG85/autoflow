@@ -934,7 +934,7 @@ class ReviewOppBranchSnapshotsQueryIn(BaseModel):
     snapshot_filters: Optional[Dict[str, Any]] = Field(
         default=None,
         description=(
-            "可选筛选器，支持 opportunity_ids/forecast_types/stages: string[]；"
+            "可选筛选器，支持 opportunity_ids/forecast_types/opportunity_stages: string[]；"
             "以及 expected_closing_date_start/end: YYYY-MM-DD"
         ),
     )
@@ -991,7 +991,7 @@ class ReviewSnapshotGroupDataQueryIn(BaseModel):
     snapshot_filters: Optional[Dict[str, Any]] = Field(
         default=None,
         description=(
-            "可选筛选器，支持 opportunity_ids/forecast_types/stages: string[]；"
+            "可选筛选器，支持 opportunity_ids/forecast_types/opportunity_stages: string[]；"
             "以及 expected_closing_date_start/end: YYYY-MM-DD"
         ),
     )

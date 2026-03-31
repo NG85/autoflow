@@ -435,7 +435,7 @@ class CRMReviewService:
         Current supported fields:
         - opportunity_ids: List[str]
         - forecast_types: List[str]
-        - stages: List[str]
+        - opportunity_stages: List[str]
         - expected_closing_date_start: str (YYYY-MM-DD)
         - expected_closing_date_end: str (YYYY-MM-DD)
         """
@@ -471,7 +471,7 @@ class CRMReviewService:
         return {
             "opportunity_ids": _normalize_string_list(raw.get("opportunity_ids")),
             "forecast_types": _normalize_string_list(raw.get("forecast_types")),
-            "stages": _normalize_string_list(raw.get("stages")),
+            "opportunity_stages": _normalize_string_list(raw.get("opportunity_stages")),
             "expected_closing_date_start": _normalize_date_or_raise(
                 expected_closing_date_start, "expected_closing_date_start"
             ),
@@ -491,9 +491,9 @@ class CRMReviewService:
         forecast_types = normalized_filters.get("forecast_types") or []
         if forecast_types:
             base_where.append(CRMReviewOppBranchSnapshot.forecast_type.in_(forecast_types))
-        stages = normalized_filters.get("stages") or []
-        if stages:
-            base_where.append(CRMReviewOppBranchSnapshot.opportunity_stage.in_(stages))
+        opportunity_stages = normalized_filters.get("opportunity_stages") or []
+        if opportunity_stages:
+            base_where.append(CRMReviewOppBranchSnapshot.opportunity_stage.in_(opportunity_stages))
         expected_closing_date_start = normalized_filters.get("expected_closing_date_start")
         if expected_closing_date_start:
             base_where.append(
