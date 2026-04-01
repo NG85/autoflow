@@ -206,7 +206,7 @@ def query_review_snapshot_groups(
     """
     分组汇总：各分组的 key、名称、数量，以及本次 review 的信息、提交统计、是否可编辑等（不含明细行）。
     - 可见范围：成员只看自己；负责人看本次 review 的全部成员。
-    - ``group_by``：owner / forecast_type / opportunity_stage / risk_type；按风险分组时会多出 ``__NO_RISK__``（无风险商机）。
+    - ``group_by``：owner / forecast_type / opportunity_stage。
     - 可先筛选再分组；支持排序，未指定时按分组键升序。
     """
     data = crm_review_service.list_snapshot_groups(
@@ -230,7 +230,7 @@ def query_review_snapshot_group_data(
 ):
     """
     某一分组下的商机快照分页列表。可见范围同 ``snapshot-groups``。
-    - ``group_key``：按负责人传 owner_id；按预测/阶段传字段值，空值用 ``__EMPTY__``；按风险传 type_code（空 code 也可用 ``__EMPTY__``），无风险整组用 ``__NO_RISK__``。
+    - ``group_key``：按负责人传 owner_id；按预测/阶段传字段值，空值用 ``__EMPTY__``。
     - 支持筛选、排序、字段级别；未指定排序时默认：负责人 → 预测类型 → 金额（降序）。
     """
     return crm_review_service.query_snapshot_group_data(
@@ -351,7 +351,7 @@ def query_review_snapshot_filter_enums(
 ) -> ReviewSnapshotFilterEnumsOut:
     """
     筛选页用的枚举（分组维度、预测类型、商机阶段等）。登录即可调用。
-    返回里的分组选项含人员/预测/阶段；若要按风险分组，请直接调 ``snapshot-groups`` 并传 ``group_by=risk_type``。
+    返回里的分组选项含人员/预测/阶段。
     """
     # 需要登录态；不额外限制角色（仅提供筛选枚举）
     _ = user

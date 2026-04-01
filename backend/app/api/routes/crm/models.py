@@ -960,9 +960,9 @@ class ReviewOppBranchSnapshotsQueryIn(BaseModel):
 
 
 class ReviewSnapshotGroupsQueryIn(BaseModel):
-    group_by: Literal["owner", "forecast_type", "opportunity_stage", "risk_type"] = Field(
+    group_by: Literal["owner", "forecast_type", "opportunity_stage"] = Field(
         default="owner",
-        description="分组维度：人员 / 预测类型 / 商机阶段 / 风险类型",
+        description="分组维度：人员 / 预测类型 / 商机阶段",
     )
     sort_by: Optional[
         Literal[
@@ -1016,15 +1016,15 @@ class ReviewSnapshotGroupsOut(BaseModel):
     is_leader: bool
     editable: bool
     submit_stats: ReviewSessionSubmitStatsOut
-    group_by: Literal["owner", "forecast_type", "opportunity_stage", "risk_type"]
+    group_by: Literal["owner", "forecast_type", "opportunity_stage"]
     total_groups: int
     groups: List[ReviewSnapshotGroupItemOut]
 
 
 class ReviewSnapshotGroupDataQueryIn(BaseModel):
-    group_by: Literal["owner", "forecast_type", "opportunity_stage", "risk_type"] = Field(
+    group_by: Literal["owner", "forecast_type", "opportunity_stage"] = Field(
         default="owner",
-        description="分组维度：人员 / 预测类型 / 商机阶段 / 风险类型",
+        description="分组维度：人员 / 预测类型 / 商机阶段",
     )
     group_key: str = Field(..., description="分组值。owner=owner_id；其他为字段原值；空值可传 __EMPTY__")
     page: int = Field(default=1, ge=1)

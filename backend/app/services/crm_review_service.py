@@ -31,9 +31,6 @@ from app.services.aldebaran_service import aldebaran_client
 
 logger = logging.getLogger(__name__)
 
-NO_RISK_GROUP_KEY = "__NO_RISK__"
-NO_RISK_GROUP_LABEL = "无风险"
-
 
 def _audit_json_default(obj: Any) -> str:
     """Best-effort JSON fallback for audit payloads.
@@ -841,7 +838,6 @@ class CRMReviewService:
         snapshot_filters: Optional[Dict[str, Any]] = None,
     ) -> dict:
         scope = self._resolve_session_scope(db_session, session_id=session_id, user_id=user_id)
-        gb = str(group_by or "owner").strip()
         normalized_filters = self._normalize_snapshot_filters(snapshot_filters)
         direction_desc = str(sort_direction or "asc").strip().lower() == "desc"
 
@@ -870,88 +866,29 @@ class CRMReviewService:
             primary = key_expr.desc() if direction_desc else key_expr.asc()
             return [primary, key_expr.asc()]
 
-        if gb == "risk_type":
-            visible_opp_subq = (
-                select(CRMReviewOppBranchSnapshot.opportunity_id)
-                .where(*base_where)
-                .distinct()
+        gb, field_col, label_col = self._group_field_and_label(group_by)
+        group_key_expr = func.coalesce(field_col, "")
+        group_label_expr = func.coalesce(func.max(label_col), "")
+        cnt_expr = func.count()
+        stmt = (
+            select(
+                group_key_expr.label("group_key"),
+                group_label_expr.label("group_label"),
+                cnt_expr.label("cnt"),
             )
-            group_key_expr = func.coalesce(CRMReviewOppRiskProgress.type_code, "")
-            group_label_expr = func.coalesce(func.max(CRMReviewOppRiskProgress.type_name), "")
-            cnt_expr = func.count(func.distinct(CRMReviewOppRiskProgress.opportunity_id))
-            stmt = (
-                select(
-                    group_key_expr.label("group_key"),
-                    group_label_expr.label("group_label"),
-                    cnt_expr.label("cnt"),
-                )
-                .where(
-                    CRMReviewOppRiskProgress.session_id == session_id,
-                    CRMReviewOppRiskProgress.snapshot_period == scope["snapshot_period"],
-                    CRMReviewOppRiskProgress.record_type == "RISK",
-                    CRMReviewOppRiskProgress.opportunity_id.in_(visible_opp_subq),
-                )
-                .group_by(group_key_expr)
-                .order_by(*_group_order_by(cnt_expr, group_key_expr))
-            )
-            rows = db_session.exec(stmt).all()
-            groups = [
-                {
-                    "group_key": str(k or ""),
-                    "group_label": str(lbl or ""),
-                    "count": int(cnt or 0),
-                }
-                for k, lbl, cnt in rows
-            ]
-            risk_opp_subq = (
-                select(CRMReviewOppRiskProgress.opportunity_id)
-                .where(
-                    CRMReviewOppRiskProgress.session_id == session_id,
-                    CRMReviewOppRiskProgress.snapshot_period == scope["snapshot_period"],
-                    CRMReviewOppRiskProgress.record_type == "RISK",
-                    CRMReviewOppRiskProgress.opportunity_id.in_(visible_opp_subq),
-                )
-                .distinct()
-            )
-            no_risk_count = int(
-                db_session.exec(
-                    select(func.count(func.distinct(CRMReviewOppBranchSnapshot.opportunity_id)))
-                    .where(*base_where)
-                    .where(CRMReviewOppBranchSnapshot.opportunity_id.not_in(risk_opp_subq))
-                ).one()
-                or 0
-            )
-            groups.append(
-                {
-                    "group_key": NO_RISK_GROUP_KEY,
-                    "group_label": NO_RISK_GROUP_LABEL,
-                    "count": no_risk_count,
-                }
-            )
-        else:
-            gb, field_col, label_col = self._group_field_and_label(group_by)
-            group_key_expr = func.coalesce(field_col, "")
-            group_label_expr = func.coalesce(func.max(label_col), "")
-            cnt_expr = func.count()
-            stmt = (
-                select(
-                    group_key_expr.label("group_key"),
-                    group_label_expr.label("group_label"),
-                    cnt_expr.label("cnt"),
-                )
-                .where(*base_where)
-                .group_by(group_key_expr)
-                .order_by(*_group_order_by(cnt_expr, group_key_expr))
-            )
-            rows = db_session.exec(stmt).all()
-            groups = [
-                {
-                    "group_key": str(k or ""),
-                    "group_label": str(lbl or ""),
-                    "count": int(cnt or 0),
-                }
-                for k, lbl, cnt in rows
-            ]
+            .where(*base_where)
+            .group_by(group_key_expr)
+            .order_by(*_group_order_by(cnt_expr, group_key_expr))
+        )
+        rows = db_session.exec(stmt).all()
+        groups = [
+            {
+                "group_key": str(k or ""),
+                "group_label": str(lbl or ""),
+                "count": int(cnt or 0),
+            }
+            for k, lbl, cnt in rows
+        ]
         return {
             "session_id": str(scope["session"].unique_id),
             "session": {
@@ -997,7 +934,6 @@ class CRMReviewService:
         offset = (page - 1) * size
 
         scope = self._resolve_session_scope(db_session, session_id=session_id, user_id=user_id)
-        gb = str(group_by or "owner").strip()
         group_key = str(group_key or "")
         normalized_filters = self._normalize_snapshot_filters(snapshot_filters)
 
@@ -1005,49 +941,11 @@ class CRMReviewService:
             CRMReviewOppBranchSnapshot.owner_id.in_(scope["owner_ids"]),
             CRMReviewOppBranchSnapshot.snapshot_period == scope["snapshot_period"],
         ]
-        if gb == "risk_type":
-            visible_opp_subq = (
-                select(CRMReviewOppBranchSnapshot.opportunity_id)
-                .where(
-                    CRMReviewOppBranchSnapshot.owner_id.in_(scope["owner_ids"]),
-                    CRMReviewOppBranchSnapshot.snapshot_period == scope["snapshot_period"],
-                )
-                .distinct()
-            )
-            if group_key == NO_RISK_GROUP_KEY:
-                risk_opp_subq = (
-                    select(CRMReviewOppRiskProgress.opportunity_id)
-                    .where(
-                        CRMReviewOppRiskProgress.session_id == session_id,
-                        CRMReviewOppRiskProgress.snapshot_period == scope["snapshot_period"],
-                        CRMReviewOppRiskProgress.record_type == "RISK",
-                        CRMReviewOppRiskProgress.opportunity_id.in_(visible_opp_subq),
-                    )
-                    .distinct()
-                )
-                base_where.append(CRMReviewOppBranchSnapshot.opportunity_id.not_in(risk_opp_subq))
-            else:
-                risk_where = [
-                    CRMReviewOppRiskProgress.session_id == session_id,
-                    CRMReviewOppRiskProgress.snapshot_period == scope["snapshot_period"],
-                    CRMReviewOppRiskProgress.record_type == "RISK",
-                ]
-                if group_key == "__EMPTY__":
-                    risk_where.append(func.coalesce(CRMReviewOppRiskProgress.type_code, "") == "")
-                else:
-                    risk_where.append(func.coalesce(CRMReviewOppRiskProgress.type_code, "") == group_key)
-                risk_opp_subq = (
-                    select(CRMReviewOppRiskProgress.opportunity_id)
-                    .where(*risk_where)
-                    .distinct()
-                )
-                base_where.append(CRMReviewOppBranchSnapshot.opportunity_id.in_(risk_opp_subq))
+        gb, field_col, _ = self._group_field_and_label(group_by)
+        if group_key == "__EMPTY__":
+            base_where.append(func.coalesce(field_col, "") == "")
         else:
-            gb, field_col, _ = self._group_field_and_label(group_by)
-            if group_key == "__EMPTY__":
-                base_where.append(func.coalesce(field_col, "") == "")
-            else:
-                base_where.append(func.coalesce(field_col, "") == group_key)
+            base_where.append(func.coalesce(field_col, "") == group_key)
         self._append_snapshot_filters(
             base_where,
             normalized_filters,
