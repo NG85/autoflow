@@ -858,12 +858,16 @@ class CRMReviewService:
 
         def _group_order_by(cnt_expr: Any, key_expr: Any) -> List[Any]:
             # 分组结果排序：
-            # - 显式按 risk/progress count 排序时用 count
-            # - 其他场景按分组 key 排序
-            if str(sort_by or "").strip() in {"risk_count", "progress_count"}:
+            # - 未指定 sort_by：保持原先默认，仅按分组 key 升序（不受 sort_direction 影响）
+            # - risk_count / progress_count：按数量排序
+            # - 其他显式 sort_by：按分组 key 与 sort_direction
+            sk = str(sort_by or "").strip()
+            if not sk:
+                return [key_expr.asc()]
+            if sk in {"risk_count", "progress_count"}:
                 primary = cnt_expr.desc() if direction_desc else cnt_expr.asc()
-            else:
-                primary = key_expr.desc() if direction_desc else key_expr.asc()
+                return [primary, key_expr.asc()]
+            primary = key_expr.desc() if direction_desc else key_expr.asc()
             return [primary, key_expr.asc()]
 
         if gb == "risk_type":
