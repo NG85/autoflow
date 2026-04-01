@@ -178,9 +178,10 @@ def query_my_review_opp_branch_snapshots(
     user: CurrentUserDep,
 ):
     """
-    Review 分页列表（不分组），返回形态与 ``snapshot-group-data`` 一致（仅无 ``group_by`` / ``group_key``）：
-    ``session_id``、``page``、``size``、``total``、``items``。
-    Review session 元数据与提交统计见 ``snapshot-groups``。
+    商机快照分页列表（不分组）。
+    - 返回结构与 ``snapshot-group-data`` 一致，只是没有 ``group_by`` / ``group_key``。
+    - 可见范围：普通成员只看本人；负责人看本次 review 的全部成员。支持筛选、排序、字段级别；未指定排序时默认：负责人 → 预测类型 → 金额（降序）。
+    - 需要 session 信息、提交统计时请先调 ``snapshot-groups``。
     """
     return crm_review_service.get_my_edit_page_data(
         db_session,
@@ -203,9 +204,10 @@ def query_review_snapshot_groups(
     user: CurrentUserDep,
 ) -> ReviewSnapshotGroupsOut:
     """
-    查询分组集合（仅返回分组，不返回具体 snapshot 行）：
-    - 权限范围：普通成员仅自己；leader 为本 session 全员
-    - group_by: owner / forecast_type / opportunity_stage / risk_type
+    分组汇总：各分组的 key、名称、数量，以及本次 review 的信息、提交统计、是否可编辑等（不含明细行）。
+    - 可见范围：成员只看自己；负责人看本次 review 的全部成员。
+    - ``group_by``：owner / forecast_type / opportunity_stage / risk_type；按风险分组时会多出 ``__NO_RISK__``（无风险商机）。
+    - 可先筛选再分组；支持排序，未指定时按分组键升序。
     """
     data = crm_review_service.list_snapshot_groups(
         db_session,
@@ -227,10 +229,9 @@ def query_review_snapshot_group_data(
     user: CurrentUserDep,
 ):
     """
-    查询指定分组值下的 snapshot 明细：
-    - group_by=owner 时 group_key 传 owner_id
-    - group_by=forecast_type/opportunity_stage 时 group_key 传字段值
-    - 为空分组可传 __EMPTY__
+    某一分组下的商机快照分页列表。可见范围同 ``snapshot-groups``。
+    - ``group_key``：按负责人传 owner_id；按预测/阶段传字段值，空值用 ``__EMPTY__``；按风险传 type_code（空 code 也可用 ``__EMPTY__``），无风险整组用 ``__NO_RISK__``。
+    - 支持筛选、排序、字段级别；未指定排序时默认：负责人 → 预测类型 → 金额（降序）。
     """
     return crm_review_service.query_snapshot_group_data(
         db_session,
@@ -255,9 +256,7 @@ def query_review_opportunity_risk_progress_details(
     user: CurrentUserDep,
 ):
     """
-    查询单个商机的风险/进展详情（含数量）：
-    - 权限范围：普通成员仅自己可见商机；leader 为本 session 全员
-    - 返回：risk_count/progress_count + risk_details/progress_details
+    单个商机的风险与进展明细（条数 + 列表）。仅当该商机在本次 review 对你可见时返回，否则 404。
     """
     return crm_review_service.get_opportunity_risk_progress_details(
         db_session,
@@ -273,9 +272,7 @@ def query_my_latest_review_session(
     user: CurrentUserDep,
 ) -> MyLatestReviewSessionOut:
     """
-    查询当前用户参与的最新一个 review session：
-    - 通过 CRMReviewAttendee.user_id 关联参与会话
-    - 按 CRMReviewSession.report_date 倒序（同日再按 create_time 倒序）取最新
+    当前用户参与的、汇报日最新的一场 review 的 session id；没有则为 null。
     """
     row = db_session.exec(
         select(CRMReviewSession.unique_id)
@@ -298,7 +295,7 @@ def query_my_review_session_history(
     size: int = 20,
 ) -> ReviewSessionHistoryListOut:
     """
-    查询当前用户参与过的历史 review session 基础列表（分页）。
+    当前用户参与过的 review 列表（分页），从新到旧。``size`` 最大 200。
     """
     page = max(int(page or 1), 1)
     size = max(min(int(size or 20), 200), 1)
@@ -353,10 +350,8 @@ def query_review_snapshot_filter_enums(
     user: CurrentUserDep,
 ) -> ReviewSnapshotFilterEnumsOut:
     """
-    查询 Review 页面筛选枚举配置：
-    1) forecast_types: 来自 crm_system_configurations(config_type='ForecastTypeMapping')，
-       每条 config_value(JSON array) 取第一个元素。
-    2) opportunity_stages: 来自 diagnostic_playbook(handbook_id, sales_stage)。
+    筛选页用的枚举（分组维度、预测类型、商机阶段等）。登录即可调用。
+    返回里的分组选项含人员/预测/阶段；若要按风险分组，请直接调 ``snapshot-groups`` 并传 ``group_by=risk_type``。
     """
     # 需要登录态；不额外限制角色（仅提供筛选枚举）
     _ = user
@@ -433,9 +428,8 @@ def submit_my_review_branch_snapshot_changes(
     user: CurrentUserDep,
 ):
     """
-    提交保存（一次提交更新多条记录）：
-    - 仅更新白名单字段（见 ``REVIEW_BRANCH_SNAPSHOT_EDITABLE_FIELDS``）
-    - 写回 crm_review_opp_branch_snapshot；一次提交写 1 条 CRMReviewOppAuditLog（old/new JSON）
+    提交本场商机快照修改（可一次提交多条）。仅在可编辑阶段成功；空数组也会记一次提交。
+    请求体里每条只传允许改的字段，具体以 ``ReviewBranchSnapshotUpdateIn`` 为准。
     """
     return crm_review_service.submit_my_snapshot_changes(
         db_session,
@@ -453,10 +447,8 @@ def update_review_session_phase(
     user: CurrentUserDep,
 ):
     """
-    更新 review session.review_phase（仅 stage=lead_review 时允许）：
-    - 仅允许 leader 在前端切换 edit/closed（可反复切换）
-    - not_started 由后端任务在进入 lead_review 时初始化
-    - 非 lead_review 阶段不允许修改
+    负责人在「负责人评审」阶段切换本场是编辑中还是已关闭（edit / closed），可反复改。
+    仅负责人可调；且仅当会话处于负责人评审阶段时允许，否则报错。
     """
     session = crm_review_session_repo.get_by_unique_id(db_session, session_id)
     if not session:
@@ -496,8 +488,7 @@ def query_review_session_kpi_metrics(
     calc_phase: Optional[str] = None,
 ) -> ReviewSessionKpiMetricsOut:
     """
-    查询某个 review session 的 KPI metrics，供前端展示指标卡片/列表。
-    可选筛选：scope_type、calc_phase。
+    本次 review 的 KPI 指标列表，仅负责人可调。可用 ``scope_type``、``calc_phase`` 筛选。
     """
     session = crm_review_session_repo.get_by_unique_id(db_session, session_id)
     if not session:
@@ -561,11 +552,8 @@ def query_review_session_insights(
     fields_level: Literal["basic", "full"] = "basic",
 ) -> Union[ReviewSessionInsightsBasicOut, ReviewSessionInsightsOut]:
     """
-    查询 review session 的部门级 insight（risk/progress）：
-    - 仅本 session leader 可查询
-    - 仅返回 scope_type=department
-    - risk：按 type 返回（每个 type 一条）
-    - progress：按 category 分组，组内按 type 返回记录
+    部门视角的风险与进展洞察，仅负责人可调。风险为列表，进展按类别分组。
+    查询参数 ``fields_level``：basic（默认）或 full，字段多少不同。
     """
     session = crm_review_session_repo.get_by_unique_id(db_session, session_id)
     if not session:
@@ -694,9 +682,7 @@ def query_review_session_insight_risk_opportunities(
     user: CurrentUserDep,
 ) -> ReviewSessionInsightDetailOut:
     """
-    查询 risk 卡片详情（关联商机）：
-    - 根据 risk_id（crm_review_opp_risk_progress.unique_id）查询
-    - 返回该 risk 关联的商机详情（crm_review_risk_opportunity_relation）
+    某条风险洞察关联的商机列表，仅负责人可调。``risk_id`` 与 insights 里风险项的 ``insight_unique_id`` 一致；响应含洞察摘要与关联商机。
     """
     session = crm_review_session_repo.get_by_unique_id(db_session, session_id)
     if not session:
@@ -785,11 +771,8 @@ def recalculate_review_session_forecast_aggregates(
     user: CurrentUserDep,
 ) -> ReviewSessionForecastRecalcOut:
     """
-    参会人可调用；聚合结果**仅**来自 Aldebaran ``POST /api/v1/review/performance/query``（可用 ``ALDEBARAN_REVIEW_SESSION_RECALC_PATH`` 覆盖），不做本地 DB 兜底。
-    - Leader：请求体仅 ``session_id``（全量）。
-    - 普通成员：请求体 ``session_id`` + ``owner_id``（crm_user_id）。
-    成功时返回固定结构：``total`` + ``attendees`` + ``pagination``，并带 ``recalc_scope``。
-    单人查询会归一化为 ``attendees`` 仅 1 条。
+    触发本次 review 的预测/业绩聚合重算（结果来自外部服务）。参会人均可调用：负责人拉全场，普通成员只拉本人。
+    具体字段见响应模型。
     """
     data = crm_review_service.recalculate_forecast_aggregates(
         db_session,
