@@ -428,7 +428,7 @@ def submit_my_review_branch_snapshot_changes(
     user: CurrentUserDep,
 ):
     """
-    提交本场商机快照修改（可一次提交多条）。仅在可编辑阶段成功；空数组也会记一次提交。
+    提交本次 review 的商机快照修改（可一次提交多条）。仅在可编辑阶段成功；空数组也会记一次提交。
     请求体里每条只传允许改的字段，具体以 ``ReviewBranchSnapshotUpdateIn`` 为准。
     """
     return crm_review_service.submit_my_snapshot_changes(
@@ -447,7 +447,7 @@ def update_review_session_phase(
     user: CurrentUserDep,
 ):
     """
-    负责人在「负责人评审」阶段切换本场是编辑中还是已关闭（edit / closed），可反复改。
+    负责人在「负责人评审」阶段切换本次 review 是编辑中还是已关闭（edit / closed），可反复改。
     仅负责人可调；且仅当会话处于负责人评审阶段时允许，否则报错。
     """
     session = crm_review_session_repo.get_by_unique_id(db_session, session_id)
