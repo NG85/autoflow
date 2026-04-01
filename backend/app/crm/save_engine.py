@@ -1180,6 +1180,18 @@ def assess_quality_batch(followup_record_zh: str, followup_record_en: str, next_
     
     # 检查下一步计划是否为空
     next_steps_empty = not next_steps_zh.strip() and not next_steps_en.strip()
+
+    def _mirror_level_zh_to_en(level_zh: str) -> str:
+        mapping = {
+            "不合格": "unqualified",
+            "合格": "qualified",
+            "优秀": "excellent",
+        }
+        return mapping.get(level_zh, "unqualified")
+
+    def _mirror_reason_zh_to_en(reason_zh: str) -> str:
+        # 默认场景下采用中文单源评估，英文原因为确定性镜像，避免英文输入为空导致误判。
+        return f"Aligned with Chinese assessment: {reason_zh}" if reason_zh else "Aligned with Chinese assessment"
     
     def _evaluate_followup() -> dict:
         if followup_empty:
@@ -1201,6 +1213,11 @@ def assess_quality_batch(followup_record_zh: str, followup_record_en: str, next_
             followup_result_en = assess_followup_quality_bilingual("", followup_record_en)
             followup_result["followup_quality_level_en"] = followup_result_en.get("followup_quality_level_en", followup_result["followup_quality_level_en"])
             followup_result["followup_quality_reason_en"] = followup_result_en.get("followup_quality_reason_en", followup_result["followup_quality_reason_en"])
+        else:
+            level_zh = followup_result.get("followup_quality_level_zh", "不合格")
+            reason_zh = followup_result.get("followup_quality_reason_zh", "")
+            followup_result["followup_quality_level_en"] = _mirror_level_zh_to_en(level_zh)
+            followup_result["followup_quality_reason_en"] = _mirror_reason_zh_to_en(reason_zh)
         return followup_result
 
     def _evaluate_next_steps() -> dict:
@@ -1223,6 +1240,11 @@ def assess_quality_batch(followup_record_zh: str, followup_record_en: str, next_
             next_steps_result_en = assess_next_steps_quality_bilingual("", next_steps_en)
             next_steps_result["next_steps_quality_level_en"] = next_steps_result_en.get("next_steps_quality_level_en", next_steps_result["next_steps_quality_level_en"])
             next_steps_result["next_steps_quality_reason_en"] = next_steps_result_en.get("next_steps_quality_reason_en", next_steps_result["next_steps_quality_reason_en"])
+        else:
+            level_zh = next_steps_result.get("next_steps_quality_level_zh", "不合格")
+            reason_zh = next_steps_result.get("next_steps_quality_reason_zh", "")
+            next_steps_result["next_steps_quality_level_en"] = _mirror_level_zh_to_en(level_zh)
+            next_steps_result["next_steps_quality_reason_en"] = _mirror_reason_zh_to_en(reason_zh)
         return next_steps_result
 
     # 并行执行两类评估，减少整体等待时间
