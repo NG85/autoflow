@@ -191,6 +191,15 @@ class Settings(BaseSettings):
     
     # CRM visit record form configuration
     CRM_VISIT_RECORD_FORM_TYPE: VisitRecordFormType = VisitRecordFormType.COMPLETE
+    # CRM visit record multilingual output configuration.
+    # Default disabled to shorten processing chain; enable when multilingual fields are required.
+    CRM_VISIT_RECORD_MULTILINGUAL_ENABLED: bool = False
+    # Target languages for multilingual generation, e.g. "zh,en".
+    # This is reserved for future extension; current implementation supports zh/en pair.
+    CRM_VISIT_RECORD_MULTILINGUAL_LANGS: Annotated[list[str] | str | None, BeforeValidator(parse_str_list)] = None
+    # Whether to evaluate English content independently.
+    # Default disabled: evaluate Chinese only, then use mirrored English result fields.
+    CRM_VISIT_RECORD_BILINGUAL_EVAL_ENABLED: bool = False
     
     NOTIFICATION_PLATFORM: str = "feishu"
     
