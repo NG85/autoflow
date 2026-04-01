@@ -987,6 +987,11 @@ class CRMReviewOppRiskProgress(SQLModel, table=True):
         sa_column=Column(Text),
         description="BRD: 风险判断规则",
     )
+    summary: Optional[str] = Field(
+        default=None,
+        sa_column=Column(Text),
+        description="BRD: 概述",
+    )
     gap_description: Optional[str] = Field(
         default=None,
         sa_column=Column(Text),
@@ -1109,6 +1114,106 @@ class CRMReviewOppRiskProgress(SQLModel, table=True):
         Index("idx_snapshot_period", "snapshot_period"),
         Index("idx_status", "status"),
         Index("idx_type_code", "type_code"),
+    )
+
+
+class CRMReviewRiskOpportunityRelation(SQLModel, table=True):
+    """Risk to opportunity relation for review insights."""
+
+    class Config:
+        orm_mode = True
+
+    __tablename__ = "crm_review_risk_opportunity_relation"
+
+    id: Optional[int] = Field(
+        default=None,
+        primary_key=True,
+        description="主键ID（自增序列）",
+    )
+    unique_id: str = Field(
+        sa_column=Column(String(255), nullable=False),
+        description="唯一ID",
+    )
+    risk_unique_id: str = Field(
+        sa_column=Column(String(255), nullable=False),
+        description="关联 crm_review_opp_risk_progress.unique_id",
+    )
+    type_name: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(128)),
+        description="冗余的风险类型名称，用于加速查询",
+    )
+    session_id: str = Field(
+        sa_column=Column(String(255), nullable=False),
+        description="复盘会话ID",
+    )
+    snapshot_period: str = Field(
+        sa_column=Column(String(32), nullable=False),
+        description="快照周期，如 2026-W13",
+    )
+    calc_phase: str = Field(
+        sa_column=Column(String(16), nullable=False),
+        description="计算阶段 first/second",
+    )
+    opportunity_id: str = Field(
+        sa_column=Column(String(255), nullable=False),
+        description="关联商机ID",
+    )
+    owner_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+        description="商机负责人ID",
+    )
+    department_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+        description="部门ID",
+    )
+    relation_reason: Optional[str] = Field(
+        default=None,
+        sa_column=Column(Text),
+        description="关联原因说明",
+    )
+    relation_rank: Optional[int] = Field(
+        default=None,
+        sa_column=Column(Integer),
+        description="排序/优先级",
+    )
+    relation_weight: Optional[float] = Field(
+        default=None,
+        sa_column=Column(Numeric(8, 4)),
+        description="关联权重",
+    )
+    metadata_: Optional[dict] = Field(
+        default=None,
+        sa_column=Column("metadata", JSON),
+        description="扩展信息",
+    )
+    created_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime, nullable=False, server_default=func.now()),
+        description="创建时间",
+    )
+    updated_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(
+            DateTime,
+            nullable=False,
+            server_default=func.now(),
+            onupdate=func.now(),
+        ),
+        description="更新时间",
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "risk_unique_id",
+            "opportunity_id",
+            name="uk_risk_opp_relation",
+        ),
+        Index("idx_opportunity_id", "opportunity_id"),
+        Index("idx_risk_unique_id", "risk_unique_id"),
+        Index("idx_session_period_phase", "session_id", "snapshot_period", "calc_phase"),
     )
 
 
