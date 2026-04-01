@@ -178,6 +178,7 @@ class Settings(BaseSettings):
     ALDEBARAN_CVGG_URL: str = "/api/v1/previsit/create_v4"
     ALDEBARAN_WEEKLY_REPORT_URL: str = "/api/v1/report/weekly"
     ALDEBARAN_TENANT_ID: str = "PINGCAP"
+    ALDEBARAN_REVIEW_SESSION_RECALC_PATH: str = "/api/v1/review/performance/query"
     
     EMBEDDING_THRESHOLD: float = 0.92
 
@@ -190,6 +191,15 @@ class Settings(BaseSettings):
     
     # CRM visit record form configuration
     CRM_VISIT_RECORD_FORM_TYPE: VisitRecordFormType = VisitRecordFormType.COMPLETE
+    # CRM visit record multilingual output configuration.
+    # Default disabled to shorten processing chain; enable when multilingual fields are required.
+    CRM_VISIT_RECORD_MULTILINGUAL_ENABLED: bool = False
+    # Target languages for multilingual generation, e.g. "zh,en".
+    # This is reserved for future extension; current implementation supports zh/en pair.
+    CRM_VISIT_RECORD_MULTILINGUAL_LANGS: Annotated[list[str] | str | None, BeforeValidator(parse_str_list)] = None
+    # Whether to evaluate English content independently.
+    # Default disabled: evaluate Chinese only, then use mirrored English result fields.
+    CRM_VISIT_RECORD_BILINGUAL_EVAL_ENABLED: bool = False
     
     NOTIFICATION_PLATFORM: str = "feishu"
     
@@ -262,6 +272,7 @@ class Settings(BaseSettings):
     
     # Feishu send message configuration
     REVIEW_REPORT_HOST: str = "https://aptsell.pingcap.net"
+    REVIEW_SESSION_PAGE_URL: str = "/v2/weekly-insight"
 
     # Ops backdoor: CC Feishu cards to specified open_ids using specified Feishu app
     OPS_CC_FEISHU_ENABLED: bool = False

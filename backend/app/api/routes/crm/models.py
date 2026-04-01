@@ -881,3 +881,376 @@ class WeeklyFollowupDepartmentOption(BaseModel):
 
 class SaveWeeklyFollowupCommentsIn(BaseModel):
     comments: List[CRMComment] = []
+
+
+# ----------------- CRM Review Session (branch snapshot edit) -----------------
+
+class ReviewBranchSnapshotUpdateIn(BaseModel):
+    """
+    按 branch snapshot 行更新：使用 ``unique_id`` 定位行（同 opportunity_id + period 可能多分支时以行为准）。
+    """
+
+    unique_id: str = Field(..., description="crm_review_opp_branch_snapshot.unique_id")
+    version: int = Field(
+        ...,
+        ge=0,
+        description="Optimistic lock version from query response (crm_review_opp_branch_snapshot.modification_count)",
+    )
+    forecast_type: Optional[str] = None
+    forecast_amount: Optional[float] = None
+    opportunity_stage: Optional[str] = None
+    expected_closing_date: Optional[str] = None
+
+
+class ReviewSessionSubmitStatsOut(BaseModel):
+    total: int
+    submitted: int
+    not_submitted: int
+
+
+class ReviewBranchSnapshotSubmitOut(BaseModel):
+    updated_count: int
+    submit_stats: ReviewSessionSubmitStatsOut
+
+
+class ReviewBranchSnapshotSubmitIn(BaseModel):
+    updates: List[ReviewBranchSnapshotUpdateIn] = Field(default_factory=list)
+
+
+class ReviewSessionPhaseUpdateIn(BaseModel):
+    review_phase: Literal["edit", "closed"] = Field(
+        ...,
+        description="Review phase transition controlled by UI: edit/closed",
+    )
+
+
+class ReviewOppBranchSnapshotsQueryIn(BaseModel):
+    page: int = Field(default=1, ge=1)
+    size: int = Field(default=20, ge=1, le=100)
+    fields_level: Literal["basic", "full"] = Field(
+        default="basic",
+        description="返回字段级别：basic=核心字段，full=完整字段",
+    )
+    sort_by: Optional[
+        Literal[
+            "forecast_type",
+            "ai_commit",
+            "opportunity_stage",
+            "ai_stage",
+            "forecast_amount",
+            "expected_closing_date",
+            "ai_expected_closing_date",
+            "progress_count",
+            "risk_count",
+        ]
+    ] = Field(default=None, description="可选排序字段")
+    sort_direction: Literal["asc", "desc"] = Field(default="asc", description="排序方向")
+    snapshot_filters: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "可选筛选器，支持 opportunity_ids/opportunity_names/owner_ids/owner_names/"
+            "forecast_types/opportunity_stages: string[]；"
+            "expected_closing_date_start/end: YYYY-MM-DD；"
+            "forecast_amount_min/max: number；"
+            "ai_commits/ai_stages: string[]；"
+            "ai_expected_closing_date_start/end: YYYY-MM-DD；"
+            "has_risk/has_progress: boolean"
+        ),
+    )
+
+
+class ReviewSnapshotGroupsQueryIn(BaseModel):
+    group_by: Literal["owner", "forecast_type", "opportunity_stage"] = Field(
+        default="owner",
+        description="分组维度：人员 / 预测类型 / 商机阶段",
+    )
+    sort_by: Optional[
+        Literal[
+            "forecast_type",
+            "ai_commit",
+            "opportunity_stage",
+            "ai_stage",
+            "forecast_amount",
+            "expected_closing_date",
+            "ai_expected_closing_date",
+            "progress_count",
+            "risk_count",
+        ]
+    ] = Field(default=None, description="可选排序字段（用于分组结果排序）")
+    sort_direction: Literal["asc", "desc"] = Field(default="asc", description="排序方向")
+    snapshot_filters: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "可选筛选器，支持 opportunity_ids/opportunity_names/owner_ids/owner_names/"
+            "forecast_types/opportunity_stages: string[]；"
+            "expected_closing_date_start/end: YYYY-MM-DD；"
+            "forecast_amount_min/max: number；"
+            "ai_commits/ai_stages: string[]；"
+            "ai_expected_closing_date_start/end: YYYY-MM-DD；"
+            "has_risk/has_progress: boolean"
+        ),
+    )
+
+
+class ReviewSnapshotGroupItemOut(BaseModel):
+    group_key: str
+    group_label: str
+    count: int
+
+
+class ReviewSessionMetaOut(BaseModel):
+    session_id: str
+    period: str
+    period_start: date
+    period_end: date
+    stage: str
+    report_date: date
+    create_time: Optional[str] = None
+    review_phase: Optional[str] = None
+
+
+class ReviewSnapshotGroupsOut(BaseModel):
+    session_id: str
+    session: ReviewSessionMetaOut
+    can_review: bool
+    is_leader: bool
+    editable: bool
+    submit_stats: ReviewSessionSubmitStatsOut
+    group_by: Literal["owner", "forecast_type", "opportunity_stage"]
+    total_groups: int
+    groups: List[ReviewSnapshotGroupItemOut]
+
+
+class ReviewSnapshotGroupDataQueryIn(BaseModel):
+    group_by: Literal["owner", "forecast_type", "opportunity_stage"] = Field(
+        default="owner",
+        description="分组维度：人员 / 预测类型 / 商机阶段",
+    )
+    group_key: str = Field(..., description="分组值。owner=owner_id；其他为字段原值；空值可传 __EMPTY__")
+    page: int = Field(default=1, ge=1)
+    size: int = Field(default=20, ge=1, le=100)
+    fields_level: Literal["basic", "full"] = Field(
+        default="basic",
+        description="返回字段级别：basic=核心字段，full=完整字段",
+    )
+    sort_by: Optional[
+        Literal[
+            "forecast_type",
+            "ai_commit",
+            "opportunity_stage",
+            "ai_stage",
+            "forecast_amount",
+            "expected_closing_date",
+            "ai_expected_closing_date",
+            "progress_count",
+            "risk_count",
+        ]
+    ] = Field(default=None, description="可选排序字段")
+    sort_direction: Literal["asc", "desc"] = Field(default="asc", description="排序方向")
+    snapshot_filters: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "可选筛选器，支持 opportunity_ids/opportunity_names/owner_ids/owner_names/"
+            "forecast_types/opportunity_stages: string[]；"
+            "expected_closing_date_start/end: YYYY-MM-DD；"
+            "forecast_amount_min/max: number；"
+            "ai_commits/ai_stages: string[]；"
+            "ai_expected_closing_date_start/end: YYYY-MM-DD；"
+            "has_risk/has_progress: boolean"
+        ),
+    )
+
+
+class ReviewSessionKpiMetricOut(BaseModel):
+    unique_id: str
+    session_id: str
+    scope_type: str
+    scope_id: Optional[str] = None
+    scope_name: Optional[str] = None
+    parent_scope_id: Optional[str] = None
+    metric_category: str
+    metric_name: str
+    metric_value: Optional[float] = None
+    metric_value_prev: Optional[float] = None
+    metric_delta: Optional[float] = None
+    metric_rate: Optional[float] = None
+    metric_unit: Optional[str] = None
+    metric_content: Optional[str] = None
+    metric_content_en: Optional[str] = None
+    calc_phase: Optional[str] = None
+    period_type: Optional[str] = None
+    period: Optional[str] = None
+    report_date: Optional[date] = None
+    report_year: Optional[int] = None
+    report_week_of_year: Optional[int] = None
+
+
+class ReviewSessionKpiMetricsOut(BaseModel):
+    session_id: str
+    total: int
+    items: List[ReviewSessionKpiMetricOut]
+
+
+class ReviewSessionInsightItemBaseOut(BaseModel):
+    insight_unique_id: str
+    type_code: str
+    type_name: str
+    record_type: str
+    summary: Optional[str] = None
+    detail_description: Optional[str] = None
+
+
+class ReviewSessionRiskInsightItemBasicOut(ReviewSessionInsightItemBaseOut):
+    judgment_rule: Optional[str] = None
+    category: Optional[str] = None
+    gap_description: Optional[str] = None
+
+
+class ReviewSessionInsightItemOut(ReviewSessionRiskInsightItemBasicOut):
+    severity: Optional[str] = None
+    source: Optional[str] = None
+    metric_name: Optional[str] = None
+    solution: Optional[str] = None
+    status: Optional[str] = None
+    detected_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class ReviewSessionProgressCategoryGroupBasicOut(BaseModel):
+    category: str = ""
+    items: List[ReviewSessionInsightItemBaseOut] = Field(default_factory=list)
+
+
+class ReviewSessionProgressCategoryGroupOut(ReviewSessionProgressCategoryGroupBasicOut):
+    items: List[ReviewSessionInsightItemOut] = Field(default_factory=list)
+
+
+class ReviewSessionInsightsBasicOut(BaseModel):
+    session_id: str
+    scope_type: Literal["department"] = "department"
+    risk_total: int = 0
+    progress_total: int = 0
+    risk_items: List[ReviewSessionRiskInsightItemBasicOut] = Field(default_factory=list)
+    progress_items: List[ReviewSessionProgressCategoryGroupBasicOut] = Field(default_factory=list)
+
+
+class ReviewSessionInsightsOut(ReviewSessionInsightsBasicOut):
+    risk_items: List[ReviewSessionInsightItemOut] = Field(default_factory=list)
+    progress_items: List[ReviewSessionProgressCategoryGroupOut] = Field(default_factory=list)
+
+
+class ReviewSessionInsightRiskOpportunityOut(BaseModel):
+    relation_unique_id: str
+    risk_unique_id: str
+    opportunity_id: str
+    owner_id: Optional[str] = None
+    department_id: Optional[str] = None
+    snapshot_period: str
+    calc_phase: str
+    relation_reason: Optional[str] = None
+    relation_rank: Optional[int] = None
+    relation_weight: Optional[float] = None
+
+
+class ReviewSessionInsightDetailBasicOut(BaseModel):
+    insight_unique_id: str
+    session_id: str
+    scope_type: Literal["department"] = "department"
+    record_type: Literal["RISK", "PROGRESS"]
+    type_code: str
+    type_name: str
+    category: Optional[str] = None
+    judgment_rule: Optional[str] = None
+    summary: Optional[str] = None
+    gap_description: Optional[str] = None
+    detail_description: Optional[str] = None
+    opportunities: List[ReviewSessionInsightRiskOpportunityOut] = Field(default_factory=list)
+
+
+class ReviewSessionInsightDetailOut(ReviewSessionInsightDetailBasicOut):
+    severity: Optional[str] = None
+    source: Optional[str] = None
+    metric_name: Optional[str] = None
+    solution: Optional[str] = None
+    status: Optional[str] = None
+    detected_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class ReviewPerformanceMetricsOut(BaseModel):
+    target: str = "0"
+    closed_amount: str = "0"
+    commit_amount: str = "0"
+    upside_amount: str = "0"
+    gap: str = "0"
+    achievement_rate: float = 0.0
+    opportunity_count: int = 0
+
+
+class ReviewPerformanceAttendeeOut(ReviewPerformanceMetricsOut):
+    owner_id: str = ""
+    owner_name: str = ""
+    department_id: Optional[str] = None
+    department_name: Optional[str] = None
+    opportunities: Optional[Any] = None
+
+
+class ReviewSessionPerformancePaginationOut(BaseModel):
+    page: int = 1
+    page_size: int = 50
+    total_pages: int = 1
+    total_items: int = 0
+
+
+class ReviewSessionForecastRecalcOut(BaseModel):
+    """
+    固定返回结构：全量/单人统一为 ``total + attendees + pagination``。
+    单人场景会将 Aldebaran 单人响应归一化为 ``attendees`` 仅 1 条。
+    """
+
+    session_id: str
+    fy_quarter: Optional[str] = None
+    recalc_scope: Literal["full_session", "self_only"]
+    total: ReviewPerformanceMetricsOut = Field(default_factory=ReviewPerformanceMetricsOut)
+    attendees: List[ReviewPerformanceAttendeeOut] = Field(default_factory=list)
+    pagination: ReviewSessionPerformancePaginationOut = Field(default_factory=ReviewSessionPerformancePaginationOut)
+
+
+class ReviewOpportunityStageGroupOut(BaseModel):
+    handbook_id: str
+    sales_stages: List[str] = Field(default_factory=list)
+
+
+class ReviewSnapshotGroupByOptionOut(BaseModel):
+    key: Literal["owner", "forecast_type", "opportunity_stage"]
+    label: str
+
+
+class ReviewSnapshotFilterEnumsOut(BaseModel):
+    group_by_options: List[ReviewSnapshotGroupByOptionOut] = Field(default_factory=list)
+    forecast_types: List[str] = Field(default_factory=list)
+    opportunity_stages: List[ReviewOpportunityStageGroupOut] = Field(default_factory=list)
+
+
+class MyLatestReviewSessionOut(BaseModel):
+    review_session_id: Optional[str] = None
+
+
+class ReviewSessionHistoryItemOut(BaseModel):
+    session_id: str
+    session_name: Optional[str] = None
+    department_name: Optional[str] = None
+    period: str
+    period_start: date
+    period_end: date
+    stage: str
+    review_phase: Optional[str] = None
+    report_date: date
+    create_time: Optional[str] = None
+
+
+class ReviewSessionHistoryListOut(BaseModel):
+    total: int
+    page: int
+    size: int
+    items: List[ReviewSessionHistoryItemOut] = Field(default_factory=list)

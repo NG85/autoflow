@@ -1,6 +1,8 @@
 import logging
 import json
 import requests
+from concurrent.futures import ThreadPoolExecutor
+import re
 from typing import Optional, Any
 from datetime import datetime
 from uuid import UUID
@@ -14,6 +16,92 @@ from app.tasks.document_qa import extract_and_save_document_qa
 from app.utils.ark_llm import call_ark_llm
 from app.utils.uuid6 import uuid6
 logger = logging.getLogger(__name__)
+
+def _extract_first_json_object(text: str) -> str:
+    """
+    从文本中提取第一个完整 JSON 对象（基于花括号配对，忽略字符串中的括号）。
+    找不到时返回原文本。
+    """
+    start = text.find("{")
+    if start == -1:
+        return text
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for idx in range(start, len(text)):
+        ch = text[idx]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == "\"":
+                in_string = False
+            continue
+
+        if ch == "\"":
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:idx + 1]
+
+    return text
+
+
+def _safe_parse_json_object(raw: str) -> dict:
+    """
+    轻量 JSON 解析：
+    1) 直接解析
+    2) 去掉 markdown 代码块围栏后解析
+    3) 提取首个完整 JSON 对象后解析
+    仅做低风险处理，避免激进修复引入误判。
+    """
+    candidates: list[str] = []
+    text = raw.strip()
+    candidates.append(text)
+
+    # 常见格式：```json ... ``` 或 ``` ... ```
+    fence_removed = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE).strip()
+    if fence_removed and fence_removed != text:
+        candidates.append(fence_removed)
+
+    extracted = _extract_first_json_object(fence_removed or text).strip()
+    if extracted and extracted not in candidates:
+        candidates.append(extracted)
+
+    last_error: Exception | None = None
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return parsed
+            raise ValueError("Parsed JSON is not an object")
+        except Exception as exc:
+            last_error = exc
+
+    raise ValueError(f"Failed to parse JSON object from LLM response: {last_error}")
+
+
+def _should_generate_multilingual_content() -> bool:
+    """
+    是否启用多语内容生成。
+    默认关闭；仅当显式开启且包含 zh/en 时才启用，便于后续扩展更多语种。
+    """
+    if not settings.CRM_VISIT_RECORD_MULTILINGUAL_ENABLED:
+        return False
+
+    langs = settings.CRM_VISIT_RECORD_MULTILINGUAL_LANGS
+    if not langs:
+        # 开关已开但未指定语言时，默认沿用 zh/en
+        return True
+
+    normalized = {str(lang).strip().lower() for lang in langs if str(lang).strip()}
+    return "zh" in normalized and "en" in normalized
+
 
 def _generate_record_id(record_type, now):
     dt = now.strftime("%Y%m%d_%H%M%S")
@@ -258,7 +346,7 @@ Content to analyze:
 """
     
     try:
-        result = call_ark_llm(prompt)
+        result = call_ark_llm(prompt, temperature=0)
         data = json.loads(result)
         followup_record = data.get("followup_record", followup_content)
         next_steps = data.get("next_steps", "")
@@ -702,7 +790,7 @@ def extract_risk_info_from_content(
 """
     
     try:
-        result = call_ark_llm(prompt)
+        result = call_ark_llm(prompt, temperature=0)
         risk_info = result.strip()
         
         # 如果结果为空或只包含无意义的字符，返回空字符串
@@ -953,8 +1041,16 @@ def process_visit_record_content_reliable(followup_content: str = None, followup
             followup_record = followup_record or ""
             next_steps = next_steps or ""
         
-        # 第二步：双语生成（批量处理）
-        bilingual_result = generate_bilingual_content_batch(followup_record, next_steps)
+        # 第二步：双语生成（按配置启用，默认关闭以缩短链路）
+        if _should_generate_multilingual_content():
+            bilingual_result = generate_bilingual_content_batch(followup_record, next_steps)
+        else:
+            bilingual_result = {
+                "followup_record_zh": followup_record or "",
+                "followup_record_en": followup_record or "",
+                "next_steps_zh": next_steps or "",
+                "next_steps_en": next_steps or ""
+            }
         
         # 第三步：质量评估（批量处理）
         quality_result = assess_quality_batch(bilingual_result["followup_record_zh"], bilingual_result["followup_record_en"], 
@@ -1074,43 +1170,91 @@ def generate_bilingual_content_batch(followup_record: str, next_steps: str) -> d
 
 def assess_quality_batch(followup_record_zh: str, followup_record_en: str, next_steps_zh: str, next_steps_en: str) -> dict:
     """
-    批量进行质量评估，按内容类型分组处理
+    批量进行质量评估，按内容类型分组处理。
+    默认仅评估中文内容；开启配置后再对英文内容独立评估，避免中英混合输入导致波动。
     """
-    result = {}
+    bilingual_eval_enabled = settings.CRM_VISIT_RECORD_BILINGUAL_EVAL_ENABLED
     
     # 检查跟进记录是否为空
     followup_empty = not followup_record_zh.strip() and not followup_record_en.strip()
     
     # 检查下一步计划是否为空
     next_steps_empty = not next_steps_zh.strip() and not next_steps_en.strip()
-    
-    # 第一步：评估跟进记录（中英双语）
-    if followup_empty:
-        # 如果跟进记录为空，返回默认的不合格评估结果
-        followup_result = {
-            "followup_quality_level_zh": "不合格",
-            "followup_quality_reason_zh": "跟进记录内容为空，无法进行评估",
-            "followup_quality_level_en": "unqualified",
-            "followup_quality_reason_en": "Follow-up record is empty, cannot be assessed"
+
+    def _mirror_level_zh_to_en(level_zh: str) -> str:
+        mapping = {
+            "不合格": "unqualified",
+            "合格": "qualified",
+            "优秀": "excellent",
         }
-    else:
-        followup_result = assess_followup_quality_bilingual(followup_record_zh, followup_record_en)
-    result.update(followup_result)
+        return mapping.get(level_zh, "unqualified")
+
+    def _mirror_reason_zh_to_en(reason_zh: str) -> str:
+        # 默认场景下采用中文单源评估，英文原因为确定性镜像，避免英文输入为空导致误判。
+        return f"Aligned with Chinese assessment: {reason_zh}" if reason_zh else "Aligned with Chinese assessment"
     
-    # 第二步：评估下一步计划（中英双语）
-    if next_steps_empty:
-        # 如果下一步计划为空，返回默认的不合格评估结果
-        next_steps_result = {
-            "next_steps_quality_level_zh": "不合格",
-            "next_steps_quality_reason_zh": "下一步计划内容为空，无法进行评估",
-            "next_steps_quality_level_en": "unqualified",
-            "next_steps_quality_reason_en": "Next steps plan is empty, cannot be assessed"
-        }
-    else:
-        next_steps_result = assess_next_steps_quality_bilingual(next_steps_zh, next_steps_en)
-    result.update(next_steps_result)
-    
-    return result
+    def _evaluate_followup() -> dict:
+        if followup_empty:
+            return {
+                "followup_quality_level_zh": "不合格",
+                "followup_quality_reason_zh": "跟进记录内容为空，无法进行评估",
+                "followup_quality_level_en": "unqualified",
+                "followup_quality_reason_en": "Follow-up record is empty, cannot be assessed"
+            }
+
+        # 默认只用中文内容评估，避免中英混评带来的边界波动；
+        # 若中文为空但英文存在，自动回退到英文评估，避免误判为空内容
+        if followup_record_zh.strip():
+            followup_result = assess_followup_quality_bilingual(followup_record_zh, "")
+        else:
+            followup_result = assess_followup_quality_bilingual("", followup_record_en)
+
+        if bilingual_eval_enabled and followup_record_en.strip():
+            followup_result_en = assess_followup_quality_bilingual("", followup_record_en)
+            followup_result["followup_quality_level_en"] = followup_result_en.get("followup_quality_level_en", followup_result["followup_quality_level_en"])
+            followup_result["followup_quality_reason_en"] = followup_result_en.get("followup_quality_reason_en", followup_result["followup_quality_reason_en"])
+        else:
+            level_zh = followup_result.get("followup_quality_level_zh", "不合格")
+            reason_zh = followup_result.get("followup_quality_reason_zh", "")
+            followup_result["followup_quality_level_en"] = _mirror_level_zh_to_en(level_zh)
+            followup_result["followup_quality_reason_en"] = _mirror_reason_zh_to_en(reason_zh)
+        return followup_result
+
+    def _evaluate_next_steps() -> dict:
+        if next_steps_empty:
+            return {
+                "next_steps_quality_level_zh": "不合格",
+                "next_steps_quality_reason_zh": "下一步计划内容为空，无法进行评估",
+                "next_steps_quality_level_en": "unqualified",
+                "next_steps_quality_reason_en": "Next steps plan is empty, cannot be assessed"
+            }
+
+        # 默认只用中文内容评估，避免中英混评带来的边界波动；
+        # 若中文为空但英文存在，自动回退到英文评估，避免误判为空内容
+        if next_steps_zh.strip():
+            next_steps_result = assess_next_steps_quality_bilingual(next_steps_zh, "")
+        else:
+            next_steps_result = assess_next_steps_quality_bilingual("", next_steps_en)
+
+        if bilingual_eval_enabled and next_steps_en.strip():
+            next_steps_result_en = assess_next_steps_quality_bilingual("", next_steps_en)
+            next_steps_result["next_steps_quality_level_en"] = next_steps_result_en.get("next_steps_quality_level_en", next_steps_result["next_steps_quality_level_en"])
+            next_steps_result["next_steps_quality_reason_en"] = next_steps_result_en.get("next_steps_quality_reason_en", next_steps_result["next_steps_quality_reason_en"])
+        else:
+            level_zh = next_steps_result.get("next_steps_quality_level_zh", "不合格")
+            reason_zh = next_steps_result.get("next_steps_quality_reason_zh", "")
+            next_steps_result["next_steps_quality_level_en"] = _mirror_level_zh_to_en(level_zh)
+            next_steps_result["next_steps_quality_reason_en"] = _mirror_reason_zh_to_en(reason_zh)
+        return next_steps_result
+
+    # 并行执行两类评估，减少整体等待时间
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        followup_future = executor.submit(_evaluate_followup)
+        next_steps_future = executor.submit(_evaluate_next_steps)
+        followup_result = followup_future.result()
+        next_steps_result = next_steps_future.result()
+
+    return {**followup_result, **next_steps_result}
 
 
 def assess_followup_quality_bilingual(followup_record_zh: str, followup_record_en: str) -> dict:
@@ -1203,6 +1347,10 @@ def assess_followup_quality_bilingual(followup_record_zh: str, followup_record_e
    - 客户反馈具体明确，包含客户的具体观点、态度或关注点
    - 体现销售专业素养或深度客户洞察
    - 避免空泛华丽表述，内容真实可信，有实际价值
+   - **降档规则（强制）**：仅当同时满足以下三项才可判"优秀"，否则一律判"合格"：
+     a) 过程描述中有至少2个具体沟通动作/事实；
+     b) 客户反馈至少1条且具体明确；
+     c) 记录中体现至少1项推进结果或明确后续目标。
 
 **注意事项**：
 - 如果记录中包含"客户很满意"等表述，但同时有其他具体信息（如满意什么、为什么满意、客户的具体反馈等），不应仅因此判为不合格
@@ -1243,9 +1391,9 @@ def assess_followup_quality_bilingual(followup_record_zh: str, followup_record_e
 """
     
     try:
-        result = call_ark_llm(prompt)
+        result = call_ark_llm(prompt, temperature=0)
         logger.info(f"Followup quality result: {result}")
-        data = json.loads(result)
+        data = _safe_parse_json_object(result)
         return {
             "followup_quality_level_zh": data.get("followup_quality_zh", {}).get("level", "不合格"),
             "followup_quality_reason_zh": data.get("followup_quality_zh", {}).get("reason", "AI输出格式异常"),
@@ -1349,6 +1497,10 @@ def assess_next_steps_quality_bilingual(next_steps_zh: str, next_steps_en: str) 
    - 具备清晰的目标导向，明确希望达成的结果
    - 体现较强的推进意识和主动性
    - 计划有助于有效推进客户关系或商机进展
+   - **降档规则（强制）**：仅当同时满足以下三项才可判"优秀"，否则一律判"合格"：
+     a) 至少包含2个明确可执行动作；
+     b) 至少包含1个明确时间安排（日期或相对时间）；
+     c) 至少包含1个明确目标结果（如推进评审/达成意向/安排会议等）。
 
 **评判流程（按顺序执行）**：
 1. 先判是否模板化/占位符/测试/乱码等 → 是则**不合格**。
@@ -1401,9 +1553,9 @@ def assess_next_steps_quality_bilingual(next_steps_zh: str, next_steps_en: str) 
 """
     
     try:
-        result = call_ark_llm(prompt)
+        result = call_ark_llm(prompt, temperature=0)
         logger.info(f"Next steps quality result: {result}")
-        data = json.loads(result)
+        data = _safe_parse_json_object(result)
         return {
             "next_steps_quality_level_zh": data.get("next_steps_quality_zh", {}).get("level", "不合格"),
             "next_steps_quality_reason_zh": data.get("next_steps_quality_zh", {}).get("reason", "AI输出格式异常"),

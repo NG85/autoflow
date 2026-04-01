@@ -101,7 +101,7 @@ chat:
     description: "The public key of Langfuse."
     client: false
   langfuse_host:
-    default: "https://us.cloud.langfuse.com"
+    default: "https://langfuse.zhizhenzhihe.com"
     data_type: str
     description: "The host of Langfuse."
     client: false

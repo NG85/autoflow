@@ -1803,6 +1803,22 @@ class PlatformNotificationService:
             recipient_user_id=recipient_user_id,
             message_text=message_text,
         )
+    def send_review_session_notification(
+        self,
+        db_session: Session,
+        *,
+        recipient_user_id: str,
+        message_text: str,
+    ) -> Dict[str, Any]:
+        """
+        review session 通知：给 review session 的接收者发一条「文本消息」。
+        复用 send_weekly_followup_comment_notification 的通用发送逻辑。
+        """
+        return self.send_weekly_followup_comment_notification(
+            db_session,
+            recipient_user_id=recipient_user_id,
+            message_text=message_text,
+        )
     
     def send_sales_task_created_notification(
         self,
