@@ -180,9 +180,13 @@ def query_my_review_opp_branch_snapshots(
     """
     商机快照分页列表（不分组）。
     - 返回结构与 ``snapshot-group-data`` 一致，只是没有 ``group_by`` / ``group_key``。
-    - 可见范围：普通成员只看本人；负责人看本次 review 的全部成员。支持筛选、排序、字段级别；未指定排序时默认：负责人 → 预测类型 → 金额（降序）。
+    - 可见范围：普通成员只看本人；负责人看本次 review 的全部成员。支持筛选、排序、字段级别；``sorts`` 未传或空时默认：负责人 → 预测类型 → 金额（降序）。
+    - 排序：请求体 ``sorts`` 为按优先级排列的多字段排序。
     - 需要 session 信息、提交统计时请先调 ``snapshot-groups``。
     """
+    sorts_arg = (
+        [(s.field, s.direction) for s in request.sorts] if request.sorts is not None else None
+    )
     return crm_review_service.get_my_edit_page_data(
         db_session,
         session_id=session_id,
@@ -190,8 +194,7 @@ def query_my_review_opp_branch_snapshots(
         page=request.page,
         size=request.size,
         fields_level=request.fields_level,
-        sort_by=request.sort_by,
-        sort_direction=request.sort_direction,
+        sorts=sorts_arg,
         snapshot_filters=request.snapshot_filters,
     )
 
@@ -207,15 +210,17 @@ def query_review_snapshot_groups(
     分组汇总：各分组的 key、名称、数量，以及本次 review 的信息、提交统计、是否可编辑等（不含明细行）。
     - 可见范围：成员只看自己；负责人看本次 review 的全部成员。
     - ``group_by``：owner / forecast_type / opportunity_stage。
-    - 可先筛选再分组；支持排序，未指定时按分组键升序。
+    - 可先筛选再分组；``sorts`` 仅第一项用于分组行顺序，未传或空则按分组键升序。
     """
+    sorts_arg = (
+        [(s.field, s.direction) for s in request.sorts] if request.sorts is not None else None
+    )
     data = crm_review_service.list_snapshot_groups(
         db_session,
         session_id=session_id,
         user_id=str(user.id),
         group_by=request.group_by,
-        sort_by=request.sort_by,
-        sort_direction=request.sort_direction,
+        sorts=sorts_arg,
         snapshot_filters=request.snapshot_filters,
     )
     return ReviewSnapshotGroupsOut.model_validate(data)
@@ -231,8 +236,11 @@ def query_review_snapshot_group_data(
     """
     某一分组下的商机快照分页列表。可见范围同 ``snapshot-groups``。
     - ``group_key``：按负责人传 owner_id；按预测/阶段传字段值，空值用 ``__EMPTY__``。
-    - 支持筛选、排序、字段级别；未指定排序时默认：负责人 → 预测类型 → 金额（降序）。
+    - 支持筛选、排序、字段级别；``sorts`` 未传或空时默认：负责人 → 预测类型 → 金额（降序）。
     """
+    sorts_arg = (
+        [(s.field, s.direction) for s in request.sorts] if request.sorts is not None else None
+    )
     return crm_review_service.query_snapshot_group_data(
         db_session,
         session_id=session_id,
@@ -242,8 +250,7 @@ def query_review_snapshot_group_data(
         page=request.page,
         size=request.size,
         fields_level=request.fields_level,
-        sort_by=request.sort_by,
-        sort_direction=request.sort_direction,
+        sorts=sorts_arg,
         snapshot_filters=request.snapshot_filters,
     )
 
