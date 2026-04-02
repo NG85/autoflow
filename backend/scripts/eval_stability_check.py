@@ -2,11 +2,14 @@
 """
 批量测试 CRM 质量评估稳定性脚本（可直接运行）
 
+与业务入口一致：使用 save_engine.assess_quality_batch（单次主评估 + level_en 映射 + 同路 reason_en），
+不再依赖已废弃的 CRM_VISIT_RECORD_BILINGUAL_EVAL 第二路。
+
 用法：
-1) 在项目根目录运行
+1) 在 backend 目录下或项目根目录运行（见下方命令）
 2) 确保后端依赖和环境变量已加载（尤其 ARK_*）
-3) 执行：
-   python scripts/eval_stability_check.py --runs 10
+3) 执行示例：
+   cd backend && python scripts/eval_stability_check.py --runs 10
 
 可选参数：
 - --runs 10            每条样本重复次数
@@ -31,10 +34,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from app.crm.save_engine import (
-    assess_followup_quality_bilingual,
-    assess_next_steps_quality_bilingual,
-)
+from app.crm.save_engine import assess_quality_batch
 
 
 @dataclass
@@ -52,11 +52,11 @@ SAMPLES: List[Sample] = [
     Sample("F2", "followup", text_zh="待补充", expected="不合格"),
     Sample("F3", "followup", text_zh="test 123 asdf", expected="不合格"),
     Sample("F4", "followup", text_zh="今天和客户沟通了，整体顺利，后续持续跟进。", expected="不合格"),
-    Sample("F5", "followup", text_zh="1) 与客户IT负责人确认现网慢查询问题主要在报表模块。2) 演示了索引优化方案和灰度步骤。3) 客户反馈可先在测试库验证，担心业务高峰影响。", expected="合格"),
+    Sample("F5", "followup", text_zh="1) 与客户IT负责人确认现网慢查询问题主要在报表模块。2) 演示了索引优化方案和灰度步骤。3) 客户反馈可先在测试库验证，担心业务高峰影响。", expected="优秀"),
     Sample("F6", "followup", text_zh="向客户说明了读写分离改造范围，客户确认先覆盖订单查询链路，并要求周五前给回滚预案。", expected="合格"),
     Sample("F7", "followup", text_zh="详细介绍了方案优势，客户认可，后续继续推进。", expected="不合格"),
     Sample("F8", "followup", text_zh="上午与客户DBA和架构师复盘Q1性能瓶颈，确认高峰时段写入延迟集中在库存服务；现场演示参数调优与连接池隔离方案。客户明确反馈可接受两阶段切换，并提出需先验证审计合规。双方达成下周三前完成压测并在周会上评审上线窗口。", expected="优秀"),
-    Sample("M1", "followup", text_en="Discussed migration scope with CTO; client requested rollback strategy and security checklist before pilot.", expected="qualified+"),
+    Sample("M1", "followup", text_en="Discussed migration scope with CTO; client requested rollback strategy and security checklist before pilot.", expected="qualified"),
     # # ---------- next ----------
     Sample("N1", "next", text_zh="1. 待办事项（如：具体动作）2. 时间节点（如：完成时间）3. 预期成果", expected="不合格"),
     Sample("N2", "next", text_zh="TBD", expected="不合格"),
@@ -72,15 +72,26 @@ SAMPLES: List[Sample] = [
 
 
 def eval_one(sample: Sample) -> Dict[str, Any]:
+    """
+    调用与拜访记录处理相同的 assess_quality_batch：未测的一侧传空字符串。
+    有中文时主评中文；仅英文样本与线上一致走英文分支。
+    """
     t0 = time.perf_counter()
+    en = sample.text_en or ""
     if sample.kind == "followup":
-        r = assess_followup_quality_bilingual(sample.text_zh, sample.text_en)
+        if sample.text_zh.strip():
+            r = assess_quality_batch(sample.text_zh, en, "", "")
+        else:
+            r = assess_quality_batch("", en, "", "")
         level_zh = r.get("followup_quality_level_zh", "")
         level_en = r.get("followup_quality_level_en", "")
         reason_zh = r.get("followup_quality_reason_zh", "")
         reason_en = r.get("followup_quality_reason_en", "")
     else:
-        r = assess_next_steps_quality_bilingual(sample.text_zh, sample.text_en)
+        if sample.text_zh.strip():
+            r = assess_quality_batch("", "", sample.text_zh, en)
+        else:
+            r = assess_quality_batch("", "", "", en)
         level_zh = r.get("next_steps_quality_level_zh", "")
         level_en = r.get("next_steps_quality_level_en", "")
         reason_zh = r.get("next_steps_quality_reason_zh", "")
