@@ -1168,30 +1168,56 @@ def generate_bilingual_content_batch(followup_record: str, next_steps: str) -> d
         }
 
 
+def _mirror_quality_level_zh_to_en(level_zh: str) -> str:
+    """中文等级 → 英文等级（单源中文评估时与中文结论一致）。"""
+    mapping = {
+        "不合格": "unqualified",
+        "合格": "qualified",
+        "优秀": "excellent",
+    }
+    return mapping.get(level_zh, "unqualified")
+
+
+def _fallback_followup_reason_en(level_zh: str) -> str:
+    """模型未返回 reason_en 时的英文兜底（与等级一致）。"""
+    return {
+        "不合格": "Unqualified: template-like or vague content, or missing concrete actions and customer feedback.",
+        "合格": "Qualified: concrete communication actions and locatable customer feedback are present.",
+        "优秀": "Excellent: multiple concrete actions, specific customer feedback, and key details demonstrating sales professionalism and customer insight.",
+    }.get(level_zh, "Unqualified: quality assessment could not be summarized in English.")
+
+
+def _fallback_next_steps_reason_en(level_zh: str) -> str:
+    """模型未返回 reason_en 时的英文兜底（与等级一致）。"""
+    return {
+        "不合格": "Unqualified: placeholder-like content, or missing concrete actions and time-bound plans.",
+        "合格": "Qualified: concrete next actions, clear timing, and expected outcomes are stated.",
+        "优秀": "Excellent: multiple executable actions, clear schedule, and explicit target outcomes.",
+    }.get(level_zh, "Unqualified: quality assessment could not be summarized in English.")
+
+
+def _coerce_followup_reason_en(raw: str | None, level_zh: str) -> str:
+    t = (raw or "").strip()
+    return t if t else _fallback_followup_reason_en(level_zh)
+
+
+def _coerce_next_steps_reason_en(raw: str | None, level_zh: str) -> str:
+    t = (raw or "").strip()
+    return t if t else _fallback_next_steps_reason_en(level_zh)
+
+
 def assess_quality_batch(followup_record_zh: str, followup_record_en: str, next_steps_zh: str, next_steps_en: str) -> dict:
     """
     批量进行质量评估，按内容类型分组处理。
-    默认仅评估中文内容；开启配置后再对英文内容独立评估，避免中英混合输入导致波动。
+
+    仅一次主评估：有中文则评中文，无中文则评英文；同一次输出中文结论与英文 reason（或仅英文路径下的中英 JSON）。
+    level_en 由 level_zh 映射，与主结论一致；不再对英文字段单独发起第二路 LLM，避免与主结论语义冲突并节省调用。
     """
-    bilingual_eval_enabled = settings.CRM_VISIT_RECORD_BILINGUAL_EVAL_ENABLED
-    
     # 检查跟进记录是否为空
     followup_empty = not followup_record_zh.strip() and not followup_record_en.strip()
     
     # 检查下一步计划是否为空
     next_steps_empty = not next_steps_zh.strip() and not next_steps_en.strip()
-
-    def _mirror_level_zh_to_en(level_zh: str) -> str:
-        mapping = {
-            "不合格": "unqualified",
-            "合格": "qualified",
-            "优秀": "excellent",
-        }
-        return mapping.get(level_zh, "unqualified")
-
-    def _mirror_reason_zh_to_en(reason_zh: str) -> str:
-        # 默认场景下采用中文单源评估，英文原因为确定性镜像，避免英文输入为空导致误判。
-        return f"Aligned with Chinese assessment: {reason_zh}" if reason_zh else "Aligned with Chinese assessment"
     
     def _evaluate_followup() -> dict:
         if followup_empty:
@@ -1209,15 +1235,8 @@ def assess_quality_batch(followup_record_zh: str, followup_record_en: str, next_
         else:
             followup_result = assess_followup_quality_bilingual("", followup_record_en)
 
-        if bilingual_eval_enabled and followup_record_en.strip():
-            followup_result_en = assess_followup_quality_bilingual("", followup_record_en)
-            followup_result["followup_quality_level_en"] = followup_result_en.get("followup_quality_level_en", followup_result["followup_quality_level_en"])
-            followup_result["followup_quality_reason_en"] = followup_result_en.get("followup_quality_reason_en", followup_result["followup_quality_reason_en"])
-        else:
-            level_zh = followup_result.get("followup_quality_level_zh", "不合格")
-            reason_zh = followup_result.get("followup_quality_reason_zh", "")
-            followup_result["followup_quality_level_en"] = _mirror_level_zh_to_en(level_zh)
-            followup_result["followup_quality_reason_en"] = _mirror_reason_zh_to_en(reason_zh)
+        level_zh = followup_result.get("followup_quality_level_zh", "不合格")
+        followup_result["followup_quality_level_en"] = _mirror_quality_level_zh_to_en(level_zh)
         return followup_result
 
     def _evaluate_next_steps() -> dict:
@@ -1236,15 +1255,8 @@ def assess_quality_batch(followup_record_zh: str, followup_record_en: str, next_
         else:
             next_steps_result = assess_next_steps_quality_bilingual("", next_steps_en)
 
-        if bilingual_eval_enabled and next_steps_en.strip():
-            next_steps_result_en = assess_next_steps_quality_bilingual("", next_steps_en)
-            next_steps_result["next_steps_quality_level_en"] = next_steps_result_en.get("next_steps_quality_level_en", next_steps_result["next_steps_quality_level_en"])
-            next_steps_result["next_steps_quality_reason_en"] = next_steps_result_en.get("next_steps_quality_reason_en", next_steps_result["next_steps_quality_reason_en"])
-        else:
-            level_zh = next_steps_result.get("next_steps_quality_level_zh", "不合格")
-            reason_zh = next_steps_result.get("next_steps_quality_reason_zh", "")
-            next_steps_result["next_steps_quality_level_en"] = _mirror_level_zh_to_en(level_zh)
-            next_steps_result["next_steps_quality_reason_en"] = _mirror_reason_zh_to_en(reason_zh)
+        level_zh = next_steps_result.get("next_steps_quality_level_zh", "不合格")
+        next_steps_result["next_steps_quality_level_en"] = _mirror_quality_level_zh_to_en(level_zh)
         return next_steps_result
 
     # 并行执行两类评估，减少整体等待时间
@@ -1257,9 +1269,130 @@ def assess_quality_batch(followup_record_zh: str, followup_record_en: str, next_
     return {**followup_result, **next_steps_result}
 
 
+def _followup_quality_prompt(followup_body: str) -> str:
+    """跟进记录质量评估：同一套规则；正文可为中文或英文，仅嵌入处用中性标题【跟进记录】。"""
+    return f"""
+你是销售管理评审专家。请仅根据下方【跟进记录】评估质量，并严格输出 JSON。
+
+【跟进记录】
+{followup_body}
+
+【说明】
+- 仅评估上列正文；语言以正文为准（中文或英文均可）。不得因「另一语言字段未填写」判不合格。
+- 跟进时间、对象、方式、参与人员等已在其他字段记录，本字段无需重复。
+- 重点评估：沟通过程是否具体、客户反馈是否具体、是否体现推进价值。
+
+【评判流程（必须严格按顺序，禁止跳步）】
+
+步骤0) 模板特征扫描（必须首先执行）：
+  逐条检查正文是否命中以下任一模板/占位符模式——命中任意一条即直接判“不合格”，不得进入后续步骤：
+  a. 含「（如：…）」「（例如：…）」「（请填写…）」「如：…」等填写提示括号；
+  b. 整体为编号骨架 + 提示语结构，如「1. 跟进内容 2. 客户反馈 3. 结论」且各项仅有标题/提示、无实质业务描述；
+  c. 含「请输入」「待补充」「TBD」「N/A」「test」「asdf」等占位/测试标记；
+  d. 全文为乱码、无意义字符重复、或与业务完全无关的测试文本。
+  关键：模板提示中的示例文字（如“沟通事项”“观点/异议”）不是真实业务内容，不得作为评估依据。
+
+步骤1) 硬否决复核：若步骤0未命中，再检查是否存在其他无意义内容（纯问候、纯标点等），是则判“不合格”。
+
+步骤2) 常规质量评估（仅在步骤0和步骤1均通过后执行）：
+   - 不合格：过程过于模糊、仅“已沟通/已讨论”等空泛表述、无有效客户反馈、无实际业务信息。
+   - 合格：非模板；过程描述清晰具体且至少包含1个明确沟通动作/事实；有可定位的客户反馈或观点；体现对客户需求理解；表达清楚。
+   - 优秀：在合格基础上，内容具体详实，且同时满足：
+     a. 至少2个具体沟通动作/事实（如具体讨论了什么、演示了什么、确认了什么）；
+     b. 至少1条具体的客户反馈（客户的具体观点、具体建议、具体异议或担忧，而非笼统的“认可”“满意”）；
+     c. 内容包含关键细节，能体现销售专业性或客户洞察（如具体问题定位、针对性方案、客户的具体需求/顾虑等）。
+
+【收敛规则】
+- 证据锚定：每个判断都必须能在原文找到直接证据（可逐字引用），不能脑补或推断。模板提示中的示例词不算证据。
+- 冲突裁决：若“合格/优秀”边界不清或证据不足，统一判“合格”。
+- 不因“未写异议”而直接不合格；但若内容空泛，也不得判优秀。
+- 编号/要点列表若承载真实业务事实，视为真实记录，不判模板。
+- 严格从严：证据刚好达标且信息密度一般时，优先判“合格”而非“优秀”。
+
+【输出格式（仅 JSON）】
+{{
+  "followup_quality_zh": {{
+    "level": "不合格|合格|优秀",
+    "reason": "不超过50字，使用中文表述关键问题或亮点（若正文为英文，用中文概括对英文内容的评判）",
+    "reason_en": "Concise English (one or two sentences), same judgment as level/reason; normal assessment wording, no placeholder phrasing"
+  }}
+}}
+
+要求：
+- 仅输出 JSON，不要任何前后缀、解释文字或 markdown。
+- reason 与 reason_en 须与 level 一致；reason_en 为地道英文，禁止仅写「与中文一致」类占位。
+- 使用双引号；可被标准 JSON 解析。
+"""
+
+
+def _next_steps_quality_prompt(next_steps_body: str) -> str:
+    """下一步计划质量评估：同一套规则；正文可为中文或英文，嵌入处用中性标题【下一步计划】。"""
+    return f"""
+你是销售管理评审专家。请仅根据下方【下一步计划】评估质量，并严格输出 JSON。
+
+【下一步计划】
+{next_steps_body}
+
+【说明】
+- 仅评估上列正文；语言以正文为准（中文或英文均可）。不得因「另一语言字段未填写」判不合格。
+- 本次仅评估“下一步计划”字段；客户/项目/联系人等已在其他字段记录。
+- 重点评估：计划是否具体、可执行、时间是否明确、是否有推进目标。
+
+【明确时间的定义（常规推进必查）】
+- 须在正文可逐字引用：具体日期、星期、或相对时间词。中文例如：今日/明天/本周X/下周/本月底/周五前等；英文例如：today/tomorrow/this week/next Friday/end of month/by Friday 等。
+- 下列情形一律视为「无明确时间安排」，不得判合格或优秀：全文无可定位时间点；仅有「安排会议/尽快/后续」或 schedule a meeting / ASAP / follow up 等而无何时完成。
+
+【评判流程（必须严格按顺序，禁止跳步）】
+
+步骤0) 模板特征扫描（必须首先执行）：
+  逐条检查正文是否命中以下任一模板/占位符模式——命中任意一条即直接判“不合格”，不得进入后续步骤：
+  a. 含「（如：…）」「（例如：…）」「（请填写…）」「如：…」等填写提示括号；
+  b. 整体为编号骨架 + 提示语结构，如「1. 待办事项 2. 时间节点 3. 预期成果」且各项仅有标题/提示、无实质业务描述；
+  c. 含「请输入」「待补充」「TBD」「N/A」「test」「asdf」等占位/测试标记；
+  d. 全文为乱码、无意义字符重复、或与业务完全无关的测试文本。
+  关键：模板提示中的示例文字（如“具体动作”“完成时间”）不是真实业务内容，不得作为评估依据。
+
+步骤1) 特殊情形（优先于常规判定）：若正文明确商机关闭、无预算、无机会、客户无需求、仅保持触达，或英文 opportunity closed / no budget / no demand / touch base only 等同义表述，判“合格”（可无具体动作、无时间安排）。
+
+步骤2) 硬否决复核：若步骤0和步骤1均未命中，再检查是否存在其他无意义内容（纯问候、纯标点等），是则判“不合格”。
+
+步骤3) 常规推进判定（须同时满足下列各条才可判合格；任一条不满足则判不合格，不得以「动作很具体」放宽）：
+   - 不合格：仅保持沟通/等待反馈/持续跟进或 stay in touch / waiting for feedback 等空泛内容；或无具体动作；或按上文定义无明确时间安排；或未写明预期推进方向/结果。
+   - 合格：非模板；有至少1个具体动作；有明确时间（符合上文定义）；并写明预期推进方向/结果。
+   - 优秀（仅常规推进场景）：在合格基础上**同时**满足下列 a–d（缺一不可）；任一条仅“勉强沾边”则最高判合格：
+     a. 至少2个明确可执行动作（可区分、可执行，体现可操作性）；
+     b. 至少2个可定位的时间点（明确到天，可为两个截止时间，或「动作A在T1、动作B在T2」）；
+     c. 至少1个**具体且可验证的目标结果**（完成后可明确判断是否达成），例如：确认范围/方案、完成演示、获取客户反馈、推动立项、签署合同等。注意：“沟通”“讨论”“对齐”“同步”等活动性描述不计为目标结果（它们是动作而非成果）；
+     d. 计划整体体现**前瞻性和主动性**（如动作之间有逻辑递进关系、有明确的推进节奏，能体现对客户需求的理解）。
+
+【收敛规则】
+- 证据锚定：每个判断都必须能在原文找到直接证据（可逐字引用），不能脑补或推断。模板提示中的示例词不算证据。
+- 冲突裁决：仅适用于「优秀」与「合格」之间边界不清时，**统一判「合格」**（评优秀宁缺毋滥）。不适用于「合格」与「不合格」：凡缺明确时间、缺具体动作或缺推进结果等硬条件，必须判「不合格」，禁止为了“折中”抬成合格。
+- 编号/要点列表若承载真实计划，不判模板。
+- “暂无/待定”或 TBD 单独出现视为占位符不合格；若在完整句中明确因商机关闭而无后续，可判合格。
+- 严格从严：优秀的 a–c 条件刚好达到下限（如恰好2个动作、恰好2个时间点）且计划覆盖范围有限时，优先判“合格”而非“优秀”。优秀应当明显超过下限或具有显著的推进力度。
+- 合格与优秀：目标仅为“沟通”“讨论”“同步”等活动性描述而无可验证结果时，不得评优秀。
+
+【输出格式（仅 JSON）】
+{{
+  "next_steps_quality_zh": {{
+    "level": "不合格|合格|优秀",
+    "reason": "不超过50字，使用中文表述关键问题或亮点（若正文为英文，用中文概括对英文内容的评判）",
+    "reason_en": "Concise English (one or two sentences), same judgment as level/reason; normal assessment wording"
+  }}
+}}
+
+要求：
+- 仅输出 JSON，不要任何前后缀、解释文字或 markdown。
+- reason_en 为地道英文，与 level、reason 一致；禁止仅写「与中文一致」类占位。
+- level、reason、reason_en 必须一致：若理由写明缺少时间安排/无明确时间等，等级必须为「不合格」；若目标仅为过程性确认，等级不得为「优秀」。
+- 使用双引号；可被标准 JSON 解析。
+"""
+
+
 def assess_followup_quality_bilingual(followup_record_zh: str, followup_record_en: str) -> dict:
     """
-    评估跟进记录质量（中英双语）
+    评估跟进记录质量。有中文则评中文正文，否则评英文正文；同一套提示词（中性【跟进记录】）与解析逻辑。
     """
     # 检查内容是否为空
     if not followup_record_zh.strip() and not followup_record_en.strip():
@@ -1269,150 +1402,38 @@ def assess_followup_quality_bilingual(followup_record_zh: str, followup_record_e
             "followup_quality_level_en": "unqualified",
             "followup_quality_reason_en": "Follow-up record is empty, cannot be assessed"
         }
-    
-    prompt = f"""
-你是一位销售管理专家，在销售团队管理和客户关系推进方面经验丰富，擅长评估销售人员记录的"跟进记录"质量。请对以下内容进行评判，并输出如下结构：
 
-**跟进记录（中文）**：
-{followup_record_zh or ""}
-
-**跟进记录（英文）**：
-{followup_record_en or ""}
-
-**输出要求：**
-1. 输出必须是纯JSON，不能包含任何前缀、后缀或解释性文字。
-2. 必须使用双引号（"），不能使用单引号。
-3. 不能有尾随逗号。
-4. 字符串中的引号必须正确转义。
-5. 输出必须能被标准JSON解析器直接解析。
-
-**示例：**
-{{
-    "followup_quality_zh": {{
-        "level": "合格",
-        "reason": "内容具体明确"
-    }},
-    "followup_quality_en": {{
-        "level": "qualified",
-        "reason": "Content is specific and clear"
-    }}
-}}
-
-**评判说明**：
-1. **优先检查模板化内容（基于语义，而非格式）**：
-   - 这里的“模板/结构化提示”指文本主要在表达“应该怎么写/该填哪些项/给出填写示例/占位符待填”，即**写作/表单指导语**，而不是在陈述一次真实拜访中发生了什么。
-   - 判定为模板的语义特征（满足其一即可）：内容以“填写说明/提示/示例/请补充/如：...”为主；内容在要求按某些栏目填写（如“跟进内容/客户反馈/共识或结论/下一步计划”等）但**缺少任何具体事实**；内容是占位符/待补充/测试等无业务信息。
-   - 判定为真实记录的语义特征（满足其一即可）：出现具体业务事实/动作/进展/问题/项目/人物/组织/系统/事件/感谢/承接事项等（例如“同步某认证进展”“汇报策略执行”“承接迁移项目”“跟进组织架构变化”等）。**即使以编号/要点列表呈现，也应视为真实记录，不得因“结构化”而判模板。**
-   - 若无法确定是否为模板，请默认按真实记录评估（避免误杀）。
-2. **重要背景**：跟进时间、对象、方式、参与人员等基础信息已通过表单其他字段填写，无需在"跟进记录"中重复描述。评估时请知晓这个背景，专注于跟进内容本身的质量和推进效果。
-3. 评判重点为沟通过程是否具体清晰、客户反馈是否明确具体。
-4. 不要求每次拜访都"达成共识"，但如有体现，可作为加分项。
-5. 不应因未提及客户异议或反馈而直接判不合格，前提是过程描述具体且体现真实交流。
-6. 若内容空泛但措辞华丽或无客户反馈，不得评为优秀。
-7. **评估原则**：如有合理解释（如该项信息已由表单填写覆盖），请勿因缺失判不合格。重点关注跟进记录中体现的沟通质量和客户反馈。
-
-**评判要素**：
-1. 内容完整性（核心要素）：
-   - 过程描述：是否清楚说明了做了什么，沟通了哪些内容、有哪些过程细节？避免仅写"已沟通"等模糊词语。
-   - 客户反馈：是否记录了客户的观点、态度、建议或异议？内容是否具体清晰，非敷衍。
-2. 有效性（核心要素）：
-   - 是否体现销售理解客户的需求？
-   - 是否体现了真实的沟通交流过程？
-3. 专业性/洞察力（加分项）：
-   - 是否体现销售专业素养或客户洞察，如客户的具体观点、内部动态、真实异议等。
-
-**评判标准**：
-1. **不合格**：满足以下任一条件
-   - **模板化内容（最高优先级）**：内容为提示性模板内容，而非实际跟进记录。此类内容必须直接判为不合格，无需考虑其他因素。
-   - **提示性内容（最高优先级）**：内容为填写提示而非实际记录，如"1. 跟进内容（如：拜访对象、沟通事项）"。此类内容必须直接判为不合格。
-   - **缺乏实际信息（最高优先级）**：内容为结构化提示而非具体描述，如"1. 跟进内容 2. 客户反馈 3. 共识或结论"。此类内容必须直接判为不合格。
-   - **占位符内容（最高优先级）**：内容为占位符或待填写状态，如"待补充"、"暂无"、"TBD"、"待定"、"稍后填写"、"待更新"等。此类内容必须直接判为不合格。
-   - **测试内容（最高优先级）**：内容为测试或无效内容，如"测试"、"test"、"123"、"asdf"、"随便写写"等。此类内容必须直接判为不合格。
-   - **重复内容（最高优先级）**：内容为无意义的重复字符或词语，如"沟通沟通沟通"、"客户客户客户"等。此类内容必须直接判为不合格。
-   - **乱码内容（最高优先级）**：内容为乱码或无意义字符，如"asdfghjkl"、"qwertyuiop"等。此类内容必须直接判为不合格。
-   - 内容完全模糊或过于简略，无法理解具体沟通了什么
-   - 缺乏具体的过程描述，仅使用"已沟通"、"已讨论"、"已介绍"等模糊词汇
-   - 完全没有客户反馈或客户观点
-   - 内容空泛且无实际价值，如仅写"客户很满意"、"沟通顺利"等无任何具体信息的表述
-
-2. **合格**：满足以下所有条件
-   - **非模板化**：内容为实际跟进记录，非提示性模板
-   - 内容完整，过程描述具体清晰，能清楚了解沟通了什么内容
-   - 包含客户反馈或客户观点，内容具体非敷衍
-   - 体现销售对客户需求的理解
-   - 文字表达清晰明了，逻辑清楚
-
-3. **优秀**：在合格基础上，满足以下条件
-   - 内容详实，过程描述非常具体，包含沟通细节
-   - 客户反馈具体明确，包含客户的具体观点、态度或关注点
-   - 体现销售专业素养或深度客户洞察
-   - 避免空泛华丽表述，内容真实可信，有实际价值
-   - **降档规则（强制）**：仅当同时满足以下三项才可判"优秀"，否则一律判"合格"：
-     a) 过程描述中有至少2个具体沟通动作/事实；
-     b) 客户反馈至少1条且具体明确；
-     c) 记录中体现至少1项推进结果或明确后续目标。
-
-**注意事项**：
-- 如果记录中包含"客户很满意"等表述，但同时有其他具体信息（如满意什么、为什么满意、客户的具体反馈等），不应仅因此判为不合格
-- 重点关注记录是否提供了有价值的业务信息，而非单纯的字面表述
-- 对于简短的记录，如果信息密度高、内容具体，也应给予合理评价
-
-**示例参考**：
-- 不合格示例：
-  * "1. 跟进内容（如：拜访对象、沟通事项）\n2. 客户反馈（如：观点、态度、建议或异议）\n3. 共识或结论（如有请说明）"（模板化提示内容）
-  * "待补充"、"暂无"、"TBD"、"待定"（占位符内容）
-  * "测试"、"test"、"123"、"asdf"（测试内容）
-  * "沟通沟通沟通"、"客户客户客户"（重复内容）
-  * "asdfghjkl"、"qwertyuiop"（乱码内容）
-  * "与客户沟通了产品，客户表示有兴趣，后续跟进。"（内容模糊）
-  * "客户很满意，沟通顺利。"（仅此一句，无其他信息）
-  * "已介绍产品功能，客户表示考虑。"（缺乏具体信息）
-- 合格示例（条目式真实记录，不是模板）：
-  * "1. 祝贺赵总正式担任... 2. 汇报TiDB业务策略执行进展... 3. 同步商密认证进展 ... 4. 跟进...组织架构变化 ... 5. 承接...迁移项目，并对领导表示感谢"（条目式但信息明确具体）
-- 合格示例：
-  * "向客户详细介绍了产品A的核心功能，客户对自动化处理能力很感兴趣，询问了价格和部署时间，表示需要内部讨论。"
-  * "客户对产品B的数据分析功能很感兴趣，特别关心报表生成速度，我详细演示了相关功能，客户表示会向技术团队推荐。"
-  * "客户很满意我们的解决方案，特别认可数据安全性和处理速度，要求提供详细报价。"（虽然简短，但信息具体）
-- 优秀示例：
-  * "客户对产品A的自动化处理能力表现出强烈兴趣，特别关注数据安全性和处理速度。客户提到目前手动处理效率低，希望能在Q2前上线。我详细解答了安全认证和性能指标，客户表示满意并希望进一步了解技术细节。"
-  * "客户反馈说他们目前使用的系统经常出现卡顿，影响工作效率。我详细介绍了我们产品的性能优势，客户当场要求提供技术方案，并安排下周三与IT部门负责人会面。客户明确表示如果方案合适，预算已获批。"
-
-**输出要求**：
-1. **优先检查**：首先检查是否为模板化内容，如果是，必须直接判为"不合格"，原因明确说明"模板化提示内容"。
-2. 如不合格，指出所有主要问题点，并提出具体、可执行的改进建议；
-3. 如合格，给出优化建议（即使达标也要指出可提升之处）；
-4. 如优秀，指出1-2个亮点，说明其在具体性、洞察力方面的优势；
-5. 严格根据原始文本进行评判，不要虚构内容；
-6. **严格只输出 JSON 格式，不要添加任何多余说明、解释或建议；**
-7. **所有评估内容都必须包含在JSON结构内，不要在JSON外部添加任何文字；**
-8. 如果内容为空，评估为"不合格"。
-9. **重要：输出必须是完整的JSON格式，以{{开始，以}}结束，中间不能有任何其他文字。**
-10. **评估原因应简洁明了，控制在50字以内，重点说明关键问题或亮点。**
-"""
-    
+    # 有中文则评中文正文，否则评英文正文；同一套提示词与解析逻辑
+    body = followup_record_zh.strip() if followup_record_zh.strip() else followup_record_en.strip()
+    prompt = _followup_quality_prompt(body)
     try:
         result = call_ark_llm(prompt, temperature=0)
         logger.info(f"Followup quality result: {result}")
         data = _safe_parse_json_object(result)
+        zh = data.get("followup_quality_zh") or {}
+        level_zh = zh.get("level", "不合格")
+        reason_zh = zh.get("reason", "AI输出格式异常")
+        reason_en = _coerce_followup_reason_en(zh.get("reason_en"), level_zh)
         return {
-            "followup_quality_level_zh": data.get("followup_quality_zh", {}).get("level", "不合格"),
-            "followup_quality_reason_zh": data.get("followup_quality_zh", {}).get("reason", "AI输出格式异常"),
-            "followup_quality_level_en": data.get("followup_quality_en", {}).get("level", "unqualified"),
-            "followup_quality_reason_en": data.get("followup_quality_en", {}).get("reason", "AI output format error")
+            "followup_quality_level_zh": level_zh,
+            "followup_quality_reason_zh": reason_zh,
+            "followup_quality_level_en": _mirror_quality_level_zh_to_en(level_zh),
+            "followup_quality_reason_en": reason_en,
         }
     except Exception as e:
         logger.warning(f"Failed to assess followup quality bilingual: {e}")
+        err_zh = "AI评估失败，请重试"
         return {
             "followup_quality_level_zh": "不合格",
-            "followup_quality_reason_zh": "AI评估失败，请重试",
-            "followup_quality_level_en": "unqualified",
-            "followup_quality_reason_en": "AI assessment failed, please retry"
+            "followup_quality_reason_zh": err_zh,
+            "followup_quality_level_en": _mirror_quality_level_zh_to_en("不合格"),
+            "followup_quality_reason_en": "AI assessment failed. Please retry.",
         }
 
 
 def assess_next_steps_quality_bilingual(next_steps_zh: str, next_steps_en: str) -> dict:
     """
-    评估下一步计划质量（中英双语）
+    评估下一步计划质量。有中文则评中文正文，否则评英文正文；同一套提示词与解析逻辑。
     """
     # 检查内容是否为空
     if not next_steps_zh.strip() and not next_steps_en.strip():
@@ -1422,151 +1443,29 @@ def assess_next_steps_quality_bilingual(next_steps_zh: str, next_steps_en: str) 
             "next_steps_quality_level_en": "unqualified",
             "next_steps_quality_reason_en": "Next steps plan is empty, cannot be assessed"
         }
-    
-    prompt = f"""
-你是一位销售管理专家，在销售团队管理和客户关系推进方面经验丰富，擅长评估销售人员记录的"下一步计划"质量。请对以下内容进行评判，并输出如下结构：
 
-**下一步计划（中文）**：
-{next_steps_zh or ""}
-
-**下一步计划（英文）**：
-{next_steps_en or ""}
-
-**输出要求**：
-1. 输出必须是纯JSON，不能包含任何前缀、后缀或解释性文字。
-2. 必须使用双引号（"），不能使用单引号。
-3. 不能有尾随逗号。
-4. 字符串中的引号必须正确转义。
-5. 输出必须能被标准JSON解析器直接解析。
-
-**示例（常规推进-合格）**：
-{{
-    "next_steps_quality_zh": {{"level": "合格", "reason": "计划具体明确"}},
-    "next_steps_quality_en": {{"level": "qualified", "reason": "Plan is specific and clear"}}
-}}
-
-**示例（商机关闭-合格）**：
-{{
-    "next_steps_quality_zh": {{"level": "合格", "reason": "商机关闭，记录合理"}},
-    "next_steps_quality_en": {{"level": "qualified", "reason": "Opportunity closed, record is valid"}}
-}}
-
-**评判说明**：
-1. **重要背景**：本次评判仅聚焦"下一步计划"字段。其他字段如客户、项目、联系人等信息已通过表单结构记录，无需在此重复。
-2. 请重点判断该计划是否明确、具体、具备可执行性，并是否能有效推进客户关系或商机进展。
-3. **模板化检查基于语义而非格式**：只有当内容主要在表达“应该怎么写/该填哪些项/给出填写示例/占位符待填”（写作或填写指导语）时，才判为模板；编号/要点列表本身不构成模板，若分条描述的是具体动作、时间安排、目标或风险点，应按真实计划评估。
-4. **商机关闭/无机会场景（特殊情形）**：若下一步计划中**明确说明**商机已关闭、客户已明确无需求、确认无合作机会等，导致"无后续计划"或"仅保持长期关注"，此类为**合理业务记录**，应判为**合格**，原因可说明"商机关闭/无机会，记录合理"。此类内容不需要有具体执行动作或时间节点。
-
-**评判要素**：
-1. 计划明确性（核心要素）：
-  - 是否写清楚要做什么？避免"持续沟通""保持联系"等泛泛描述，是否具体说明了任务/动作？
-  - 是否明确了具体的执行内容，而非模糊的表述？
-2. 时间安排（核心要素，**仅适用于常规推进场景**）：
-  - 是否写明预期完成时间？可为具体日期或相对时间（如"下周二""近期""本周内"）。
-  - 常规推进场景下如完全缺失时间安排，评为不合格。商机关闭/无机会场景不要求时间安排。
-3. 目标导向（加分项）：
-  - 是否表达了希望达成的具体目标？如"推进评审、完成演示、达成意向"等，体现主动推进意识。
-4. 推进商机能力（加分项）：
-  - 整体计划是否有助于推进客户沟通、转化或成交？
-
-**评判标准**：
-1. **不合格**：满足以下任一条件
-   - **模板化内容（最高优先级）**：内容为提示性模板内容，而非实际计划。此类内容必须直接判为不合格，无需考虑其他因素。
-   - **提示性内容（最高优先级）**：内容为填写提示而非实际计划，如"1. 待办事项（如：要做的具体内容）"。此类内容必须直接判为不合格。
-   - **缺乏实际信息（最高优先级）**：内容为结构化提示而非具体计划，如"1. 待办事项 2. 时间节点 3. 预期成果"。此类内容必须直接判为不合格。
-   - **占位符内容（最高优先级）**：内容为占位符或待填写状态，如"待补充"、"暂无"、"TBD"、"待定"、"稍后填写"、"待更新"等。此类内容必须直接判为不合格。
-   - **测试内容（最高优先级）**：内容为测试或无效内容，如"测试"、"test"、"123"、"asdf"、"随便写写"等。此类内容必须直接判为不合格。
-   - **重复内容（最高优先级）**：内容为无意义的重复字符或词语，如"计划计划计划"、"跟进跟进跟进"等。此类内容必须直接判为不合格。
-   - **乱码内容（最高优先级）**：内容为乱码或无意义字符，如"asdfghjkl"、"qwertyuiop"等。此类内容必须直接判为不合格。
-   - 完全缺失具体计划，仅写"等待客户反馈""保持沟通"等无具体动作的表述（**排除**：若明确说明商机已关闭/无机会导致无后续计划，见下方「商机关闭」特殊情形，判为合格）
-   - 完全缺失时间安排，无法知道何时执行（**排除**：商机关闭/无机会场景下无需时间安排，判为合格）
-   - 内容过于模糊/抽象，如"持续跟进""加强联系"等，难以执行
-   - 计划内容空泛，无实际价值
-
-2. **合格**：满足以下任一情形
-   - **情形A（常规推进）**：满足以下所有条件
-     - **非模板化**：内容为实际下一步计划，非提示性模板
-     - 写明了具体要做的事，内容清晰可执行
-     - 包含时间安排（具体日期或相对时间）
-     - 体现出基本的客户推进意识
-     - 文字表达清晰明了
-   - **情形B（商机关闭/无机会）**：内容明确说明商机已关闭、客户已明确无需求、确认无合作机会等，导致无后续计划或仅长期关注；此类记录合理，判为合格，无需要求具体动作或时间节点。
-
-3. **优秀**：**仅针对常规推进场景**（商机关闭/无机会只判合格，不判优秀）。在合格（情形A）基础上，满足以下条件：
-   - 内容具体详实，计划非常明确
-   - 具备清晰的目标导向，明确希望达成的结果
-   - 体现较强的推进意识和主动性
-   - 计划有助于有效推进客户关系或商机进展
-   - **降档规则（强制）**：仅当同时满足以下三项才可判"优秀"，否则一律判"合格"：
-     a) 至少包含2个明确可执行动作；
-     b) 至少包含1个明确时间安排（日期或相对时间）；
-     c) 至少包含1个明确目标结果（如推进评审/达成意向/安排会议等）。
-
-**评判流程（按顺序执行）**：
-1. 先判是否模板化/占位符/测试/乱码等 → 是则**不合格**。
-2. 再判是否明确为商机关闭/无机会/不再跟进 → 是则**合格**（原因写商机关闭、记录合理）。
-3. 否则按**常规推进**要素判：有具体计划+时间安排+可执行 → **合格**或**优秀**；否则**不合格**。
-4. 最终输出必须严格符合上述**输出格式**，仅输出JSON。
-
-**示例参考**：
-- 不合格示例：
-  * "1. 待办事项（如：要做的具体内容）\n2. 时间节点（如：预计完成时间）\n3. 预期成果（如：达成的目标或效果）"（模板化提示内容）
-  * "待补充"、"暂无"、"TBD"、"待定"（占位符内容）
-  * "测试"、"test"、"123"、"asdf"（测试内容）
-  * "计划计划计划"、"跟进跟进跟进"（重复内容）
-  * "asdfghjkl"、"qwertyuiop"（乱码内容）
-  * "等待客户反馈"（无具体动作和时间）
-  * "保持沟通"（无具体计划和时间）
-  * "持续跟进"（内容模糊，无具体安排）
-- 合格示例：
-  * "本周三前发送产品资料，并邀请客户安排下次演示。"
-  * "下周二前完成技术方案设计，并安排与客户的技术评审会议。"
-  * "本周内整理客户需求文档，下周一向客户汇报初步方案。"
-  * "客户已明确暂无需求，商机关闭，无后续计划。"（商机关闭场景）
-  * "拜访确认客户当前无预算，商机暂关闭，后续有需求再联系。"（商机关闭场景）
-  * "Opportunity closed - customer declined, no next steps."（商机关闭场景）
-- 优秀示例：
-  * "下周二与客户完成方案讲解，获取初步反馈，争取推动其内部技术评审。"
-  * "本周五前完成详细报价方案，下周一安排与客户财务部门会面，争取在月底前达成合作意向。"
-  * "明天发送产品演示视频，周三跟进客户反馈，争取安排现场演示，推进项目进入下一阶段。"
-
-**注意事项**：
-- 重点关注计划的具体性和可执行性，而非字数多少
-- 时间安排可以是相对时间（如"下周"、"近期"），但必须明确（**商机关闭/无机会场景除外**，此类无需时间安排）
-- 如果计划包含多个步骤，只要主要步骤明确即可
-- 避免因计划简短但具体而误判为不合格
-- 若内容明确表达"商机已关闭/无机会/客户明确无需求"，应视为合格记录，不要因无具体下一步动作而判不合格
-- 区分占位符与合理表述：单独写"暂无"、"待定"为占位符（不合格）；在完整句子中写"暂无后续计划（因商机关闭）"、"客户暂无需求"等为合理业务表述（可按商机关闭判合格）
-
-**输出要求**：
-1. **优先检查**：首先检查是否为模板化内容，如果是，必须直接判为"不合格"，原因明确说明"模板化提示内容"。
-2. **商机关闭检查**：若内容明确表示商机已关闭/无机会/客户明确无需求导致无后续计划，应判为"合格"，原因可写"商机关闭，记录合理"或"Opportunity closed, record is valid"。
-3. 如内容不合格，指出所有主要问题点，并提出具体、可执行的改进建议；
-4. 如内容合格，给出优化建议（即使达标也要指出可提升之处）；
-5. 如内容优秀，指出1-2个突出亮点，说明其在计划性、目标性或推进力方面的优势；
-6. 严格根据原始文本进行评判，不要虚构内容；
-7. **严格只输出 JSON 格式，不要添加任何多余说明、解释或建议；**
-8. **所有评估内容都必须包含在JSON结构内，不要在JSON外部添加任何文字；**
-9. 如果内容为空，评估为"不合格"。
-10. **重要：输出必须是完整的JSON格式，以{{开始，以}}结束，中间不能有任何其他文字。**
-11. **评估原因应简洁明了，控制在50字以内，重点说明关键问题或亮点。**
-"""
-    
+    body = next_steps_zh.strip() if next_steps_zh.strip() else next_steps_en.strip()
+    prompt = _next_steps_quality_prompt(body)
     try:
         result = call_ark_llm(prompt, temperature=0)
         logger.info(f"Next steps quality result: {result}")
         data = _safe_parse_json_object(result)
+        zh = data.get("next_steps_quality_zh") or {}
+        level_zh = zh.get("level", "不合格")
+        reason_zh = zh.get("reason", "AI输出格式异常")
+        reason_en = _coerce_next_steps_reason_en(zh.get("reason_en"), level_zh)
         return {
-            "next_steps_quality_level_zh": data.get("next_steps_quality_zh", {}).get("level", "不合格"),
-            "next_steps_quality_reason_zh": data.get("next_steps_quality_zh", {}).get("reason", "AI输出格式异常"),
-            "next_steps_quality_level_en": data.get("next_steps_quality_en", {}).get("level", "unqualified"),
-            "next_steps_quality_reason_en": data.get("next_steps_quality_en", {}).get("reason", "AI output format error")
+            "next_steps_quality_level_zh": level_zh,
+            "next_steps_quality_reason_zh": reason_zh,
+            "next_steps_quality_level_en": _mirror_quality_level_zh_to_en(level_zh),
+            "next_steps_quality_reason_en": reason_en,
         }
     except Exception as e:
         logger.warning(f"Failed to assess next steps quality bilingual: {e}")
+        err_zh = "AI评估失败，请重试"
         return {
             "next_steps_quality_level_zh": "不合格",
-            "next_steps_quality_reason_zh": "AI评估失败，请重试",
-            "next_steps_quality_level_en": "unqualified",
-            "next_steps_quality_reason_en": "AI assessment failed, please retry"
+            "next_steps_quality_reason_zh": err_zh,
+            "next_steps_quality_level_en": _mirror_quality_level_zh_to_en("不合格"),
+            "next_steps_quality_reason_en": "AI assessment failed. Please retry.",
         }
