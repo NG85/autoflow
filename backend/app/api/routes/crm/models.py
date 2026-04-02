@@ -924,6 +924,24 @@ class ReviewSessionPhaseUpdateIn(BaseModel):
     )
 
 
+ReviewSnapshotSortField = Literal[
+    "forecast_type",
+    "ai_commit",
+    "opportunity_stage",
+    "ai_stage",
+    "forecast_amount",
+    "expected_closing_date",
+    "ai_expected_closing_date",
+    "progress_count",
+    "risk_count",
+]
+
+
+class ReviewSnapshotSortItem(BaseModel):
+    field: ReviewSnapshotSortField
+    direction: Literal["asc", "desc"] = Field(default="asc", description="该字段排序方向")
+
+
 class ReviewOppBranchSnapshotsQueryIn(BaseModel):
     page: int = Field(default=1, ge=1)
     size: int = Field(default=20, ge=1, le=100)
@@ -931,20 +949,11 @@ class ReviewOppBranchSnapshotsQueryIn(BaseModel):
         default="basic",
         description="返回字段级别：basic=核心字段，full=完整字段",
     )
-    sort_by: Optional[
-        Literal[
-            "forecast_type",
-            "ai_commit",
-            "opportunity_stage",
-            "ai_stage",
-            "forecast_amount",
-            "expected_closing_date",
-            "ai_expected_closing_date",
-            "progress_count",
-            "risk_count",
-        ]
-    ] = Field(default=None, description="可选排序字段")
-    sort_direction: Literal["asc", "desc"] = Field(default="asc", description="排序方向")
+    sorts: Optional[List[ReviewSnapshotSortItem]] = Field(
+        default=None,
+        max_length=16,
+        description="排序字段列表，顺序即优先级；未传或空则使用默认：负责人 → 预测类型 → 金额（降序）",
+    )
     snapshot_filters: Optional[Dict[str, Any]] = Field(
         default=None,
         description=(
@@ -964,20 +973,11 @@ class ReviewSnapshotGroupsQueryIn(BaseModel):
         default="owner",
         description="分组维度：人员 / 预测类型 / 商机阶段",
     )
-    sort_by: Optional[
-        Literal[
-            "forecast_type",
-            "ai_commit",
-            "opportunity_stage",
-            "ai_stage",
-            "forecast_amount",
-            "expected_closing_date",
-            "ai_expected_closing_date",
-            "progress_count",
-            "risk_count",
-        ]
-    ] = Field(default=None, description="可选排序字段（用于分组结果排序）")
-    sort_direction: Literal["asc", "desc"] = Field(default="asc", description="排序方向")
+    sorts: Optional[List[ReviewSnapshotSortItem]] = Field(
+        default=None,
+        max_length=16,
+        description="分组行排序：仅第一项生效（与原先单字段排序语义一致）；未传或空则按分组键升序",
+    )
     snapshot_filters: Optional[Dict[str, Any]] = Field(
         default=None,
         description=(
@@ -1033,20 +1033,11 @@ class ReviewSnapshotGroupDataQueryIn(BaseModel):
         default="basic",
         description="返回字段级别：basic=核心字段，full=完整字段",
     )
-    sort_by: Optional[
-        Literal[
-            "forecast_type",
-            "ai_commit",
-            "opportunity_stage",
-            "ai_stage",
-            "forecast_amount",
-            "expected_closing_date",
-            "ai_expected_closing_date",
-            "progress_count",
-            "risk_count",
-        ]
-    ] = Field(default=None, description="可选排序字段")
-    sort_direction: Literal["asc", "desc"] = Field(default="asc", description="排序方向")
+    sorts: Optional[List[ReviewSnapshotSortItem]] = Field(
+        default=None,
+        max_length=16,
+        description="排序字段列表，顺序即优先级；未传或空则使用默认：负责人 → 预测类型 → 金额（降序）",
+    )
     snapshot_filters: Optional[Dict[str, Any]] = Field(
         default=None,
         description=(

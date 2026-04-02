@@ -388,45 +388,49 @@ class CRMReviewService:
             func.str_to_date(col, "%Y-%m-%d"),
         )
 
-    def _build_snapshot_sort_order(
+    @staticmethod
+    def _normalize_sorts_list(sorts: Optional[List[Tuple[str, str]]]) -> List[Tuple[str, str]]:
+        if not sorts:
+            return []
+        out: List[Tuple[str, str]] = []
+        for field, direction in sorts:
+            f = str(field or "").strip()
+            if not f:
+                continue
+            d = str(direction or "asc").strip().lower()
+            if d not in ("asc", "desc"):
+                d = "asc"
+            out.append((f, d))
+        return out
+
+    def _snapshot_sort_expr_for_key(
         self,
         db_session: Session,
+        key: str,
         *,
-        sort_by: Optional[str],
-        sort_direction: str,
         session_id: str,
         snapshot_period: str,
-    ) -> List[Any]:
-        direction_desc = str(sort_direction or "asc").strip().lower() == "desc"
-        key = str(sort_by or "").strip()
-        if not key:
-            ft_rank = self._build_forecast_type_rank_case(db_session)
-            return [
-                func.coalesce(CRMReviewOppBranchSnapshot.owner_name, ""),
-                ft_rank,
-                CRMReviewOppBranchSnapshot.forecast_amount.desc(),
-            ]
-
-        def _dir(expr: Any) -> Any:
-            return expr.desc() if direction_desc else expr.asc()
-
-        if key == "forecast_type":
-            expr = self._build_forecast_rank_case_for_col(db_session, CRMReviewOppBranchSnapshot.forecast_type)
-        elif key == "ai_commit":
-            expr = self._build_forecast_rank_case_for_col(db_session, CRMReviewOppBranchSnapshot.ai_commit)
-        elif key == "opportunity_stage":
-            expr = func.lower(func.coalesce(CRMReviewOppBranchSnapshot.opportunity_stage, ""))
-        elif key == "ai_stage":
-            expr = func.lower(func.coalesce(CRMReviewOppBranchSnapshot.ai_stage, ""))
-        elif key == "forecast_amount":
-            expr = func.coalesce(CRMReviewOppBranchSnapshot.forecast_amount, 0)
-        elif key == "expected_closing_date":
-            expr = self._date_parse_expr(CRMReviewOppBranchSnapshot.expected_closing_date)
-        elif key == "ai_expected_closing_date":
-            expr = self._date_parse_expr(CRMReviewOppBranchSnapshot.ai_expected_closing_date)
-        elif key in {"risk_count", "progress_count"}:
-            record_type = "RISK" if key == "risk_count" else "PROGRESS"
-            expr = (
+    ) -> Optional[Any]:
+        k = str(key or "").strip()
+        if not k:
+            return None
+        if k == "forecast_type":
+            return self._build_forecast_rank_case_for_col(db_session, CRMReviewOppBranchSnapshot.forecast_type)
+        if k == "ai_commit":
+            return self._build_forecast_rank_case_for_col(db_session, CRMReviewOppBranchSnapshot.ai_commit)
+        if k == "opportunity_stage":
+            return func.lower(func.coalesce(CRMReviewOppBranchSnapshot.opportunity_stage, ""))
+        if k == "ai_stage":
+            return func.lower(func.coalesce(CRMReviewOppBranchSnapshot.ai_stage, ""))
+        if k == "forecast_amount":
+            return func.coalesce(CRMReviewOppBranchSnapshot.forecast_amount, 0)
+        if k == "expected_closing_date":
+            return self._date_parse_expr(CRMReviewOppBranchSnapshot.expected_closing_date)
+        if k == "ai_expected_closing_date":
+            return self._date_parse_expr(CRMReviewOppBranchSnapshot.ai_expected_closing_date)
+        if k in {"risk_count", "progress_count"}:
+            record_type = "RISK" if k == "risk_count" else "PROGRESS"
+            return (
                 select(func.count())
                 .where(
                     CRMReviewOppRiskProgress.session_id == session_id,
@@ -437,19 +441,46 @@ class CRMReviewService:
                 .correlate(CRMReviewOppBranchSnapshot)
                 .scalar_subquery()
             )
-        else:
-            ft_rank = self._build_forecast_type_rank_case(db_session)
-            return [
-                func.coalesce(CRMReviewOppBranchSnapshot.owner_name, ""),
-                ft_rank,
-                CRMReviewOppBranchSnapshot.forecast_amount.desc(),
-            ]
+        return None
 
+    def _default_snapshot_sort_order(self, db_session: Session) -> List[Any]:
+        ft_rank = self._build_forecast_type_rank_case(db_session)
         return [
-            _dir(expr),
-            func.coalesce(CRMReviewOppBranchSnapshot.owner_name, "").asc(),
-            CRMReviewOppBranchSnapshot.id.desc(),
+            func.coalesce(CRMReviewOppBranchSnapshot.owner_name, ""),
+            ft_rank,
+            CRMReviewOppBranchSnapshot.forecast_amount.desc(),
         ]
+
+    def _build_snapshot_sort_order(
+        self,
+        db_session: Session,
+        *,
+        sorts: List[Tuple[str, str]],
+        session_id: str,
+        snapshot_period: str,
+    ) -> List[Any]:
+        if not sorts:
+            return self._default_snapshot_sort_order(db_session)
+
+        out: List[Any] = []
+        for field, direction in sorts:
+            direction_desc = direction == "desc"
+            expr = self._snapshot_sort_expr_for_key(
+                db_session,
+                field,
+                session_id=session_id,
+                snapshot_period=snapshot_period,
+            )
+            if expr is None:
+                continue
+            out.append(expr.desc() if direction_desc else expr.asc())
+
+        if not out:
+            return self._default_snapshot_sort_order(db_session)
+
+        out.append(func.coalesce(CRMReviewOppBranchSnapshot.owner_name, "").asc())
+        out.append(CRMReviewOppBranchSnapshot.id.desc())
+        return out
 
     @staticmethod
     def _group_field_and_label(group_by: str):
@@ -760,8 +791,7 @@ class CRMReviewService:
         page: int = 1,
         size: int = 20,
         fields_level: str = "basic",
-        sort_by: Optional[str] = None,
-        sort_direction: str = "asc",
+        sorts: Optional[List[Tuple[str, str]]] = None,
         snapshot_filters: Optional[Dict[str, Any]] = None,
     ) -> dict:
         page = int(page or 1)
@@ -793,10 +823,10 @@ class CRMReviewService:
                 select(func.count()).select_from(CRMReviewOppBranchSnapshot).where(*base_where)
             ).one()
         )
+        norm_sorts = self._normalize_sorts_list(sorts)
         order_by = self._build_snapshot_sort_order(
             db_session,
-            sort_by=sort_by,
-            sort_direction=sort_direction,
+            sorts=norm_sorts,
             session_id=session_id,
             snapshot_period=snapshot_period,
         )
@@ -833,13 +863,15 @@ class CRMReviewService:
         session_id: str,
         user_id: str,
         group_by: str = "owner",
-        sort_by: Optional[str] = None,
-        sort_direction: str = "asc",
+        sorts: Optional[List[Tuple[str, str]]] = None,
         snapshot_filters: Optional[Dict[str, Any]] = None,
     ) -> dict:
         scope = self._resolve_session_scope(db_session, session_id=session_id, user_id=user_id)
         normalized_filters = self._normalize_snapshot_filters(snapshot_filters)
-        direction_desc = str(sort_direction or "asc").strip().lower() == "desc"
+        norm = self._normalize_sorts_list(sorts)
+        first_sort = norm[0] if norm else None
+        sort_by = first_sort[0] if first_sort else None
+        direction_desc = first_sort[1] == "desc" if first_sort else False
 
         base_where: List[Any] = [
             CRMReviewOppBranchSnapshot.owner_id.in_(scope["owner_ids"]),
@@ -853,10 +885,10 @@ class CRMReviewService:
         )
 
         def _group_order_by(cnt_expr: Any, key_expr: Any) -> List[Any]:
-            # 分组结果排序：
-            # - 未指定 sort_by：保持原先默认，仅按分组 key 升序（不受 sort_direction 影响）
+            # 分组结果排序（仅使用 sorts 的第一项，与原先单字段语义一致）：
+            # - 未指定：仅按分组 key 升序
             # - risk_count / progress_count：按数量排序
-            # - 其他显式 sort_by：按分组 key 与 sort_direction
+            # - 其他：按分组 key 与 direction
             sk = str(sort_by or "").strip()
             if not sk:
                 return [key_expr.asc()]
@@ -921,8 +953,7 @@ class CRMReviewService:
         page: int = 1,
         size: int = 20,
         fields_level: str = "basic",
-        sort_by: Optional[str] = None,
-        sort_direction: str = "asc",
+        sorts: Optional[List[Tuple[str, str]]] = None,
         snapshot_filters: Optional[Dict[str, Any]] = None,
     ) -> dict:
         page = int(page or 1)
@@ -958,10 +989,10 @@ class CRMReviewService:
                 select(func.count()).select_from(CRMReviewOppBranchSnapshot).where(*base_where)
             ).one()
         )
+        norm_sorts = self._normalize_sorts_list(sorts)
         order_by = self._build_snapshot_sort_order(
             db_session,
-            sort_by=sort_by,
-            sort_direction=sort_direction,
+            sorts=norm_sorts,
             session_id=session_id,
             snapshot_period=scope["snapshot_period"],
         )
