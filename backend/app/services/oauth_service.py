@@ -2,8 +2,7 @@ import logging
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-# from cachetools import TTLCache, cached
-# from cachetools.keys import methodkey
+from cachetools import TTLCache
 import requests
 
 from app.core.config import settings
@@ -20,9 +19,8 @@ class OAuthClient:
     ) -> None:
         self._base_url = (base_url or settings.OAUTH_BASE_URL).rstrip("/")
         self._session = session or requests.Session()
+        self._roles_permissions_cache: TTLCache = TTLCache(maxsize=256, ttl=60)
 
-
-    # @cached(cache=TTLCache(maxsize=100, ttl=60 * 10), key=methodkey)
     def query_user_roles_and_permissions(self, *, user_id: UUID, timeout_seconds: int = 30) -> Dict[str, Any]:
         """
         POST /permission/query
@@ -32,7 +30,16 @@ class OAuthClient:
             "roles": List[Any],
             "permissions": List[str]
         }
+
+        Results are cached per user_id with a 60-second TTL to reduce
+        external HTTP calls on high-frequency endpoints like /me/menu-config.
+        Failures are NOT cached so the next call retries immediately.
         """
+        cache_key = str(user_id)
+        cached_result = self._roles_permissions_cache.get(cache_key)
+        if cached_result is not None:
+            return cached_result
+
         url = f"{self._base_url}/permission/query"
         try:
             resp = self._session.post(
@@ -43,8 +50,10 @@ class OAuthClient:
             )
             resp.raise_for_status()
             data = resp.json()
-            result = data.get("result", {}) if isinstance(data, dict) else {}
-            return {"roles": result.get("roles", []), "permissions": result.get("permissions", [])}
+            raw = data.get("result", {}) if isinstance(data, dict) else {}
+            result = {"roles": raw.get("roles", []), "permissions": raw.get("permissions", [])}
+            self._roles_permissions_cache[cache_key] = result
+            return result
         except Exception:
             logger.exception("OAuth permission/query failed, user_id=%s", user_id)
             return {"roles": [], "permissions": []}

@@ -62,6 +62,339 @@ website:
     data_type: str
     description: "Google Analytics ID"
     client: true
+  menu_config:
+    default:
+      version: 1
+      menus:
+        - key: home
+          title: 欢迎
+          order: 0
+          visible: true
+          enabled: true
+          target:
+            type: route
+            value: "/"
+
+        - key: qa
+          title: 智能问答
+          order: 10
+          visible: true
+          enabled: false
+
+        - key: qa.chat
+          parent_key: qa
+          title: 智能问答
+          order: 11
+          visible: true
+          enabled: true
+          target:
+            type: route
+            value: "/chat"
+
+        - key: qa.history
+          parent_key: qa
+          title: 对话记录
+          order: 12
+          visible: true
+          enabled: true
+          target:
+            type: route
+            value: "/c"
+
+        - key: visit_guide
+          title: 客户拜访攻略
+          order: 20
+          visible: true
+          enabled: false
+
+        - key: visit_guide.assistant
+          parent_key: visit_guide
+          title: 客户拜访攻略
+          order: 21
+          visible: true
+          enabled: true
+          target:
+            type: route
+            value: "/agent/sanYeZhi"
+
+        - key: visit_guide.history
+          parent_key: visit_guide
+          title: 客户拜访攻略记录
+          order: 22
+          visible: true
+          enabled: true
+          target:
+            type: route
+            value: "/agent/clientVisitHistory"
+
+        - key: sales.playbook
+          title: 销售打法执行手册
+          order: 30
+          visible: true
+          enabled: true
+          target:
+            type: route
+            value: "/salesPlaybook"
+
+        - key: performance.weekly
+          title: 业绩达成
+          order: 40
+          visible: true
+          enabled: true
+          target:
+            type: route
+            value: "/review/list/weekly"
+
+        - key: performance.weekly_v2
+          title: 业绩达成V2
+          order: 41
+          visible: true
+          enabled: true
+          target:
+            type: route
+            value: "/review/list/weekly_v2"
+
+        - key: performance.forecast
+          title: 业绩预测
+          order: 50
+          visible: true
+          enabled: true
+          target:
+            type: route
+            value: "/review/fcst"
+
+        - key: crm
+          title: 客户/商机
+          order: 60
+          visible: true
+          enabled: false
+
+        - key: crm.account
+          parent_key: crm
+          title: 客户
+          order: 61
+          visible: true
+          enabled: true
+          target:
+            type: route
+            value: "/review/list/account"
+
+        - key: crm.opportunity
+          parent_key: crm
+          title: 商机
+          order: 62
+          visible: true
+          enabled: true
+          target:
+            type: route
+            value: "/review/list/opportunity"
+
+        - key: crm.follow_up_summary
+          parent_key: crm
+          title: 周跟进总结
+          order: 63
+          visible: true
+          enabled: true
+          target:
+            type: route
+            value: "/review/list/opportunitySummary"
+
+        - key: crm.risk_analysis
+          parent_key: crm
+          title: 业务风险分析
+          order: 64
+          visible: true
+          enabled: true
+          target:
+            type: route
+            value: "/review/risk"
+
+        - key: behavior
+          title: 销售行为管理
+          order: 70
+          visible: true
+          enabled: false
+
+        - key: behavior.entry
+          parent_key: behavior
+          title: 行为录入
+          order: 71
+          visible: true
+          enabled: false
+
+        - key: behavior.entry.follow_up
+          parent_key: behavior.entry
+          title: 客户跟进录入
+          order: 72
+          visible: true
+          enabled: true
+          target:
+            type: route
+            value: "/registerVisitRecord/register"
+
+        - key: behavior.entry.meeting
+          parent_key: behavior.entry
+          title: 客户会议录入
+          order: 73
+          visible: true
+          enabled: true
+          target:
+            type: route
+            value: "/registerVisitRecord/register?visit_type=link"
+
+        - key: behavior.entry.document
+          parent_key: behavior.entry
+          title: 客户文档录入
+          order: 74
+          visible: true
+          enabled: true
+          target:
+            type: route
+            value: "/ClientFileUpload/upload"
+
+        - key: behavior.entry.follow_up_apac
+          parent_key: behavior.entry
+          title: 客户跟进录入(APAC)
+          order: 75
+          visible: true
+          enabled: true
+          target:
+            type: route
+            value: "/registerVisitRecord/apac/register"
+
+        - key: behavior.entry.query_apac
+          parent_key: behavior.entry
+          title: 行为查询(APAC)
+          order: 76
+          visible: true
+          enabled: true
+          target:
+            type: route
+            value: "/registerVisitRecord/apac/list"
+
+        - key: behavior.query
+          parent_key: behavior
+          title: 行为查询
+          order: 80
+          visible: true
+          enabled: true
+          target:
+            type: route
+            value: "/registerVisitRecord/list"
+
+        - key: behavior.task_query
+          parent_key: behavior
+          title: 任务查询
+          order: 81
+          visible: true
+          enabled: true
+          target:
+            type: route
+            value: "/task/query"
+
+        - key: behavior.analysis
+          parent_key: behavior
+          title: 销售行为分析
+          order: 82
+          visible: true
+          enabled: true
+          target:
+            type: route
+            value: "/review/list/muban5"
+
+        - key: user.upload
+          title: 资料上传
+          order: 90
+          visible: true
+          enabled: true
+          target:
+            type: route
+            value: "/user-upload"
+
+        - key: user.contacts
+          title: 客户联系人
+          order: 91
+          visible: true
+          enabled: true
+          target:
+            type: route
+            value: "/user/management"
+
+        - key: performance.insight
+          title: 销售业绩
+          order: 100
+          visible: true
+          enabled: true
+          target:
+            type: route
+            value: "/v2/weekly-insight"
+
+        - key: scenario
+          title: 业务场景
+          order: 110
+          visible: true
+          enabled: false
+
+        - key: scenario.sales_progress
+          parent_key: scenario
+          title: 销售业绩进展分析
+          order: 111
+          visible: true
+          enabled: false
+
+        - key: scenario.sales_progress.weekly_decision
+          parent_key: scenario.sales_progress
+          title: 周度经营决策
+          order: 112
+          visible: true
+          enabled: true
+          target:
+            type: route
+            value: "/v2/weekly-insight"
+
+        - key: scenario.sales_progress.report_history
+          parent_key: scenario.sales_progress
+          title: 历史报告
+          order: 113
+          visible: true
+          enabled: true
+          target:
+            type: route
+            value: "/v2/history"
+
+        # 以下是 demo 扩展（默认统一设 visible=false）
+        - key: demo.insurance
+          title: 保险业务智能问答
+          order: 200
+          visible: false
+          enabled: false
+
+        - key: demo.account
+          title: 客户
+          order: 201
+          visible: false
+          enabled: false
+
+        - key: demo.pipeline
+          title: 商机
+          order: 202
+          visible: false
+          enabled: false
+
+        - key: demo.calendar
+          title: 日程
+          order: 203
+          visible: false
+          enabled: false
+
+        - key: demo.business
+          title: 商务咨询
+          order: 204
+          visible: false
+          enabled: false
+    data_type: dict
+    description: "Frontend menu configuration. Includes menu visibility, enablement, audience filtering rules, and optional custom unenabled page."
+    client: true
 
 custom_js:
   custom_js_example_questions:
