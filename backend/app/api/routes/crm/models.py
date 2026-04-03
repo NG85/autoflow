@@ -934,6 +934,7 @@ ReviewSnapshotSortField = Literal[
     "ai_expected_closing_date",
     "progress_count",
     "risk_count",
+    "opp_summary_count",
 ]
 
 

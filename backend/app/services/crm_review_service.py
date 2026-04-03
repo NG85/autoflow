@@ -259,7 +259,7 @@ class CRMReviewService:
                 CRMReviewOppRiskProgress.session_id == session_id,
                 CRMReviewOppRiskProgress.snapshot_period == snapshot_period,
                 CRMReviewOppRiskProgress.opportunity_id.in_(normalized_opp_ids),
-                CRMReviewOppRiskProgress.record_type.in_(("RISK", "PROGRESS")),
+                CRMReviewOppRiskProgress.record_type.in_(("RISK", "PROGRESS", "OPP_SUMMARY")),
             )
             .order_by(CRMReviewOppRiskProgress.detected_at.desc())
         ).all()
@@ -270,9 +270,12 @@ class CRMReviewService:
             if not opp_id:
                 continue
             rtype = str(getattr(row, "record_type") or "").strip().upper()
-            if rtype not in ("RISK", "PROGRESS"):
+            if rtype not in ("RISK", "PROGRESS", "OPP_SUMMARY"):
                 continue
-            bucket = by_opp.setdefault(opp_id, {"RISK": [], "PROGRESS": []})
+            bucket = by_opp.setdefault(
+                opp_id,
+                {"RISK": [], "PROGRESS": [], "OPP_SUMMARY": []},
+            )
             bucket[rtype].append(self._model_to_dict(row))
         return by_opp
 
@@ -303,9 +306,13 @@ class CRMReviewService:
         for item in items:
             row = self._model_to_dict(item)
             opp_id = str(getattr(item, "opportunity_id") or "").strip()
-            opp_bucket = by_opp.get(opp_id, {"RISK": [], "PROGRESS": []})
+            opp_bucket = by_opp.get(
+                opp_id,
+                {"RISK": [], "PROGRESS": [], "OPP_SUMMARY": []},
+            )
             row["risk_count"] = len(opp_bucket["RISK"])
             row["progress_count"] = len(opp_bucket["PROGRESS"])
+            row["opp_summary_count"] = len(opp_bucket["OPP_SUMMARY"])
             enriched.append(row)
         return enriched
 
@@ -323,6 +330,7 @@ class CRMReviewService:
                 item = {k: row.get(k) for k in full_fields}
                 item["risk_count"] = int(row.get("risk_count") or 0)
                 item["progress_count"] = int(row.get("progress_count") or 0)
+                item["opp_summary_count"] = int(row.get("opp_summary_count") or 0)
                 projected_full.append(item)
             return projected_full
 
@@ -332,6 +340,7 @@ class CRMReviewService:
             item = {k: row.get(k) for k in basic_fields}
             item["risk_count"] = int(row.get("risk_count") or 0)
             item["progress_count"] = int(row.get("progress_count") or 0)
+            item["opp_summary_count"] = int(row.get("opp_summary_count") or 0)
             projected.append(item)
         return projected
 
@@ -428,8 +437,12 @@ class CRMReviewService:
             return self._date_parse_expr(CRMReviewOppBranchSnapshot.expected_closing_date)
         if k == "ai_expected_closing_date":
             return self._date_parse_expr(CRMReviewOppBranchSnapshot.ai_expected_closing_date)
-        if k in {"risk_count", "progress_count"}:
-            record_type = "RISK" if k == "risk_count" else "PROGRESS"
+        if k in {"risk_count", "progress_count", "opp_summary_count"}:
+            record_type = (
+                "RISK"
+                if k == "risk_count"
+                else ("PROGRESS" if k == "progress_count" else "OPP_SUMMARY")
+            )
             return (
                 select(func.count())
                 .where(
@@ -887,12 +900,12 @@ class CRMReviewService:
         def _group_order_by(cnt_expr: Any, key_expr: Any) -> List[Any]:
             # 分组结果排序（仅使用 sorts 的第一项，与原先单字段语义一致）：
             # - 未指定：仅按分组 key 升序
-            # - risk_count / progress_count：按数量排序
+            # - risk_count / progress_count / opp_summary_count：按数量排序
             # - 其他：按分组 key 与 direction
             sk = str(sort_by or "").strip()
             if not sk:
                 return [key_expr.asc()]
-            if sk in {"risk_count", "progress_count"}:
+            if sk in {"risk_count", "progress_count", "opp_summary_count"}:
                 primary = cnt_expr.desc() if direction_desc else cnt_expr.asc()
                 return [primary, key_expr.asc()]
             primary = key_expr.desc() if direction_desc else key_expr.asc()
@@ -1056,15 +1069,20 @@ class CRMReviewService:
             snapshot_period=snapshot_period,
             opportunity_ids=[opportunity_id],
         )
-        opp_bucket = by_opp.get(opportunity_id, {"RISK": [], "PROGRESS": []})
+        opp_bucket = by_opp.get(
+            opportunity_id,
+            {"RISK": [], "PROGRESS": [], "OPP_SUMMARY": []},
+        )
         return {
             "session_id": str(scope["session"].unique_id),
             "opportunity_id": opportunity_id,
             "snapshot_period": snapshot_period,
             "risk_count": len(opp_bucket["RISK"]),
             "progress_count": len(opp_bucket["PROGRESS"]),
+            "opp_summary_count": len(opp_bucket["OPP_SUMMARY"]),
             "risk_details": opp_bucket["RISK"],
             "progress_details": opp_bucket["PROGRESS"],
+            "opp_summary_details": opp_bucket["OPP_SUMMARY"],
         }
 
     def submit_my_snapshot_changes(
