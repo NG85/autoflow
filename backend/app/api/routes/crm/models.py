@@ -1218,10 +1218,17 @@ class ReviewSnapshotGroupByOptionOut(BaseModel):
     label: str
 
 
+AiForecastTypeFilter = Literal["NonCommit", "Commit"]
+
+
 class ReviewSnapshotFilterEnumsOut(BaseModel):
     group_by_options: List[ReviewSnapshotGroupByOptionOut] = Field(default_factory=list)
     forecast_types: List[str] = Field(default_factory=list)
     opportunity_stages: List[ReviewOpportunityStageGroupOut] = Field(default_factory=list)
+    ai_forecast_types: List[AiForecastTypeFilter] = Field(
+        default_factory=lambda: ["NonCommit", "Commit"],
+        description="AI 预测类型筛选项：NonCommit / Commit",
+    )
 
 
 class MyLatestReviewSessionOut(BaseModel):
