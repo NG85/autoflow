@@ -420,6 +420,7 @@ def query_review_snapshot_filter_enums(
             ],
             "forecast_types": forecast_types,
             "opportunity_stages": opportunity_stages,
+            "ai_forecast_types": ["NonCommit", "Commit"],
         }
     )
 
