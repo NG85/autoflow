@@ -134,18 +134,17 @@ class ReviewDataSource:
         period = session_obj.period
         owner_ids = self._get_session_attendee_owner_ids(session_obj.unique_id)
 
-        stmt = select(CRMReviewOppBranchSnapshot).where(
-            CRMReviewOppBranchSnapshot.snapshot_period == period
-        )
-        if owner_ids:
-            stmt = stmt.where(
-                CRMReviewOppBranchSnapshot.owner_id.in_(owner_ids)
-            )
-        else:
+        if not owner_ids:
             logger.warning(
                 f"No attendees found for session {session_obj.unique_id}, "
-                f"falling back to all snapshots in period {period}"
+                f"skipping snapshot loading to avoid indexing unrelated data"
             )
+            return
+
+        stmt = select(CRMReviewOppBranchSnapshot).where(
+            CRMReviewOppBranchSnapshot.snapshot_period == period,
+            CRMReviewOppBranchSnapshot.owner_id.in_(owner_ids),
+        )
 
         snapshots: List[CRMReviewOppBranchSnapshot] = list(self.db_session.exec(stmt).all())
         logger.info(
@@ -193,6 +192,41 @@ class ReviewDataSource:
                 meta=metadata,
             )
 
+    def _build_scope_name_maps(
+        self, session_obj: CRMReviewSession
+    ) -> Dict[str, Dict[str, str]]:
+        """Build {scope_type: {id: name}} maps from snapshots and session.
+
+        Returns a dict with keys ``"opportunity"``, ``"owner"``, and
+        ``"department"`` each mapping IDs to human-readable names.
+        """
+        opp_map: Dict[str, str] = {}
+        owner_map: Dict[str, str] = {}
+
+        stmt = select(
+            CRMReviewOppBranchSnapshot.opportunity_id,
+            CRMReviewOppBranchSnapshot.opportunity_name,
+            CRMReviewOppBranchSnapshot.owner_id,
+            CRMReviewOppBranchSnapshot.owner_name,
+        ).where(
+            CRMReviewOppBranchSnapshot.snapshot_period == session_obj.period,
+        )
+        for row in self.db_session.exec(stmt).all():
+            if row[0] and row[1]:
+                opp_map[row[0]] = row[1]
+            if row[2] and row[3]:
+                owner_map[row[2]] = row[3]
+
+        dept_map: Dict[str, str] = {}
+        if session_obj.department_id and session_obj.department_name:
+            dept_map[session_obj.department_id] = session_obj.department_name
+
+        return {
+            "opportunity": opp_map,
+            "owner": owner_map,
+            "department": dept_map,
+        }
+
     def _load_risk_progress_documents(
         self, session_obj: CRMReviewSession
     ) -> Generator[Document, None, None]:
@@ -202,8 +236,20 @@ class ReviewDataSource:
         records: List[CRMReviewOppRiskProgress] = list(self.db_session.exec(stmt).all())
         logger.info(f"Loading {len(records)} risk/progress documents for session {session_obj.unique_id}")
 
+        scope_maps = self._build_scope_name_maps(session_obj)
+        opp_name_map = scope_maps["opportunity"]
+
         for rp in records:
-            lines = format_risk_progress_info(rp)
+            resolved_scope_name = None
+            if rp.scope_id and rp.scope_type:
+                type_map = scope_maps.get(rp.scope_type, {})
+                resolved_scope_name = type_map.get(rp.scope_id)
+
+            lines = format_risk_progress_info(
+                rp,
+                opportunity_name=opp_name_map.get(rp.opportunity_id) if rp.opportunity_id else None,
+                scope_name=resolved_scope_name,
+            )
             content_str = "\n".join(lines)
 
             metadata = self._base_metadata(CrmDataType.REVIEW_RISK_PROGRESS)
