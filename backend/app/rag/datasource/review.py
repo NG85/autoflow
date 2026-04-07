@@ -13,6 +13,7 @@ from sqlmodel import Session, select
 
 from app.models import Document
 from app.models.crm_review import (
+    CRMReviewAttendee,
     CRMReviewKpiMetrics,
     CRMReviewOppBranchSnapshot,
     CRMReviewOppRiskProgress,
@@ -120,15 +121,37 @@ class ReviewDataSource:
             meta=metadata,
         )
 
+    def _get_session_attendee_owner_ids(self, session_id: str) -> List[str]:
+        """Get crm_user_id list of all attendees for this session."""
+        stmt = select(CRMReviewAttendee.crm_user_id).where(
+            CRMReviewAttendee.session_id == session_id
+        )
+        return [row for row in self.db_session.exec(stmt).all() if row]
+
     def _load_snapshot_documents(
         self, session_obj: CRMReviewSession
     ) -> Generator[Document, None, None]:
         period = session_obj.period
+        owner_ids = self._get_session_attendee_owner_ids(session_obj.unique_id)
+
         stmt = select(CRMReviewOppBranchSnapshot).where(
             CRMReviewOppBranchSnapshot.snapshot_period == period
         )
+        if owner_ids:
+            stmt = stmt.where(
+                CRMReviewOppBranchSnapshot.owner_id.in_(owner_ids)
+            )
+        else:
+            logger.warning(
+                f"No attendees found for session {session_obj.unique_id}, "
+                f"falling back to all snapshots in period {period}"
+            )
+
         snapshots: List[CRMReviewOppBranchSnapshot] = list(self.db_session.exec(stmt).all())
-        logger.info(f"Loading {len(snapshots)} snapshot documents for period {period}")
+        logger.info(
+            f"Loading {len(snapshots)} snapshot documents for session "
+            f"{session_obj.unique_id} (period={period}, attendee_owners={len(owner_ids)})"
+        )
 
         for snap in snapshots:
             lines = format_snapshot_info(snap)
