@@ -51,6 +51,9 @@ class ChatMessageSate(int, enum.Enum):
     INITIALIZATION = 9
     KG_QUERY_EXECUTION = 9
     FINISHED = 10
+    REVIEW_INTENT_CLASSIFICATION = 11
+    REVIEW_DATA_RETRIEVAL = 12
+    REVIEW_CONTEXT_BUILDING = 13
     
     
 class CrmDataType(str, enum.Enum):
@@ -62,4 +65,7 @@ class CrmDataType(str, enum.Enum):
     PAYMENTPLAN = "crm_payment_plan"
     STAGE = "crm_stage"
     SALES_RECORD = "crm_sales_record"
-    # TODO: Add more other CRM types
+    OPPORTUNITY_UPDATES = "crm_opportunity_updates"
+    REVIEW_SESSION = "crm_review_session"
+    REVIEW_SNAPSHOT = "crm_review_snapshot"
+    REVIEW_RISK_PROGRESS = "crm_review_risk_progress"

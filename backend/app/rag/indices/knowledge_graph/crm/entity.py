@@ -26,6 +26,7 @@ class ContactEntity(CRMEntityBase):
 class InternalOwnerEntity(CRMEntityBase):
     """Entity representing a CRM internal owner"""
     CRM_DATA_TYPE = CrmDataType.INTERNAL_OWNER
+
 class OpportunityEntity(CRMEntityBase):
     """Entity representing a CRM opportunity"""
     CRM_DATA_TYPE = CrmDataType.OPPORTUNITY
@@ -37,4 +38,15 @@ class OrderEntity(CRMEntityBase):
 class PaymentPlanEntity(CRMEntityBase):
     """Entity representing a CRM payment plan"""
     CRM_DATA_TYPE = CrmDataType.PAYMENTPLAN
-    
+
+class ReviewSessionEntity(CRMEntityBase):
+    """Entity representing a CRM review session (department-level periodic review)"""
+    CRM_DATA_TYPE = CrmDataType.REVIEW_SESSION
+
+class ReviewSnapshotEntity(CRMEntityBase):
+    """Entity representing an opportunity branch snapshot within a review"""
+    CRM_DATA_TYPE = CrmDataType.REVIEW_SNAPSHOT
+
+class ReviewRiskProgressEntity(CRMEntityBase):
+    """Entity representing a risk or progress insight detected during review"""
+    CRM_DATA_TYPE = CrmDataType.REVIEW_RISK_PROGRESS

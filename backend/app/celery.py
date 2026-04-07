@@ -39,6 +39,9 @@ app.autodiscover_tasks(["app"])
 # 导入定时任务模块
 app.autodiscover_tasks(['app.tasks.cron_jobs'])
 
+# 导入 review 索引任务模块
+app.autodiscover_tasks(['app.tasks.review_index'])
+
 # 配置定时任务
 if settings.CRM_DAILY_TASK_ENABLED:
     cron_expr = settings.CRM_DAILY_TASK_CRON

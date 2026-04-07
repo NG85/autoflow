@@ -268,7 +268,48 @@ def build_crm_graph_index_for_document(
 
             primary_data = opportunity_updates_data
             logger.info(f"Creating graph for opportunity updates {updates_group_id} with opportunity {opportunity_updates_data.get('opportunity_name')}")
-           
+
+        elif crm_data_type == CrmDataType.REVIEW_SESSION:
+            session_id = meta.get("session_id") or meta.get("unique_id")
+            if not session_id:
+                logger.warning("Missing session_id in metadata, skipping graph construction")
+                return
+            primary_data = {k: v for k, v in meta.items() if k != "crm_data_type" and v is not None}
+            primary_data.setdefault("session_id", session_id)
+            logger.info(f"Creating graph for review session {session_id}")
+
+        elif crm_data_type == CrmDataType.REVIEW_SNAPSHOT:
+            snapshot_unique_id = meta.get("unique_id")
+            if not snapshot_unique_id:
+                logger.warning("Missing unique_id in metadata for review snapshot, skipping graph construction")
+                return
+            primary_data = {k: v for k, v in meta.items() if k != "crm_data_type" and v is not None}
+            session_id = meta.get("session_id")
+            if session_id:
+                secondary_data = {
+                    "session_id": session_id,
+                    "session_name": meta.get("session_name", session_id),
+                    "document_id": document_id,
+                    "chunk_id": chunk_id,
+                }
+            logger.info(f"Creating graph for review snapshot {snapshot_unique_id}")
+
+        elif crm_data_type == CrmDataType.REVIEW_RISK_PROGRESS:
+            rp_unique_id = meta.get("unique_id")
+            if not rp_unique_id:
+                logger.warning("Missing unique_id in metadata for review risk/progress, skipping graph construction")
+                return
+            primary_data = {k: v for k, v in meta.items() if k != "crm_data_type" and v is not None}
+            session_id = meta.get("session_id")
+            if session_id:
+                secondary_data = {
+                    "session_id": session_id,
+                    "session_name": meta.get("session_name", session_id),
+                    "document_id": document_id,
+                    "chunk_id": chunk_id,
+                }
+            logger.info(f"Creating graph for review risk/progress {rp_unique_id}")
+
         else:
             logger.warning(f"Unknown crm_data_type: {crm_data_type}, skipping graph construction")
             return          

@@ -12,9 +12,10 @@ from app.types import MimeTypes
 
 logger = logging.getLogger(__name__)
 
-def save_crm_to_file(crm_data_type, data, doc_content, doc_datetime, doc_metadata):
+def save_crm_to_file(crm_data_type, data, doc_content, doc_datetime, doc_metadata, file_name: str = None):
     try:
-        file_name = f"{getattr(data, f'{crm_data_type}_name','未具名')}_{getattr(data, 'unique_id')}.md"
+        if not file_name:
+            file_name = f"{getattr(data, f'{crm_data_type}_name','未具名')}_{getattr(data, 'unique_id')}.md"
         file_path = f"crm/{crm_data_type}/{int(time.time())}-{uuid7().hex}.md"
         
         default_file_storage.save(file_path, doc_content)

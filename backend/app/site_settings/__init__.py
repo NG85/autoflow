@@ -6,6 +6,7 @@ from sqlmodel import Session, select
 from app.models import SiteSetting as DBSiteSetting
 from app.core.db import engine
 from app.site_settings.default import default_settings
+from app.site_settings.menu_config_validator import validate_menu_config
 from app.site_settings.types import SettingValue, SettingType
 
 logger = logging.getLogger(__name__)
@@ -116,6 +117,8 @@ class SiteSettingProxy:
         _default_setting: SettingValue = getattr(default_settings, name)
         if not isinstance(value, type_mapping[_default_setting.data_type]):
             raise ValueError(f"{name} must be of type `{_default_setting.data_type}`.")
+        if name == "menu_config":
+            value = validate_menu_config(value)
 
         db_setting_obj = session.exec(
             select(DBSiteSetting).filter(DBSiteSetting.name == name)
