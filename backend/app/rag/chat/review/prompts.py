@@ -1,6 +1,27 @@
 """Prompt templates for the Review Session Q&A feature."""
 
 # ---------------------------------------------------------------------------
+# Metric glossary (shared across prompts)
+# ---------------------------------------------------------------------------
+METRIC_GLOSSARY = """\
+| 中文名 | metric_name | 说明 |
+|--------|-------------|------|
+| 商机数 | opp_count | 本周期商机总数 |
+| 目标 | target | 部门/个人销售目标金额 |
+| 已成单 | closed | 已关单赢单金额 |
+| 差额 | gap | 目标与已成单之差（target − closed） |
+| 倍数 | pipeline_coverage | Pipeline 覆盖倍数 = (commit_sales + upside_sales) / gap（gap ≤ 0 时为 0） |
+| 销售确定下单 | commit_sales | 销售自己判定会成单的金额 |
+| AI确定下单 | commit_ai | AI 判定会成单的金额 |
+| 销售可能下单 | upside_sales | 销售判定可能成单的金额 |
+
+每个指标的数据字段:
+- metric_value: 本次 review session 的值
+- metric_value_prev: 上次的值
+- metric_delta: 本次与上次的变化量
+- metric_rate: 本次与上次的变化率（小数，如 0.15 = 15%）"""
+
+# ---------------------------------------------------------------------------
 # Intent classification
 # ---------------------------------------------------------------------------
 REVIEW_INTENT_CLASSIFICATION_PROMPT = """\
@@ -14,6 +35,9 @@ question into one of three intent types and extract structured parameters.
 - Stage: {{stage}}
 - Review Phase: {{review_phase}}
 
+## Available Metrics
+""" + METRIC_GLOSSARY + """
+
 ## Chat History
 {{chat_history}}
 
@@ -22,11 +46,12 @@ question into one of three intent types and extract structured parameters.
 
 ## Intent Types
 1. **data_query** — "是什么" questions: the user wants to look up numbers, lists, \
-or factual data (e.g., "本周 commit 总金额是多少？", "哪些商机处于 Evaluation 阶段？").
+or factual data (e.g., "本周 commit 总金额是多少？", "商机数有多少？", "目标完成了多少？").
 2. **root_cause** — "为什么" questions: the user wants to understand why a metric \
-changed, what risks exist, or what caused a gap (e.g., "为什么 commit 金额较上周下降了？").
+changed, what risks exist, or what caused a gap (e.g., "为什么 commit 较上周下降了？", \
+"差额为什么这么大？").
 3. **strategy** — "怎么办" questions: the user wants actionable recommendations or \
-best practices (e.g., "如何提升 pipeline 转化率？", "针对高风险商机应该怎么跟进？").
+best practices (e.g., "如何提升 pipeline 覆盖倍数？", "针对高风险商机应该怎么跟进？").
 
 ## Output Format
 Return a JSON object with the following fields:
@@ -43,14 +68,16 @@ Return a JSON object with the following fields:
 ```
 
 ### Field Guide
-- **metric_names**: relevant metrics such as "commit_amount", "upside_amount", \
-"pipeline_count", "forecast_amount", "closed_won_amount", "gap", "achievement_rate", \
-"opportunity_stage", "risk_count", "stage_conversion". Use empty list if unclear.
+- **metric_names**: MUST use the exact `metric_name` values from the table above: \
+"opp_count", "target", "closed", "gap", "pipeline_coverage", "commit_sales", \
+"commit_ai", "upside_sales". Use empty list [] to retrieve ALL metrics, or list \
+only the relevant ones. Map user's Chinese terms to the correct metric_name \
+(e.g., "商机数" → "opp_count", "倍数" → "pipeline_coverage", "已成单" → "closed").
 - **scope_type**: the level the question is about. Default to "department" if unclear.
 - **scope_id**: only set when the user mentions a specific person, department, or \
 opportunity by name/ID.
-- **time_comparison**: set to "wow" if the user asks about week-over-week changes; \
-"mom" for month-over-month; otherwise "current_only".
+- **time_comparison**: set to "wow" if the user asks about week-over-week changes \
+or "跟上周比"; "mom" for month-over-month; otherwise "current_only".
 - **opportunity_id**: set when the user gives a CRM opportunity unique ID.
 - **opportunity_name_keyword**: set when the user refers to an opportunity or \
 customer **by name** (e.g. 「马上消费」「某某公司」) and you can extract a short \
@@ -73,6 +100,9 @@ lookup question within a review session.
 - Period: {{period}} ({{period_start}} ~ {{period_end}})
 - Department: {{department_name}}
 
+## Metric Glossary
+""" + METRIC_GLOSSARY + """
+
 ## Structured Data
 {{structured_context}}
 
@@ -82,11 +112,18 @@ lookup question within a review session.
 ## Instructions
 1. Answer the question STRICTLY based on the structured data provided above. \
 Do NOT fabricate any numbers.
-2. If the data does not contain enough information to answer, state clearly what \
-is missing.
-3. Present numbers clearly — use tables (markdown) when comparing multiple items.
-4. Use the same language as the user's question.
-5. Keep the answer concise and data-driven.
+2. Use the Metric Glossary to translate metric_name to Chinese when presenting \
+results (e.g., show "销售确定下单" instead of "commit_sales").
+3. When displaying amounts, use "万" as the unit if the value ≥ 10000 (divide \
+by 10000 and round to 2 decimal places), otherwise show the raw number.
+4. When the data includes metric_value_prev / metric_delta / metric_rate, \
+present the change information (e.g., "较上期变化 +10.5万, 增长 15.2%").
+5. For pipeline_coverage (倍数), remember it = (commit_sales + upside_sales) / \
+gap. If the user asks about coverage adequacy, 1.0x means exactly covered, \
+>3x is generally healthy.
+6. Present numbers clearly — use tables (markdown) when comparing multiple items.
+7. Use the same language as the user's question.
+8. Keep the answer concise and data-driven.
 
 Answer:
 """
@@ -103,6 +140,9 @@ The user wants to understand **why** a metric changed or a gap exists.
 ## Review Session
 - Period: {{period}} ({{period_start}} ~ {{period_end}})
 - Department: {{department_name}}
+
+## Metric Glossary
+""" + METRIC_GLOSSARY + """
 
 ## Structured Data (KPI & Snapshot Changes)
 {{structured_context}}
@@ -139,6 +179,9 @@ based on the review session data.
 ## Review Session
 - Period: {{period}} ({{period_start}} ~ {{period_end}})
 - Department: {{department_name}}
+
+## Metric Glossary
+""" + METRIC_GLOSSARY + """
 
 ## Structured Data (KPI & Snapshots)
 {{structured_context}}

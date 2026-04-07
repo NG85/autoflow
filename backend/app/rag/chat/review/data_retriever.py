@@ -23,6 +23,43 @@ from app.rag.chat.review.intent_router import ReviewIntent
 
 logger = logging.getLogger(__name__)
 
+METRIC_DISPLAY_NAMES = {
+    "opp_count": "商机数",
+    "target": "目标",
+    "closed": "已成单",
+    "gap": "差额",
+    "pipeline_coverage": "倍数",
+    "commit_sales": "销售确定下单",
+    "commit_ai": "AI确定下单",
+    "upside_sales": "销售可能下单",
+}
+
+AMOUNT_METRICS = {"target", "closed", "gap", "commit_sales", "commit_ai", "upside_sales"}
+
+
+def _fmt_value(metric_name: str, value) -> str:
+    if value is None:
+        return "N/A"
+    if metric_name == "pipeline_coverage":
+        return f"{value:.2f}x"
+    if metric_name == "opp_count":
+        v = int(value) if isinstance(value, float) and value == int(value) else value
+        return str(v)
+    if metric_name in AMOUNT_METRICS and isinstance(value, (int, float)):
+        if abs(value) >= 10000:
+            return f"{value / 10000:.2f}万"
+        return f"{value:,.2f}"
+    if isinstance(value, float):
+        return f"{value:,.2f}"
+    return str(value)
+
+
+def _fmt_rate(rate) -> str:
+    if rate is None:
+        return ""
+    pct = rate * 100 if abs(rate) < 10 else rate
+    return f"{pct:+.1f}%"
+
 
 def _escape_like(s: str) -> str:
     return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -82,23 +119,19 @@ class ReviewDataContext(BaseModel):
         parts: List[str] = []
 
         if self.kpi_metrics:
-            parts.append("### KPI Metrics")
+            parts.append("### KPI 指标")
+            parts.append("")
+            parts.append("| 范围 | 指标 (metric_name) | 本期值 | 上期值 | 变化量 | 变化率 |")
+            parts.append("|------|-------------------|--------|--------|--------|--------|")
             for m in self.kpi_metrics:
-                line = (
-                    f"- [{m.get('scope_type', '')}] {m.get('scope_name', m.get('scope_id', ''))}"
-                    f" | {m.get('metric_category', '')}/{m.get('metric_name', '')}"
-                    f" = {m.get('metric_value', 'N/A')}"
-                )
-                if m.get("metric_value_prev") is not None:
-                    line += f" (prev: {m['metric_value_prev']}"
-                    if m.get("metric_delta") is not None:
-                        line += f", delta: {m['metric_delta']}"
-                    if m.get("metric_rate") is not None:
-                        line += f", rate: {m['metric_rate']}"
-                    line += ")"
-                if m.get("metric_unit"):
-                    line += f" [{m['metric_unit']}]"
-                parts.append(line)
+                mname = m.get("metric_name", "")
+                cn = METRIC_DISPLAY_NAMES.get(mname, mname)
+                scope = m.get("scope_name") or m.get("scope_id") or m.get("scope_type", "")
+                cur = _fmt_value(mname, m.get("metric_value"))
+                prev = _fmt_value(mname, m.get("metric_value_prev")) if m.get("metric_value_prev") is not None else "-"
+                delta = _fmt_value(mname, m.get("metric_delta")) if m.get("metric_delta") is not None else "-"
+                rate = _fmt_rate(m.get("metric_rate")) if m.get("metric_rate") is not None else "-"
+                parts.append(f"| {scope} | {cn} ({mname}) | {cur} | {prev} | {delta} | {rate} |")
 
         if self.opportunity_snapshot_rows:
             parts.append("\n### 商机快照明细（本周期分支快照）")
