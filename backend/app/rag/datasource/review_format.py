@@ -153,32 +153,44 @@ def format_snapshot_info(snapshot) -> List[str]:
     return lines
 
 
-def format_risk_progress_info(risk_progress) -> List[str]:
+def format_risk_progress_info(
+    risk_progress,
+    opportunity_name: Optional[str] = None,
+    scope_name: Optional[str] = None,
+) -> List[str]:
     """Format a single risk/progress record into markdown lines.
 
     Parameters
     ----------
     risk_progress : CRMReviewOppRiskProgress
+    opportunity_name : str | None
+        Resolved opportunity display name.  Falls back to ``opportunity_id``
+        when *None*.
+    scope_name : str | None
+        Resolved display name for *scope_id* (opportunity name, owner name,
+        or department name depending on *scope_type*).  Falls back to
+        ``scope_id`` when *None*.
     """
     lines: List[str] = []
 
     record_type = getattr(risk_progress, "record_type", "")
     type_name = getattr(risk_progress, "type_name", "")
-    type_label = "风险" if record_type == "RISK" else "进展" if record_type == "PROGRESS" else record_type
-
+    type_label = "风险" if record_type == "RISK" else "进展" if record_type == "PROGRESS" else "商机总结" if record_type == "OPP_SUMMARY" else record_type
     lines.append(f"# {type_label}: {type_name}")
     lines.append("")
 
     lines.append(f"- **记录类型**: {record_type}")
     lines.append(f"- **类型代码**: {getattr(risk_progress, 'type_code', '')}")
-    lines.append(f"- **范围**: {getattr(risk_progress, 'scope_type', '')} / {getattr(risk_progress, 'scope_id', '') or '全局'}")
+    scope_display = scope_name or getattr(risk_progress, 'scope_id', '') or '全局'
+    lines.append(f"- **范围**: {getattr(risk_progress, 'scope_type', '')} / {scope_display}")
     lines.append(f"- **快照周期**: {getattr(risk_progress, 'snapshot_period', '')}")
     lines.append(f"- **计算阶段**: {getattr(risk_progress, 'calc_phase', '')}")
     lines.append("")
 
+    opp_name = opportunity_name or getattr(risk_progress, "opportunity_name", None)
     opp_id = getattr(risk_progress, "opportunity_id", None)
-    if opp_id:
-        lines.append(f"- **关联商机**: {opp_id}")
+    if opp_name or opp_id:
+        lines.append(f"- **关联商机**: {opp_name or opp_id}")
 
     severity = getattr(risk_progress, "severity", None)
     if severity:

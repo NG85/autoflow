@@ -296,14 +296,10 @@ def format_contact_info(contact) -> List[str]:
         kdm_formatted = '是' if str(kdm_value).lower() in ('是', 'yes', 'true', '1') else '否'
         content.append(f"**{kdm_label}**: {kdm_formatted}")
             
-    # 处理直属上级信息
+    # 处理直属上级信息（仅显示名称，ID 对问答无语义价值）
     if "direct_superior" in valid_columns and getattr(contact, "direct_superior"):
         superior_label = column_comments.get("direct_superior", "直属上级")
         content.append(f"**{superior_label}**: {getattr(contact, 'direct_superior')}")
-        
-    if "direct_superior_id" in valid_columns and getattr(contact, "direct_superior_id"):
-        superior_id_label = column_comments.get("direct_superior_id", "直属上级ID")
-        content.append(f"**{superior_id_label}**: {getattr(contact, 'direct_superior_id')}")
     
     
     # 处理联系方式
