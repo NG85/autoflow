@@ -41,6 +41,10 @@ from app.site_settings import SiteSetting
 from app.utils.tracing import LangfuseContextManager
 from app.rag import default_prompt
 from app.rag.chat.crm_authority import CRMAuthority, get_user_crm_authority
+from app.rag.chat.review.intent_router import ReviewIntentRouter, ReviewSessionContext
+from app.rag.chat.review.data_retriever import ReviewDataRetriever
+from app.rag.chat.review.context_builder import ReviewContextBuilder
+from app.rag.chat.review import prompts as review_prompts
 from app.models.chat import ChatType
 from app.api.routes.models import ChatMode
 
@@ -302,6 +306,9 @@ class ChatFlow:
                             "data": data,
                             "message": message,
                         })
+                elif self.chat_type == ChatType.REVIEW_SESSION:
+                    response_text = yield from self._review_session_chat()
+                    trace.update(output=response_text)
                 else:
                     if self.engine_config.is_external_engine:
                         yield from self._external_chat()
@@ -1421,6 +1428,221 @@ class ChatFlow:
         
         # 2. Return None if no match is found, indicating the question is not about the assistant's identity
         return None
+
+    def _review_session_chat(
+        self,
+    ) -> Generator[ChatEvent | str, None, Optional[str]]:
+        """End-to-end Q&A flow for a review session.
+
+        Pipeline:
+        1. _chat_start()
+        2. Load review session from context
+        3. ReviewIntentRouter.classify()
+        4. ReviewDataRetriever.retrieve()
+        5. (strategy only) KG + chunk retrieval via RetrieveFlow
+        6. ReviewContextBuilder.build()
+        7. LLM generate answer with intent-specific prompt
+        8. _chat_finish()
+        """
+        from app.repositories.crm_review_session import crm_review_session_repo
+
+        ctx = langfuse_instrumentor_context.get().copy()
+        db_user_message, db_assistant_message = yield from self._chat_start()
+        langfuse_instrumentor_context.get().update(ctx)
+
+        yield ChatEvent(
+            event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
+            payload=ChatStreamMessagePayload(
+                state=ChatMessageSate.INITIALIZATION,
+                display="Initializing review session Q&A",
+            ),
+        )
+
+        # --- Load review session ---
+        review_session_id = (self.context or {}).get("review_session_id", "")
+        if not review_session_id:
+            error_msg = "review_session_id is required in context for REVIEW_SESSION chat type."
+            yield ChatEvent(event_type=ChatEventType.TEXT_PART, payload=error_msg)
+            yield from self._chat_finish(
+                db_assistant_message=db_assistant_message,
+                db_user_message=db_user_message,
+                response_text=error_msg,
+                source_documents=[],
+            )
+            return error_msg
+
+        review_session = crm_review_session_repo.get_by_unique_id(
+            self.db_session, review_session_id
+        )
+        if not review_session:
+            error_msg = f"Review session {review_session_id} not found."
+            yield ChatEvent(event_type=ChatEventType.TEXT_PART, payload=error_msg)
+            yield from self._chat_finish(
+                db_assistant_message=db_assistant_message,
+                db_user_message=db_user_message,
+                response_text=error_msg,
+                source_documents=[],
+            )
+            return error_msg
+
+        session_ctx = ReviewSessionContext(
+            session_id=review_session.unique_id,
+            department_name=review_session.department_name,
+            period=review_session.period,
+            period_type=review_session.period_type,
+            period_start=str(review_session.period_start),
+            period_end=str(review_session.period_end),
+            stage=review_session.stage,
+            review_phase=review_session.review_phase,
+        )
+
+        # --- 1. Intent classification ---
+        yield ChatEvent(
+            event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
+            payload=ChatStreamMessagePayload(
+                state=ChatMessageSate.REVIEW_INTENT_CLASSIFICATION,
+                display="Classifying question intent",
+            ),
+        )
+        self._ensure_llm_initialized()
+        intent_router = ReviewIntentRouter(fast_llm=self._fast_llm)
+
+        with self._trace_manager.span(
+            name="review_intent_classification",
+            input=self.user_question,
+        ) as span:
+            intent = intent_router.classify(
+                user_question=self.user_question,
+                session_context=session_ctx,
+                chat_history=self.chat_history,
+            )
+            span.end(output=intent.model_dump())
+
+        logger.info(
+            "Review intent: type=%s, metrics=%s, scope=%s",
+            intent.intent_type,
+            intent.metric_names,
+            intent.scope_type,
+        )
+
+        # --- 2. Structured data retrieval ---
+        yield ChatEvent(
+            event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
+            payload=ChatStreamMessagePayload(
+                state=ChatMessageSate.REVIEW_DATA_RETRIEVAL,
+                display="Retrieving review session data",
+            ),
+        )
+        data_retriever = ReviewDataRetriever()
+
+        with self._trace_manager.span(
+            name="review_data_retrieval",
+            input=intent.model_dump(),
+        ) as span:
+            data_ctx = data_retriever.retrieve(
+                db_session=self.db_session,
+                review_session=review_session,
+                intent=intent,
+                user_question=self.user_question,
+            )
+            span.end(output={
+                "kpi_count": len(data_ctx.kpi_metrics),
+                "snapshot_count": len(data_ctx.snapshot_aggregations),
+                "opportunity_snapshot_count": len(data_ctx.opportunity_snapshot_rows),
+                "risk_count": len(data_ctx.risks),
+                "progress_count": len(data_ctx.progresses),
+            })
+
+        # --- 3. (strategy only) KG + vector retrieval ---
+        knowledge_graph_context = ""
+        relevant_chunks = []
+
+        if intent.intent_type == "strategy":
+            yield ChatEvent(
+                event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
+                payload=ChatStreamMessagePayload(
+                    state=ChatMessageSate.REVIEW_CONTEXT_BUILDING,
+                    display="Searching knowledge base for best practices",
+                ),
+            )
+            try:
+                self._ensure_retrieve_flow_initialized()
+                self.granted_files = []
+                self.crm_authority = None
+
+                (_, knowledge_graph_context) = yield from self._search_knowledge_graph(
+                    user_question=self.user_question,
+                    annotation_silent=True,
+                )
+                relevant_chunks = self.retrieve_flow.search_relevant_chunks(
+                    self.user_question,
+                    crm_authority=self.crm_authority,
+                    granted_files=self.granted_files,
+                )
+            except Exception as e:
+                logger.warning("KB retrieval failed for review strategy chat, continuing without: %s", e)
+
+        # --- 4. Build context ---
+        structured_context = ReviewContextBuilder.build_structured_context(intent, data_ctx)
+        risk_context = ReviewContextBuilder.build_risk_context(intent, data_ctx)
+        kb_context = ReviewContextBuilder.build_kb_context(knowledge_graph_context, relevant_chunks)
+
+        # --- 5. Select prompt and generate ---
+        yield ChatEvent(
+            event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
+            payload=ChatStreamMessagePayload(
+                state=ChatMessageSate.GENERATE_ANSWER,
+                display="Generating answer",
+            ),
+        )
+
+        prompt_map = {
+            "data_query": review_prompts.REVIEW_DATA_QUERY_PROMPT,
+            "root_cause": review_prompts.REVIEW_ROOT_CAUSE_PROMPT,
+            "strategy": review_prompts.REVIEW_STRATEGY_PROMPT,
+        }
+        prompt_template = RichPromptTemplate(prompt_map[intent.intent_type])
+
+        format_kwargs = {
+            "current_date": datetime.now().strftime("%Y-%m-%d"),
+            "period": session_ctx.period,
+            "period_start": session_ctx.period_start,
+            "period_end": session_ctx.period_end,
+            "department_name": session_ctx.department_name or "",
+            "structured_context": structured_context,
+            "user_question": self.user_question,
+        }
+        if intent.intent_type in ("root_cause", "strategy"):
+            format_kwargs["risk_context"] = risk_context
+        if intent.intent_type == "strategy":
+            format_kwargs["kb_context"] = kb_context
+
+        with self._trace_manager.span(
+            name="review_generate_answer",
+            input={
+                "intent_type": intent.intent_type,
+                "user_question": self.user_question,
+            },
+        ) as span:
+            response_text = self._llm.predict(prompt_template, **format_kwargs)
+            span.end(output=response_text)
+
+        if not response_text:
+            response_text = "未能生成回答，请稍后重试。"
+
+        yield ChatEvent(
+            event_type=ChatEventType.TEXT_PART,
+            payload=response_text,
+        )
+
+        yield from self._chat_finish(
+            db_assistant_message=db_assistant_message,
+            db_user_message=db_user_message,
+            response_text=response_text,
+            source_documents=[],
+        )
+
+        return response_text
 
     def _save_cvg_messages(self) -> Generator[ChatEvent | str, None, None]:
         """Save user command and cvg report as chat messages"""                    

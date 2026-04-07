@@ -18,6 +18,7 @@ from .base import IntEnumType, UUIDBaseModel, UpdatableBaseModel
 class ChatType(str, enum.Enum):
     DEFAULT = "default"
     CLIENT_VISIT_GUIDE = "client_visit_guide"
+    REVIEW_SESSION = "review_session"
 
 class ChatVisibility(int, enum.Enum):
     PRIVATE = 0
