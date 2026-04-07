@@ -1,9 +1,19 @@
-from .entity import AccountEntity, ContactEntity, OpportunityEntity
+from .entity import (
+    AccountEntity,
+    ContactEntity,
+    OpportunityEntity,
+    ReviewSessionEntity,
+    ReviewSnapshotEntity,
+    ReviewRiskProgressEntity,
+)
 from .builder import CRMKnowledgeGraphBuilder
 
 __all__ = [
-    'AccountEntity', 
-    'ContactEntity', 
+    'AccountEntity',
+    'ContactEntity',
     'OpportunityEntity',
-    'CRMKnowledgeGraphBuilder'
+    'ReviewSessionEntity',
+    'ReviewSnapshotEntity',
+    'ReviewRiskProgressEntity',
+    'CRMKnowledgeGraphBuilder',
 ]

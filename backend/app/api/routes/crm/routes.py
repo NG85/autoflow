@@ -3,16 +3,23 @@ import io
 import hashlib
 import json
 from typing import List, Literal, Optional, Union
+from uuid import UUID
 from zoneinfo import ZoneInfo
+
+from fastapi import APIRouter, Body, HTTPException, Request
+from fastapi.responses import StreamingResponse
+from llama_index.core.base.llms.types import ChatMessage, MessageRole
+from openpyxl import Workbook
+from pydantic import BaseModel, Field, field_validator
+from fastapi_pagination import Page
+from datetime import datetime
+
 from app.api.deps import CurrentUserDep, SessionDep
 from app.exceptions import InternalServerError
 from app.models.customer_document import CustomerDocument
-from fastapi import APIRouter, Body, HTTPException
-from fastapi.responses import StreamingResponse
-from openpyxl import Workbook
 from app.crm.view_engine import CrmViewRequest, ViewType, CrmViewEngine, ViewRegistry
-from fastapi_pagination import Page
-from datetime import datetime
+from app.models.chat import ChatType
+from app.rag.chat.chat_flow import ChatFlow
 
 from app.api.routes.crm.models import (
     Account,
@@ -788,6 +795,115 @@ def recalculate_review_session_forecast_aggregates(
         user_id=str(user.id),
     )
     return ReviewSessionForecastRecalcOut.model_validate(data)
+
+
+class ReviewSessionChatRequest(BaseModel):
+    messages: List[ChatMessage] = Field(..., min_length=1)
+    chat_engine: str = "default"
+    chat_id: Optional[UUID] = None
+    stream: bool = True
+
+    @field_validator("messages")
+    @classmethod
+    def check_messages(cls, messages: List[ChatMessage]) -> List[ChatMessage]:
+        if not messages:
+            raise ValueError("messages cannot be empty")
+        for m in messages:
+            if m.role not in [MessageRole.USER, MessageRole.ASSISTANT]:
+                raise ValueError("role must be either 'user' or 'assistant'")
+            if not m.content:
+                raise ValueError("message content cannot be empty")
+        if messages[-1].role != MessageRole.USER:
+            raise ValueError("last message must be from user")
+        return messages
+
+
+@router.post("/crm/review/sessions/{session_id}/chat")
+def review_session_chat(
+    request: Request,
+    session_id: str,
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    chat_request: ReviewSessionChatRequest,
+):
+    """
+    Review session Q&A endpoint. Supports three types of questions:
+    - data_query: factual lookups (what)
+    - root_cause: why a metric changed (why)
+    - strategy: actionable recommendations (how)
+
+    Only session attendees can access.
+    """
+    session = crm_review_session_repo.get_by_unique_id(db_session, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Review session not found")
+
+    attendee = crm_review_attendee_repo.get_by_session_and_user_id(
+        db_session, session_id=session_id, user_id=str(user.id)
+    )
+    if not attendee:
+        raise HTTPException(
+            status_code=403,
+            detail="User is not an attendee of this review session",
+        )
+
+    origin = request.headers.get("Origin") or request.headers.get("Referer")
+    browser_id = getattr(request.state, "browser_id", "")
+
+    chat_flow = ChatFlow(
+        db_session=db_session,
+        user=user,
+        browser_id=browser_id,
+        origin=origin,
+        chat_id=chat_request.chat_id,
+        chat_messages=chat_request.messages,
+        engine_name=chat_request.chat_engine,
+        chat_type=ChatType.REVIEW_SESSION,
+        context={"review_session_id": session_id},
+    )
+
+    if chat_request.stream:
+        return StreamingResponse(
+            chat_flow.chat(),
+            media_type="text/event-stream",
+        )
+    else:
+        from app.rag.chat.chat_service import get_final_chat_result
+
+        return get_final_chat_result(chat_flow.chat())
+
+
+@router.post("/crm/review/sessions/{session_id}/build-index")
+def build_review_session_index(
+    session_id: str,
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    kb_id: Optional[int] = None,
+):
+    """手动触发某个 review session 的向量 + 知识图谱索引构建。
+
+    会为该 session 下的所有数据（session 摘要、商机快照、风险/进展）
+    生成 Document 并异步执行向量 embedding 和 CRM 知识图谱构建。
+
+    Parameters
+    ----------
+    kb_id : int | None
+        目标知识库 ID。不传则使用默认 CRM 知识库 (CRM_DAILY_KB_ID)。
+    """
+    session_obj = crm_review_session_repo.get_by_unique_id(db_session, session_id)
+    if not session_obj:
+        raise HTTPException(status_code=404, detail="Review session not found")
+
+    from app.tasks.review_index import index_review_session_data
+
+    index_review_session_data.delay(session_id, kb_id=kb_id)
+    logger.info(f"User {user.id} triggered review index build for session {session_id}, kb_id={kb_id}")
+
+    return {
+        "detail": f"Review session index build triggered for session {session_id}",
+        "session_id": session_id,
+        "kb_id": kb_id,
+    }
 
 
 def _to_comments(v: object) -> list[CRMComment]:
