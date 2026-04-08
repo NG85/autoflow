@@ -123,9 +123,11 @@ class TiDBGraphStore(KnowledgeGraphStore):
     def _ensure_relationship_indexes(self, table_name: str) -> None:
         """Ensure hot filter indexes exist for dynamic relationship tables."""
         required_indexes = {
-            "idx_relationship_chunk_id": "chunk_id",
-            "idx_relationship_graph_type": "graph_type",
-            "idx_relationship_document_id": "document_id",
+            "idx_relationship_chunk_id": ["chunk_id"],
+            "idx_relationship_graph_type": ["graph_type"],
+            "idx_relationship_document_id": ["document_id"],
+            "idx_relationship_graph_doc": ["graph_type", "document_id"],
+            "idx_relationship_graph_chunk": ["graph_type", "chunk_id"],
         }
         with engine.begin() as conn:
             existed_indexes = {
@@ -143,20 +145,21 @@ class TiDBGraphStore(KnowledgeGraphStore):
                 )
                 if row[0]
             }
-            for index_name, column_name in required_indexes.items():
+            for index_name, column_names in required_indexes.items():
                 if index_name in existed_indexes:
                     continue
                 try:
+                    columns_sql = ", ".join(f"`{c}`" for c in column_names)
                     conn.execute(
                         text(
-                            f"CREATE INDEX `{index_name}` ON `{table_name}` (`{column_name}`)"
+                            f"CREATE INDEX `{index_name}` ON `{table_name}` ({columns_sql})"
                         )
                     )
                     logger.info(
                         "Created index <%s> on <%s>(%s)",
                         index_name,
                         table_name,
-                        column_name,
+                        ",".join(column_names),
                     )
                 except Exception as e:
                     # Idempotent protection for concurrent KB initialization.
@@ -265,8 +268,8 @@ class TiDBGraphStore(KnowledgeGraphStore):
             self._session.exec(
                 select(self._relationship_model).where(
                     and_(
-                        self._relationship_model.meta["chunk_id"] == chunk_id,
-                        self._relationship_model.meta["graph_type"] == self._graph_type
+                        self._relationship_model.chunk_id == chunk_id,
+                        self._relationship_model.graph_type == self._graph_type
                     )
                 )
             ).first()

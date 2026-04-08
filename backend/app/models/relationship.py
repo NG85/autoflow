@@ -95,6 +95,8 @@ def get_dynamic_relationship_model(
                 Index("idx_relationship_chunk_id", "chunk_id"),
                 Index("idx_relationship_graph_type", "graph_type"),
                 Index("idx_relationship_document_id", "document_id"),
+                Index("idx_relationship_graph_doc", "graph_type", "document_id"),
+                Index("idx_relationship_graph_chunk", "graph_type", "chunk_id"),
                 {"extend_existing": True},
             ),
             "__annotations__": {
