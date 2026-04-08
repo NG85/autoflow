@@ -189,6 +189,13 @@ def _get_filter_condition(json_field, op, value):
     return None
 
 
+def _resolve_filter_field(model_alias, field: str):
+    """Prefer physical columns for hot filters, fallback to meta JSON."""
+    if field in {"chunk_id", "document_id", "graph_type"} and hasattr(model_alias, field):
+        return getattr(model_alias, field)
+    return model_alias.meta[field]
+
+
 def apply_filter_condition(model_alias, condition):
     """
     Apply filter conditions recursively for nested compound conditions.
@@ -214,7 +221,7 @@ def apply_filter_condition(model_alias, condition):
                 else:
                     # Handle simple conditions
                     for field, op, value in sub_condition:
-                        json_field = model_alias.meta[field]
+                        json_field = _resolve_filter_field(model_alias, field)
                         or_conditions.append(_get_filter_condition(json_field, op, value))
             
             if or_conditions:
@@ -230,7 +237,7 @@ def apply_filter_condition(model_alias, condition):
                 else:
                     # Handle simple conditions
                     for field, op, value in sub_condition:
-                        json_field = model_alias.meta[field]
+                        json_field = _resolve_filter_field(model_alias, field)
                         and_conditions.append(_get_filter_condition(json_field, op, value))
             
             if and_conditions:
@@ -239,7 +246,7 @@ def apply_filter_condition(model_alias, condition):
         # Handle simple conditions
         conditions = []
         for field, op, value in condition:
-            json_field = model_alias.meta[field]
+            json_field = _resolve_filter_field(model_alias, field)
             conditions.append(_get_filter_condition(json_field, op, value))
         
         if conditions:
