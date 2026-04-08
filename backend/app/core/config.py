@@ -139,6 +139,15 @@ class Settings(BaseSettings):
     CELERY_BROKER_URL: str = "redis://redis:6379/0"
     CELERY_RESULT_BACKEND: str = "redis://redis:6379/0"
 
+    # Celery worker tuning (override via ConfigMap per environment)
+    CELERY_DEFAULT_CONCURRENCY: int = 1
+    CELERY_LLM_CONCURRENCY: int = 1
+    CELERY_MAX_MEMORY_PER_CHILD: int = 400000   # KB, 0 = disabled
+    CELERY_MAX_TASKS_PER_CHILD: int = 50         # 0 = disabled
+    CELERY_TASK_SOFT_TIME_LIMIT: int = 600       # seconds
+    CELERY_TASK_TIME_LIMIT: int = 900            # seconds
+    CELERY_RESULT_EXPIRES: int = 3600            # seconds
+
     # TODO: move below config to `option` table, it should be configurable by staff in console
     TIDB_AI_CHAT_ENDPOINT: str = "https://af.aptsell.ai/api/v1/chats"
     TIDB_AI_API_KEY: SecretStr | None = None
