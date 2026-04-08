@@ -280,11 +280,17 @@ class Settings(BaseSettings):
     REVIEW_REPORT_HOST: str = "https://aptsell.pingcap.net"
     REVIEW_SESSION_PAGE_URL: str = "/v2/weekly-insight"
 
-    # Ops backdoor: CC Feishu cards to specified open_ids using specified Feishu app
-    OPS_CC_FEISHU_ENABLED: bool = False
+    # Ops backdoor: CC cards (Feishu or DingTalk based on current customer app config)
+    # "off" | "feishu" | "dingtalk"
+    OPS_CC_PROVIDER: str = "off"
     OPS_CC_FEISHU_APP_ID: str | None = None
     OPS_CC_FEISHU_APP_SECRET: str | None = None
     OPS_CC_FEISHU_OPEN_IDS: Annotated[list[str] | str | None, BeforeValidator(parse_str_list)] = None
+    OPS_CC_FEISHU_CHAT_IDS: Annotated[list[str] | str | None, BeforeValidator(parse_str_list)] = None
+    OPS_CC_DINGTALK_APP_ID: str | None = None
+    OPS_CC_DINGTALK_APP_SECRET: str | None = None
+    OPS_CC_DINGTALK_USER_IDS: Annotated[list[str] | str | None, BeforeValidator(parse_str_list)] = None
+    OPS_CC_DINGTALK_CHAT_IDS: Annotated[list[str] | str | None, BeforeValidator(parse_str_list)] = None
     
     # Visit detail page URL configuration
     VISIT_DETAIL_PAGE_URL: str = "https://aptsell.pingcap.net/registerVisitRecord/list"
