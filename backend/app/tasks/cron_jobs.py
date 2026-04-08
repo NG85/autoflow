@@ -1730,28 +1730,30 @@ def _count_cancelled_tasks(session: Session, start_date: datetime, end_date: dat
     """
     from sqlalchemy import text
     
-    # 先查询出所有记录，然后在Python中处理assignee_key，确保与_analyze_crm_todos中的逻辑一致
+    # 在数据库侧按 owner 分组计数，避免拉取全量行到 Python
     sql = text(
         """
         SELECT
             owner_name,
-            owner_id
+            owner_id,
+            COUNT(*) AS cnt
         FROM crm_todos
         WHERE (owner_name IS NOT NULL OR owner_id IS NOT NULL)
             AND data_source IS NOT NULL
             AND ai_status = 'CANCELLED'
             AND due_date >= :start_date
             AND due_date <= :end_date
+        GROUP BY owner_name, owner_id
         """
     )
     rows = session.exec(sql, params={"start_date": start_date, "end_date": end_date}).fetchall()
-    
-    # 使用公共方法处理assignee_key
+
+    # 使用公共方法处理assignee_key（仅遍历去重后的 owner 组合，远小于原始行数）
     cancelled_count = {}
     for r in rows:
         assignee_key, _ = _get_assignee_key_and_name_from_data(r.owner_name, r.owner_id)
         if assignee_key:
-            cancelled_count[assignee_key] = cancelled_count.get(assignee_key, 0) + 1
+            cancelled_count[assignee_key] = cancelled_count.get(assignee_key, 0) + r.cnt
 
     return cancelled_count
 
@@ -1770,27 +1772,29 @@ def _count_no_due_date_tasks(session: Session) -> dict[str, int]:
     """
     from sqlalchemy import text
     
-    # 先查询出所有记录，然后在Python中处理assignee_key，确保与_analyze_crm_todos中的逻辑一致
+    # 在数据库侧按 owner 分组计数，避免拉取全量行到 Python
     sql = text(
         """
         SELECT
             owner_name,
-            owner_id
+            owner_id,
+            COUNT(*) AS cnt
         FROM crm_todos
         WHERE (owner_name IS NOT NULL OR owner_id IS NOT NULL)
             AND data_source IS NOT NULL
             AND ai_status IN ('PENDING', 'IN_PROGRESS')
             AND due_date IS NULL
+        GROUP BY owner_name, owner_id
         """
     )
     rows = session.exec(sql).fetchall()
-    
-    # 使用公共方法处理assignee_key
+
+    # 使用公共方法处理assignee_key（仅遍历去重后的 owner 组合，远小于原始行数）
     no_due_date_count = {}
     for r in rows:
         assignee_key, _ = _get_assignee_key_and_name_from_data(r.owner_name, r.owner_id)
         if assignee_key:
-            no_due_date_count[assignee_key] = no_due_date_count.get(assignee_key, 0) + 1
+            no_due_date_count[assignee_key] = no_due_date_count.get(assignee_key, 0) + r.cnt
 
     return no_due_date_count
 

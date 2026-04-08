@@ -554,20 +554,17 @@ def sync_bitable_visit_records(
             logger.info("指定时间范围内没有需要写入的CRM拜访记录")
             return []
 
-        # 构造写入字段
-        crm_rows: list[dict] = []
-        for r in rows:
-            row_dict = dict(r._mapping) if hasattr(r, "_mapping") else dict(r)
-            crm_rows.append(row_dict)
-
         token = client.get_tenant_access_token()
         app_token = resolve_bitable_app_token(token, url_type, url_token)
 
+        # 单次遍历：直接从 rows 构造写入字段，避免中间 list 拷贝
         records_fields = []
-        for row in crm_rows:
-            fields = build_bitable_fields_from_crm_row(row)
+        for r in rows:
+            row_dict = dict(r._mapping) if hasattr(r, "_mapping") else dict(r)
+            fields = build_bitable_fields_from_crm_row(row_dict)
             if fields:
                 records_fields.append(fields)
+        del rows  # 及时释放原始行内存
 
         if not records_fields:
             logger.warning("没有可写入的字段，跳过批量创建bitable记录")
