@@ -11,7 +11,7 @@ from llama_index.core.embeddings.utils import EmbedType, resolve_embed_model
 from llama_index.embeddings.openai import OpenAIEmbedding, OpenAIEmbeddingModelType
 import sqlalchemy
 from sqlmodel import Session, asc, func, select, text, SQLModel
-from sqlalchemy.orm import aliased, defer, joinedload, noload
+from sqlalchemy.orm import defer, joinedload, noload
 from tidb_vector.sqlalchemy import VectorAdaptor
 from sqlalchemy import and_, or_, desc
 
@@ -120,6 +120,59 @@ class TiDBGraphStore(KnowledgeGraphStore):
         self._relationship_model = relationship_db_model
         self._chunk_model = chunk_db_model
 
+    def _ensure_relationship_indexes(self, table_name: str) -> None:
+        """Ensure hot filter indexes exist for dynamic relationship tables."""
+        required_indexes = {
+            "idx_relationship_chunk_id": ["chunk_id"],
+            "idx_relationship_graph_type": ["graph_type"],
+            "idx_relationship_document_id": ["document_id"],
+            "idx_relationship_graph_doc": ["graph_type", "document_id"],
+            "idx_relationship_graph_chunk": ["graph_type", "chunk_id"],
+        }
+        with engine.begin() as conn:
+            existed_indexes = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        """
+                        SELECT INDEX_NAME
+                        FROM information_schema.statistics
+                        WHERE table_schema = DATABASE()
+                          AND table_name = :table_name
+                        """
+                    ),
+                    {"table_name": table_name},
+                )
+                if row[0]
+            }
+            for index_name, column_names in required_indexes.items():
+                if index_name in existed_indexes:
+                    continue
+                try:
+                    columns_sql = ", ".join(f"`{c}`" for c in column_names)
+                    conn.execute(
+                        text(
+                            f"CREATE INDEX `{index_name}` ON `{table_name}` ({columns_sql})"
+                        )
+                    )
+                    logger.info(
+                        "Created index <%s> on <%s>(%s)",
+                        index_name,
+                        table_name,
+                        ",".join(column_names),
+                    )
+                except Exception as e:
+                    # Idempotent protection for concurrent KB initialization.
+                    err_msg = str(e).lower()
+                    if "duplicate key name" in err_msg or "already exists" in err_msg:
+                        logger.warning(
+                            "Index <%s> already exists on <%s>, skip creating.",
+                            index_name,
+                            table_name,
+                        )
+                        continue
+                    raise
+
     def ensure_table_schema(self) -> None:
         inspector = sqlalchemy.inspect(engine)
         existed_table_names = inspector.get_table_names()
@@ -165,6 +218,9 @@ class TiDBGraphStore(KnowledgeGraphStore):
             logger.info(
                 f"Relationships table <{relationships_table_name}> is already exists, not action to do."
             )
+
+        # Ensure indexes for both newly-created and existing dynamic relationship tables.
+        self._ensure_relationship_indexes(relationships_table_name)
 
     def drop_table_schema(self) -> None:
         inspector = sqlalchemy.inspect(engine)
@@ -212,8 +268,8 @@ class TiDBGraphStore(KnowledgeGraphStore):
             self._session.exec(
                 select(self._relationship_model).where(
                     and_(
-                        self._relationship_model.meta["chunk_id"] == chunk_id,
-                        self._relationship_model.meta["graph_type"] == self._graph_type
+                        self._relationship_model.chunk_id == chunk_id,
+                        self._relationship_model.graph_type == self._graph_type
                     )
                 )
             ).first()
@@ -662,18 +718,21 @@ class TiDBGraphStore(KnowledgeGraphStore):
         session: Optional[Session] = None,
         filter_doc_ids: Optional[List[int]] = None,
     ) -> Tuple[List[SQLModel], List[SQLModel]]:
-        # select the relationships to rank
-        subquery = (
+        # Build candidate set on relationship table first, then join entities later.
+        candidate_query = (
             select(
-                self._relationship_model,
+                self._relationship_model.id,
+                self._relationship_model.source_entity_id,
+                self._relationship_model.target_entity_id,
                 self._relationship_model.description_vec.cosine_distance(
                     embedding
                 ).label("embedding_distance"),
             )
-            .options(defer(self._relationship_model.description_vec)))
+            .options(defer(self._relationship_model.description_vec))
+        )
         if filter_doc_ids and len(filter_doc_ids) > 0:
             logger.debug(f"Add document_id filter to knowledge graph query: {len(filter_doc_ids)}")
-            subquery = subquery.where(self._relationship_model.document_id.in_(filter_doc_ids))
+            candidate_query = candidate_query.where(self._relationship_model.document_id.in_(filter_doc_ids))
         else:
             # No document_id filter, query all relationships
             logger.debug("No document_id filter, query all relationships from knowledge graph")
@@ -682,44 +741,50 @@ class TiDBGraphStore(KnowledgeGraphStore):
         if relationship_meta_filters:
             logger.debug(f"Applying relationship meta filters: {relationship_meta_filters}")
             filter_conditions = parse_mongo_style_filter(relationship_meta_filters)
-            subquery = subquery.where(apply_filter_condition(self._relationship_model, filter_conditions))
-        
-        # Create subquery with ordering and limit
-        subquery = (
-            subquery
+            candidate_query = candidate_query.where(apply_filter_condition(self._relationship_model, filter_conditions))
+
+        # Keep original filtering semantics before candidate pre-limit.
+        if visited_relationships:
+            candidate_query = candidate_query.where(
+                self._relationship_model.id.notin_(visited_relationships)
+            )
+
+        if distance_range != (0.0, 1.0):
+            candidate_query = candidate_query.where(
+                self._relationship_model.description_vec.cosine_distance(embedding)
+                >= distance_range[0]
+            ).where(
+                self._relationship_model.description_vec.cosine_distance(embedding)
+                <= distance_range[1]
+            )
+
+        if visited_entities:
+            candidate_query = candidate_query.where(
+                self._relationship_model.source_entity_id.in_(visited_entities)
+            )
+
+        # Pre-limit candidate set to reduce sort/join memory pressure.
+        prelimit = max(limit * 10, rank_n * 10)
+        candidates_subquery = (
+            candidate_query
             .order_by(asc("embedding_distance"))
-            #.limit(limit * 10)
+            .limit(prelimit)
         ).subquery()
 
-        relationships_alias = aliased(self._relationship_model, subquery)
-
         query = (
-            select(relationships_alias, text("embedding_distance"))
+            select(self._relationship_model, candidates_subquery.c.embedding_distance)
+            .join(candidates_subquery, self._relationship_model.id == candidates_subquery.c.id)
             .options(
-                defer(relationships_alias.description_vec),
-                joinedload(relationships_alias.source_entity)
+                defer(self._relationship_model.description_vec),
+                joinedload(self._relationship_model.source_entity)
                 .defer(self._entity_model.meta_vec)
                 .defer(self._entity_model.description_vec),
-                joinedload(relationships_alias.target_entity)
+                joinedload(self._relationship_model.target_entity)
                 .defer(self._entity_model.meta_vec)
                 .defer(self._entity_model.description_vec),
             )
             # .where(relationships_alias.weight >= 0)
         )
-
-        if visited_relationships:
-            query = query.where(subquery.c.id.notin_(visited_relationships))
-
-        if distance_range != (0.0, 1.0):
-            # embedding_distance between the range
-            query = query.where(
-                text(
-                    "embedding_distance >= :min_distance AND embedding_distance <= :max_distance"
-                )
-            ).params(min_distance=distance_range[0], max_distance=distance_range[1])
-
-        if visited_entities:
-            query = query.where(subquery.c.source_entity_id.in_(visited_entities))
 
         query = query.order_by(asc("embedding_distance")).limit(limit)
 

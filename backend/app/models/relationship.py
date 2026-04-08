@@ -4,7 +4,7 @@ from typing import Optional, Type
 from uuid import UUID
 
 from pydantic import BaseModel
-from sqlalchemy import Column, Enum, Text, JSON, DateTime
+from sqlalchemy import Column, Enum, Text, JSON, DateTime, Index
 from sqlmodel import (
     SQLModel,
     Field,
@@ -91,7 +91,14 @@ def get_dynamic_relationship_model(
         (Relationship,),
         {
             "__tablename__": relationship_table_name,
-            "__table_args__": {"extend_existing": True},
+            "__table_args__": (
+                Index("idx_relationship_chunk_id", "chunk_id"),
+                Index("idx_relationship_graph_type", "graph_type"),
+                Index("idx_relationship_document_id", "document_id"),
+                Index("idx_relationship_graph_doc", "graph_type", "document_id"),
+                Index("idx_relationship_graph_chunk", "graph_type", "chunk_id"),
+                {"extend_existing": True},
+            ),
             "__annotations__": {
                 "source_entity": entity_model,
                 "target_entity": entity_model,
