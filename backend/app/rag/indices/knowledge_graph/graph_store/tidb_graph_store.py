@@ -122,30 +122,53 @@ class TiDBGraphStore(KnowledgeGraphStore):
 
     def _ensure_relationship_indexes(self, table_name: str) -> None:
         """Ensure hot filter indexes exist for dynamic relationship tables."""
-        inspector = sqlalchemy.inspect(engine)
-        existed_indexes = {
-            idx.get("name") for idx in inspector.get_indexes(table_name) if idx.get("name")
-        }
         required_indexes = {
             "idx_relationship_chunk_id": "chunk_id",
             "idx_relationship_graph_type": "graph_type",
             "idx_relationship_document_id": "document_id",
         }
         with engine.begin() as conn:
+            existed_indexes = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        """
+                        SELECT INDEX_NAME
+                        FROM information_schema.statistics
+                        WHERE table_schema = DATABASE()
+                          AND table_name = :table_name
+                        """
+                    ),
+                    {"table_name": table_name},
+                )
+                if row[0]
+            }
             for index_name, column_name in required_indexes.items():
                 if index_name in existed_indexes:
                     continue
-                conn.execute(
-                    text(
-                        f"CREATE INDEX `{index_name}` ON `{table_name}` (`{column_name}`)"
+                try:
+                    conn.execute(
+                        text(
+                            f"CREATE INDEX `{index_name}` ON `{table_name}` (`{column_name}`)"
+                        )
                     )
-                )
-                logger.info(
-                    "Created index <%s> on <%s>(%s)",
-                    index_name,
-                    table_name,
-                    column_name,
-                )
+                    logger.info(
+                        "Created index <%s> on <%s>(%s)",
+                        index_name,
+                        table_name,
+                        column_name,
+                    )
+                except Exception as e:
+                    # Idempotent protection for concurrent KB initialization.
+                    err_msg = str(e).lower()
+                    if "duplicate key name" in err_msg or "already exists" in err_msg:
+                        logger.warning(
+                            "Index <%s> already exists on <%s>, skip creating.",
+                            index_name,
+                            table_name,
+                        )
+                        continue
+                    raise
 
     def ensure_table_schema(self) -> None:
         inspector = sqlalchemy.inspect(engine)
