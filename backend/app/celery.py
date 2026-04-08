@@ -14,6 +14,12 @@ app.conf.update(
     enable_utc=True,
     task_acks_late=True,
     task_reject_on_worker_lost=True,
+    # Worker 内存回收与任务超时
+    worker_max_memory_per_child=settings.CELERY_MAX_MEMORY_PER_CHILD or None,
+    worker_max_tasks_per_child=settings.CELERY_MAX_TASKS_PER_CHILD or None,
+    task_soft_time_limit=settings.CELERY_TASK_SOFT_TIME_LIMIT,
+    task_time_limit=settings.CELERY_TASK_TIME_LIMIT,
+    result_expires=settings.CELERY_RESULT_EXPIRES,
     # 配置队列路由
     task_routes=[
         # {"app.tasks.evaluate.*": {"queue": "evaluation"}},
