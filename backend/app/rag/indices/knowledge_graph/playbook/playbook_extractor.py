@@ -80,6 +80,7 @@ class ExtractPlaybookTriplet(dspy.Signature):
         - Must use exact entity names in relationships
         - Only extract relationships that are explicitly mentioned in the text
         - Do not infer or make assumptions about relationships
+        - For JSON output: each relationship object must use the key "relationship_desc" for the relationship narrative; never use the key "description" on a relationship object (entities use "description" only).
           
     3. Quality Guidelines:
       Basic Entity Information:
