@@ -142,7 +142,10 @@ def _extract_qa_pairs_for_chunk(
     attempt = 0
     while attempt < max_retries:
         try:
-            result = call_ark_llm(prompt)
+            result = call_ark_llm(
+                prompt,
+                response_format={"type": "json_object"},
+            )
             data = json.loads(result)
             raw_pairs = data.get("qa_pairs", []) or []
             break

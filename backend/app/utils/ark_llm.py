@@ -1,5 +1,5 @@
 import logging
-from typing import Any
+from typing import Any, Optional
 
 import requests
 
@@ -9,7 +9,11 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
-def call_ark_llm(prompt: str, temperature: float = 0.3) -> str:
+def call_ark_llm(
+    prompt: str,
+    temperature: float = 0.3,
+    response_format: Optional[dict[str, Any]] = None,
+) -> str:
     """
     调用 Ark LLM 的统一工具函数。
 
@@ -32,6 +36,8 @@ def call_ark_llm(prompt: str, temperature: float = 0.3) -> str:
         ],
         "temperature": temperature,
     }
+    if response_format is not None:
+        data["response_format"] = response_format
 
     resp = requests.post(url, headers=headers, json=data, timeout=30)
     resp.raise_for_status()
