@@ -803,6 +803,56 @@ def extract_risk_info_from_content(
         return ""
 
 
+def extract_visit_method_from_content(content: str, db_session: SessionDep) -> str:
+    """
+    从文本中抽取拜访及沟通方式（仅返回配置表允许的值）。
+    """
+    if not content:
+        return ""
+    try:
+        from app.models.crm_system_configurations import CRMSystemConfiguration
+        from sqlmodel import select
+
+        stmt = select(CRMSystemConfiguration.config_key).where(
+            CRMSystemConfiguration.config_type == "CommunicationMediumCategory",
+            CRMSystemConfiguration.is_active == True,
+        )
+        method_candidates = [str(x).strip() for x in db_session.exec(stmt).all() if str(x).strip()]
+        if not method_candidates:
+            return ""
+
+        options_text = "\n".join(f"- {m}" for m in method_candidates)
+        prompt = f"""你是销售运营助手，需要从销售拜访记录内容中识别“跟进方式”。
+你必须且只能从候选列表中选择一个值；如果无法判断，返回空字符串。
+
+{options_text}
+
+记录内容：
+{content}
+
+要求：
+1. 输出必须为单行纯文本，且与候选项“完全一致”（逐字匹配，包含中英文大小写与空格）；
+2. 不允许输出候选项之外的任何内容；
+3. 不要输出解释、理由、标点、编号、前后缀、引号、换行或 markdown；
+4. 如果无法判断，直接返回空字符串。
+
+仅输出最终答案（一个候选值或空字符串）："""
+
+        raw = (call_ark_llm(prompt, temperature=0) or "").strip()
+        if not raw:
+            return ""
+        for method in method_candidates:
+            if raw == method:
+                return method
+        for method in method_candidates:
+            if method in raw:
+                return method
+        return ""
+    except Exception as e:
+        logger.warning(f"Failed to extract visit communication method: {e}")
+        return ""
+
+
 def save_visit_record_with_content(
     record: SimpleVisitRecordCreate | CompleteVisitRecordCreate,
     content: str,
