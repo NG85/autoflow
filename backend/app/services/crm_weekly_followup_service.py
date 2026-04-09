@@ -106,25 +106,40 @@ class CRMWeeklyFollowupService:
             ]
         )
         return f"""
-你是销售管理的周复盘助手。请基于“本周拜访记录摘要（较完整）”，输出该【{key.department_name}】团队下该实体的一周跟进总结。
+你是销售管理周复盘助手。请基于“本周拜访记录摘要（较完整）”，输出该【{key.department_name}】团队下该实体的“本周进展与风险”结构化总结。
 
 实体信息（同一组拜访记录对应同一实体）：
 - 客户: {account_name or '--'}
 - 商机: {opportunity_name or '--'}
 - 伙伴: {partner_name or '--'}
 
-要求：
-1) 输出必须是严格 JSON（不要 markdown、不要多余文字）。
+任务目标：
+- progress：总结该实体本周最有价值的推进结果（结论优先），并给出关键依据与下一步动作（可选）。
+- risks：只总结会影响推进的明确风险/分歧/阻塞项；无明确风险必须输出空字符串。
+
+输出要求：
+1) 输出必须是严格 JSON（不要 markdown、不要代码块、不要多余文字）。
 2) 字段必须包含：
    - progress: string（用于“列表页单行/两行展示”，务必精炼）
    - risks: string（用于列表页展示；可为空字符串）
-3) 列表页展示优化（非常重要）：
-   - progress：1-3 句中文，优先给“结论 + 关键依据 + 下一步动作（可选）”，避免长段落与逐条复述；建议 <= 120 字
-   - risks：如无明确风险输出空字符串；如有风险，最多给出 3 条，每条建议 <= 40 字（总字数建议 <= 120）
-4) 归纳规则：
-   - 综合多次拜访记录提炼关键变化/共识/承诺/下一步；不要照搬原文
-   - 若多条记录互相矛盾，请在 risks 中加以说明
-   - 避免空泛套话（如“总体进展良好”），尽量具体可执行
+3) 输出格式示例（仅作结构示例，请基于实际内容生成）：
+{{
+  "progress": "本周完成需求澄清并确认POC范围，客户认可方案方向，下周三前提交实施计划。",
+  "risks": "客户预算审批周期不确定，可能影响立项时间。"
+}}
+4) 列表页展示优化（非常重要）：
+   - progress：1-3 句中文，优先“结论 -> 依据 -> 下一步（可选）”；避免逐条流水账；建议 <= 120 字
+   - risks：如无明确风险输出 ""；如有风险，最多 3 条关键信息（可用分号分隔），总字数建议 <= 120
+5) 归纳规则：
+   - 综合多次拜访记录提炼“关键变化/达成共识/客户承诺/下一步”，不要照搬原文
+   - 仅基于给定摘要生成，不得编造时间、金额、人员、承诺、结论
+   - 若记录间存在冲突或说法反复，必须在 risks 中明确指出冲突点
+   - 若同一信息重复出现，合并去重后再输出
+   - 避免空泛套话（如“总体进展良好”），应尽量具体、可执行、可验证
+6) 质量门槛（必须满足）：
+   - progress 必须体现“本周发生了什么实质推进”（如确认范围、明确决策路径、锁定下一步动作）
+   - 没有可验证推进时，progress 应如实写“推进有限 + 当前状态”，不得强行写积极结论
+   - risks 仅写负面因素或不确定性；不要把普通待办写成风险
 
 本周拜访记录摘要：
 {visits_text}
@@ -268,13 +283,9 @@ class CRMWeeklyFollowupService:
     def _parse_llm_json(self, raw: str) -> Optional[Dict[str, Any]]:
         if not raw:
             return None
-        raw = raw.strip()
-        # 兼容模型偶发输出前后包裹文本：尽量提取第一个 JSON 对象
-        m = re.search(r"\{[\s\S]*\}", raw)
-        if not m:
-            return None
         try:
-            return json.loads(m.group(0))
+            parsed = json.loads(raw.strip())
+            return parsed if isinstance(parsed, dict) else None
         except Exception:
             return None
 
@@ -675,7 +686,11 @@ class CRMWeeklyFollowupService:
             risks = ""
             prompt = self._build_entity_prompt(key, list(reversed(compressed)))  # 由早到晚
             try:
-                raw = call_ark_llm(prompt, temperature=0.2)
+                raw = call_ark_llm(
+                    prompt,
+                    temperature=0.2,
+                    response_format={"type": "json_object"},
+                )
                 parsed = self._parse_llm_json(raw)
                 if parsed:
                     progress = str(parsed.get("progress") or "").strip()

@@ -2,7 +2,6 @@ import logging
 import json
 import requests
 from concurrent.futures import ThreadPoolExecutor
-import re
 from typing import Optional, Any
 from datetime import datetime
 from uuid import UUID
@@ -17,73 +16,16 @@ from app.utils.ark_llm import call_ark_llm
 from app.utils.uuid6 import uuid6
 logger = logging.getLogger(__name__)
 
-def _extract_first_json_object(text: str) -> str:
-    """
-    从文本中提取第一个完整 JSON 对象（基于花括号配对，忽略字符串中的括号）。
-    找不到时返回原文本。
-    """
-    start = text.find("{")
-    if start == -1:
-        return text
-
-    depth = 0
-    in_string = False
-    escaped = False
-    for idx in range(start, len(text)):
-        ch = text[idx]
-        if in_string:
-            if escaped:
-                escaped = False
-            elif ch == "\\":
-                escaped = True
-            elif ch == "\"":
-                in_string = False
-            continue
-
-        if ch == "\"":
-            in_string = True
-        elif ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start:idx + 1]
-
-    return text
-
-
 def _safe_parse_json_object(raw: str) -> dict:
     """
-    轻量 JSON 解析：
-    1) 直接解析
-    2) 去掉 markdown 代码块围栏后解析
-    3) 提取首个完整 JSON 对象后解析
-    仅做低风险处理，避免激进修复引入误判。
+    JSON 模式下的最小解析：
+    - 仅接受可直接解析的 JSON 对象
+    - 避免对异常输出做激进修复，减少误判
     """
-    candidates: list[str] = []
-    text = raw.strip()
-    candidates.append(text)
-
-    # 常见格式：```json ... ``` 或 ``` ... ```
-    fence_removed = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE).strip()
-    if fence_removed and fence_removed != text:
-        candidates.append(fence_removed)
-
-    extracted = _extract_first_json_object(fence_removed or text).strip()
-    if extracted and extracted not in candidates:
-        candidates.append(extracted)
-
-    last_error: Exception | None = None
-    for candidate in candidates:
-        try:
-            parsed = json.loads(candidate)
-            if isinstance(parsed, dict):
-                return parsed
-            raise ValueError("Parsed JSON is not an object")
-        except Exception as exc:
-            last_error = exc
-
-    raise ValueError(f"Failed to parse JSON object from LLM response: {last_error}")
+    parsed = json.loads((raw or "").strip())
+    if not isinstance(parsed, dict):
+        raise ValueError("Parsed JSON is not an object")
+    return parsed
 
 
 def _should_generate_multilingual_content() -> bool:
@@ -346,7 +288,11 @@ Content to analyze:
 """
     
     try:
-        result = call_ark_llm(prompt, temperature=0)
+        result = call_ark_llm(
+            prompt,
+            temperature=0,
+            response_format={"type": "json_object"},
+        )
         data = json.loads(result)
         followup_record = data.get("followup_record", followup_content)
         next_steps = data.get("next_steps", "")
@@ -1180,10 +1126,10 @@ def generate_bilingual_content_batch(followup_record: str, next_steps: str) -> d
 
 **示例：**
 {{
-"followup_record_zh": "向客户介绍了产品功能，客户对自动化处理很感兴趣，询问了价格和部署时间",
-"followup_record_en": "Introduced product features to client, who showed interest in automation capabilities and inquired about pricing and deployment timeline",
-"next_steps_zh": "下周三前发送详细报价，安排技术演示",
-"next_steps_en": "Send detailed quote by next Wednesday and schedule technical demo"
+  "followup_record_zh": "向客户介绍了产品功能，客户对自动化处理很感兴趣，询问了价格和部署时间",
+  "followup_record_en": "Introduced product features to client, who showed interest in automation capabilities and inquired about pricing and deployment timeline",
+  "next_steps_zh": "下周三前发送详细报价，安排技术演示",
+  "next_steps_en": "Send detailed quote by next Wednesday and schedule technical demo"
 }}
 
 **重要提示：**
@@ -1196,7 +1142,10 @@ def generate_bilingual_content_batch(followup_record: str, next_steps: str) -> d
 """
     
     try:
-        result = call_ark_llm(prompt)
+        result = call_ark_llm(
+            prompt,
+            response_format={"type": "json_object"},
+        )
         data = json.loads(result)
         
         logger.info(f"Bilingual content result: {data}")
@@ -1457,7 +1406,11 @@ def assess_followup_quality_bilingual(followup_record_zh: str, followup_record_e
     body = followup_record_zh.strip() if followup_record_zh.strip() else followup_record_en.strip()
     prompt = _followup_quality_prompt(body)
     try:
-        result = call_ark_llm(prompt, temperature=0)
+        result = call_ark_llm(
+            prompt,
+            temperature=0,
+            response_format={"type": "json_object"},
+        )
         logger.info(f"Followup quality result: {result}")
         data = _safe_parse_json_object(result)
         zh = data.get("followup_quality_zh") or {}
@@ -1497,7 +1450,11 @@ def assess_next_steps_quality_bilingual(next_steps_zh: str, next_steps_en: str) 
     body = next_steps_zh.strip() if next_steps_zh.strip() else next_steps_en.strip()
     prompt = _next_steps_quality_prompt(body)
     try:
-        result = call_ark_llm(prompt, temperature=0)
+        result = call_ark_llm(
+            prompt,
+            temperature=0,
+            response_format={"type": "json_object"},
+        )
         logger.info(f"Next steps quality result: {result}")
         data = _safe_parse_json_object(result)
         zh = data.get("next_steps_quality_zh") or {}
