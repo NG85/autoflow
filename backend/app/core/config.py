@@ -146,6 +146,19 @@ class Settings(BaseSettings):
     CELERY_MAX_TASKS_PER_CHILD: int = 50         # 0 = disabled
     CELERY_TASK_SOFT_TIME_LIMIT: int = 600       # seconds
     CELERY_TASK_TIME_LIMIT: int = 900            # seconds
+    # Task-level timeout override for index jobs (split by workload)
+    # Document indexing may trigger multiple LLM/embedding requests.
+    CELERY_DOCUMENT_INDEX_TASK_SOFT_TIME_LIMIT: int = 5400  # seconds
+    CELERY_DOCUMENT_INDEX_TASK_TIME_LIMIT: int = 6000       # seconds
+    # KG indexing usually works on one chunk/document and should fail fast on stalls.
+    CELERY_KG_INDEX_TASK_SOFT_TIME_LIMIT: int = 1200        # seconds
+    CELERY_KG_INDEX_TASK_TIME_LIMIT: int = 1500             # seconds
+    # Small vector-only indexing tasks (entity/relationship/chunk embeddings).
+    CELERY_VECTOR_INDEX_TASK_SOFT_TIME_LIMIT: int = 420     # seconds
+    CELERY_VECTOR_INDEX_TASK_TIME_LIMIT: int = 600          # seconds
+    # Timeout override for non-index heavy tasks (cron/LLM integration).
+    CELERY_HEAVY_TASK_SOFT_TIME_LIMIT: int = 1800           # seconds
+    CELERY_HEAVY_TASK_TIME_LIMIT: int = 2400                # seconds
     CELERY_RESULT_EXPIRES: int = 3600            # seconds
 
     # TODO: move below config to `option` table, it should be configurable by staff in console

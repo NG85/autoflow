@@ -5,6 +5,7 @@ from uuid import UUID
 from celery.utils.log import get_task_logger
 import pandas as pd
 from app.celery import app as celery_app
+from app.core.config import settings
 from sqlmodel import Session
 from app.core.db import engine
 from app.models import (
@@ -23,7 +24,11 @@ from app.rag.types import CrmDataType
 logger = get_task_logger(__name__)
     
 
-@celery_app.task(bind=True)
+@celery_app.task(
+    bind=True,
+    soft_time_limit=settings.CELERY_KG_INDEX_TASK_SOFT_TIME_LIMIT,
+    time_limit=settings.CELERY_KG_INDEX_TASK_TIME_LIMIT,
+)
 def build_crm_graph_index_for_document(
     self,
     knowledge_base_id: int,

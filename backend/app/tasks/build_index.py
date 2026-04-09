@@ -4,6 +4,7 @@ from sqlmodel import Session
 from celery.utils.log import get_task_logger
 
 from app.celery import app as celery_app
+from app.core.config import settings
 from app.core.db import engine
 from app.models import (
     Document as DBDocument,
@@ -27,7 +28,11 @@ logger = get_task_logger(__name__)
 # TODO: refactor: divide into two tasks: build_vector_index_for_document and build_kg_index_for_document
 
 
-@celery_app.task(bind=True)
+@celery_app.task(
+    bind=True,
+    soft_time_limit=settings.CELERY_DOCUMENT_INDEX_TASK_SOFT_TIME_LIMIT,
+    time_limit=settings.CELERY_DOCUMENT_INDEX_TASK_TIME_LIMIT,
+)
 def build_index_for_document(self, knowledge_base_id: int, document_id: int):
     # Pre-check before building index.
     with Session(engine, expire_on_commit=False) as session:
@@ -105,7 +110,10 @@ def build_index_for_document(self, knowledge_base_id: int, document_id: int):
             build_kg_index_for_chunk.delay(knowledge_base_id, chunk.id)
 
 
-@celery_app.task
+@celery_app.task(
+    soft_time_limit=settings.CELERY_KG_INDEX_TASK_SOFT_TIME_LIMIT,
+    time_limit=settings.CELERY_KG_INDEX_TASK_TIME_LIMIT,
+)
 def build_kg_index_for_chunk(knowledge_base_id: int, chunk_id: UUID):
     with Session(engine, expire_on_commit=False) as session:
         kb = knowledge_base_repo.must_get(session, knowledge_base_id)
@@ -157,7 +165,10 @@ def build_kg_index_for_chunk(knowledge_base_id: int, chunk_id: UUID):
             session.commit()
 
 
-@celery_app.task
+@celery_app.task(
+    soft_time_limit=settings.CELERY_VECTOR_INDEX_TASK_SOFT_TIME_LIMIT,
+    time_limit=settings.CELERY_VECTOR_INDEX_TASK_TIME_LIMIT,
+)
 def build_vector_index_for_entity(knowledge_base_id: int, entity_id: int):
     with Session(engine, expire_on_commit=False) as session:
         kb = knowledge_base_repo.must_get(session, knowledge_base_id)
@@ -187,7 +198,10 @@ def build_vector_index_for_entity(knowledge_base_id: int, entity_id: int):
         )
         
 
-@celery_app.task
+@celery_app.task(
+    soft_time_limit=settings.CELERY_VECTOR_INDEX_TASK_SOFT_TIME_LIMIT,
+    time_limit=settings.CELERY_VECTOR_INDEX_TASK_TIME_LIMIT,
+)
 def build_vector_index_for_relationship(knowledge_base_id: int, relationship_id: int):
     with Session(engine, expire_on_commit=False) as session:
         kb = knowledge_base_repo.must_get(session, knowledge_base_id)
@@ -217,7 +231,10 @@ def build_vector_index_for_relationship(knowledge_base_id: int, relationship_id:
         )
 
 
-@celery_app.task
+@celery_app.task(
+    soft_time_limit=settings.CELERY_VECTOR_INDEX_TASK_SOFT_TIME_LIMIT,
+    time_limit=settings.CELERY_VECTOR_INDEX_TASK_TIME_LIMIT,
+)
 def build_vector_index_for_chunk(knowledge_base_id: int, chunk_id: UUID):
     with Session(engine, expire_on_commit=False) as session:
         kb = knowledge_base_repo.must_get(session, knowledge_base_id)
