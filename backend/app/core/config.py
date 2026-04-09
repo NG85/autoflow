@@ -146,6 +146,19 @@ class Settings(BaseSettings):
     CELERY_MAX_TASKS_PER_CHILD: int = 50         # 0 = disabled
     CELERY_TASK_SOFT_TIME_LIMIT: int = 600       # seconds
     CELERY_TASK_TIME_LIMIT: int = 900            # seconds
+    # Task-level timeout override for index jobs (split by workload)
+    # Document indexing may trigger multiple LLM/embedding requests.
+    CELERY_DOCUMENT_INDEX_TASK_SOFT_TIME_LIMIT: int = 5400  # seconds
+    CELERY_DOCUMENT_INDEX_TASK_TIME_LIMIT: int = 6000       # seconds
+    # KG indexing usually works on one chunk/document and should fail fast on stalls.
+    CELERY_KG_INDEX_TASK_SOFT_TIME_LIMIT: int = 1200        # seconds
+    CELERY_KG_INDEX_TASK_TIME_LIMIT: int = 1500             # seconds
+    # Small vector-only indexing tasks (entity/relationship/chunk embeddings).
+    CELERY_VECTOR_INDEX_TASK_SOFT_TIME_LIMIT: int = 420     # seconds
+    CELERY_VECTOR_INDEX_TASK_TIME_LIMIT: int = 600          # seconds
+    # Timeout override for non-index heavy tasks (cron/LLM integration).
+    CELERY_HEAVY_TASK_SOFT_TIME_LIMIT: int = 1800           # seconds
+    CELERY_HEAVY_TASK_TIME_LIMIT: int = 2400                # seconds
     CELERY_RESULT_EXPIRES: int = 3600            # seconds
 
     # TODO: move below config to `option` table, it should be configurable by staff in console
@@ -280,11 +293,17 @@ class Settings(BaseSettings):
     REVIEW_REPORT_HOST: str = "https://aptsell.pingcap.net"
     REVIEW_SESSION_PAGE_URL: str = "/v2/weekly-insight"
 
-    # Ops backdoor: CC Feishu cards to specified open_ids using specified Feishu app
-    OPS_CC_FEISHU_ENABLED: bool = False
+    # Ops backdoor: CC cards (Feishu or DingTalk based on current customer app config)
+    # "off" | "feishu" | "dingtalk"
+    OPS_CC_PROVIDER: str = "off"
     OPS_CC_FEISHU_APP_ID: str | None = None
     OPS_CC_FEISHU_APP_SECRET: str | None = None
     OPS_CC_FEISHU_OPEN_IDS: Annotated[list[str] | str | None, BeforeValidator(parse_str_list)] = None
+    OPS_CC_FEISHU_CHAT_IDS: Annotated[list[str] | str | None, BeforeValidator(parse_str_list)] = None
+    OPS_CC_DINGTALK_APP_ID: str | None = None
+    OPS_CC_DINGTALK_APP_SECRET: str | None = None
+    OPS_CC_DINGTALK_USER_IDS: Annotated[list[str] | str | None, BeforeValidator(parse_str_list)] = None
+    OPS_CC_DINGTALK_CHAT_IDS: Annotated[list[str] | str | None, BeforeValidator(parse_str_list)] = None
     
     # Visit detail page URL configuration
     VISIT_DETAIL_PAGE_URL: str = "https://aptsell.pingcap.net/registerVisitRecord/list"

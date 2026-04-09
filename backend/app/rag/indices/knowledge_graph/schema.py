@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 from typing import Mapping, Any, List
 
 
@@ -63,10 +63,11 @@ class Relationship(BaseModel):
         description="Target entity name of the relationship, it should an existing entity in the Entity list"
     )
     relationship_desc: str = Field(
+        validation_alias=AliasChoices("relationship_desc", "description"),
         description=(
             "Description of the relationship, it should be a complete and comprehensive sentence, not few words. "
             "Sample relationship description: 'TiDB will release a new LTS version every 6 months.'"
-        )
+        ),
     )
 
 

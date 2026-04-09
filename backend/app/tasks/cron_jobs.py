@@ -189,7 +189,12 @@ def generate_crm_daily_statistics(self, target_date_str=None, report_type=None):
         self.retry(exc=e, countdown=300)  # 5分钟后重试
 
 
-@app.task(bind=True, max_retries=3)
+@app.task(
+    bind=True,
+    max_retries=3,
+    soft_time_limit=settings.CELERY_HEAVY_TASK_SOFT_TIME_LIMIT,
+    time_limit=settings.CELERY_HEAVY_TASK_TIME_LIMIT,
+)
 def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, report_type=None):
     """
     生成CRM周报数据并推送给团队leader
@@ -1366,7 +1371,11 @@ def persist_crm_todo_facts_hourly_stock(self):
         self.retry(exc=e, countdown=300)
 
 
-@app.task(bind=True)
+@app.task(
+    bind=True,
+    soft_time_limit=settings.CELERY_HEAVY_TASK_SOFT_TIME_LIMIT,
+    time_limit=settings.CELERY_HEAVY_TASK_TIME_LIMIT,
+)
 def send_sales_task_summary(self, start_date_str=None, end_date_str=None):
     """
     销售任务总结推送任务

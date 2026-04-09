@@ -406,7 +406,11 @@ def batch_create_bitable_records(token: str, app_token: str, table_id: str, reco
                 created_ids.append(rid)
     return created_ids
 
-@app.task(bind=True)
+@app.task(
+    bind=True,
+    soft_time_limit=settings.CELERY_HEAVY_TASK_SOFT_TIME_LIMIT,
+    time_limit=settings.CELERY_HEAVY_TASK_TIME_LIMIT,
+)
 def sync_bitable_visit_records(
     self,
     start_date_str: str | None = None,

@@ -89,61 +89,125 @@ class PlatformNotificationService:
     """多平台推送服务 - 基于用户档案进行消息推送，支持飞书和Lark"""
 
     # Ops backdoor allowlist: only CC company-level daily/weekly reports.
-    _OPS_CC_FEISHU_ALLOWED_SOURCES = {"company daily report", "company weekly report"}
+    _OPS_CC_ALLOWED_SOURCES = {"company daily report", "company weekly report"}
 
     # tenant_access_token 有效期约 2 小时（飞书/钉钉文档），Redis 缓存 110 分钟，多进程/多实例共享
     _TOKEN_CACHE_TTL_SECONDS = 110 * 60
 
-    def _ops_cc_feishu_card(self, card_content: Dict[str, Any], *, source: str) -> None:
+    def _ops_cc_platform_card(self, card_content: Dict[str, Any], *, source: str) -> None:
         """
-        运维后门：用指定的飞书应用，将卡片抄送给指定 open_id 列表。
-        - 仅飞书平台
+        运维后门：按当前客户配置（飞书/钉钉）将卡片抄送到指定接收者。
         - 每次事件抄送一次（调用方控制）
         - 失败不影响主流程（仅记录日志）
         """
         try:
-            if source not in self._OPS_CC_FEISHU_ALLOWED_SOURCES:
+            if source not in self._OPS_CC_ALLOWED_SOURCES:
                 return
             
-            if not settings.OPS_CC_FEISHU_ENABLED:
+            provider = (getattr(settings, "OPS_CC_PROVIDER", "") or "").strip().lower()
+            if provider in ("", "off", "none", "disabled", "false"):
+                return
+            elif provider in ("feishu", PLATFORM_FEISHU):
+                target_platform = PLATFORM_FEISHU
+            elif provider in ("dingtalk", PLATFORM_DINGTALK):
+                target_platform = PLATFORM_DINGTALK
+            else:
+                logger.warning("Invalid OPS_CC_PROVIDER=%s, skip. source=%s", provider, source)
                 return
 
-            open_ids = settings.OPS_CC_FEISHU_OPEN_IDS or []
-            if not open_ids:
+            if target_platform is None:
+                logger.warning("Ops CC enabled but no current platform app configured, skip. source=%s", source)
                 return
 
-            app_id = settings.OPS_CC_FEISHU_APP_ID
-            app_secret = settings.OPS_CC_FEISHU_APP_SECRET
-            if not app_id or not app_secret:
-                logger.warning(
-                    "Ops CC enabled but missing Feishu app credentials, skip. source=%s",
-                    source,
-                )
-                return
-
-            token = feishu_client.get_tenant_access_token(app_id=app_id, app_secret=app_secret)
             success = 0
-            for oid in open_ids:
-                try:
-                    feishu_client.send_message(
-                        oid,
-                        token,
-                        card_content,
-                        receive_id_type="open_id",
-                        msg_type="interactive",
-                    )
-                    success += 1
-                except Exception as e:
-                    logger.error("Ops CC Feishu send failed. source=%s, open_id=%s, error=%s", source, oid, e)
+            total = 0
+            if target_platform == PLATFORM_FEISHU:
+                open_ids = settings.OPS_CC_FEISHU_OPEN_IDS or []
+                chat_ids = settings.OPS_CC_FEISHU_CHAT_IDS or []
+                total = len(open_ids) + len(chat_ids)
+                if total <= 0:
+                    return
 
-            logger.info(
-                "Ops CC Feishu done. source=%s, success=%s/%s",
-                source,
-                success,
-                len(open_ids),
-            )
+                app_id = settings.OPS_CC_FEISHU_APP_ID
+                app_secret = settings.OPS_CC_FEISHU_APP_SECRET
+                if not app_id or not app_secret:
+                    logger.warning(
+                        "Ops CC enabled but missing Feishu app credentials, skip. source=%s",
+                        source,
+                    )
+                    return
+                token = feishu_client.get_tenant_access_token(app_id=app_id, app_secret=app_secret)
+
+                for oid in open_ids:
+                    try:
+                        feishu_client.send_message(
+                            oid,
+                            token,
+                            card_content,
+                            receive_id_type="open_id",
+                            msg_type="interactive",
+                        )
+                        success += 1
+                    except Exception as e:
+                        logger.error("Ops CC Feishu send failed. source=%s, open_id=%s, error=%s", source, oid, e)
+
+                for cid in chat_ids:
+                    try:
+                        feishu_client.send_message(
+                            cid,
+                            token,
+                            card_content,
+                            receive_id_type="chat_id",
+                            msg_type="interactive",
+                        )
+                        success += 1
+                    except Exception as e:
+                        logger.error("Ops CC Feishu send failed. source=%s, chat_id=%s, error=%s", source, cid, e)
+            else:
+                user_ids = settings.OPS_CC_DINGTALK_USER_IDS or []
+                chat_ids = settings.OPS_CC_DINGTALK_CHAT_IDS or []
+                total = len(user_ids) + len(chat_ids)
+                if total <= 0:
+                    return
+
+                app_id = settings.OPS_CC_DINGTALK_APP_ID
+                app_secret = settings.OPS_CC_DINGTALK_APP_SECRET
+                if not app_id or not app_secret:
+                    logger.warning(
+                        "Ops CC enabled but missing DingTalk app credentials, skip. source=%s",
+                        source,
+                    )
+                    return
+                token = dingtalk_client.get_tenant_access_token(app_id=app_id, app_secret=app_secret)
+                for uid in user_ids:
+                    try:
+                        dingtalk_client.send_message(
+                            uid,
+                            token,
+                            card_content,
+                            receive_id_type="user_id",
+                            msg_type="interactive",
+                        )
+                        success += 1
+                    except Exception as e:
+                        logger.error("Ops CC DingTalk send failed. source=%s, user_id=%s, error=%s", source, uid, e)
+
+                for cid in chat_ids:
+                    try:
+                        dingtalk_client.send_message(
+                            cid,
+                            token,
+                            card_content,
+                            receive_id_type="chat_id",
+                            msg_type="interactive",
+                        )
+                        success += 1
+                    except Exception as e:
+                        logger.error("Ops CC DingTalk send failed. source=%s, chat_id=%s, error=%s", source, cid, e)
+
+            logger.info("Ops CC done. source=%s, platform=%s, success=%s/%s", source, target_platform, success, total)
         except Exception as e:
-            logger.error("Ops CC Feishu unexpected error. source=%s, error=%s", source, e)
+            logger.error("Ops CC unexpected error. source=%s, error=%s", source, e)
 
     def _get_current_app_id(self, platform: Optional[str]) -> Optional[str]:
         """按平台返回当前应用使用的 client_id（用于部门群配置 client_id 过滤）。"""
@@ -638,14 +702,18 @@ class PlatformNotificationService:
         total_success_count = 0
         total_failed_recipients = []
 
-        # Ops backdoor: CC Feishu card once per event (best-effort, no impact on main flow)
+        # Ops backdoor: CC card once per event (best-effort, no impact on main flow)
         try:
-            cc_card_content = (
-                (card_content_by_platform or {}).get(PLATFORM_FEISHU) if card_content_by_platform else card_content
-            )
+            cc_platform = None
+            if bool((settings.FEISHU_APP_ID or "").strip()):
+                cc_platform = PLATFORM_FEISHU
+            elif bool((settings.DINGTALK_APP_ID or "").strip()):
+                cc_platform = PLATFORM_DINGTALK
+
+            cc_card_content = (card_content_by_platform or {}).get(cc_platform) if (card_content_by_platform and cc_platform) else card_content
             if not cc_card_content and template_vars:
                 cc_template_id = (
-                    (template_id_by_platform or {}).get(PLATFORM_FEISHU) if template_id_by_platform else template_id
+                    (template_id_by_platform or {}).get(cc_platform) if (template_id_by_platform and cc_platform) else template_id
                 )
                 if cc_template_id:
                     cc_card_content = {
@@ -656,9 +724,9 @@ class PlatformNotificationService:
                         },
                     }
             if cc_card_content:
-                self._ops_cc_feishu_card(cc_card_content, source=notification_type)
+                self._ops_cc_platform_card(cc_card_content, source=notification_type)
         except Exception as e:
-            logger.error("Ops CC Feishu prepare/send failed. source=%s, error=%s", notification_type, e)
+            logger.error("Ops CC prepare/send failed. source=%s, error=%s", notification_type, e)
         
         # 获取所有需要的平台token
         platforms = [p for p in recipients_by_platform.keys() if p]

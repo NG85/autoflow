@@ -2,6 +2,7 @@ import logging
 import io
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Literal, Optional, Union
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -1871,23 +1872,67 @@ def create_visit_record(
 
 @router.post("/crm/visit_record/verify")
 def verify_visit_record(
+    db_session: SessionDep,
     user: CurrentUserDep,
     followup_content: Optional[str] = Body(None, example=""),
     followup_record: Optional[str] = Body(None, example=""),
     next_steps: Optional[str] = Body(None, example=""),
+    remarks: Optional[str] = Body(None, example=""),
+    visit_communication_method: Optional[str] = Body(None, example=""),
 ):
     try:
-        from app.crm.save_engine import process_visit_record_content_reliable
-        
-        # 使用统一的处理流程
-        if followup_content:
-            result = process_visit_record_content_reliable(followup_content=followup_content)
+        from app.crm.save_engine import (
+            process_visit_record_content_reliable,
+            extract_risk_info_from_content,
+            extract_visit_method_from_content,
+        )
+
+        input_remarks = (remarks or "").strip()
+        input_visit_method = (visit_communication_method or "").strip()
+        result: dict
+        extracted_risk_info = ""
+        extracted_visit_method = ""
+        # 构造风险抽取正文
+        if followup_content and followup_content.strip():
+            risk_content = followup_content.strip()
         else:
-            result = process_visit_record_content_reliable(
+            complete_parts = []
+            if followup_record and followup_record.strip():
+                complete_parts.append(f"跟进记录：\n{followup_record.strip()}")
+            if next_steps and next_steps.strip():
+                complete_parts.append(f"下一步计划：\n{next_steps.strip()}")
+            risk_content = "\n\n".join(complete_parts).strip()
+
+        # 无论 remarks 是否为空，都并行执行质量评估与风险抽取
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            quality_future = executor.submit(
+                process_visit_record_content_reliable,
+                followup_content=followup_content,
                 followup_record=followup_record,
-                next_steps=next_steps
+                next_steps=next_steps,
             )
-        
+            risk_future = executor.submit(
+                extract_risk_info_from_content,
+                content=risk_content,
+                title="销售拜访记录",
+                remarks=input_remarks or None,
+            )
+            visit_method_future = None
+            if not input_visit_method:
+                visit_method_future = executor.submit(extract_visit_method_from_content, risk_content, db_session)
+            result = quality_future.result()
+            extracted_risk_info = (risk_future.result() or "").strip()
+            if visit_method_future:
+                extracted_visit_method = (visit_method_future.result() or "").strip()
+
+        ai_remark_parts: list[str] = []
+        if input_remarks:
+            ai_remark_parts.append(input_remarks)
+        if extracted_risk_info:
+            ai_remark_parts.append(f"[SIA提取] {extracted_risk_info}")
+        ai_remarks = "\n".join(ai_remark_parts)
+        final_visit_method = input_visit_method or extracted_visit_method
+
         data = {
             "followup": {
                 "level_zh": result["followup_quality_level_zh"],
@@ -1906,7 +1951,9 @@ def verify_visit_record(
                 "content_en": result["next_steps_en"],
                 "level_en": result["next_steps_quality_level_en"],
                 "reason_en": result["next_steps_quality_reason_en"]
-            }
+            },
+            "remarks": ai_remarks,
+            "visit_communication_method": final_visit_method
         }
         
         return {"code": 0, "message": "success", "data": data}
