@@ -1903,7 +1903,7 @@ def verify_visit_record(
                 complete_parts.append(f"下一步计划：\n{next_steps.strip()}")
             risk_content = "\n\n".join(complete_parts).strip()
 
-        # 无论 remarks 是否为空，都并行执行质量评估与风险抽取
+        # 质量评估始终执行；仅当 remarks 为空时抽取风险（与拜访方式：仅当未填时抽取 一致）
         with ThreadPoolExecutor(max_workers=3) as executor:
             quality_future = executor.submit(
                 process_visit_record_content_reliable,
@@ -1911,26 +1911,27 @@ def verify_visit_record(
                 followup_record=followup_record,
                 next_steps=next_steps,
             )
-            risk_future = executor.submit(
-                extract_risk_info_from_content,
-                content=risk_content,
-                title="销售拜访记录",
-                remarks=input_remarks or None,
-            )
+            risk_future = None
+            if not input_remarks:
+                risk_future = executor.submit(
+                    extract_risk_info_from_content,
+                    content=risk_content,
+                    title="销售拜访记录",
+                    remarks=None,
+                )
             visit_method_future = None
             if not input_visit_method:
                 visit_method_future = executor.submit(extract_visit_method_from_content, risk_content, db_session)
             result = quality_future.result()
-            extracted_risk_info = (risk_future.result() or "").strip()
+            if risk_future:
+                extracted_risk_info = (risk_future.result() or "").strip()
             if visit_method_future:
                 extracted_visit_method = (visit_method_future.result() or "").strip()
 
-        ai_remark_parts: list[str] = []
         if input_remarks:
-            ai_remark_parts.append(input_remarks)
-        if extracted_risk_info:
-            ai_remark_parts.append(f"[SIA提取] {extracted_risk_info}")
-        ai_remarks = "\n".join(ai_remark_parts)
+            ai_remarks = input_remarks
+        else:
+            ai_remarks = f"[SIA提取] {extracted_risk_info}" if extracted_risk_info else ""
         final_visit_method = input_visit_method or extracted_visit_method
 
         data = {
