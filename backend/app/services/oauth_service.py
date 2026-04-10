@@ -422,7 +422,20 @@ class OAuthClient:
         """
         roles_and_permissions = self.query_user_roles_and_permissions(user_id=user_id)
         permissions = roles_and_permissions.get("permissions", [])
-        has_permission = permission in permissions
+        if not isinstance(permissions, list):
+            permissions = []
+
+        target_permission = str(permission or "").strip()
+        if not target_permission:
+            logger.info(f"User {user_id} permission check skipped due to empty permission")
+            return False
+
+        normalized_permissions = {
+            str(p).strip()
+            for p in permissions
+            if p is not None and str(p).strip()
+        }
+        has_permission = target_permission in normalized_permissions
         logger.info(f"User {user_id} permission check for {permission}: {has_permission}")
         return has_permission
 
@@ -433,9 +446,21 @@ class OAuthClient:
         """
         roles_and_permissions = self.query_user_roles_and_permissions(user_id=user_id)
         roles = roles_and_permissions.get("roles", [])
+        if not isinstance(roles, list):
+            roles = []
+
+        target_role = str(role or "").strip().lower()
+        if not target_role:
+            logger.info(f"User {user_id} role check skipped due to empty role")
+            return False
+
         # 用role的code属性来匹配
-        role_codes = [r.get("code") for r in roles if isinstance(r, dict) and r.get("code")]
-        has_role = role.lower() in [rc.lower() for rc in role_codes]
+        role_codes = {
+            str(r.get("code", "")).strip().lower()
+            for r in roles
+            if isinstance(r, dict) and r.get("code")
+        }
+        has_role = target_role in role_codes
         logger.info(f"User {user_id} role check for {role}: {has_role}")
         return has_role
     
