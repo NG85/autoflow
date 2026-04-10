@@ -11,6 +11,7 @@ from fastapi_pagination.ext.sqlmodel import paginate
 from app.models import Chat, User, ChatMessage, ChatUpdate, ChatFilters, ChatOrigin
 from app.repositories.base_repo import BaseRepo
 from app.exceptions import ChatNotFound, ChatMessageNotFound
+from app.services.oauth_service import oauth_client
 
 
 class ChatRepo(BaseRepo):
@@ -26,7 +27,19 @@ class ChatRepo(BaseRepo):
     ) -> Page[Chat]:
         query = select(Chat).where(Chat.deleted_at == None)
         if user:
-            if not user.is_superuser:
+            can_view_all_client_visit_guide = False
+            if filters.chat_type == "client_visit_guide":
+                try:
+                    can_view_all_client_visit_guide = (
+                        oauth_client.check_user_has_permission(
+                            user_id=user.id,
+                            permission="chats:client_visit_guide:company:view",
+                        )
+                    )
+                except Exception:
+                    can_view_all_client_visit_guide = False
+
+            if not user.is_superuser and not can_view_all_client_visit_guide:
                 query = query.where(
                     or_(Chat.user_id == user.id, Chat.browser_id == browser_id)
                 )

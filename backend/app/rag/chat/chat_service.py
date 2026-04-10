@@ -44,8 +44,11 @@ from app.rag.types import (
 from app.repositories import chat_engine_repo
 from app.repositories.embedding_model import embedding_model_repo
 from app.repositories.llm import llm_repo
+from app.services.oauth_service import oauth_client
 from app.site_settings import SiteSetting
 from llama_index.core.prompts.rich import RichPromptTemplate
+
+from app.models.chat import ChatType
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +99,19 @@ def user_can_view_chat(chat: DBChat, user: Optional[User]) -> bool:
     # Non-anonymous chat can be accessed by owner or superuser
     if not chat.user_id or chat.visibility == ChatVisibility.PUBLIC:
         return True
-    return user is not None and (user.is_superuser or chat.user_id == user.id)
+    if user is None:
+        return False
+    if user.is_superuser or chat.user_id == user.id:
+        return True
+    if chat.chat_type == ChatType.CLIENT_VISIT_GUIDE:
+        try:
+            return oauth_client.check_user_has_permission(
+                user_id=user.id,
+                permission="chats:client_visit_guide:company:view",
+            )
+        except Exception:
+            return False
+    return False
 
 
 def user_can_edit_chat(chat: DBChat, user: Optional[User]) -> bool:
