@@ -266,7 +266,15 @@ class DingTalkClient(BaseClient):
         """获取钉钉多维表格内容"""
         pass
 
-    def send_message(self, receive_id: str, token: str, text: str, receive_id_type: str = "open_id", msg_type: str = "text") -> Dict[str, Any]:
+    def send_message(
+        self,
+        receive_id: str,
+        token: str,
+        text: str,
+        receive_id_type: str = "open_id",
+        msg_type: str = "text",
+        robot_code: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         发送钉钉消息
         
@@ -282,6 +290,7 @@ class DingTalkClient(BaseClient):
             text: 消息内容（文本消息为文本字符串，卡片消息为JSON字符串）
             receive_id_type: 接收者类型（"chat_id"为群聊，其他为单聊）
             msg_type: 消息类型（"text", "interactive"等）
+            robot_code: 机器人 AppKey（与 token 对应的应用一致；不传则使用当前客户端默认 app_id）
         
         Returns:
             发送结果
@@ -290,18 +299,31 @@ class DingTalkClient(BaseClient):
             "x-acs-dingtalk-access-token": token,
             "Content-Type": "application/json"
         }
+        raw = (robot_code or self.app_id or "").strip()
+        effective_robot = raw or (self.app_id or "")
         
         # 根据消息类型选择不同的API
         if msg_type == "interactive":
             # 发送交互式卡片
-            return self._send_interactive_card(receive_id_type, receive_id, text, headers)
+            return self._send_interactive_card(
+                receive_id_type, receive_id, text, headers, robot_code=effective_robot
+            )
         elif msg_type == "text":
             # 发送文本消息
-            return self._send_text_message(receive_id_type, receive_id, text, headers)
+            return self._send_text_message(
+                receive_id_type, receive_id, text, headers, robot_code=effective_robot
+            )
         else:
             return {"errcode": -1, "errmsg": f"Unsupported message type: {msg_type}"}
     
-    def _send_text_message(self, receive_id_type: str, receive_id: str, text: str, headers: Dict[str, str]) -> Dict[str, Any]:
+    def _send_text_message(
+        self,
+        receive_id_type: str,
+        receive_id: str,
+        text: str,
+        headers: Dict[str, str],
+        robot_code: str,
+    ) -> Dict[str, Any]:
         """
         发送文本消息（批量发送单聊消息）
         
@@ -318,7 +340,7 @@ class DingTalkClient(BaseClient):
         }
         
         payload = {
-            "robotCode": self.app_id,  # 机器人code
+            "robotCode": robot_code,  # 机器人code
             "userIds": [receive_id],   # 用户ID列表
             "msgKey": msg_key,  # 消息模板key
             "msgParam": json.dumps(msg_param, ensure_ascii=False)  # 消息参数
@@ -327,7 +349,7 @@ class DingTalkClient(BaseClient):
         if receive_id_type == "chat_id":
             url = f"{self.base_url}/v1.0/robot/groupMessages/send"
             payload={
-                "robotCode": self.app_id,  # 机器人code
+                "robotCode": robot_code,  # 机器人code
                 "openConversationId": receive_id,   # 群聊ID
                 "msgKey": msg_key,  # 消息模板key
                 "msgParam": json.dumps(msg_param, ensure_ascii=False)  # 消息参数
@@ -350,7 +372,14 @@ class DingTalkClient(BaseClient):
             logger.error(f"发送钉钉文本消息异常: {e}")
             return {"errcode": -1, "errmsg": str(e)}
     
-    def _send_interactive_card(self, receive_id_type: str, receive_id: str, card_data: str, headers: Dict[str, str]) -> Dict[str, Any]:
+    def _send_interactive_card(
+        self,
+        receive_id_type: str,
+        receive_id: str,
+        card_data: str,
+        headers: Dict[str, str],
+        robot_code: str,
+    ) -> Dict[str, Any]:
         """
         发送交互式卡片消息（新版API - 创建并投放卡片）
         
@@ -485,7 +514,7 @@ class DingTalkClient(BaseClient):
                     group_deliver_model = {}
             if not isinstance(group_deliver_model, dict):
                 group_deliver_model = {}
-            group_deliver_model.setdefault("robotCode", self.app_id)
+            group_deliver_model.setdefault("robotCode", robot_code)
             payload["imGroupOpenDeliverModel"] = group_deliver_model
             
             # IM机器人单聊投放参数
@@ -498,7 +527,7 @@ class DingTalkClient(BaseClient):
             if not isinstance(robot_deliver_model, dict):
                 robot_deliver_model = {}
             robot_deliver_model.setdefault("spaceType", "IM_ROBOT")
-            robot_deliver_model.setdefault("robotCode", self.app_id)
+            robot_deliver_model.setdefault("robotCode", robot_code)
             payload["imRobotOpenDeliverModel"] = robot_deliver_model
 
             # 场域信息（实测接口要求始终携带）

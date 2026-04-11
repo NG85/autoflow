@@ -187,6 +187,7 @@ class PlatformNotificationService:
                             card_content,
                             receive_id_type="user_id",
                             msg_type="interactive",
+                            robot_code=app_id,
                         )
                         success += 1
                     except Exception as e:
@@ -200,6 +201,7 @@ class PlatformNotificationService:
                             card_content,
                             receive_id_type="chat_id",
                             msg_type="interactive",
+                            robot_code=app_id,
                         )
                         success += 1
                     except Exception as e:
