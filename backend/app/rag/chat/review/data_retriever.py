@@ -147,6 +147,7 @@ class ReviewDataContext(BaseModel):
     risks: List[Dict[str, Any]] = Field(default_factory=list)
     progresses: List[Dict[str, Any]] = Field(default_factory=list)
     comparison_data: Optional[Dict[str, Any]] = None
+    query_note: Optional[str] = None
 
     def is_empty(self) -> bool:
         return (
@@ -155,11 +156,15 @@ class ReviewDataContext(BaseModel):
             and not self.opportunity_snapshot_rows
             and not self.risks
             and not self.progresses
+            and not self.query_note
         )
 
     def to_context_text(self) -> str:
         """Serialize to LLM-readable structured text."""
         parts: List[str] = []
+        if self.query_note:
+            parts.append(self.query_note)
+            parts.append("")
 
         if self.kpi_metrics:
             parts.append("### KPI 指标")
@@ -266,13 +271,9 @@ class ReviewDataRetriever:
 
         session_id = review_session.unique_id
         snapshot_period = review_session.period
-
-        ctx.kpi_metrics = self._query_kpi_metrics(
-            db_session, session_id, intent
-        )
-
         question = user_question or ""
         mismatch_type = _detect_mismatch_query_type(question)
+
         if mismatch_type:
             cfg = MISMATCH_QUERY_CONFIGS[mismatch_type]
             ctx.opportunity_snapshot_rows = self._query_field_mismatch_opportunities(
@@ -286,7 +287,24 @@ class ReviewDataRetriever:
                 mismatch_type=mismatch_type,
                 limit=200,
             )
+            # For mismatch list queries, avoid falling back to KPI/aggregation views,
+            # which can mislead the model into answering a different question.
+            if ctx.opportunity_snapshot_rows:
+                ctx.query_note = (
+                    f"### 差异查询结果\n"
+                    f"- 已按“{cfg['sales_label']} vs {cfg['ai_label']}”检索，"
+                    f"共找到 {len(ctx.opportunity_snapshot_rows)} 个不一致商机。"
+                )
+            else:
+                ctx.query_note = (
+                    f"### 差异查询结果\n"
+                    f"- 已按“{cfg['sales_label']} vs {cfg['ai_label']}”检索当前周期商机，"
+                    f"未发现不一致记录。"
+                )
         else:
+            ctx.kpi_metrics = self._query_kpi_metrics(
+                db_session, session_id, intent
+            )
             ctx.opportunity_snapshot_rows = self._collect_opportunity_snapshot_rows(
                 db_session,
                 review_session,
@@ -294,12 +312,13 @@ class ReviewDataRetriever:
                 user_question=question,
             )
 
-        ctx.snapshot_aggregations = self._query_snapshot_aggregations(
-            db_session,
-            snapshot_period,
-            intent,
-            skip_opportunity_detail=bool(ctx.opportunity_snapshot_rows),
-        )
+        if not mismatch_type:
+            ctx.snapshot_aggregations = self._query_snapshot_aggregations(
+                db_session,
+                snapshot_period,
+                intent,
+                skip_opportunity_detail=bool(ctx.opportunity_snapshot_rows),
+            )
 
         risks_and_progress = self._query_risk_progress(
             db_session, session_id, snapshot_period, intent

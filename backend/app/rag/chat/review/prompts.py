@@ -106,6 +106,11 @@ KPI metric lookup, opportunity detail lookup, and mismatch list lookup for \
 {stage, forecast status, expected closing date}. If the user asks a mismatch \
 list without specifying the dimension, set `needs_clarification=true` and ask \
 which dimension they want.
+- **field availability boundary**: distinguish levels clearly. Session-level KPI \
+includes AI amount metric (e.g. `commit_ai`), but per-opportunity snapshot does \
+not have AI amount field. If user asks opportunity-level "sales vs AI amount \
+mismatch list", do NOT guess; set `needs_clarification=true` and guide to \
+supported mismatch dimensions (stage / forecast status / expected closing date).
 
 Respond ONLY with the JSON object, no explanation.
 """

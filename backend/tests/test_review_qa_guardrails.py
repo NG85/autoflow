@@ -28,8 +28,46 @@ def test_soft_boundary_guard_clarifies_ambiguous_mismatch_dimension():
     assert "商机阶段" in guarded.clarifying_question
 
 
+def test_soft_boundary_guard_does_not_clarify_when_dimension_is_explicit():
+    intent = ReviewIntent(
+        intent_type="data_query",
+        needs_clarification=True,
+        clarifying_question="旧澄清文案",
+    )
+    guarded = ReviewIntentRouter._apply_soft_boundary_guard(
+        intent,
+        "项目阶段，销售判断与AI判断不一致的有哪些",
+    )
+    assert guarded.needs_clarification is False
+    assert guarded.clarifying_question == ""
+
+
+def test_soft_boundary_guard_clarifies_when_user_asks_ai_amount_mismatch():
+    intent = ReviewIntent(intent_type="data_query")
+    guarded = ReviewIntentRouter._apply_soft_boundary_guard(
+        intent,
+        "销售和AI金额不一致的商机有哪些",
+    )
+    assert guarded.needs_clarification is True
+    assert "单商机快照里没有AI金额字段" in guarded.clarifying_question
+
+
+def test_soft_boundary_guard_keeps_session_level_ai_amount_query():
+    intent = ReviewIntent(intent_type="data_query")
+    guarded = ReviewIntentRouter._apply_soft_boundary_guard(
+        intent,
+        "本期AI确定下单金额是多少",
+    )
+    assert guarded.needs_clarification is False
+
+
 def test_detect_mismatch_query_type_stage_without_sales_keyword():
     q = "AI和商机阶段不一致的项目有哪些"
+    assert _detect_mismatch_query_type(q) == "stage"
+
+
+def test_detect_mismatch_query_type_stage_user_example():
+    q = "项目阶段，销售判断与AI判断不一致的有哪些"
     assert _detect_mismatch_query_type(q) == "stage"
 
 
