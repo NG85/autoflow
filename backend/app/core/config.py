@@ -220,8 +220,6 @@ class Settings(BaseSettings):
     # This is reserved for future extension; current implementation supports zh/en pair.
     CRM_VISIT_RECORD_MULTILINGUAL_LANGS: Annotated[list[str] | str | None, BeforeValidator(parse_str_list)] = None
     
-    NOTIFICATION_PLATFORM: str = "feishu"
-    
     # CRM daily report task configuration
     CRM_DAILY_REPORT_ENABLED: bool = False
     CRM_DAILY_REPORT_CRON: str = '30 8 * * *'  # 每天早上8:30执行
@@ -272,17 +270,18 @@ class Settings(BaseSettings):
     ENABLE_FEISHU_BTABLE_SYNC: bool = False
     FEISHU_BTABLE_SYNC_CRON: str = '0 13 * * 0'  # 每周日中午1点执行
     FEISHU_BTABLE_URL: str | None = None
-    FEISHU_APP_ID: str = 'cli_a808bc341680d00b'
-    FEISHU_APP_SECRET: str = '9oGQcBaHRCfOB2Vy2AwtyGQxZUpPzjaa'
-    
+    # 飞书 / Lark / 钉钉：不在代码库中写默认凭据，由部署环境（ConfigMap / Secret / .env）注入
+    FEISHU_APP_ID: str = ""
+    FEISHU_APP_SECRET: str = ""
+
     # Lark configuration
-    LARK_APP_ID: str = 'cli_a8294dbbcdb8d02d'
-    LARK_APP_SECRET: str = 'PonwmInSR6PzmRNKHzeNybdV0PDew8EY'
-    
+    LARK_APP_ID: str = ""
+    LARK_APP_SECRET: str = ""
+
     # Dingtalk configuration
-    DINGTALK_APP_ID: str = 'dingiyzzmxq0riihvyo7'
-    DINGTALK_APP_SECRET: str = 'T-i3txM2le3thhaziAKEDCevRLqlTNM89dVkbW44-OMQ1nh5vgorlF5QfypphiCx'
-    DINGTALK_COPR_ID: str = 'ding2f8a51bf16e4fc5facaaa37764f94726'
+    DINGTALK_APP_ID: str = ""
+    DINGTALK_APP_SECRET: str = ""
+    DINGTALK_COPR_ID: str = ""
     DINGTALK_COMPANY_WEEKLY_REPORT_TEMPLATE_ID: str = 'daa13a1a-f064-4512-968c-0a1f101d3222.schema'  # 钉钉公司周报卡片模板ID
     DINGTALK_DEPT_WEEKLY_REPORT_TEMPLATE_ID: str = '349394d8-33ad-4be5-9f7e-bac33494ee42.schema'  # 钉钉团队周报卡片模板ID
     FEISHU_COMPANY_WEEKLY_REPORT_TEMPLATE_ID: str = 'AAqvMFGD8n8bZ'  # 飞书公司周报卡片模板ID
@@ -293,7 +292,7 @@ class Settings(BaseSettings):
     REVIEW_REPORT_HOST: str = "https://aptsell.pingcap.net"
     REVIEW_SESSION_PAGE_URL: str = "/v2/weekly-insight"
 
-    # Ops backdoor: CC cards (Feishu or DingTalk based on current customer app config)
+    # Ops backdoor: CC cards (Feishu or DingTalk per OPS_CC_PROVIDER)
     # "off" | "feishu" | "dingtalk"
     OPS_CC_PROVIDER: str = "off"
     OPS_CC_FEISHU_APP_ID: str | None = None

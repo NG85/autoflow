@@ -27,6 +27,22 @@ from app.services.oauth_service import oauth_client
 
 logger = logging.getLogger(__name__)
 
+
+def _parse_ops_cc_provider() -> tuple[Optional[str], str]:
+    """
+    将 OPS_CC_PROVIDER 解析为用于 Ops 抄送的平台常量。
+    返回 (platform, state)，state 为 disabled | ok | invalid。
+    """
+    provider = (getattr(settings, "OPS_CC_PROVIDER", "") or "").strip().lower()
+    if provider in ("", "off", "none", "disabled", "false"):
+        return None, "disabled"
+    if provider in ("feishu", PLATFORM_FEISHU):
+        return PLATFORM_FEISHU, "ok"
+    if provider in ("dingtalk", PLATFORM_DINGTALK):
+        return PLATFORM_DINGTALK, "ok"
+    return None, "invalid"
+
+
 # 站点未配置或缺失键时的默认卡片模板 ID（与 default_settings.yml 中 notification.card_templates 一致）
 _DEFAULT_CARD_TEMPLATES: Dict[str, Dict[str, str]] = {
     "sales_daily_report": {
@@ -96,27 +112,20 @@ class PlatformNotificationService:
 
     def _ops_cc_platform_card(self, card_content: Dict[str, Any], *, source: str) -> None:
         """
-        运维后门：按当前客户配置（飞书/钉钉）将卡片抄送到指定接收者。
+        运维后门：按 OPS_CC_PROVIDER 选择飞书/钉钉卡片形态，抄送到指定接收者。
         - 每次事件抄送一次（调用方控制）
         - 失败不影响主流程（仅记录日志）
         """
         try:
             if source not in self._OPS_CC_ALLOWED_SOURCES:
                 return
-            
-            provider = (getattr(settings, "OPS_CC_PROVIDER", "") or "").strip().lower()
-            if provider in ("", "off", "none", "disabled", "false"):
-                return
-            elif provider in ("feishu", PLATFORM_FEISHU):
-                target_platform = PLATFORM_FEISHU
-            elif provider in ("dingtalk", PLATFORM_DINGTALK):
-                target_platform = PLATFORM_DINGTALK
-            else:
-                logger.warning("Invalid OPS_CC_PROVIDER=%s, skip. source=%s", provider, source)
-                return
 
-            if target_platform is None:
-                logger.warning("Ops CC enabled but no current platform app configured, skip. source=%s", source)
+            target_platform, cc_state = _parse_ops_cc_provider()
+            if cc_state == "disabled":
+                return
+            if cc_state == "invalid":
+                raw = (getattr(settings, "OPS_CC_PROVIDER", "") or "").strip()
+                logger.warning("Invalid OPS_CC_PROVIDER=%s, skip. source=%s", raw, source)
                 return
 
             success = 0
@@ -706,11 +715,9 @@ class PlatformNotificationService:
 
         # Ops backdoor: CC card once per event (best-effort, no impact on main flow)
         try:
-            cc_platform = None
-            if bool((settings.FEISHU_APP_ID or "").strip()):
-                cc_platform = PLATFORM_FEISHU
-            elif bool((settings.DINGTALK_APP_ID or "").strip()):
-                cc_platform = PLATFORM_DINGTALK
+            cc_platform, cc_state = _parse_ops_cc_provider()
+            if cc_state != "ok":
+                cc_platform = None
 
             cc_card_content = (card_content_by_platform or {}).get(cc_platform) if (card_content_by_platform and cc_platform) else card_content
             if not cc_card_content and template_vars:
