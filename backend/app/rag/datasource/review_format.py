@@ -107,20 +107,20 @@ def format_snapshot_info(snapshot) -> List[str]:
     baseline_stage = getattr(snapshot, "baseline_opportunity_stage", None)
     lines.append("## 报告基线数据（T2 冻结，报告分析依据）")
     lines.append("")
-    lines.append(f"- **预测类型**: {baseline_forecast or getattr(snapshot, 'forecast_type', '') or ''}")
-    lines.append(f"- **预测金额**: {_fmt(baseline_amount if baseline_amount is not None else getattr(snapshot, 'forecast_amount', None))}")
+    lines.append(f"- **预测状态**: {baseline_forecast or getattr(snapshot, 'forecast_type', '') or ''}")
+    lines.append(f"- **签约金额**: {_fmt(baseline_amount if baseline_amount is not None else getattr(snapshot, 'forecast_amount', None))}")
     lines.append(f"- **商机阶段**: {baseline_stage or getattr(snapshot, 'opportunity_stage', '') or ''}")
-    lines.append(f"- **预计关闭日期**: {getattr(snapshot, 'baseline_expected_closing_date', '') or getattr(snapshot, 'expected_closing_date', '') or ''}")
+    lines.append(f"- **预计成交日期**: {getattr(snapshot, 'baseline_expected_closing_date', '') or getattr(snapshot, 'expected_closing_date', '') or ''}")
     lines.append(f"- **阶段停留天数**: {_fmt(getattr(snapshot, 'stage_stay', 0))}")
     lines.append("")
 
     # Current values (latest, may have been modified by user after T2)
     lines.append("## 最新预测数据（用户可修改）")
     lines.append("")
-    lines.append(f"- **预测类型**: {getattr(snapshot, 'forecast_type', '') or ''}")
-    lines.append(f"- **预测金额**: {_fmt(getattr(snapshot, 'forecast_amount', None))}")
+    lines.append(f"- **预测状态**: {getattr(snapshot, 'forecast_type', '') or ''}")
+    lines.append(f"- **签约金额**: {_fmt(getattr(snapshot, 'forecast_amount', None))}")
     lines.append(f"- **商机阶段**: {getattr(snapshot, 'opportunity_stage', '') or ''}")
-    lines.append(f"- **预计关闭日期**: {getattr(snapshot, 'expected_closing_date', '') or ''}")
+    lines.append(f"- **预计成交日期**: {getattr(snapshot, 'expected_closing_date', '') or ''}")
     lines.append("")
 
     # AI evaluations
@@ -130,12 +130,12 @@ def format_snapshot_info(snapshot) -> List[str]:
         lines.append("## AI 评估")
         lines.append("")
         if ai_commit:
-            lines.append(f"- **AI Commit**: {ai_commit}")
+            lines.append(f"- **AI 判断的预测状态**: {ai_commit}")
         if ai_stage:
-            lines.append(f"- **AI 阶段**: {ai_stage}")
+            lines.append(f"- **AI 判断的商机阶段**: {ai_stage}")
         ai_close = getattr(snapshot, "ai_expected_closing_date", None)
         if ai_close:
-            lines.append(f"- **AI 预计关闭日期**: {ai_close}")
+            lines.append(f"- **AI 判断的预计成交日期**: {ai_close}")
         lines.append("")
 
     # Change tracking

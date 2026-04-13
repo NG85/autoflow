@@ -208,7 +208,7 @@ class CRMKnowledgeGraphBuilder:
         return ReviewSnapshotEntity(
             id=None,
             name=f"{opp_name}_{period}",
-            description=f"商机快照 {opp_name}（{period}），预测类型 {data.get('forecast_type', '')}",
+            description=f"商机快照 {opp_name}（{period}），预测状态 {data.get('forecast_type', '')}",
             metadata=metadata,
         )
 
