@@ -36,6 +36,30 @@ METRIC_DISPLAY_NAMES = {
 
 AMOUNT_METRICS = {"target", "closed", "gap", "commit_sales", "commit_ai", "upside_sales"}
 
+MISMATCH_QUERY_CONFIGS = {
+    "stage": {
+        "aliases": ("阶段", "stage", "项目阶段", "商机阶段"),
+        "sales_field": "opportunity_stage",
+        "ai_field": "ai_stage",
+        "sales_label": "销售商机阶段",
+        "ai_label": "AI商机阶段",
+    },
+    "forecast": {
+        "aliases": ("预测", "判断", "commit", "forecast", "预测状态", "销售判断", "ai判断", "预测类型"),
+        "sales_field": "forecast_type",
+        "ai_field": "ai_commit",
+        "sales_label": "销售预测状态",
+        "ai_label": "AI预测状态",
+    },
+    "close_date": {
+        "aliases": ("预计成交", "成交日期", "close date", "closing date"),
+        "sales_field": "expected_closing_date",
+        "ai_field": "ai_expected_closing_date",
+        "sales_label": "销售预计成交日期",
+        "ai_label": "AI预计成交日期",
+    },
+}
+
 
 def _fmt_value(metric_name: str, value) -> str:
     if value is None:
@@ -84,6 +108,25 @@ def _infer_opportunity_name_keyword(question: str) -> Optional[str]:
     return None
 
 
+def _detect_mismatch_query_type(question: str) -> Optional[str]:
+    """Detect mismatch list query type (stage / forecast / close_date)."""
+    if not question:
+        return None
+    q = question.lower()
+    has_sales = ("销售" in q) or ("业务" in q)
+    has_ai = ("ai" in q) or ("智能" in q) or ("算法" in q)
+    has_diff = any(k in q for k in ("不同", "不一致", "差异", "不一样", "冲突"))
+    has_list = any(k in q for k in ("哪些", "列表", "清单", "列出"))
+    has_opportunity = any(k in q for k in ("商机", "项目", "pipeline", "机会"))
+    # "销售" may be omitted when users directly say "AI和商机阶段不一致".
+    if not (has_ai and has_diff and (has_list or has_opportunity)):
+        return None
+    for diff_type, cfg in MISMATCH_QUERY_CONFIGS.items():
+        if any(alias in q for alias in cfg["aliases"]):
+            return diff_type
+    return None
+
+
 def _safe_float(v: Any) -> Optional[float]:
     if v is None:
         return None
@@ -104,6 +147,7 @@ class ReviewDataContext(BaseModel):
     risks: List[Dict[str, Any]] = Field(default_factory=list)
     progresses: List[Dict[str, Any]] = Field(default_factory=list)
     comparison_data: Optional[Dict[str, Any]] = None
+    query_note: Optional[str] = None
 
     def is_empty(self) -> bool:
         return (
@@ -112,11 +156,15 @@ class ReviewDataContext(BaseModel):
             and not self.opportunity_snapshot_rows
             and not self.risks
             and not self.progresses
+            and not self.query_note
         )
 
     def to_context_text(self) -> str:
         """Serialize to LLM-readable structured text."""
         parts: List[str] = []
+        if self.query_note:
+            parts.append(self.query_note)
+            parts.append("")
 
         if self.kpi_metrics:
             parts.append("### KPI 指标")
@@ -145,11 +193,19 @@ class ReviewDataContext(BaseModel):
                     f"负责人: {row.get('owner_name') or 'N/A'} (owner_id={row.get('owner_id', '')})"
                 )
                 parts.append(
-                    f"  预测: {row.get('forecast_type') or ''} / "
-                    f"金额={row.get('forecast_amount', 'N/A')} | "
-                    f"阶段: {row.get('opportunity_stage') or ''} | "
-                    f"关单日期: {row.get('expected_closing_date') or ''}"
+                    f"  预测状态: {row.get('forecast_type') or ''} / "
+                    f"AI预测状态: {row.get('ai_commit') or ''} / "
+                    f"销售商机阶段: {row.get('opportunity_stage') or ''} / "
+                    f"AI商机阶段: {row.get('ai_stage') or ''} / "
+                    f"签约金额={row.get('forecast_amount', 'N/A')} | "
+                    f"预计成交日期: {row.get('expected_closing_date') or ''} / "
+                    f"AI预计成交日期: {row.get('ai_expected_closing_date') or ''}"
                 )
+                if row.get("mismatch_type"):
+                    parts.append(
+                        f"  差异项: {row.get('sales_label')}={row.get('sales_value') or ''} / "
+                        f"{row.get('ai_label')}={row.get('ai_value') or ''}"
+                    )
         elif self.snapshot_aggregations:
             parts.append("\n### Opportunity Snapshot Aggregations")
             for agg in self.snapshot_aggregations:
@@ -183,6 +239,10 @@ class ReviewDataContext(BaseModel):
                     parts.append(f"  Gap: {r['gap_description']}")
                 if r.get("financial_impact") is not None:
                     parts.append(f"  Financial impact: {r['financial_impact']}")
+                if r.get("solution"):
+                    parts.append(f"  Suggested action: {r['solution']}")
+                if r.get("detail_description") and r.get("detail_description") != r.get("summary"):
+                    parts.append(f"  Detail: {r['detail_description']}")
 
         if self.progresses:
             parts.append("\n### Progress Signals")
@@ -191,6 +251,8 @@ class ReviewDataContext(BaseModel):
                     f"- {p.get('type_name', p.get('type_code', ''))}: "
                     f"{p.get('summary', p.get('detail_description', 'N/A'))}"
                 )
+                if p.get("solution"):
+                    parts.append(f"  Next step: {p['solution']}")
 
         return "\n".join(parts) if parts else "(No risk/progress signals)"
 
@@ -209,24 +271,54 @@ class ReviewDataRetriever:
 
         session_id = review_session.unique_id
         snapshot_period = review_session.period
+        question = user_question or ""
+        mismatch_type = _detect_mismatch_query_type(question)
 
-        ctx.kpi_metrics = self._query_kpi_metrics(
-            db_session, session_id, intent
-        )
+        if mismatch_type:
+            cfg = MISMATCH_QUERY_CONFIGS[mismatch_type]
+            ctx.opportunity_snapshot_rows = self._query_field_mismatch_opportunities(
+                db_session=db_session,
+                snapshot_period=snapshot_period,
+                department_id=review_session.department_id,
+                sales_field=cfg["sales_field"],
+                ai_field=cfg["ai_field"],
+                sales_label=cfg["sales_label"],
+                ai_label=cfg["ai_label"],
+                mismatch_type=mismatch_type,
+                limit=200,
+            )
+            # For mismatch list queries, avoid falling back to KPI/aggregation views,
+            # which can mislead the model into answering a different question.
+            if ctx.opportunity_snapshot_rows:
+                ctx.query_note = (
+                    f"### 差异查询结果\n"
+                    f"- 已按“{cfg['sales_label']} vs {cfg['ai_label']}”检索，"
+                    f"共找到 {len(ctx.opportunity_snapshot_rows)} 个不一致商机。"
+                )
+            else:
+                ctx.query_note = (
+                    f"### 差异查询结果\n"
+                    f"- 已按“{cfg['sales_label']} vs {cfg['ai_label']}”检索当前周期商机，"
+                    f"未发现不一致记录。"
+                )
+        else:
+            ctx.kpi_metrics = self._query_kpi_metrics(
+                db_session, session_id, intent
+            )
+            ctx.opportunity_snapshot_rows = self._collect_opportunity_snapshot_rows(
+                db_session,
+                review_session,
+                intent,
+                user_question=question,
+            )
 
-        ctx.opportunity_snapshot_rows = self._collect_opportunity_snapshot_rows(
-            db_session,
-            review_session,
-            intent,
-            user_question=user_question or "",
-        )
-
-        ctx.snapshot_aggregations = self._query_snapshot_aggregations(
-            db_session,
-            snapshot_period,
-            intent,
-            skip_opportunity_detail=bool(ctx.opportunity_snapshot_rows),
-        )
+        if not mismatch_type:
+            ctx.snapshot_aggregations = self._query_snapshot_aggregations(
+                db_session,
+                snapshot_period,
+                intent,
+                skip_opportunity_detail=bool(ctx.opportunity_snapshot_rows),
+            )
 
         risks_and_progress = self._query_risk_progress(
             db_session, session_id, snapshot_period, intent
@@ -293,10 +385,67 @@ class ReviewDataRetriever:
             "owner_name": row.owner_name,
             "owner_id": row.owner_id,
             "forecast_type": row.forecast_type,
+            "ai_commit": row.ai_commit,
             "forecast_amount": _safe_float(row.forecast_amount),
             "opportunity_stage": row.opportunity_stage,
+            "ai_stage": row.ai_stage,
             "expected_closing_date": row.expected_closing_date,
+            "ai_expected_closing_date": row.ai_expected_closing_date,
         }
+
+    def _query_field_mismatch_opportunities(
+        self,
+        db_session: Session,
+        snapshot_period: str,
+        department_id: Optional[str],
+        sales_field: str,
+        ai_field: str,
+        sales_label: str,
+        ai_label: str,
+        mismatch_type: str,
+        limit: int = 200,
+    ) -> List[Dict[str, Any]]:
+        S = CRMReviewOppBranchSnapshot
+        sales_col = getattr(S, sales_field)
+        ai_col = getattr(S, ai_field)
+        stmt = select(S).where(
+            S.snapshot_period == snapshot_period,
+            sales_col.is_not(None),
+            ai_col.is_not(None),
+            sales_col != ai_col,
+        )
+        if department_id:
+            stmt = stmt.where(S.owner_department_id == department_id)
+        stmt = stmt.order_by(S.opportunity_name).limit(limit)
+        rows = list(db_session.exec(stmt).all())
+        if not rows and department_id:
+            # Fallback to full period if departmental scope has no mismatch rows.
+            stmt2 = (
+                select(S)
+                .where(
+                    S.snapshot_period == snapshot_period,
+                    sales_col.is_not(None),
+                    ai_col.is_not(None),
+                    sales_col != ai_col,
+                )
+                .order_by(S.opportunity_name)
+                .limit(limit)
+            )
+            rows = list(db_session.exec(stmt2).all())
+        detailed_rows: List[Dict[str, Any]] = []
+        for r in rows:
+            row = self._snapshot_row_to_detail(r)
+            row.update(
+                {
+                    "mismatch_type": mismatch_type,
+                    "sales_label": sales_label,
+                    "ai_label": ai_label,
+                    "sales_value": row.get(sales_field),
+                    "ai_value": row.get(ai_field),
+                }
+            )
+            detailed_rows.append(row)
+        return detailed_rows
 
     def _get_snapshot_by_opportunity_id(
         self,

@@ -6,6 +6,7 @@ import threading
 from typing import Dict, List, Optional, Generator, Tuple, Any
 from urllib.parse import urljoin
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 import requests
 from langfuse.llama_index import LlamaIndexInstrumentor
@@ -1525,6 +1526,42 @@ class ChatFlow:
             intent.scope_type,
         )
 
+        if intent.needs_clarification:
+            clarification_text = intent.clarifying_question.strip()
+            if not clarification_text:
+                metric_display_map = {
+                    "opp_count": "商机数",
+                    "target": "目标",
+                    "closed": "已成单",
+                    "gap": "差额",
+                    "pipeline_coverage": "倍数",
+                    "commit_sales": "销售确定下单",
+                    "commit_ai": "AI确定下单",
+                    "upside_sales": "销售可能下单",
+                }
+                metric_candidates = [
+                    metric_display_map.get(m, m)
+                    for m in (intent.metric_names or [])[:2]
+                    if m
+                ]
+                if len(metric_candidates) >= 2:
+                    clarification_text = (
+                        f"请确认你是想看“{metric_candidates[0]}”还是“{metric_candidates[1]}”？"
+                    )
+                else:
+                    clarification_text = "请确认你想查询的指标口径，我再继续给出准确数据。"
+            yield ChatEvent(
+                event_type=ChatEventType.TEXT_PART,
+                payload=clarification_text,
+            )
+            yield from self._chat_finish(
+                db_assistant_message=db_assistant_message,
+                db_user_message=db_user_message,
+                response_text=clarification_text,
+                source_documents=[],
+            )
+            return clarification_text
+
         # --- 2. Structured data retrieval ---
         yield ChatEvent(
             event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
@@ -1570,15 +1607,62 @@ class ChatFlow:
                 self.granted_files = []
                 self.crm_authority = None
 
-                (_, knowledge_graph_context) = yield from self._search_knowledge_graph(
+                (knowledge_graph_result, knowledge_graph_context) = yield from self._search_knowledge_graph(
                     user_question=self.user_question,
                     annotation_silent=True,
                 )
+                review_type_values = {
+                    CrmDataType.REVIEW_SESSION.value,
+                    CrmDataType.REVIEW_SNAPSHOT.value,
+                    CrmDataType.REVIEW_RISK_PROGRESS.value,
+                }
+                filtered_relationships = []
+                for rel in knowledge_graph_result.relationships:
+                    rel_meta = rel.meta or {}
+                    rel_type = str(rel_meta.get("crm_data_type", ""))
+                    if rel_type and rel_type not in review_type_values:
+                        continue
+                    rel_period = str(rel_meta.get("snapshot_period", "") or "")
+                    rel_session = str(rel_meta.get("session_id", "") or "")
+                    if rel_period and rel_period != session_ctx.period:
+                        continue
+                    if rel_session and rel_session != session_ctx.session_id:
+                        continue
+                    filtered_relationships.append(rel)
+                if filtered_relationships:
+                    related_entity_ids = set()
+                    for rel in filtered_relationships:
+                        related_entity_ids.add(rel.source_entity_id)
+                        related_entity_ids.add(rel.target_entity_id)
+                    knowledge_graph_result.relationships = filtered_relationships
+                    knowledge_graph_result.entities = [
+                        ent for ent in knowledge_graph_result.entities if ent.id in related_entity_ids
+                    ]
+                    knowledge_graph_context = self.retrieve_flow._get_knowledge_graph_context(
+                        knowledge_graph_result
+                    )
+                else:
+                    knowledge_graph_context = ""
+
                 relevant_chunks = self.retrieve_flow.search_relevant_chunks(
                     self.user_question,
                     crm_authority=self.crm_authority,
                     granted_files=self.granted_files,
                 )
+                filtered_chunks = []
+                for chunk in relevant_chunks:
+                    meta = chunk.node.metadata or {}
+                    chunk_type = str(meta.get("crm_data_type", ""))
+                    if chunk_type and chunk_type not in review_type_values:
+                        continue
+                    chunk_period = str(meta.get("snapshot_period", "") or "")
+                    chunk_session = str(meta.get("session_id", "") or "")
+                    if chunk_period and chunk_period != session_ctx.period:
+                        continue
+                    if chunk_session and chunk_session != session_ctx.session_id:
+                        continue
+                    filtered_chunks.append(chunk)
+                relevant_chunks = filtered_chunks
             except Exception as e:
                 logger.warning("KB retrieval failed for review strategy chat, continuing without: %s", e)
 
@@ -1604,7 +1688,7 @@ class ChatFlow:
         prompt_template = RichPromptTemplate(prompt_map[intent.intent_type])
 
         format_kwargs = {
-            "current_date": datetime.now().strftime("%Y-%m-%d"),
+            "current_date": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d"),
             "period": session_ctx.period,
             "period_start": session_ctx.period_start,
             "period_end": session_ctx.period_end,

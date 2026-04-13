@@ -63,7 +63,9 @@ Return a JSON object with the following fields:
     "scope_id": "<id or null>",
     "time_comparison": "wow" | "mom" | "current_only",
     "opportunity_id": "<id or null>",
-    "opportunity_name_keyword": "<short name substring or null>"
+    "opportunity_name_keyword": "<short name substring or null>",
+    "needs_clarification": true | false,
+    "clarifying_question": "<question or empty string>"
 }
 ```
 
@@ -73,6 +75,19 @@ Return a JSON object with the following fields:
 "commit_ai", "upside_sales". Use empty list [] to retrieve ALL metrics, or list \
 only the relevant ones. Map user's Chinese terms to the correct metric_name \
 (e.g., "商机数" → "opp_count", "倍数" → "pipeline_coverage", "已成单" → "closed").
+- **terminology normalization**: users may use colloquial or non-standard terms. \
+Normalize semantically similar expressions to canonical metric names before \
+filling `metric_names`. Examples: "销售判断"/"销售预测"/"业务判断" → "commit_sales"; \
+"AI判断"/"AI预测" → "commit_ai"; "可能下单"/"或有"/"潜在" → "upside_sales"; \
+"覆盖率"/"覆盖倍数"/"pipeline倍数" → "pipeline_coverage". Prefer semantic match \
+over literal keyword match.
+- **ambiguity handling (lightweight)**: if a term may map to multiple metrics and \
+you cannot confidently disambiguate from context, include the top 2 likely \
+`metric_names` (instead of forcing one guess).
+- **entity normalization**: normalize business object aliases before extraction. \
+Treat "项目"/"pipeline"/"销售机会"/"机会" as "商机" (`opportunity`). If a specific \
+name is mentioned with these aliases, set `scope_type` to "opportunity" and fill \
+`opportunity_name_keyword` with the key name fragment.
 - **scope_type**: the level the question is about. Default to "department" if unclear.
 - **scope_id**: only set when the user mentions a specific person, department, or \
 opportunity by name/ID.
@@ -80,9 +95,22 @@ opportunity by name/ID.
 or "跟上周比"; "mom" for month-over-month; otherwise "current_only".
 - **opportunity_id**: set when the user gives a CRM opportunity unique ID.
 - **opportunity_name_keyword**: set when the user refers to an opportunity or \
-customer **by name** (e.g. 「马上消费」「某某公司」) and you can extract a short \
+customer **by name** (e.g. 「某某公司」) and you can extract a short \
 substring to match `opportunity_name` or `account_name` in review snapshots. \
 Use null if the question is not about a named opportunity.
+- **needs_clarification / clarifying_question**: when intent or metric mapping is \
+ambiguous and could lead to wrong retrieval, set `needs_clarification` to true \
+and provide one short clarifying question. Otherwise set false and empty string.
+- **soft boundary for data_query**: precision-first. Supported "what" queries are: \
+KPI metric lookup, opportunity detail lookup, and mismatch list lookup for \
+{stage, forecast status, expected closing date}. If the user asks a mismatch \
+list without specifying the dimension, set `needs_clarification=true` and ask \
+which dimension they want.
+- **field availability boundary**: distinguish levels clearly. Session-level KPI \
+includes AI amount metric (e.g. `commit_ai`), but per-opportunity snapshot does \
+not have AI amount field. If user asks opportunity-level "sales vs AI amount \
+mismatch list", do NOT guess; set `needs_clarification=true` and guide to \
+supported mismatch dimensions (stage / forecast status / expected closing date).
 
 Respond ONLY with the JSON object, no explanation.
 """
@@ -123,7 +151,19 @@ gap. If the user asks about coverage adequacy, 1.0x means exactly covered, \
 >3x is generally healthy.
 6. Present numbers clearly — use tables (markdown) when comparing multiple items.
 7. Use the same language as the user's question.
-8. Keep the answer concise and data-driven.
+8. Before answering, normalize user wording to canonical business terms in the \
+Metric Glossary. Treat colloquial synonyms as the same metric intent \
+(e.g., "销售判断"/"销售预测" -> "销售确定下单", "AI判断" -> "AI确定下单", \
+"覆盖率" -> "倍数").
+9. Normalize entity aliases in the question before analysis: treat \
+"项目"/"pipeline"/"销售机会"/"机会" as "商机".
+10. If the question is ambiguous across similar metrics, briefly state your mapping \
+assumption in one sentence, then provide the data.
+11. Respect soft boundary: only answer within supported data_query scope (KPI / \
+opportunity detail / mismatch lists for stage, forecast status, expected closing date). \
+If the question is outside scope or mismatch dimension is unclear, ask one short \
+clarifying question first.
+12. Keep the answer concise and data-driven.
 
 Answer:
 """
@@ -161,8 +201,12 @@ as evidence.
    - **现象**: What changed (with numbers)
    - **原因分析**: Possible root causes ranked by impact
    - **关键影响因素**: The top opportunities / owners driving the change
-4. Use the same language as the user's question.
-5. Be objective — do not speculate beyond what the data supports.
+4. For each major cause, label evidence strength: **高/中/低**, and explain why \
+based on available data quality and completeness.
+5. If evidence is insufficient, explicitly say what data is missing and avoid \
+assertive conclusions.
+6. Use the same language as the user's question.
+7. Be objective — do not speculate beyond what the data supports.
 
 Answer:
 """
@@ -202,8 +246,12 @@ based on the review session data.
    - State the action clearly
    - Explain the rationale (link to specific data / risk signals)
    - Suggest success metrics or next steps
-4. If knowledge base context is available, incorporate best practices.
-5. Use the same language as the user's question.
+   - Add **适用条件** and **不适用场景**
+4. Include a brief prioritization basis for ordering (impact, effort, time-to-value).
+5. If knowledge base context is available, incorporate best practices.
+6. If data is insufficient for strong recommendations, state the limitation first \
+and provide conservative, low-risk next actions.
+7. Use the same language as the user's question.
 
 Answer:
 """
