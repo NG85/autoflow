@@ -10,6 +10,9 @@ from app.rag.indices.knowledge_graph.crm.entity import (
     ReviewRiskProgressEntity,
     ReviewSessionEntity,
     ReviewSnapshotEntity,
+    ReviewWeekEntity,
+    ReviewDepartmentEntity,
+    ReviewRecommendationEntity,
 )
 from app.rag.types import CrmDataType
 from app.models.enums import GraphType
@@ -234,6 +237,60 @@ class CRMKnowledgeGraphBuilder:
             name=f"{type_name}_{period}",
             description=f"{label}: {type_name}（{scope_type}, {period}）",
             metadata=metadata,
+        )
+
+    @staticmethod
+    def _previous_week_id(week_id: str) -> str:
+        try:
+            year_str, week_str = week_id.split("-W")
+            year = int(year_str)
+            week = int(week_str)
+            if week > 1:
+                return f"{year}-W{week - 1:02d}"
+            return f"{year - 1}-W52"
+        except Exception:
+            return ""
+
+    def create_review_week_entity(self, data: Dict) -> ReviewWeekEntity:
+        week_id = data.get("week_id") or data.get("snapshot_period") or data.get("period", "")
+        return ReviewWeekEntity(
+            id=None,
+            name=f"Week {week_id}",
+            description=f"Review week timeline node {week_id}",
+            metadata={
+                "week_id": week_id,
+                "time_granularity": data.get("time_granularity", "week"),
+                "week_start": data.get("week_start", ""),
+                "week_end": data.get("week_end", ""),
+                "session_week_rank": data.get("session_week_rank"),
+            },
+        )
+
+    def create_review_department_entity(self, data: Dict) -> ReviewDepartmentEntity:
+        dept_name = data.get("department_name") or data.get("owner_department_name") or ""
+        dept_id = data.get("department_id") or data.get("owner_department_id") or ""
+        label = dept_name or dept_id or "Unknown Department"
+        return ReviewDepartmentEntity(
+            id=None,
+            name=f"Department {label}",
+            description=f"Review department scope {label}",
+            metadata={"department_id": dept_id, "department_name": dept_name},
+        )
+
+    def create_review_recommendation_entity(self, data: Dict) -> ReviewRecommendationEntity:
+        rec_id = data.get("recommendation_id", "")
+        action = data.get("action", "")
+        return ReviewRecommendationEntity(
+            id=None,
+            name=f"Recommendation {rec_id}",
+            description=f"Review recommendation {rec_id}: {action}",
+            metadata={
+                "recommendation_id": rec_id,
+                "status": data.get("recommendation_status", ""),
+                "outcome": data.get("recommendation_outcome", ""),
+                "session_id": data.get("session_id", ""),
+                "week_id": data.get("week_id") or data.get("snapshot_period", ""),
+            },
         )
 
     def build_graph_from_document_data(
@@ -707,13 +764,7 @@ class CRMKnowledgeGraphBuilder:
             # Session → Department
             dept_name = primary_data.get("department_name")
             if dept_name:
-                dept_entity = AccountEntity(
-                    id=None,
-                    name=dept_name,
-                    description=f"部门{dept_name}",
-                    metadata={"department_id": primary_data.get("department_id", ""),
-                              "department_name": dept_name},
-                )
+                dept_entity = self.create_review_department_entity(primary_data)
                 entities_data.append({
                     "name": dept_entity.name,
                     "description": dept_entity.description,
@@ -726,10 +777,48 @@ class CRMKnowledgeGraphBuilder:
                     "source_entity_description": session_entity.description,
                     "target_entity_description": dept_entity.description,
                     "relationship_desc": f"Review会议{session_entity.name}属于部门{dept_name}",
-                    "meta": {**rel_meta_base, "relation_type": "BELONGS_TO",
+                    "meta": {**rel_meta_base, "relation_type": "OF_DEPARTMENT",
                              "source_type": CrmDataType.REVIEW_SESSION,
-                             "target_type": CrmDataType.ACCOUNT},
+                             "target_type": "crm_review_department"},
                 })
+            # Session → Week (+Week PREV_WEEK)
+            week_entity = self.create_review_week_entity(primary_data)
+            if week_entity.metadata.get("week_id"):
+                entities_data.append({
+                    "name": week_entity.name,
+                    "description": week_entity.description,
+                    "meta": week_entity.metadata,
+                    "graph_type": GraphType.crm,
+                })
+                relationships_data.append({
+                    "source_entity": session_entity.name,
+                    "target_entity": week_entity.name,
+                    "source_entity_description": session_entity.description,
+                    "target_entity_description": week_entity.description,
+                    "relationship_desc": f"Review会议{session_entity.name}发生在{week_entity.metadata.get('week_id')}",
+                    "meta": {**rel_meta_base, "relation_type": "IN_WEEK",
+                             "source_type": CrmDataType.REVIEW_SESSION,
+                             "target_type": "crm_review_week"},
+                })
+                prev_week_id = self._previous_week_id(str(week_entity.metadata.get("week_id")))
+                if prev_week_id:
+                    prev_week = self.create_review_week_entity({"week_id": prev_week_id})
+                    entities_data.append({
+                        "name": prev_week.name,
+                        "description": prev_week.description,
+                        "meta": prev_week.metadata,
+                        "graph_type": GraphType.crm,
+                    })
+                    relationships_data.append({
+                        "source_entity": week_entity.name,
+                        "target_entity": prev_week.name,
+                        "source_entity_description": week_entity.description,
+                        "target_entity_description": prev_week.description,
+                        "relationship_desc": f"{week_entity.metadata.get('week_id')} 的上一周是 {prev_week_id}",
+                        "meta": {**rel_meta_base, "relation_type": "PREV_WEEK",
+                                 "source_type": "crm_review_week",
+                                 "target_type": "crm_review_week"},
+                    })
 
         elif crm_data_type == CrmDataType.REVIEW_SNAPSHOT:
             snapshot_entity = self.create_review_snapshot_entity(primary_data)
@@ -805,6 +894,25 @@ class CRMKnowledgeGraphBuilder:
                     "meta": {**rel_meta_base, "relation_type": "BELONGS_TO",
                              "source_type": CrmDataType.REVIEW_SNAPSHOT,
                              "target_type": CrmDataType.REVIEW_SESSION},
+                })
+            # Snapshot → Week
+            week_entity = self.create_review_week_entity(primary_data)
+            if week_entity.metadata.get("week_id"):
+                entities_data.append({
+                    "name": week_entity.name,
+                    "description": week_entity.description,
+                    "meta": week_entity.metadata,
+                    "graph_type": GraphType.crm,
+                })
+                relationships_data.append({
+                    "source_entity": snapshot_entity.name,
+                    "target_entity": week_entity.name,
+                    "source_entity_description": snapshot_entity.description,
+                    "target_entity_description": week_entity.description,
+                    "relationship_desc": f"商机快照{snapshot_entity.name}观测于{week_entity.metadata.get('week_id')}",
+                    "meta": {**rel_meta_base, "relation_type": "OBSERVED_IN",
+                             "source_type": CrmDataType.REVIEW_SNAPSHOT,
+                             "target_type": "crm_review_week"},
                 })
             # Snapshot → Owner
             owner_name = primary_data.get("owner_name")
@@ -905,6 +1013,81 @@ class CRMKnowledgeGraphBuilder:
                     "meta": {**rel_meta_base, "relation_type": "DETECTED_IN",
                              "source_type": CrmDataType.REVIEW_RISK_PROGRESS,
                              "target_type": CrmDataType.OPPORTUNITY},
+                })
+            # RiskProgress → Week
+            week_entity = self.create_review_week_entity(primary_data)
+            if week_entity.metadata.get("week_id"):
+                entities_data.append({
+                    "name": week_entity.name,
+                    "description": week_entity.description,
+                    "meta": week_entity.metadata,
+                    "graph_type": GraphType.crm,
+                })
+                relationships_data.append({
+                    "source_entity": rp_entity.name,
+                    "target_entity": week_entity.name,
+                    "source_entity_description": rp_entity.description,
+                    "target_entity_description": week_entity.description,
+                    "relationship_desc": f"{rp_entity.name}观测于{week_entity.metadata.get('week_id')}",
+                    "meta": {**rel_meta_base, "relation_type": "OBSERVED_IN",
+                             "source_type": CrmDataType.REVIEW_RISK_PROGRESS,
+                             "target_type": "crm_review_week"},
+                })
+
+        elif crm_data_type == "crm_review_recommendation":
+            rec_entity = self.create_review_recommendation_entity(primary_data)
+            entities_data.append({
+                "name": rec_entity.name,
+                "description": rec_entity.description,
+                "meta": rec_entity.metadata,
+                "graph_type": GraphType.crm,
+            })
+            rel_meta_base = {
+                **meta,
+                "document_id": document_id,
+                "chunk_id": chunk_id,
+                "crm_data_type": crm_data_type,
+                "snapshot_period": primary_data.get("snapshot_period", ""),
+                "unique_id": primary_data.get("recommendation_id", ""),
+            }
+            session_id = primary_data.get("session_id")
+            if session_id:
+                session_entity = self.create_review_session_entity(
+                    {"session_id": session_id, "session_name": session_id}
+                )
+                entities_data.append({
+                    "name": session_entity.name,
+                    "description": session_entity.description,
+                    "meta": session_entity.metadata,
+                    "graph_type": GraphType.crm,
+                })
+                relationships_data.append({
+                    "source_entity": rec_entity.name,
+                    "target_entity": session_entity.name,
+                    "source_entity_description": rec_entity.description,
+                    "target_entity_description": session_entity.description,
+                    "relationship_desc": f"推荐项{rec_entity.name}属于Review会议{session_entity.name}",
+                    "meta": {**rel_meta_base, "relation_type": "BELONGS_TO",
+                             "source_type": "crm_review_recommendation",
+                             "target_type": CrmDataType.REVIEW_SESSION},
+                })
+            week_entity = self.create_review_week_entity(primary_data)
+            if week_entity.metadata.get("week_id"):
+                entities_data.append({
+                    "name": week_entity.name,
+                    "description": week_entity.description,
+                    "meta": week_entity.metadata,
+                    "graph_type": GraphType.crm,
+                })
+                relationships_data.append({
+                    "source_entity": rec_entity.name,
+                    "target_entity": week_entity.name,
+                    "source_entity_description": rec_entity.description,
+                    "target_entity_description": week_entity.description,
+                    "relationship_desc": f"推荐项{rec_entity.name}观测于{week_entity.metadata.get('week_id')}",
+                    "meta": {**rel_meta_base, "relation_type": "OBSERVED_IN",
+                             "source_type": "crm_review_recommendation",
+                             "target_type": "crm_review_week"},
                 })
     
         return entities_data, relationships_data

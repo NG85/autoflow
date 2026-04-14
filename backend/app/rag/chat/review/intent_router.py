@@ -42,6 +42,14 @@ class ReviewIntent(BaseModel):
             "an opportunity or customer by name (e.g. 马上消费) without CRM ID"
         ),
     )
+    needs_clarification: bool = Field(
+        default=False,
+        description="Whether the parser is uncertain and should ask a follow-up question.",
+    )
+    clarifying_question: str = Field(
+        default="",
+        description="A short follow-up question when needs_clarification is true.",
+    )
 
 
 class ReviewSessionContext(BaseModel):

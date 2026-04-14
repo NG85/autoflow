@@ -50,3 +50,18 @@ class ReviewSnapshotEntity(CRMEntityBase):
 class ReviewRiskProgressEntity(CRMEntityBase):
     """Entity representing a risk or progress insight detected during review"""
     CRM_DATA_TYPE = CrmDataType.REVIEW_RISK_PROGRESS
+
+
+class ReviewWeekEntity(CRMEntityBase):
+    """Entity representing a review week timeline node."""
+    CRM_DATA_TYPE = "crm_review_week"
+
+
+class ReviewDepartmentEntity(CRMEntityBase):
+    """Entity representing a review department timeline scope node."""
+    CRM_DATA_TYPE = "crm_review_department"
+
+
+class ReviewRecommendationEntity(CRMEntityBase):
+    """Entity representing a review recommendation feedback item."""
+    CRM_DATA_TYPE = "crm_review_recommendation"

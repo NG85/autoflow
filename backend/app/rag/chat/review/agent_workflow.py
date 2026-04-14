@@ -203,8 +203,9 @@ class AgentWorkFlow:
         artifacts.metadata["workflow_plan"] = plan.model_dump()
         artifacts.metadata["time_axis"] = self._build_time_metadata()
 
-        if intent.needs_clarification:
-            artifacts.response_text = intent.clarifying_question.strip() or "请先明确问题范围，我再继续分析。"
+        if getattr(intent, "needs_clarification", False):
+            clarification = str(getattr(intent, "clarifying_question", "") or "").strip()
+            artifacts.response_text = clarification or "请先明确问题范围，我再继续分析。"
             return artifacts
 
         yield ChatEvent(

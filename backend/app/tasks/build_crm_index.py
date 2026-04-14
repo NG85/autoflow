@@ -310,6 +310,15 @@ def build_crm_graph_index_for_document(
                 }
             logger.info(f"Creating graph for review risk/progress {rp_unique_id}")
 
+        elif crm_data_type == "crm_review_recommendation":
+            recommendation_id = meta.get("recommendation_id")
+            if not recommendation_id:
+                logger.warning("Missing recommendation_id in metadata, skipping graph construction")
+                return
+            primary_data = {k: v for k, v in meta.items() if k != "crm_data_type" and v is not None}
+            primary_data.setdefault("recommendation_id", recommendation_id)
+            logger.info(f"Creating graph for review recommendation {recommendation_id}")
+
         else:
             logger.warning(f"Unknown crm_data_type: {crm_data_type}, skipping graph construction")
             return          
