@@ -13,6 +13,7 @@ from sqlmodel import Session, select
 from app.celery import app as celery_app
 from app.core.config import settings
 from app.core.db import engine
+from app.models import Document as DBDocument
 from app.models.data_source import DataSource, DataSourceType
 from app.models.knowledge_base import KnowledgeBaseDataSource
 from app.rag.datasource.review import ReviewDataSource
@@ -56,6 +57,23 @@ def index_review_session_data(self, session_id: str, kb_id: int = None):
 
             doc_count = 0
             for document in loader.load_documents():
+                existing_id = db_session.exec(
+                    select(DBDocument.id).where(
+                        DBDocument.knowledge_base_id == kb.id,
+                        DBDocument.data_source_id == data_source_id,
+                        DBDocument.source_uri == document.source_uri,
+                    )
+                ).first()
+                if existing_id:
+                    logger.info(
+                        f"Document already exists for source_uri={document.source_uri}, "
+                        f"reusing document #{existing_id}"
+                    )
+                    build_index_for_document.delay(kb.id, existing_id)
+                    build_crm_graph_index_for_document.delay(kb.id, existing_id)
+                    doc_count += 1
+                    continue
+
                 db_session.add(document)
                 db_session.commit()
                 db_session.refresh(document)

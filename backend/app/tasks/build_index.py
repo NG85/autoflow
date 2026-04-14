@@ -40,11 +40,10 @@ def build_index_for_document(self, knowledge_base_id: int, document_id: int):
 
         # Check document.
         db_document = session.get(DBDocument, document_id)
-        doc_category = db_document.meta["category"]
-        
         if db_document is None:
             logger.error(f"Document #{document_id} is not found")
             return
+        doc_category = (db_document.meta or {}).get("category")
 
         if db_document.index_status not in (
             DocIndexTaskStatus.PENDING,
@@ -75,6 +74,10 @@ def build_index_for_document(self, knowledge_base_id: int, document_id: int):
             index_service.build_vector_index_for_document(index_session, db_document)
 
         with Session(engine) as session:
+            db_document = session.get(DBDocument, document_id)
+            if db_document is None:
+                logger.error(f"Document #{document_id} is not found when marking completed")
+                return
             db_document.index_status = DocIndexTaskStatus.COMPLETED
             session.add(db_document)
             session.commit()
@@ -85,6 +88,10 @@ def build_index_for_document(self, knowledge_base_id: int, document_id: int):
             logger.error(
                 f"Failed to build vector index for document {document_id}: {error_msg}"
             )
+            db_document = session.get(DBDocument, document_id)
+            if db_document is None:
+                logger.error(f"Document #{document_id} is not found when marking failed")
+                return
             db_document.index_status = DocIndexTaskStatus.FAILED
             db_document.index_result = error_msg
             session.add(db_document)

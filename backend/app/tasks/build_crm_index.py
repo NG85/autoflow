@@ -350,8 +350,13 @@ def build_crm_graph_index_for_document(
         graph_store.save(chunk.id, entities_df, relationships_df)
                         
         with Session(engine) as session:
-            chunk.crm_index_status = CrmKgIndexStatus.COMPLETED
-            session.add(chunk)
+            chunk_model = get_kb_chunk_model(kb)
+            db_chunk = session.get(chunk_model, chunk.id)
+            if db_chunk is None:
+                logger.error(f"Chunk #{chunk.id} is not found when marking CRM index completed")
+                return
+            db_chunk.crm_index_status = CrmKgIndexStatus.COMPLETED
+            session.add(db_chunk)
             session.commit()
             logger.info(
                 f"Built crm knowledge graph index for chunk #{chunk.id} successfully."
@@ -363,9 +368,14 @@ def build_crm_graph_index_for_document(
                 f"Failed to build crm knowledge graph index for chunk #{chunk.id}",
                 exc_info=True,
             )
-            chunk.crm_index_status = CrmKgIndexStatus.FAILED
-            chunk.crm_index_result = error_msg
-            session.add(chunk)
+            chunk_model = get_kb_chunk_model(kb)
+            db_chunk = session.get(chunk_model, chunk.id)
+            if db_chunk is None:
+                logger.error(f"Chunk #{chunk.id} is not found when marking CRM index failed")
+                return
+            db_chunk.crm_index_status = CrmKgIndexStatus.FAILED
+            db_chunk.crm_index_result = error_msg
+            session.add(db_chunk)
             session.commit()
 
 def _parse_owner(owner_str: str) -> List[str]:

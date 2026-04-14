@@ -197,8 +197,9 @@ class ReviewDataSource:
     ) -> Dict[str, Dict[str, str]]:
         """Build {scope_type: {id: name}} maps from snapshots and session.
 
-        Returns a dict with keys ``"opportunity"``, ``"owner"``, and
-        ``"department"`` each mapping IDs to human-readable names.
+        Used to resolve ``CRMReviewOppRiskProgress.scope_id`` by ``scope_type``:
+        ``opportunity`` → 商机, ``owner`` → 负责人, ``department`` → 部门.
+        ``company`` scope has no ``scope_id`` and is not listed here.
         """
         opp_map: Dict[str, str] = {}
         owner_map: Dict[str, str] = {}
@@ -208,18 +209,23 @@ class ReviewDataSource:
             CRMReviewOppBranchSnapshot.opportunity_name,
             CRMReviewOppBranchSnapshot.owner_id,
             CRMReviewOppBranchSnapshot.owner_name,
+            CRMReviewOppBranchSnapshot.owner_department_id,
+            CRMReviewOppBranchSnapshot.owner_department_name,
         ).where(
             CRMReviewOppBranchSnapshot.snapshot_period == session_obj.period,
         )
+        dept_map: Dict[str, str] = {}
+        if session_obj.department_id and session_obj.department_name:
+            dept_map[session_obj.department_id] = session_obj.department_name
+
         for row in self.db_session.exec(stmt).all():
             if row[0] and row[1]:
                 opp_map[row[0]] = row[1]
             if row[2] and row[3]:
                 owner_map[row[2]] = row[3]
-
-        dept_map: Dict[str, str] = {}
-        if session_obj.department_id and session_obj.department_name:
-            dept_map[session_obj.department_id] = session_obj.department_name
+            od_id, od_name = row[4], row[5]
+            if od_id and od_name:
+                dept_map[od_id] = od_name
 
         return {
             "opportunity": opp_map,
@@ -238,6 +244,8 @@ class ReviewDataSource:
 
         scope_maps = self._build_scope_name_maps(session_obj)
         opp_name_map = scope_maps["opportunity"]
+        owner_name_map = scope_maps["owner"]
+        dept_name_map = scope_maps["department"]
 
         for rp in records:
             resolved_scope_name = None
@@ -245,10 +253,19 @@ class ReviewDataSource:
                 type_map = scope_maps.get(rp.scope_type, {})
                 resolved_scope_name = type_map.get(rp.scope_id)
 
+            owner_nm = (
+                owner_name_map.get(rp.owner_id) if rp.owner_id else None
+            )
+            dept_nm = (
+                dept_name_map.get(rp.department_id) if rp.department_id else None
+            )
+
             lines = format_risk_progress_info(
                 rp,
                 opportunity_name=opp_name_map.get(rp.opportunity_id) if rp.opportunity_id else None,
                 scope_name=resolved_scope_name,
+                owner_name=owner_nm,
+                department_name=dept_nm,
             )
             content_str = "\n".join(lines)
 
