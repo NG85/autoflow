@@ -37,7 +37,12 @@ from app.rag.llms.dspy import get_dspy_lm_by_llama_llm
 from app.rag.retrievers.knowledge_graph.schema import KnowledgeGraphRetrievalResult
 from app.rag.types import ChatEventType, ChatMessageSate, CrmDataType
 from app.rag.utils import parse_goal_response_format
-from app.repositories import chat_repo, file_permission_repo
+from app.repositories import (
+    chat_repo,
+    file_permission_repo,
+    user_department_relation_repo,
+    user_profile_repo,
+)
 from app.site_settings import SiteSetting
 from app.utils.tracing import LangfuseContextManager
 from app.rag import default_prompt
@@ -1571,6 +1576,22 @@ class ChatFlow:
             ),
         )
         data_retriever = ReviewDataRetriever()
+        current_owner_id = None
+        current_owner_name = None
+        if self.user:
+            try:
+                current_owner_id = user_profile_repo.get_crm_user_id_by_user_id(
+                    self.db_session,
+                    self.user.id,
+                )
+                if current_owner_id:
+                    owner_name_map = user_department_relation_repo.get_user_names_by_crm_user_ids(
+                        self.db_session,
+                        [str(current_owner_id)],
+                    )
+                    current_owner_name = owner_name_map.get(str(current_owner_id))
+            except Exception as e:
+                logger.warning("Failed to resolve current owner identity for review chat: %s", e)
 
         with self._trace_manager.span(
             name="review_data_retrieval",
@@ -1581,6 +1602,8 @@ class ChatFlow:
                 review_session=review_session,
                 intent=intent,
                 user_question=self.user_question,
+                current_owner_id=str(current_owner_id) if current_owner_id else None,
+                current_owner_name=current_owner_name,
             )
             span.end(output={
                 "kpi_count": len(data_ctx.kpi_metrics),

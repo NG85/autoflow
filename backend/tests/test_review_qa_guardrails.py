@@ -181,6 +181,41 @@ def test_retrieve_prefers_query_plan_opportunity_detail_route(monkeypatch):
     assert len(ctx.opportunity_snapshot_rows) == 1
 
 
+def test_retrieve_passes_current_owner_context_for_self_queries(monkeypatch):
+    retriever = ReviewDataRetriever()
+    review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
+    intent = ReviewIntent(
+        intent_type="data_query",
+        query_plan={
+            "route": "opportunity_detail",
+            "detail_filters": {"owner_name": "我"},
+            "use_kpi": False,
+        },
+    )
+    captured = {}
+
+    def _mock_detail(*args, **kwargs):
+        captured["owner_id"] = kwargs.get("current_owner_id")
+        captured["owner_name"] = kwargs.get("current_owner_name")
+        return []
+
+    monkeypatch.setattr(retriever, "_query_typical_opportunity_details", _mock_detail)
+    monkeypatch.setattr(retriever, "_query_kpi_metrics", lambda *a, **k: [])
+    monkeypatch.setattr(retriever, "_query_snapshot_aggregations", lambda *a, **k: [])
+    monkeypatch.setattr(retriever, "_query_risk_progress", lambda *a, **k: [])
+
+    retriever.retrieve(
+        db_session=None,
+        review_session=review_session,
+        intent=intent,
+        user_question="查询我负责的商机明细",
+        current_owner_id="crm_123",
+        current_owner_name="张三",
+    )
+    assert captured["owner_id"] == "crm_123"
+    assert captured["owner_name"] == "张三"
+
+
 @pytest.mark.parametrize(
     "question,expected_route,expected_mismatch",
     [

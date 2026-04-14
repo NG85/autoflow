@@ -112,6 +112,10 @@ def _clean_slot_value(v: str) -> str:
     return value.strip()
 
 
+def _is_self_reference(v: str) -> bool:
+    return (v or "").strip().lower() in ("我", "我自己", "本人", "自己", "me", "myself")
+
+
 def _infer_opportunity_name_keyword(question: str) -> Optional[str]:
     """Heuristic extraction when the LLM did not set opportunity_name_keyword."""
     if not question:
@@ -446,6 +450,8 @@ class ReviewDataRetriever:
         review_session: CRMReviewSession,
         intent: ReviewIntent,
         user_question: Optional[str] = None,
+        current_owner_id: Optional[str] = None,
+        current_owner_name: Optional[str] = None,
     ) -> ReviewDataContext:
         ctx = ReviewDataContext()
 
@@ -505,6 +511,8 @@ class ReviewDataRetriever:
                 snapshot_period=snapshot_period,
                 department_id=review_session.department_id,
                 detail_filters=detail_filters,
+                current_owner_id=current_owner_id,
+                current_owner_name=current_owner_name,
                 limit=200,
             )
             if ctx.opportunity_snapshot_rows:
@@ -560,6 +568,8 @@ class ReviewDataRetriever:
         snapshot_period: str,
         department_id: Optional[str],
         detail_filters: Dict[str, Any],
+        current_owner_id: Optional[str] = None,
+        current_owner_name: Optional[str] = None,
         limit: int = 200,
     ) -> List[Dict[str, Any]]:
         S = CRMReviewOppBranchSnapshot
@@ -569,11 +579,25 @@ class ReviewDataRetriever:
 
         owner_name = (detail_filters.get("owner_name") or "").strip()
         if owner_name:
-            stmt = stmt.where(S.owner_name.like(f"%{_escape_like(owner_name)}%"))
+            if _is_self_reference(owner_name):
+                if current_owner_id:
+                    stmt = stmt.where(S.owner_id == current_owner_id)
+                elif current_owner_name:
+                    stmt = stmt.where(S.owner_name.like(f"%{_escape_like(current_owner_name)}%"))
+            else:
+                stmt = stmt.where(S.owner_name.like(f"%{_escape_like(owner_name)}%"))
         owner_names = detail_filters.get("owner_names") or []
         if owner_names:
             owner_conditions = [
-                S.owner_name.like(f"%{_escape_like(str(name).strip())}%")
+                (
+                    (S.owner_id == current_owner_id)
+                    if (_is_self_reference(str(name).strip()) and current_owner_id)
+                    else (
+                        S.owner_name.like(f"%{_escape_like(current_owner_name)}%")
+                        if (_is_self_reference(str(name).strip()) and current_owner_name)
+                        else S.owner_name.like(f"%{_escape_like(str(name).strip())}%")
+                    )
+                )
                 for name in owner_names
                 if str(name).strip()
             ]
@@ -636,10 +660,24 @@ class ReviewDataRetriever:
             # fallback to full scope to reduce false negatives from dept slicing
             stmt2 = select(S).where(S.snapshot_period == snapshot_period)
             if owner_name:
-                stmt2 = stmt2.where(S.owner_name.like(f"%{_escape_like(owner_name)}%"))
+                if _is_self_reference(owner_name):
+                    if current_owner_id:
+                        stmt2 = stmt2.where(S.owner_id == current_owner_id)
+                    elif current_owner_name:
+                        stmt2 = stmt2.where(S.owner_name.like(f"%{_escape_like(current_owner_name)}%"))
+                else:
+                    stmt2 = stmt2.where(S.owner_name.like(f"%{_escape_like(owner_name)}%"))
             if owner_names:
                 owner_conditions = [
-                    S.owner_name.like(f"%{_escape_like(str(name).strip())}%")
+                    (
+                        (S.owner_id == current_owner_id)
+                        if (_is_self_reference(str(name).strip()) and current_owner_id)
+                        else (
+                            S.owner_name.like(f"%{_escape_like(current_owner_name)}%")
+                            if (_is_self_reference(str(name).strip()) and current_owner_name)
+                            else S.owner_name.like(f"%{_escape_like(str(name).strip())}%")
+                        )
+                    )
                     for name in owner_names
                     if str(name).strip()
                 ]
