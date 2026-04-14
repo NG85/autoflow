@@ -123,7 +123,8 @@ gap. If the user asks about coverage adequacy, 1.0x means exactly covered, \
 >3x is generally healthy.
 6. Present numbers clearly — use tables (markdown) when comparing multiple items.
 7. Use the same language as the user's question.
-8. Keep the answer concise and data-driven.
+8. For mismatch-list queries (e.g., AI vs sales stage/forecast/close-date differences), first output the matching opportunity list (or explicit zero-result), then provide concise summary.
+9. Keep the answer concise and data-driven.
 
 Answer:
 """

@@ -92,7 +92,8 @@ class ReviewIntentRouter:
             review_phase=session_context.review_phase or "",
             chat_history=chat_history or [],
         )
-        return self._parse_intent(raw)
+        intent = self._parse_intent(raw)
+        return self._apply_soft_boundary_guard(intent, user_question)
 
     @staticmethod
     def _parse_intent(raw: str) -> ReviewIntent:
@@ -112,3 +113,21 @@ class ReviewIntentRouter:
         if json_match:
             return json_match.group(0).strip()
         return text.strip()
+
+    @staticmethod
+    def _apply_soft_boundary_guard(intent: ReviewIntent, user_question: str) -> ReviewIntent:
+        # 仅对 data_query 做轻量校正，避免下游检索跑偏
+        if intent.intent_type != "data_query":
+            return intent
+        q = (user_question or "").strip().lower()
+        if not q:
+            return intent
+        has_ai = ("ai" in q) or ("智能" in q) or ("算法" in q)
+        has_sales = ("销售" in q) or ("业务" in q)
+        has_diff = any(k in q for k in ("不同", "不一致", "差异", "不一样", "冲突"))
+        has_opportunity = any(k in q for k in ("商机", "项目", "pipeline", "机会"))
+        if has_ai and has_sales and has_diff and has_opportunity:
+            if not intent.metric_names:
+                # 作为下游差异分支识别的意图先验
+                intent.metric_names = ["commit_sales", "commit_ai"]
+        return intent
