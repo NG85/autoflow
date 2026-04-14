@@ -1590,9 +1590,15 @@ class ChatFlow:
                 "progress_count": len(data_ctx.progresses),
             })
 
-        # --- 3. (strategy only) KG + vector retrieval ---
+        # --- 3. KG + vector retrieval (strategy, or data_query zero-result fallback) ---
         knowledge_graph_context = ""
         relevant_chunks = []
+        should_data_query_fallback = (
+            intent.intent_type == "data_query"
+            and intent.query_type in ("opportunity_detail", "mismatch_list")
+            and not data_ctx.opportunity_snapshot_rows
+            and not intent.needs_clarification
+        )
 
         if intent.intent_type == "strategy":
             yield ChatEvent(
@@ -1665,6 +1671,128 @@ class ChatFlow:
                 relevant_chunks = filtered_chunks
             except Exception as e:
                 logger.warning("KB retrieval failed for review strategy chat, continuing without: %s", e)
+        elif should_data_query_fallback:
+            yield ChatEvent(
+                event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
+                payload=ChatStreamMessagePayload(
+                    state=ChatMessageSate.REVIEW_CONTEXT_BUILDING,
+                    display="No exact structured hit, retrieving KG/vector clues",
+                ),
+            )
+            try:
+                self._ensure_retrieve_flow_initialized()
+                self.granted_files = []
+                self.crm_authority = None
+
+                (knowledge_graph_result, knowledge_graph_context) = yield from self._search_knowledge_graph(
+                    user_question=self.user_question,
+                    annotation_silent=True,
+                )
+                review_type_values = {
+                    CrmDataType.REVIEW_SESSION.value,
+                    CrmDataType.REVIEW_SNAPSHOT.value,
+                    CrmDataType.REVIEW_RISK_PROGRESS.value,
+                }
+                filtered_relationships = []
+                for rel in knowledge_graph_result.relationships:
+                    rel_meta = rel.meta or {}
+                    rel_type = str(rel_meta.get("crm_data_type", ""))
+                    if rel_type and rel_type not in review_type_values:
+                        continue
+                    rel_period = str(rel_meta.get("snapshot_period", "") or "")
+                    rel_session = str(rel_meta.get("session_id", "") or "")
+                    if rel_period and rel_period != session_ctx.period:
+                        continue
+                    if rel_session and rel_session != session_ctx.session_id:
+                        continue
+                    filtered_relationships.append(rel)
+                if filtered_relationships:
+                    related_entity_ids = set()
+                    for rel in filtered_relationships:
+                        related_entity_ids.add(rel.source_entity_id)
+                        related_entity_ids.add(rel.target_entity_id)
+                    knowledge_graph_result.relationships = filtered_relationships
+                    knowledge_graph_result.entities = [
+                        ent for ent in knowledge_graph_result.entities if ent.id in related_entity_ids
+                    ]
+                    knowledge_graph_context = self.retrieve_flow._get_knowledge_graph_context(
+                        knowledge_graph_result
+                    )
+                else:
+                    knowledge_graph_context = ""
+
+                relevant_chunks = self.retrieve_flow.search_relevant_chunks(
+                    self.user_question,
+                    crm_authority=self.crm_authority,
+                    granted_files=self.granted_files,
+                )
+                filtered_chunks = []
+                for chunk in relevant_chunks:
+                    meta = chunk.node.metadata or {}
+                    chunk_type = str(meta.get("crm_data_type", ""))
+                    if chunk_type and chunk_type not in review_type_values:
+                        continue
+                    chunk_period = str(meta.get("snapshot_period", "") or "")
+                    chunk_session = str(meta.get("session_id", "") or "")
+                    if chunk_period and chunk_period != session_ctx.period:
+                        continue
+                    if chunk_session and chunk_session != session_ctx.session_id:
+                        continue
+                    filtered_chunks.append(chunk)
+                relevant_chunks = filtered_chunks[:3]
+
+                fallback_kb_context = ReviewContextBuilder.build_kb_context(
+                    knowledge_graph_context,
+                    relevant_chunks,
+                )
+                has_fallback_clues = bool(knowledge_graph_context.strip() or relevant_chunks)
+                if has_fallback_clues:
+                    fallback_note = (
+                        "### 候选线索（KG/向量召回，非精确命中）\n"
+                        "- 当前结构化条件下未检索到精确结果；以下为相似线索，仅用于辅助排查，请勿当作精确命中。\n"
+                        f"{fallback_kb_context[:1500]}"
+                    )
+                else:
+                    plan = intent.query_plan or {}
+                    detail_filters = {}
+                    if isinstance(plan.get("detail_filters"), dict):
+                        detail_filters = plan.get("detail_filters") or {}
+                    elif isinstance(intent.detail_filters, dict):
+                        detail_filters = intent.detail_filters or {}
+                    relaxation_hints = []
+                    if detail_filters.get("expected_closing_date"):
+                        relaxation_hints.append("先放宽预计成交日期（如改为月份范围）")
+                    if detail_filters.get("forecast_amount_min") is not None or detail_filters.get("forecast_amount_max") is not None:
+                        relaxation_hints.append("先放宽金额区间（如扩大上下限）")
+                    elif detail_filters.get("forecast_amount_value") is not None:
+                        relaxation_hints.append("先放宽金额条件（如由等于改为大于等于）")
+                    if detail_filters.get("owner_name") or detail_filters.get("owner_names"):
+                        relaxation_hints.append("再放宽负责人条件（如姓名简称或移除负责人过滤）")
+                    if detail_filters.get("opportunity_stage") or detail_filters.get("opportunity_stages"):
+                        relaxation_hints.append("再放宽商机阶段条件（如并入相邻阶段）")
+                    if detail_filters.get("forecast_type") or detail_filters.get("forecast_types"):
+                        relaxation_hints.append("放宽预测状态条件（如同时包含 commit/upside）")
+                    if intent.query_type == "mismatch_list":
+                        relaxation_hints.append("若是差异清单，确认差异维度（阶段/预测状态/预计成交日期）是否正确")
+                    if not relaxation_hints:
+                        relaxation_hints = [
+                            "先确认是否需要跨周期或跨会话检索",
+                            "尝试去掉一个最强过滤条件后重试",
+                        ]
+                    hint_lines = "\n".join(f"- {h}" for h in relaxation_hints[:4])
+                    fallback_note = (
+                        "### 未检索到候选线索\n"
+                        "- 结构化查询与KG/向量召回均未命中当前会话范围内数据。\n"
+                        "- 建议按以下顺序逐步放宽条件后重试：\n"
+                        f"{hint_lines}"
+                    )
+                data_ctx.query_note = (
+                    f"{(data_ctx.query_note or '').rstrip()}\n\n{fallback_note}".strip()
+                )
+            except Exception as e:
+                logger.warning(
+                    "KB retrieval failed for review data_query fallback, continuing without: %s", e
+                )
 
         # --- 4. Build context ---
         structured_context = ReviewContextBuilder.build_structured_context(intent, data_ctx)

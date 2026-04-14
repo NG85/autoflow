@@ -64,6 +64,23 @@ Return a JSON object with the following fields:
     "time_comparison": "wow" | "mom" | "current_only",
     "opportunity_id": "<id or null>",
     "opportunity_name_keyword": "<short name substring or null>",
+    "query_type": "kpi_aggregation" | "opportunity_detail" | "mismatch_list" | "risk_progress" | null,
+    "mismatch_type": "stage" | "forecast" | "close_date" | null,
+    "detail_filters": {
+        "owner_name": "<string, optional>",
+        "opportunity_stage": "<string, optional>",
+        "forecast_type": "<string, optional>",
+        "expected_closing_date": "<string, optional>",
+        "forecast_amount_op": "ge" | "gt" | "le" | "lt" | "eq",
+        "forecast_amount_value": "<number, optional>"
+    },
+    "query_plan": {
+        "route": "kpi_aggregation" | "opportunity_detail" | "mismatch_list" | "risk_progress",
+        "mismatch_type": "stage" | "forecast" | "close_date" | null,
+        "detail_filters": {},
+        "use_kpi": true | false
+    },
+    "intent_confidence": 0.0,
     "needs_clarification": true | false,
     "clarifying_question": "<question or empty string>"
 }
@@ -101,6 +118,21 @@ Use null if the question is not about a named opportunity.
 - **needs_clarification / clarifying_question**: when intent or metric mapping is \
 ambiguous and could lead to wrong retrieval, set `needs_clarification` to true \
 and provide one short clarifying question. Otherwise set false and empty string.
+- **query_type**: choose the primary retrieval route explicitly instead of relying on \
+implicit keyword matching: \
+`mismatch_list` (sales vs AI difference list), `opportunity_detail` (single or filtered detail list), \
+`kpi_aggregation` (metrics/aggregations), `risk_progress` (risk/progress-focused lookup).
+- **mismatch_type**: only set when `query_type=mismatch_list`; must be one of \
+`stage`, `forecast`, `close_date`.
+- **detail_filters**: when `query_type=opportunity_detail`, fill structured slots from user \
+query for owner/stage/forecast/amount/expected close date if available.
+- **query_plan**: provide an executable plan for retriever. Keep it concise and consistent \
+with `query_type` and slots.
+- **intent_confidence**: confidence in [0,1]. If confidence < 0.6 and ambiguity may affect \
+retrieval correctness, set `needs_clarification=true`.
+- **accuracy-first extraction**: do not guess slot values when the user expression is vague. \
+Only extract multi-value filters when separators are explicit (e.g., "A或B", "A、B"). \
+For amount ranges, only extract when explicit range pattern exists (e.g., "10到20万").
 - **soft boundary for data_query**: precision-first. Supported "what" queries are: \
 KPI metric lookup, opportunity detail lookup, and mismatch list lookup for \
 {stage, forecast status, expected closing date}. If the user asks a mismatch \

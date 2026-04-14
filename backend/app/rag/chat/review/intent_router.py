@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from llama_index.core.llms.llm import LLM
 from llama_index.core.prompts.rich import RichPromptTemplate
@@ -49,6 +49,28 @@ class ReviewIntent(BaseModel):
     clarifying_question: str = Field(
         default="",
         description="A short follow-up question when needs_clarification is true.",
+    )
+    query_type: Optional[
+        Literal["kpi_aggregation", "opportunity_detail", "mismatch_list", "risk_progress"]
+    ] = Field(
+        default=None,
+        description="Retrieval route for structured data execution.",
+    )
+    mismatch_type: Optional[Literal["stage", "forecast", "close_date"]] = Field(
+        default=None,
+        description="Mismatch dimension when query_type is mismatch_list.",
+    )
+    detail_filters: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Structured detail filters for opportunity_detail route.",
+    )
+    query_plan: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Executable retrieval plan used by downstream retriever.",
+    )
+    intent_confidence: float = Field(
+        default=0.0,
+        description="Confidence score in [0,1] for intent and route.",
     )
 
 
@@ -130,6 +152,32 @@ class ReviewIntentRouter:
         has_diff = any(k in q for k in ("不同", "不一致", "差异", "不一样", "冲突"))
         has_list = any(k in q for k in ("哪些", "列表", "清单", "列出"))
         has_opportunity = any(k in q for k in ("商机", "项目", "pipeline", "机会"))
+        has_detail_lookup = any(
+            k in q
+            for k in (
+                "明细",
+                "列表",
+                "清单",
+                "列出",
+                "查询",
+                "查找",
+                "哪些",
+            )
+        )
+        has_detail_field = any(
+            k in q
+            for k in (
+                "负责人",
+                "owner",
+                "阶段",
+                "预测",
+                "预测状态",
+                "成交日期",
+                "预计成交",
+                "金额",
+                "签约金额",
+            )
+        )
         asks_amount = any(k in q for k in ("金额", "签约金额", "amount", "amt"))
         has_explicit_dimension = any(
             k in q
@@ -167,5 +215,41 @@ class ReviewIntentRouter:
                 "你想看哪一类差异：商机阶段、预测状态，还是预计成交日期？"
             )
             return intent
+
+        # Route normalization: keep backward compatibility while making retrieval explicit.
+        if intent.query_type is None:
+            if has_ai and has_diff and (has_list or has_opportunity):
+                intent.query_type = "mismatch_list"
+            elif has_opportunity and (has_detail_lookup or has_detail_field):
+                intent.query_type = "opportunity_detail"
+            elif intent.opportunity_id or intent.opportunity_name_keyword:
+                intent.query_type = "opportunity_detail"
+            else:
+                intent.query_type = "kpi_aggregation"
+        if intent.query_type == "mismatch_list" and intent.mismatch_type is None:
+            if any(k in q for k in ("阶段", "stage")):
+                intent.mismatch_type = "stage"
+            elif any(k in q for k in ("预测", "forecast", "判断")):
+                intent.mismatch_type = "forecast"
+            elif any(k in q for k in ("预计成交", "成交日期", "close date", "closing date")):
+                intent.mismatch_type = "close_date"
+        if not intent.query_plan:
+            intent.query_plan = {
+                "route": intent.query_type or "kpi_aggregation",
+                "mismatch_type": intent.mismatch_type,
+                "detail_filters": intent.detail_filters or {},
+                "use_kpi": bool((intent.query_type or "kpi_aggregation") == "kpi_aggregation"),
+            }
+        # Accuracy-first: for low-confidence detail/mismatch routing, ask once before execution.
+        if (
+            (intent.intent_confidence or 0.0) > 0
+            and (intent.intent_confidence or 0.0) < 0.6
+            and not intent.needs_clarification
+            and intent.query_type in ("opportunity_detail", "mismatch_list")
+        ):
+            intent.needs_clarification = True
+            intent.clarifying_question = (
+                "为确保查询准确，请确认你想查看的是商机明细筛选结果，还是销售与AI差异清单？"
+            )
 
         return intent

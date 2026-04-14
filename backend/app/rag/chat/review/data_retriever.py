@@ -61,6 +61,15 @@ MISMATCH_QUERY_CONFIGS = {
 }
 
 
+DETAIL_FIELD_ALIASES = {
+    "owner_name": ("负责人", "销售", "owner", "对接人"),
+    "opportunity_stage": ("阶段", "商机阶段", "stage"),
+    "forecast_amount": ("签约金额", "金额", "amount", "amt"),
+    "expected_closing_date": ("预计成交日期", "预计成交", "成交日期", "close date", "closing date"),
+    "forecast_type": ("预测状态", "预测", "判断", "forecast", "commit"),
+}
+
+
 def _fmt_value(metric_name: str, value) -> str:
     if value is None:
         return "N/A"
@@ -87,6 +96,20 @@ def _fmt_rate(rate) -> str:
 
 def _escape_like(s: str) -> str:
     return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _clean_slot_value(v: str) -> str:
+    """Remove trailing natural-language suffixes from extracted slot values."""
+    value = (v or "").strip()
+    if not value:
+        return value
+    value = re.sub(
+        r"(?:的)?(?:商机|机会)(?:明细|列表|清单)?$|(?:明细|列表|清单)$",
+        "",
+        value,
+        flags=re.IGNORECASE,
+    )
+    return value.strip()
 
 
 def _infer_opportunity_name_keyword(question: str) -> Optional[str]:
@@ -125,6 +148,163 @@ def _detect_mismatch_query_type(question: str) -> Optional[str]:
         if any(alias in q for alias in cfg["aliases"]):
             return diff_type
     return None
+
+
+def _extract_detail_query_filters(question: str) -> Dict[str, Any]:
+    """Extract simple field filters for typical opportunity detail queries."""
+    if not question:
+        return {}
+    q = question.strip()
+    ql = q.lower()
+    has_opportunity_context = any(k in ql for k in ("商机", "项目", "pipeline", "机会"))
+    if not has_opportunity_context:
+        return {}
+
+    filters: Dict[str, Any] = {}
+    requested_fields: List[str] = []
+    for field_name, aliases in DETAIL_FIELD_ALIASES.items():
+        if any(alias in ql for alias in aliases):
+            requested_fields.append(field_name)
+    if requested_fields:
+        filters["requested_fields"] = requested_fields
+
+    # owner / stage / forecast: exact-ish token after "为/是/等于/叫做"
+    token_extractors = {
+        "owner_name": (
+            r"(?:负责人|销售|owner|对接人)\s*(?:是|为|=|叫做)?\s*([^\s，。,；;：:]{2,40})",
+            r"([^\s，。,；;：:]{2,40})\s*(?:负责|owner)",
+        ),
+        "opportunity_stage": (
+            r"(?:阶段|商机阶段|stage)\s*(?:是|为|=)?\s*([^\s，。,；;：:]{1,30})",
+        ),
+        "forecast_type": (
+            r"(?:预测状态|预测|判断|forecast|commit)\s*(?:是|为|=)?\s*([^\s，。,；;：:]{1,30})",
+        ),
+    }
+    for field_name, patterns in token_extractors.items():
+        for p in patterns:
+            m = re.search(p, q, re.IGNORECASE)
+            if m and m.group(1):
+                cleaned = _clean_slot_value(m.group(1))
+                if cleaned:
+                    filters[field_name] = cleaned
+                break
+
+    # Explicit multi-value extraction (accuracy-first: only parse when "或/、/和/," appears).
+    def _split_explicit_multi_values(text: str) -> List[str]:
+        parts = re.split(r"[、,，/]|和|或", text)
+        values = [_clean_slot_value(p) for p in parts if p and _clean_slot_value(p)]
+        if len(values) <= 1:
+            return []
+        # Avoid over-segmentation when sentence particles are included.
+        return [v for v in values if 1 <= len(v) <= 30]
+
+    m_owner_multi = re.search(
+        r"(?:负责人|销售|owner|对接人)\s*(?:是|为|=)?\s*([^\n。；;，,]{2,80})",
+        q,
+        re.IGNORECASE,
+    )
+    if m_owner_multi and m_owner_multi.group(1):
+        owner_values = _split_explicit_multi_values(m_owner_multi.group(1))
+        if owner_values:
+            filters["owner_names"] = owner_values
+
+    m_stage_multi = re.search(
+        r"(?:阶段|商机阶段|stage)\s*(?:是|为|=)?\s*([^\n。；;，,]{1,80})",
+        q,
+        re.IGNORECASE,
+    )
+    if m_stage_multi and m_stage_multi.group(1):
+        stage_values = _split_explicit_multi_values(m_stage_multi.group(1))
+        if stage_values:
+            filters["opportunity_stages"] = stage_values
+
+    m_forecast_multi = re.search(
+        r"(?:预测状态|预测|判断|forecast|commit)\s*(?:是|为|=)?\s*([^\n。；;，,]{1,80})",
+        q,
+        re.IGNORECASE,
+    )
+    if m_forecast_multi and m_forecast_multi.group(1):
+        forecast_values = _split_explicit_multi_values(m_forecast_multi.group(1))
+        if forecast_values:
+            filters["forecast_types"] = forecast_values
+
+    # expected close date: keep a lightweight string filter
+    m_date = re.search(
+        r"(?:预计成交日期|预计成交|成交日期|close date|closing date)\s*(?:是|为|在|=)?\s*([^\s，。,；;：:]{1,30})",
+        q,
+        re.IGNORECASE,
+    )
+    if m_date and m_date.group(1):
+        filters["expected_closing_date"] = m_date.group(1).strip()
+
+    # amount comparators
+    m_amount = re.search(
+        r"(?:签约金额|金额|amount|amt)\s*(大于等于|>=|不低于|不少于|至少|大于|>|小于等于|<=|不高于|至多|小于|<|等于|=)?\s*([0-9]+(?:\.[0-9]+)?)\s*(万|w|k|千)?",
+        q,
+        re.IGNORECASE,
+    )
+    if m_amount:
+        raw_op = (m_amount.group(1) or "等于").strip()
+        raw_value = float(m_amount.group(2))
+        unit = (m_amount.group(3) or "").lower()
+        if unit in ("万", "w"):
+            raw_value *= 10000
+        elif unit in ("k", "千"):
+            raw_value *= 1000
+        op_map = {
+            "大于等于": "ge",
+            ">=": "ge",
+            "不低于": "ge",
+            "不少于": "ge",
+            "至少": "ge",
+            "大于": "gt",
+            ">": "gt",
+            "小于等于": "le",
+            "<=": "le",
+            "不高于": "le",
+            "至多": "le",
+            "小于": "lt",
+            "<": "lt",
+            "等于": "eq",
+            "=": "eq",
+        }
+        filters["forecast_amount_op"] = op_map.get(raw_op, "eq")
+        filters["forecast_amount_value"] = raw_value
+
+    # Explicit amount range: "金额在 10 到 20 万之间"
+    m_amount_range = re.search(
+        r"(?:签约金额|金额|amount|amt)[^\d]{0,6}([0-9]+(?:\.[0-9]+)?)\s*(万|w|k|千)?\s*(?:到|至|-|~)\s*([0-9]+(?:\.[0-9]+)?)\s*(万|w|k|千)?",
+        q,
+        re.IGNORECASE,
+    )
+    if m_amount_range:
+        low = float(m_amount_range.group(1))
+        low_unit = (m_amount_range.group(2) or "").lower()
+        high = float(m_amount_range.group(3))
+        high_unit = (m_amount_range.group(4) or "").lower()
+        # If only one bound provides unit (e.g. "10到20万"), inherit it to the other bound.
+        if not low_unit and high_unit:
+            low_unit = high_unit
+        if not high_unit and low_unit:
+            high_unit = low_unit
+        if low_unit in ("万", "w"):
+            low *= 10000
+        elif low_unit in ("k", "千"):
+            low *= 1000
+        if high_unit in ("万", "w"):
+            high *= 10000
+        elif high_unit in ("k", "千"):
+            high *= 1000
+        if low > high:
+            low, high = high, low
+        filters["forecast_amount_min"] = low
+        filters["forecast_amount_max"] = high
+        # Explicit range is more reliable than single comparator parse.
+        filters.pop("forecast_amount_op", None)
+        filters.pop("forecast_amount_value", None)
+
+    return filters
 
 
 def _safe_float(v: Any) -> Optional[float]:
@@ -272,9 +452,27 @@ class ReviewDataRetriever:
         session_id = review_session.unique_id
         snapshot_period = review_session.period
         question = user_question or ""
-        mismatch_type = _detect_mismatch_query_type(question)
+        plan = intent.query_plan or {}
+        query_type = plan.get("route") or intent.query_type
+        mismatch_type = (
+            plan.get("mismatch_type")
+            or intent.mismatch_type
+            or _detect_mismatch_query_type(question)
+        )
+        detail_filters = (
+            (plan.get("detail_filters") if isinstance(plan.get("detail_filters"), dict) else None)
+            or (intent.detail_filters if isinstance(intent.detail_filters, dict) else None)
+            or _extract_detail_query_filters(question)
+        )
+        if query_type is None:
+            if mismatch_type:
+                query_type = "mismatch_list"
+            elif detail_filters:
+                query_type = "opportunity_detail"
+            else:
+                query_type = "kpi_aggregation"
 
-        if mismatch_type:
+        if query_type == "mismatch_list" and mismatch_type:
             cfg = MISMATCH_QUERY_CONFIGS[mismatch_type]
             ctx.opportunity_snapshot_rows = self._query_field_mismatch_opportunities(
                 db_session=db_session,
@@ -301,6 +499,27 @@ class ReviewDataRetriever:
                     f"- 已按“{cfg['sales_label']} vs {cfg['ai_label']}”检索当前周期商机，"
                     f"未发现不一致记录。"
                 )
+        elif query_type == "opportunity_detail" and detail_filters:
+            ctx.opportunity_snapshot_rows = self._query_typical_opportunity_details(
+                db_session=db_session,
+                snapshot_period=snapshot_period,
+                department_id=review_session.department_id,
+                detail_filters=detail_filters,
+                limit=200,
+            )
+            if ctx.opportunity_snapshot_rows:
+                ctx.query_note = (
+                    "### 商机明细查询结果\n"
+                    f"- 已按典型字段条件检索，共返回 {len(ctx.opportunity_snapshot_rows)} 条商机明细。"
+                )
+            else:
+                ctx.query_note = (
+                    "### 商机明细查询结果\n"
+                    "- 已按典型字段条件检索当前周期商机，未匹配到结果。"
+                )
+        elif query_type == "risk_progress":
+            # Risk/progress focused query: skip KPI/detail retrieval.
+            pass
         else:
             ctx.kpi_metrics = self._query_kpi_metrics(
                 db_session, session_id, intent
@@ -312,7 +531,7 @@ class ReviewDataRetriever:
                 user_question=question,
             )
 
-        if not mismatch_type:
+        if query_type == "kpi_aggregation":
             ctx.snapshot_aggregations = self._query_snapshot_aggregations(
                 db_session,
                 snapshot_period,
@@ -334,6 +553,142 @@ class ReviewDataRetriever:
             ctx.comparison_data = self._build_wow_comparison(ctx.kpi_metrics)
 
         return ctx
+
+    def _query_typical_opportunity_details(
+        self,
+        db_session: Session,
+        snapshot_period: str,
+        department_id: Optional[str],
+        detail_filters: Dict[str, Any],
+        limit: int = 200,
+    ) -> List[Dict[str, Any]]:
+        S = CRMReviewOppBranchSnapshot
+        stmt = select(S).where(S.snapshot_period == snapshot_period)
+        if department_id:
+            stmt = stmt.where(S.owner_department_id == department_id)
+
+        owner_name = (detail_filters.get("owner_name") or "").strip()
+        if owner_name:
+            stmt = stmt.where(S.owner_name.like(f"%{_escape_like(owner_name)}%"))
+        owner_names = detail_filters.get("owner_names") or []
+        if owner_names:
+            owner_conditions = [
+                S.owner_name.like(f"%{_escape_like(str(name).strip())}%")
+                for name in owner_names
+                if str(name).strip()
+            ]
+            if owner_conditions:
+                stmt = stmt.where(or_(*owner_conditions))
+
+        stage = (detail_filters.get("opportunity_stage") or "").strip()
+        if stage:
+            stmt = stmt.where(S.opportunity_stage.like(f"%{_escape_like(stage)}%"))
+        stage_values = detail_filters.get("opportunity_stages") or []
+        if stage_values:
+            stage_conditions = [
+                S.opportunity_stage.like(f"%{_escape_like(str(v).strip())}%")
+                for v in stage_values
+                if str(v).strip()
+            ]
+            if stage_conditions:
+                stmt = stmt.where(or_(*stage_conditions))
+
+        forecast_type = (detail_filters.get("forecast_type") or "").strip()
+        if forecast_type:
+            stmt = stmt.where(S.forecast_type.like(f"%{_escape_like(forecast_type)}%"))
+        forecast_values = detail_filters.get("forecast_types") or []
+        if forecast_values:
+            forecast_conditions = [
+                S.forecast_type.like(f"%{_escape_like(str(v).strip())}%")
+                for v in forecast_values
+                if str(v).strip()
+            ]
+            if forecast_conditions:
+                stmt = stmt.where(or_(*forecast_conditions))
+
+        expected_closing_date = (detail_filters.get("expected_closing_date") or "").strip()
+        if expected_closing_date:
+            stmt = stmt.where(
+                S.expected_closing_date.like(f"%{_escape_like(expected_closing_date)}%")
+            )
+
+        amount_value = detail_filters.get("forecast_amount_value")
+        amount_op = detail_filters.get("forecast_amount_op")
+        amount_min = detail_filters.get("forecast_amount_min")
+        amount_max = detail_filters.get("forecast_amount_max")
+        if amount_value is not None:
+            if amount_op == "ge":
+                stmt = stmt.where(S.forecast_amount >= amount_value)
+            elif amount_op == "gt":
+                stmt = stmt.where(S.forecast_amount > amount_value)
+            elif amount_op == "le":
+                stmt = stmt.where(S.forecast_amount <= amount_value)
+            elif amount_op == "lt":
+                stmt = stmt.where(S.forecast_amount < amount_value)
+            else:
+                stmt = stmt.where(S.forecast_amount == amount_value)
+        if amount_min is not None and amount_max is not None:
+            stmt = stmt.where(S.forecast_amount >= amount_min, S.forecast_amount <= amount_max)
+
+        stmt = stmt.order_by(S.forecast_amount.desc(), S.opportunity_name).limit(limit)
+        rows = list(db_session.exec(stmt).all())
+        if not rows and department_id:
+            # fallback to full scope to reduce false negatives from dept slicing
+            stmt2 = select(S).where(S.snapshot_period == snapshot_period)
+            if owner_name:
+                stmt2 = stmt2.where(S.owner_name.like(f"%{_escape_like(owner_name)}%"))
+            if owner_names:
+                owner_conditions = [
+                    S.owner_name.like(f"%{_escape_like(str(name).strip())}%")
+                    for name in owner_names
+                    if str(name).strip()
+                ]
+                if owner_conditions:
+                    stmt2 = stmt2.where(or_(*owner_conditions))
+            if stage:
+                stmt2 = stmt2.where(S.opportunity_stage.like(f"%{_escape_like(stage)}%"))
+            if stage_values:
+                stage_conditions = [
+                    S.opportunity_stage.like(f"%{_escape_like(str(v).strip())}%")
+                    for v in stage_values
+                    if str(v).strip()
+                ]
+                if stage_conditions:
+                    stmt2 = stmt2.where(or_(*stage_conditions))
+            if forecast_type:
+                stmt2 = stmt2.where(
+                    S.forecast_type.like(f"%{_escape_like(forecast_type)}%")
+                )
+            if forecast_values:
+                forecast_conditions = [
+                    S.forecast_type.like(f"%{_escape_like(str(v).strip())}%")
+                    for v in forecast_values
+                    if str(v).strip()
+                ]
+                if forecast_conditions:
+                    stmt2 = stmt2.where(or_(*forecast_conditions))
+            if expected_closing_date:
+                stmt2 = stmt2.where(
+                    S.expected_closing_date.like(
+                        f"%{_escape_like(expected_closing_date)}%"
+                    )
+                )
+            if amount_value is not None:
+                if amount_op == "ge":
+                    stmt2 = stmt2.where(S.forecast_amount >= amount_value)
+                elif amount_op == "gt":
+                    stmt2 = stmt2.where(S.forecast_amount > amount_value)
+                elif amount_op == "le":
+                    stmt2 = stmt2.where(S.forecast_amount <= amount_value)
+                elif amount_op == "lt":
+                    stmt2 = stmt2.where(S.forecast_amount < amount_value)
+                else:
+                    stmt2 = stmt2.where(S.forecast_amount == amount_value)
+            if amount_min is not None and amount_max is not None:
+                stmt2 = stmt2.where(S.forecast_amount >= amount_min, S.forecast_amount <= amount_max)
+            stmt2 = stmt2.order_by(S.forecast_amount.desc(), S.opportunity_name).limit(limit)
+            rows = list(db_session.exec(stmt2).all())
+        return [self._snapshot_row_to_detail(r) for r in rows]
 
     def _query_kpi_metrics(
         self,
