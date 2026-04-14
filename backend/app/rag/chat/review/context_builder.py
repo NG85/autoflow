@@ -67,6 +67,7 @@ class ReviewContextBuilder:
     def build_review_kg_filters(
         session_id: Optional[str] = None,
         snapshot_period: Optional[str] = None,
+        week_id: Optional[str] = None,
         cross_session: bool = False,
     ) -> Dict:
         """Build Mongo-style metadata filters for KG/vector retrieval scoped to review data.
@@ -93,8 +94,10 @@ class ReviewContextBuilder:
         }
 
         if not cross_session:
-            if snapshot_period:
-                filters["snapshot_period"] = {"$eq": snapshot_period}
+            period_value = week_id or snapshot_period
+            if period_value:
+                filters["snapshot_period"] = {"$eq": period_value}
+                filters["week_id"] = {"$eq": period_value}
             elif session_id:
                 filters["session_id"] = {"$eq": session_id}
 

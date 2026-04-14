@@ -2,7 +2,8 @@ import logging
 import io
 import hashlib
 import json
-from typing import List, Literal, Optional, Union
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Dict, List, Literal, Optional, Union
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -100,6 +101,7 @@ from app.api.routes.crm.models import (
 from app.repositories.crm_review_session import crm_review_session_repo
 from app.repositories.crm_review_attendee import crm_review_attendee_repo
 from app.repositories.crm_review_kpi_metrics import crm_review_kpi_metrics_repo
+from app.repositories import chat_repo
 from app.models.crm_system_configurations import CRMSystemConfiguration
 from app.models.crm_review import (
     CRMReviewAttendee,
@@ -818,6 +820,14 @@ class ReviewSessionChatRequest(BaseModel):
         return messages
 
 
+class ReviewRecommendationFeedbackIn(BaseModel):
+    chat_message_id: int
+    status: Literal["pending", "in_progress", "done"] = "done"
+    outcome: Optional[Literal["improved", "no_change", "worse"]] = None
+    kpi_delta_after_1w: Optional[float] = None
+    notes: Optional[str] = None
+
+
 @router.post("/crm/review/sessions/{session_id}/chat")
 def review_session_chat(
     request: Request,
@@ -871,6 +881,94 @@ def review_session_chat(
         from app.rag.chat.chat_service import get_final_chat_result
 
         return get_final_chat_result(chat_flow.chat())
+
+
+@router.post("/crm/review/recommendations/{recommendation_id}/feedback")
+def update_review_recommendation_feedback(
+    recommendation_id: str,
+    payload: ReviewRecommendationFeedbackIn,
+    db_session: SessionDep,
+    user: CurrentUserDep,
+):
+    """Write back recommendation execution feedback for closed-loop reranking."""
+    chat_message = chat_repo.must_get_message(db_session, payload.chat_message_id)
+    if not chat_message.meta or not isinstance(chat_message.meta, dict):
+        raise HTTPException(status_code=404, detail="No review workflow metadata found")
+
+    meta: Dict[str, Any] = chat_message.meta
+    review_workflow = meta.get("review_workflow")
+    if not isinstance(review_workflow, dict):
+        raise HTTPException(status_code=404, detail="No review workflow metadata found")
+
+    workflow_plan = review_workflow.get("workflow_plan", {})
+    session_id = workflow_plan.get("session_id")
+    if not session_id:
+        raise HTTPException(status_code=400, detail="Cannot resolve review session id")
+
+    attendee = crm_review_attendee_repo.get_by_session_and_user_id(
+        db_session, session_id=session_id, user_id=str(user.id)
+    )
+    if not attendee:
+        raise HTTPException(status_code=403, detail="User is not an attendee of this review session")
+
+    recommendations = review_workflow.get("recommendations", [])
+    if not isinstance(recommendations, list):
+        raise HTTPException(status_code=400, detail="Invalid recommendations metadata")
+
+    matched = None
+    for item in recommendations:
+        if not isinstance(item, dict):
+            continue
+        if item.get("recommendation_id") == recommendation_id:
+            item["status"] = payload.status
+            if payload.outcome:
+                item["outcome"] = payload.outcome
+            if payload.kpi_delta_after_1w is not None:
+                item["kpi_delta_after_1w"] = payload.kpi_delta_after_1w
+            if payload.notes:
+                item["notes"] = payload.notes
+            item["feedback_updated_at"] = datetime.now(ZoneInfo("Asia/Shanghai")).isoformat()
+            matched = item
+            break
+
+    if not matched:
+        raise HTTPException(status_code=404, detail="Recommendation not found")
+
+    feedback_log = meta.get("review_feedback_log", [])
+    if not isinstance(feedback_log, list):
+        feedback_log = []
+    feedback_log.append(
+        {
+            "recommendation_id": recommendation_id,
+            "chat_message_id": payload.chat_message_id,
+            "status": payload.status,
+            "outcome": payload.outcome,
+            "kpi_delta_after_1w": payload.kpi_delta_after_1w,
+            "notes": payload.notes,
+            "updated_by": str(user.id),
+            "updated_at": datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(),
+        }
+    )
+    meta["review_feedback_log"] = feedback_log
+    chat_message.meta = meta
+    db_session.add(chat_message)
+    db_session.commit()
+
+    try:
+        from app.tasks.review_index import index_review_recommendation_feedback
+
+        index_review_recommendation_feedback.delay(
+            session_id=session_id,
+            recommendation_id=recommendation_id,
+            recommendation=matched,
+        )
+    except Exception as e:
+        logger.warning("Failed to trigger recommendation feedback indexing: %s", e)
+
+    return {
+        "detail": "Review recommendation feedback updated",
+        "recommendation": matched,
+    }
 
 
 @router.post("/crm/review/sessions/{session_id}/build-index")

@@ -41,10 +41,7 @@ from app.site_settings import SiteSetting
 from app.utils.tracing import LangfuseContextManager
 from app.rag import default_prompt
 from app.rag.chat.crm_authority import CRMAuthority, get_user_crm_authority
-from app.rag.chat.review.intent_router import ReviewIntentRouter, ReviewSessionContext
-from app.rag.chat.review.data_retriever import ReviewDataRetriever
-from app.rag.chat.review.context_builder import ReviewContextBuilder
-from app.rag.chat.review import prompts as review_prompts
+from app.rag.chat.review.intent_router import ReviewSessionContext
 from app.models.chat import ChatType
 from app.api.routes.models import ChatMode
 
@@ -1432,19 +1429,9 @@ class ChatFlow:
     def _review_session_chat(
         self,
     ) -> Generator[ChatEvent | str, None, Optional[str]]:
-        """End-to-end Q&A flow for a review session.
-
-        Pipeline:
-        1. _chat_start()
-        2. Load review session from context
-        3. ReviewIntentRouter.classify()
-        4. ReviewDataRetriever.retrieve()
-        5. (strategy only) KG + chunk retrieval via RetrieveFlow
-        6. ReviewContextBuilder.build()
-        7. LLM generate answer with intent-specific prompt
-        8. _chat_finish()
-        """
+        """Planner-driven multi-agent Q&A flow for a review session."""
         from app.repositories.crm_review_session import crm_review_session_repo
+        from app.rag.chat.review.agent_workflow import AgentWorkFlow
 
         ctx = langfuse_instrumentor_context.get().copy()
         db_user_message, db_assistant_message = yield from self._chat_start()
@@ -1496,139 +1483,36 @@ class ChatFlow:
             review_phase=review_session.review_phase,
         )
 
-        # --- 1. Intent classification ---
-        yield ChatEvent(
-            event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
-            payload=ChatStreamMessagePayload(
-                state=ChatMessageSate.REVIEW_INTENT_CLASSIFICATION,
-                display="Classifying question intent",
-            ),
-        )
         self._ensure_llm_initialized()
-        intent_router = ReviewIntentRouter(fast_llm=self._fast_llm)
-
-        with self._trace_manager.span(
-            name="review_intent_classification",
-            input=self.user_question,
-        ) as span:
-            intent = intent_router.classify(
-                user_question=self.user_question,
-                session_context=session_ctx,
-                chat_history=self.chat_history,
-            )
-            span.end(output=intent.model_dump())
-
-        logger.info(
-            "Review intent: type=%s, metrics=%s, scope=%s",
-            intent.intent_type,
-            intent.metric_names,
-            intent.scope_type,
+        self._ensure_retrieve_flow_initialized()
+        workflow = AgentWorkFlow(
+            db_session=self.db_session,
+            llm=self._llm,
+            fast_llm=self._fast_llm,
+            retrieve_flow=self.retrieve_flow,
+            user_question=self.user_question,
+            chat_history=self.chat_history,
+            session_ctx=session_ctx,
+            review_session=review_session,
+            search_knowledge_graph=self._search_knowledge_graph,
         )
 
-        # --- 2. Structured data retrieval ---
-        yield ChatEvent(
-            event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
-            payload=ChatStreamMessagePayload(
-                state=ChatMessageSate.REVIEW_DATA_RETRIEVAL,
-                display="Retrieving review session data",
-            ),
-        )
-        data_retriever = ReviewDataRetriever()
-
         with self._trace_manager.span(
-            name="review_data_retrieval",
-            input=intent.model_dump(),
+            name="review_agent_workflow",
+            input={"user_question": self.user_question, "session_id": session_ctx.session_id},
         ) as span:
-            data_ctx = data_retriever.retrieve(
-                db_session=self.db_session,
-                review_session=review_session,
-                intent=intent,
-                user_question=self.user_question,
-            )
-            span.end(output={
-                "kpi_count": len(data_ctx.kpi_metrics),
-                "snapshot_count": len(data_ctx.snapshot_aggregations),
-                "opportunity_snapshot_count": len(data_ctx.opportunity_snapshot_rows),
-                "risk_count": len(data_ctx.risks),
-                "progress_count": len(data_ctx.progresses),
-            })
+            workflow_result = yield from workflow.execute()
+            span.end(output=workflow_result.metadata)
 
-        # --- 3. (strategy only) KG + vector retrieval ---
-        knowledge_graph_context = ""
-        relevant_chunks = []
-
-        if intent.intent_type == "strategy":
-            yield ChatEvent(
-                event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
-                payload=ChatStreamMessagePayload(
-                    state=ChatMessageSate.REVIEW_CONTEXT_BUILDING,
-                    display="Searching knowledge base for best practices",
-                ),
-            )
-            try:
-                self._ensure_retrieve_flow_initialized()
-                self.granted_files = []
-                self.crm_authority = None
-
-                (_, knowledge_graph_context) = yield from self._search_knowledge_graph(
-                    user_question=self.user_question,
-                    annotation_silent=True,
-                )
-                relevant_chunks = self.retrieve_flow.search_relevant_chunks(
-                    self.user_question,
-                    crm_authority=self.crm_authority,
-                    granted_files=self.granted_files,
-                )
-            except Exception as e:
-                logger.warning("KB retrieval failed for review strategy chat, continuing without: %s", e)
-
-        # --- 4. Build context ---
-        structured_context = ReviewContextBuilder.build_structured_context(intent, data_ctx)
-        risk_context = ReviewContextBuilder.build_risk_context(intent, data_ctx)
-        kb_context = ReviewContextBuilder.build_kb_context(knowledge_graph_context, relevant_chunks)
-
-        # --- 5. Select prompt and generate ---
-        yield ChatEvent(
-            event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
-            payload=ChatStreamMessagePayload(
-                state=ChatMessageSate.GENERATE_ANSWER,
-                display="Generating answer",
-            ),
-        )
-
-        prompt_map = {
-            "data_query": review_prompts.REVIEW_DATA_QUERY_PROMPT,
-            "root_cause": review_prompts.REVIEW_ROOT_CAUSE_PROMPT,
-            "strategy": review_prompts.REVIEW_STRATEGY_PROMPT,
-        }
-        prompt_template = RichPromptTemplate(prompt_map[intent.intent_type])
-
-        format_kwargs = {
-            "current_date": datetime.now().strftime("%Y-%m-%d"),
-            "period": session_ctx.period,
-            "period_start": session_ctx.period_start,
-            "period_end": session_ctx.period_end,
-            "department_name": session_ctx.department_name or "",
-            "structured_context": structured_context,
-            "user_question": self.user_question,
-        }
-        if intent.intent_type in ("root_cause", "strategy"):
-            format_kwargs["risk_context"] = risk_context
-        if intent.intent_type == "strategy":
-            format_kwargs["kb_context"] = kb_context
-
-        with self._trace_manager.span(
-            name="review_generate_answer",
-            input={
-                "intent_type": intent.intent_type,
-                "user_question": self.user_question,
-            },
-        ) as span:
-            response_text = self._llm.predict(prompt_template, **format_kwargs)
-            span.end(output=response_text)
+        response_text = workflow_result.response_text
 
         if not response_text:
             response_text = "未能生成回答，请稍后重试。"
+
+        if workflow_result.metadata:
+            msg_meta = db_assistant_message.meta if isinstance(db_assistant_message.meta, dict) else {}
+            msg_meta["review_workflow"] = workflow_result.metadata
+            db_assistant_message.meta = msg_meta
 
         yield ChatEvent(
             event_type=ChatEventType.TEXT_PART,

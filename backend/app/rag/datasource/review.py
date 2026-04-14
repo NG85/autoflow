@@ -87,7 +87,7 @@ class ReviewDataSource:
         lines = format_review_session_info(session_obj, kpi_metrics)
         content_str = "\n".join(lines)
 
-        metadata = self._base_metadata(CrmDataType.REVIEW_SESSION)
+        metadata = self._base_metadata(CrmDataType.REVIEW_SESSION, session_obj=session_obj)
         metadata["unique_id"] = session_obj.unique_id
         metadata["session_id"] = session_obj.unique_id
         metadata["department_id"] = session_obj.department_id
@@ -134,7 +134,7 @@ class ReviewDataSource:
             lines = format_snapshot_info(snap)
             content_str = "\n".join(lines)
 
-            metadata = self._base_metadata(CrmDataType.REVIEW_SNAPSHOT)
+            metadata = self._base_metadata(CrmDataType.REVIEW_SNAPSHOT, session_obj=session_obj)
             metadata["unique_id"] = snap.unique_id
             metadata["session_id"] = session_obj.unique_id
             metadata["opportunity_id"] = snap.opportunity_id
@@ -183,7 +183,7 @@ class ReviewDataSource:
             lines = format_risk_progress_info(rp)
             content_str = "\n".join(lines)
 
-            metadata = self._base_metadata(CrmDataType.REVIEW_RISK_PROGRESS)
+            metadata = self._base_metadata(CrmDataType.REVIEW_RISK_PROGRESS, session_obj=session_obj)
             metadata["unique_id"] = rp.unique_id
             metadata["session_id"] = session_obj.unique_id
             metadata["record_type"] = rp.record_type
@@ -227,8 +227,31 @@ class ReviewDataSource:
         )
         return list(self.db_session.exec(stmt).all())
 
-    def _base_metadata(self, crm_data_type: CrmDataType) -> Dict:
+    def _build_week_metadata(self, session_obj: Optional[CRMReviewSession]) -> Dict:
+        if not session_obj:
+            return {}
+        rank_stmt = (
+            select(CRMReviewSession.id)
+            .where(CRMReviewSession.department_id == session_obj.department_id)
+            .where(CRMReviewSession.period_start <= session_obj.period_start)
+        )
+        session_week_rank = len(list(self.db_session.exec(rank_stmt).all()))
         return {
+            "time_granularity": "week",
+            "week_id": session_obj.period,
+            "week_start": str(session_obj.period_start),
+            "week_end": str(session_obj.period_end),
+            "session_week_rank": session_week_rank,
+        }
+
+    def _base_metadata(
+        self,
+        crm_data_type: CrmDataType,
+        session_obj: Optional[CRMReviewSession] = None,
+    ) -> Dict:
+        metadata = {
             "category": DocumentCategory.CRM,
             "crm_data_type": crm_data_type,
         }
+        metadata.update(self._build_week_metadata(session_obj))
+        return metadata
