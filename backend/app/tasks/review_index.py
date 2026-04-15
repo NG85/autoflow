@@ -22,7 +22,8 @@ from app.rag.chat.review.indexing_policy import (
     normalize_review_data_types,
     validate_review_index_scope_by_stage,
 )
-from app.repositories import crm_review_session_repo, knowledge_base_repo
+from app.repositories import knowledge_base_repo
+from app.repositories.crm_review_session import crm_review_session_repo
 from app.tasks.build_crm_index import build_crm_graph_index_for_document
 from app.tasks.build_index import build_index_for_document
 
