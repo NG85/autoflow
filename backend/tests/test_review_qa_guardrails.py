@@ -10,6 +10,12 @@ from app.rag.chat.review.data_retriever import (
     ReviewDataRetriever,
 )
 from app.rag.chat.review.intent_router import ReviewIntent, ReviewIntentRouter
+from app.rag.chat.review.indexing_policy import (
+    build_review_datasource_name,
+    get_or_create_review_datasource_id,
+    normalize_review_data_types,
+    validate_review_index_scope_by_stage,
+)
 
 
 def test_soft_boundary_guard_only_applies_to_data_query():
@@ -282,3 +288,120 @@ def test_preset_question_detail_filter_guardrails(question, expected_filters):
     filters = _extract_detail_query_filters(question)
     for key, expected in expected_filters.items():
         assert filters.get(key) == expected
+
+
+def test_review_index_scope_disallow_snapshot_in_initial_edit():
+    with pytest.raises(ValueError):
+        validate_review_index_scope_by_stage(
+            "initial_edit",
+            ["crm_review_snapshot"],
+        )
+
+
+@pytest.mark.parametrize("stage", ["initial_edit", "first_calculating"])
+def test_review_index_scope_disallow_risk_before_first_calc_ready(stage):
+    with pytest.raises(ValueError):
+        validate_review_index_scope_by_stage(
+            stage,
+            ["crm_review_risk_progress"],
+        )
+
+
+@pytest.mark.parametrize("stage", ["first_calc_ready", "lead_review", "second_calculating", "completed"])
+def test_review_index_scope_allow_risk_from_first_calc_ready(stage):
+    validate_review_index_scope_by_stage(
+        stage,
+        ["crm_review_risk_progress"],
+    )
+
+
+def test_normalize_review_data_types_defaults_to_snapshot_and_risk():
+    assert normalize_review_data_types(None) == [
+        "crm_review_snapshot",
+        "crm_review_risk_progress",
+    ]
+
+
+def test_build_review_datasource_name_by_session():
+    assert build_review_datasource_name("rs_2026_w15_dept_a") == (
+        "CRM Review Session (rs_2026_)"
+    )
+
+
+def test_build_review_datasource_name_prefer_session_name_with_id_suffix():
+    assert build_review_datasource_name(
+        "rs_2026_w15_dept_a",
+        session_name="华东大区W15复盘",
+    ) == "CRM Review Session (华东大区W15复盘 | rs_2026_)"
+
+
+def test_get_or_create_review_datasource_id_reuse_same_session():
+    ds_name = build_review_datasource_name("rs_a")
+    existing_ds = SimpleNamespace(id=101, name=ds_name, deleted_at=None)
+    kb = SimpleNamespace(id=1, data_sources=[existing_ds])
+    db_session = SimpleNamespace()
+    ds_id = get_or_create_review_datasource_id(db_session, kb, session_id="rs_a")
+    assert ds_id == 101
+
+
+def test_get_or_create_review_datasource_id_separate_by_session():
+    # Existing datasource belongs to another session and should not be reused.
+    existing_ds = SimpleNamespace(
+        id=101,
+        name=build_review_datasource_name("rs_a"),
+        deleted_at=None,
+    )
+    kb = SimpleNamespace(id=1, data_sources=[existing_ds])
+
+    added = []
+
+    class DummyDBSession:
+        def add(self, obj):
+            # Simulate autoincrement id assignment for new DataSource before refresh.
+            if getattr(obj, "id", None) is None and obj.__class__.__name__ == "DataSource":
+                obj.id = 202
+            added.append(obj)
+
+        def flush(self):
+            return None
+
+        def commit(self):
+            return None
+
+        def refresh(self, obj):
+            return None
+
+    db_session = DummyDBSession()
+    ds_id = get_or_create_review_datasource_id(db_session, kb, session_id="rs_b")
+    assert ds_id == 202
+    created_ds = next(o for o in added if o.__class__.__name__ == "DataSource")
+    assert created_ds.name == build_review_datasource_name("rs_b")
+
+
+def test_get_or_create_review_datasource_id_ignores_deleted_datasource():
+    ds_name = build_review_datasource_name("rs_a")
+    deleted_ds = SimpleNamespace(id=101, name=ds_name, deleted_at="2026-04-01T00:00:00Z")
+    kb = SimpleNamespace(id=1, data_sources=[deleted_ds])
+
+    added = []
+
+    class DummyDBSession:
+        def add(self, obj):
+            if getattr(obj, "id", None) is None and obj.__class__.__name__ == "DataSource":
+                obj.id = 303
+            added.append(obj)
+
+        def flush(self):
+            return None
+
+        def commit(self):
+            return None
+
+        def refresh(self, obj):
+            return None
+
+    db_session = DummyDBSession()
+    ds_id = get_or_create_review_datasource_id(db_session, kb, session_id="rs_a")
+    assert ds_id == 303
+    created_ds = next(o for o in added if o.__class__.__name__ == "DataSource")
+    assert created_ds.name == ds_name

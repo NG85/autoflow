@@ -7,7 +7,7 @@ from typing import List, Literal, Optional, Union
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Body, HTTPException, Request
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from llama_index.core.base.llms.types import ChatMessage, MessageRole
 from openpyxl import Workbook
@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field, field_validator
 from fastapi_pagination import Page
 from datetime import datetime
 
-from app.api.deps import CurrentUserDep, SessionDep
+from app.api.deps import CurrentUserDep, OptionalUserDep, SessionDep
 from app.exceptions import InternalServerError
 from app.models.customer_document import CustomerDocument
 from app.crm.view_engine import CrmViewRequest, ViewType, CrmViewEngine, ViewRegistry
@@ -108,6 +108,7 @@ from app.models.crm_review import (
     CRMReviewOppRiskProgress,
     CRMReviewRiskOpportunityRelation,
 )
+from app.rag.types import CrmDataType
 from sqlalchemy import text
 
 
@@ -878,32 +879,65 @@ def review_session_chat(
 def build_review_session_index(
     session_id: str,
     db_session: SessionDep,
-    user: CurrentUserDep,
+    user: OptionalUserDep,
     kb_id: Optional[int] = None,
+    review_data_types: Optional[List[CrmDataType]] = Query(
+        default=None,
+        description=(
+            "可选：仅构建指定 review 数据类型。"
+            "可多选：crm_review_session, crm_review_snapshot, crm_review_risk_progress"
+        ),
+    ),
 ):
     """手动触发某个 review session 的向量 + 知识图谱索引构建。
 
-    会为该 session 下的所有数据（session 摘要、商机快照、风险/进展）
+    默认会构建该 session 下的商机快照与风险/进展数据，
     生成 Document 并异步执行向量 embedding 和 CRM 知识图谱构建。
+    session 摘要索引默认不构建（可通过 ``review_data_types`` 显式开启）。
+
+    支持部分构建：通过 ``review_data_types`` 仅构建指定类型，
+    例如只构建 ``crm_review_risk_progress``。
 
     Parameters
     ----------
     kb_id : int | None
-        目标知识库 ID。不传则使用默认 CRM 知识库 (CRM_DAILY_KB_ID)。
+        目标知识库 ID。不传则使用 review 专用知识库 (CRM_REVIEW_KB_ID)。
     """
     session_obj = crm_review_session_repo.get_by_unique_id(db_session, session_id)
     if not session_obj:
         raise HTTPException(status_code=404, detail="Review session not found")
 
+    from app.rag.chat.review.indexing_policy import (
+        normalize_review_data_types,
+        validate_review_index_scope_by_stage,
+    )
     from app.tasks.review_index import index_review_session_data
 
-    index_review_session_data.delay(session_id, kb_id=kb_id)
-    logger.info(f"User {user.id} triggered review index build for session {session_id}, kb_id={kb_id}")
+    selected_types = normalize_review_data_types(
+        [t.value for t in (review_data_types or [])] or None
+    )
+    try:
+        validate_review_index_scope_by_stage(session_obj.stage, selected_types)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    index_review_session_data.delay(
+        session_id,
+        kb_id=kb_id,
+        review_data_types=selected_types,
+    )
+    logger.info(
+        "User %s triggered review index build for session %s, kb_id=%s, types=%s",
+        user.id if user else 'system',
+        session_id,
+        kb_id,
+        selected_types,
+    )
 
     return {
         "detail": f"Review session index build triggered for session {session_id}",
         "session_id": session_id,
         "kb_id": kb_id,
+        "review_data_types": selected_types,
     }
 
 

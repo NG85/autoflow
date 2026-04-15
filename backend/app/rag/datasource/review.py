@@ -7,7 +7,7 @@ Celery task with an explicit ``session_id``.
 
 import logging
 from datetime import datetime
-from typing import Dict, Generator, List, Optional
+from typing import Dict, Generator, List, Optional, Set
 
 from sqlmodel import Session, select
 
@@ -48,12 +48,21 @@ class ReviewDataSource:
         data_source_id: int,
         user_id,
         review_session_id: str,
+        include_data_types: Optional[List[CrmDataType]] = None,
     ):
         self.db_session = db_session
         self.knowledge_base_id = knowledge_base_id
         self.data_source_id = data_source_id
         self.user_id = user_id
         self.review_session_id = review_session_id
+        self.include_data_types: Set[CrmDataType] = set(
+            include_data_types
+            or [
+                CrmDataType.REVIEW_SESSION,
+                CrmDataType.REVIEW_SNAPSHOT,
+                CrmDataType.REVIEW_RISK_PROGRESS,
+            ]
+        )
 
     def load_documents(self) -> Generator[Document, None, None]:
         """Yield Documents for the configured review session."""
@@ -63,13 +72,16 @@ class ReviewDataSource:
             return
 
         # 1. Session + KPI document
-        yield from self._load_session_document(session_obj)
+        if CrmDataType.REVIEW_SESSION in self.include_data_types:
+            yield from self._load_session_document(session_obj)
 
         # 2. Snapshot documents
-        yield from self._load_snapshot_documents(session_obj)
+        if CrmDataType.REVIEW_SNAPSHOT in self.include_data_types:
+            yield from self._load_snapshot_documents(session_obj)
 
         # 3. Risk / Progress documents
-        yield from self._load_risk_progress_documents(session_obj)
+        if CrmDataType.REVIEW_RISK_PROGRESS in self.include_data_types:
+            yield from self._load_risk_progress_documents(session_obj)
 
     # ------------------------------------------------------------------
     # Internal helpers
