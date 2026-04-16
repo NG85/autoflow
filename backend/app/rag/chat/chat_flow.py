@@ -50,6 +50,7 @@ from app.rag.chat.crm_authority import CRMAuthority, get_user_crm_authority
 from app.rag.chat.review.intent_router import ReviewIntentRouter, ReviewSessionContext
 from app.rag.chat.review.data_retriever import ReviewDataRetriever
 from app.rag.chat.review.context_builder import ReviewContextBuilder
+from app.rag.chat.review.metric_catalog import METRIC_DISPLAY_NAMES
 from app.rag.chat.review import prompts as review_prompts
 from app.models.chat import ChatType
 from app.api.routes.models import ChatMode
@@ -1534,18 +1535,8 @@ class ChatFlow:
         if intent.needs_clarification:
             clarification_text = intent.clarifying_question.strip()
             if not clarification_text:
-                metric_display_map = {
-                    "opp_count": "商机数",
-                    "target": "目标",
-                    "closed": "已成单",
-                    "gap": "差额",
-                    "pipeline_coverage": "倍数",
-                    "commit_sales": "销售确定下单",
-                    "commit_ai": "AI确定下单",
-                    "upside_sales": "销售可能下单",
-                }
                 metric_candidates = [
-                    metric_display_map.get(m, m)
+                    METRIC_DISPLAY_NAMES.get(m, m)
                     for m in (intent.metric_names or [])[:2]
                     if m
                 ]

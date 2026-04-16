@@ -20,21 +20,14 @@ from app.models.crm_review import (
     CRMReviewSession,
 )
 from app.rag.chat.review.intent_router import ReviewIntent
+from app.rag.chat.review.metric_catalog import (
+    AMOUNT_METRIC_NAMES,
+    METRIC_DISPLAY_NAMES,
+)
 
 logger = logging.getLogger(__name__)
 
-METRIC_DISPLAY_NAMES = {
-    "opp_count": "商机数",
-    "target": "目标",
-    "closed": "已成单",
-    "gap": "差额",
-    "pipeline_coverage": "倍数",
-    "commit_sales": "销售确定下单",
-    "commit_ai": "AI确定下单",
-    "upside_sales": "销售可能下单",
-}
-
-AMOUNT_METRICS = {"target", "closed", "gap", "commit_sales", "commit_ai", "upside_sales"}
+AMOUNT_METRICS = AMOUNT_METRIC_NAMES
 
 MISMATCH_QUERY_CONFIGS = {
     "stage": {

@@ -7,7 +7,7 @@ Celery task with an explicit ``session_id``.
 
 import logging
 from datetime import datetime
-from typing import Dict, Generator, List, Optional, Set
+from typing import Any, Dict, Generator, List, Optional, Set
 
 from sqlmodel import Session, select
 
@@ -27,6 +27,8 @@ from app.rag.datasource.review_format import (
     format_snapshot_info,
 )
 from app.rag.types import CrmDataType
+from app.repositories.department_mirror import department_mirror_repo
+from app.repositories.user_department_relation import user_department_relation_repo
 from app.types import MimeTypes
 
 logger = logging.getLogger(__name__)
@@ -96,7 +98,7 @@ class ReviewDataSource:
     def _load_session_document(
         self, session_obj: CRMReviewSession
     ) -> Generator[Document, None, None]:
-        kpi_metrics = self._get_kpi_metrics(session_obj.unique_id)
+        kpi_metrics = self._get_kpi_metrics(session_obj)
         lines = format_review_session_info(session_obj, kpi_metrics)
         content_str = "\n".join(lines)
 
@@ -139,6 +141,20 @@ class ReviewDataSource:
             CRMReviewAttendee.session_id == session_id
         )
         return [row for row in self.db_session.exec(stmt).all() if row]
+
+    def _get_session_attendee_owner_name_map(self, session_id: str) -> Dict[str, str]:
+        """Get attendee crm_user_id -> user_name map for this session."""
+        stmt = select(CRMReviewAttendee.crm_user_id, CRMReviewAttendee.user_name).where(
+            CRMReviewAttendee.session_id == session_id
+        )
+        rows = self.db_session.exec(stmt).all()
+        out: Dict[str, str] = {}
+        for crm_user_id, user_name in rows:
+            uid = str(crm_user_id or "").strip()
+            uname = str(user_name or "").strip()
+            if uid and uname and uid not in out:
+                out[uid] = uname
+        return out
 
     def _load_snapshot_documents(
         self, session_obj: CRMReviewSession
@@ -319,11 +335,89 @@ class ReviewDataSource:
                 meta=metadata,
             )
 
-    def _get_kpi_metrics(self, session_id: str) -> List[CRMReviewKpiMetrics]:
-        stmt = select(CRMReviewKpiMetrics).where(
-            CRMReviewKpiMetrics.session_id == session_id
+    def _get_kpi_metrics(self, session_obj: CRMReviewSession) -> List[Dict[str, Any]]:
+        """
+        Fetch and enrich KPI metrics for review session docs.
+
+        Rules:
+        - scope_type only includes department / owner.
+        - scope_id means department_id (department scope) or crm_user_id (owner scope).
+        - scope_name should be human-readable.
+        """
+        session_id = session_obj.unique_id
+        stmt = (
+            select(CRMReviewKpiMetrics)
+            .where(CRMReviewKpiMetrics.session_id == session_id)
+            .where(CRMReviewKpiMetrics.scope_type.in_(["department", "owner"]))
+            .order_by(
+                CRMReviewKpiMetrics.scope_type,
+                CRMReviewKpiMetrics.scope_id,
+                CRMReviewKpiMetrics.metric_name,
+            )
         )
-        return list(self.db_session.exec(stmt).all())
+        rows: List[CRMReviewKpiMetrics] = list(self.db_session.exec(stmt).all())
+        if not rows:
+            return []
+
+        owner_ids = {
+            str(r.scope_id).strip()
+            for r in rows
+            if r.scope_type == "owner" and r.scope_id
+        }
+        dept_ids = {
+            str(r.scope_id).strip()
+            for r in rows
+            if r.scope_type == "department" and r.scope_id
+        }
+        owner_name_map = (
+            user_department_relation_repo.get_user_names_by_crm_user_ids(
+                self.db_session, owner_ids
+            )
+            if owner_ids
+            else {}
+        )
+        attendee_owner_name_map = self._get_session_attendee_owner_name_map(session_id)
+        dept_name_map = (
+            department_mirror_repo.get_department_names_by_ids(self.db_session, dept_ids)
+            if dept_ids
+            else {}
+        )
+        if session_obj.department_id and session_obj.department_name:
+            dept_name_map.setdefault(
+                str(session_obj.department_id).strip(),
+                session_obj.department_name,
+            )
+
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            scope_id = str(r.scope_id or "").strip()
+            scope_name = (r.scope_name or "").strip()
+            if not scope_name:
+                if r.scope_type == "owner" and scope_id:
+                    scope_name = (
+                        attendee_owner_name_map.get(scope_id)
+                        or owner_name_map.get(scope_id)
+                        or scope_id
+                    )
+                elif r.scope_type == "department" and scope_id:
+                    scope_name = dept_name_map.get(scope_id, scope_id)
+            out.append(
+                {
+                    "scope_type": r.scope_type,
+                    "scope_id": scope_id,
+                    "scope_name": scope_name,
+                    "metric_category": r.metric_category,
+                    "metric_name": r.metric_name,
+                    "metric_value": r.metric_value,
+                    "metric_value_prev": r.metric_value_prev,
+                    "metric_delta": r.metric_delta,
+                    "metric_rate": r.metric_rate,
+                    "metric_unit": r.metric_unit,
+                    "metric_content": r.metric_content,
+                    "calc_phase": r.calc_phase,
+                }
+            )
+        return out
 
     def _base_metadata(self, crm_data_type: CrmDataType) -> Dict:
         return {

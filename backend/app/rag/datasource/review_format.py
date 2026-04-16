@@ -10,6 +10,7 @@ import logging
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
+from app.rag.chat.review.metric_catalog import METRIC_DISPLAY_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,6 @@ _SCOPE_TYPE_ZH: Dict[str, str] = {
     "department": "部门",
     "company": "公司",
 }
-
 
 def _scope_type_zh(scope_type: str) -> str:
     key = (scope_type or "").strip().lower()
@@ -41,6 +41,12 @@ def _fmt(value: Any) -> str:
     if isinstance(value, date):
         return value.isoformat()
     return str(value)
+
+
+def _kv(row: Any, key: str, default: Any = None) -> Any:
+    if isinstance(row, dict):
+        return row.get(key, default)
+    return getattr(row, key, default)
 
 
 def format_review_session_info(
@@ -81,25 +87,77 @@ def format_review_session_info(
     if kpi_metrics:
         lines.append("## 关键指标 (KPI)")
         lines.append("")
-        lines.append("| 范围 | 指标分类 | 指标名称 | 当前值 | 上期值 | 变化量 | 变化率 | 单位 |")
-        lines.append("|------|----------|----------|--------|--------|--------|--------|------|")
-        for m in kpi_metrics:
-            scope_name = getattr(m, "scope_name", "") or ""
-            rate_str = ""
-            rate_val = getattr(m, "metric_rate", None)
-            if rate_val is not None:
-                rate_str = f"{float(rate_val) * 100:.1f}%"
-            lines.append(
-                f"| {scope_name} "
-                f"| {getattr(m, 'metric_category', '')} "
-                f"| {getattr(m, 'metric_name', '')} "
-                f"| {_fmt(getattr(m, 'metric_value', None))} "
-                f"| {_fmt(getattr(m, 'metric_value_prev', None))} "
-                f"| {_fmt(getattr(m, 'metric_delta', None))} "
-                f"| {rate_str} "
-                f"| {getattr(m, 'metric_unit', '') or ''} |"
+        dept_rows = [m for m in kpi_metrics if _kv(m, "scope_type", "") == "department"]
+        owner_rows = [m for m in kpi_metrics if _kv(m, "scope_type", "") == "owner"]
+        metric_order = [
+            "opp_count",
+            "target",
+            "closed",
+            "gap",
+            "pipeline_coverage",
+            "commit_sales",
+            "commit_ai",
+            "upside_sales",
+        ]
+        metric_headers = [METRIC_DISPLAY_NAMES.get(m, m) for m in metric_order]
+
+        def _append_scope_matrix(title: str, rows: List[Any]) -> None:
+            if not rows:
+                return
+            scope_matrix: Dict[str, Dict[str, Any]] = {}
+            for m in rows:
+                scope_type = _scope_type_zh(_kv(m, "scope_type", "") or "")
+                scope_name = _kv(m, "scope_name", "") or _kv(m, "scope_id", "") or ""
+                scope_key = f"{scope_type}::{scope_name}"
+                metric_name = _kv(m, "metric_name", "") or ""
+                if scope_key not in scope_matrix:
+                    scope_matrix[scope_key] = {
+                        "scope_type": scope_type,
+                        "scope_name": scope_name,
+                        "metrics": {},
+                    }
+                scope_matrix[scope_key]["metrics"][metric_name] = m
+
+            lines.append(f"### {title}")
+            lines.append("")
+            sorted_scopes = sorted(
+                scope_matrix.values(),
+                key=lambda s: (str(s.get("scope_type", "")), str(s.get("scope_name", ""))),
             )
-        lines.append("")
+
+            # KG / Vector retrieval friendly factual sentences.
+            # Keep one metric per line with explicit current/prev/delta/rate semantics.
+            lines.append("#### KG/Vector Facts")
+            lines.append("")
+            lines.append(
+                f"- 事实维度：周期={period or ''}；阶段={stage or ''}；范围分组={title}"
+            )
+            for scope in sorted_scopes:
+                scope_type = scope["scope_type"]
+                scope_name = scope["scope_name"]
+                scope_kv_key = "部门" if scope_type == "部门" else "负责销售" if scope_type == "负责人" else "范围"
+                for metric_name in metric_order:
+                    m = scope["metrics"].get(metric_name)
+                    metric_display = METRIC_DISPLAY_NAMES.get(metric_name, metric_name)
+                    if not m:
+                        lines.append(
+                            f"- [{title}] {scope_kv_key}={scope_name}；指标={metric_display} ({metric_name})；当前值=缺失；上期值=缺失；变化量=缺失；变化率=缺失。"
+                        )
+                        continue
+                    metric_value = _fmt(_kv(m, "metric_value", None))
+                    metric_prev = _fmt(_kv(m, "metric_value_prev", None))
+                    metric_delta = _fmt(_kv(m, "metric_delta", None))
+                    rate_str = ""
+                    rate_val = _kv(m, "metric_rate", None)
+                    if rate_val is not None:
+                        rate_str = f"{float(rate_val) * 100:.1f}%"
+                    lines.append(
+                        f"- [{title}] {scope_kv_key}={scope_name}；指标={metric_display} ({metric_name})；当前值={metric_value or '缺失'}；上期值={metric_prev or '缺失'}；变化量={metric_delta or '缺失'}；变化率={rate_str or '缺失'}。"
+                    )
+            lines.append("")
+
+        _append_scope_matrix("部门范围", dept_rows)
+        _append_scope_matrix("负责人范围（商机负责销售，属本期参会人）", owner_rows)
 
     return lines
 

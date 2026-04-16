@@ -8,6 +8,7 @@ Usage:
 import traceback
 from typing import List, Optional
 
+from celery import chain
 from celery.utils.log import get_task_logger
 from sqlmodel import Session, select
 
@@ -94,8 +95,10 @@ def index_review_session_data(
                         f"Document already exists for source_uri={document.source_uri}, "
                         f"reusing document #{existing_id}"
                     )
-                    build_index_for_document.delay(kb.id, existing_id)
-                    build_crm_graph_index_for_document.delay(kb.id, existing_id)
+                    chain(
+                        build_index_for_document.si(kb.id, existing_id),
+                        build_crm_graph_index_for_document.si(kb.id, existing_id),
+                    ).delay()
                     doc_count += 1
                     continue
 
@@ -103,8 +106,10 @@ def index_review_session_data(
                 db_session.commit()
                 db_session.refresh(document)
 
-                build_index_for_document.delay(kb.id, document.id)
-                build_crm_graph_index_for_document.delay(kb.id, document.id)
+                chain(
+                    build_index_for_document.si(kb.id, document.id),
+                    build_crm_graph_index_for_document.si(kb.id, document.id),
+                ).delay()
                 doc_count += 1
 
         logger.info(

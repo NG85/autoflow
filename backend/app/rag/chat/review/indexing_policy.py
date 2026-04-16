@@ -57,6 +57,7 @@ def validate_review_index_scope_by_stage(stage: str, review_data_types: List[str
 
     Rules:
     - REVIEW_RISK_PROGRESS: allowed only at first_calc_ready and later.
+    - REVIEW_SESSION: allowed only at first_calc_ready and later.
     - REVIEW_SNAPSHOT: disallowed at initial_edit, allowed in all later stages.
     """
     stage_key = str(stage or "").strip()
@@ -70,6 +71,13 @@ def validate_review_index_scope_by_stage(stage: str, review_data_types: List[str
     ):
         violations.append(
             "crm_review_risk_progress 仅可在 first_calc_ready 及后续阶段构建"
+        )
+    if (
+        CrmDataType.REVIEW_SESSION.value in review_data_types
+        and stage_rank < min_risk_rank
+    ):
+        violations.append(
+            "crm_review_session 仅可在 first_calc_ready 及后续阶段构建"
         )
     if (
         CrmDataType.REVIEW_SNAPSHOT.value in review_data_types

@@ -16,6 +16,8 @@ from app.rag.chat.review.indexing_policy import (
     normalize_review_data_types,
     validate_review_index_scope_by_stage,
 )
+from app.rag.indices.knowledge_graph.crm.builder import CRMKnowledgeGraphBuilder
+from app.rag.types import CrmDataType
 
 
 def test_soft_boundary_guard_only_applies_to_data_query():
@@ -405,3 +407,108 @@ def test_get_or_create_review_datasource_id_ignores_deleted_datasource():
     assert ds_id == 303
     created_ds = next(o for o in added if o.__class__.__name__ == "DataSource")
     assert created_ds.name == ds_name
+
+
+def test_review_chunk_fact_extraction_produces_chunk_specific_has_fact_relations():
+    builder = CRMKnowledgeGraphBuilder()
+    primary_data = {
+        "session_id": "rs_1",
+        "session_name": "华东大区W15复盘",
+        "department_name": "银行二部",
+        "period": "2026-W15",
+        "stage": "first_calc_ready",
+    }
+    meta = {
+        "crm_data_type": CrmDataType.REVIEW_SESSION,
+        "session_id": "rs_1",
+        "stage": "first_calc_ready",
+    }
+
+    chunk_text_a = (
+        "- [负责人范围] 范围类型=负责人；范围名称=张三；指标=销售确定下单 (commit_sales)；"
+        "当前值=100；上期值=90；变化量=10；变化率=11.1%。"
+    )
+    chunk_text_b = (
+        "- [负责人范围] 范围类型=负责人；范围名称=李四；指标=销售确定下单 (commit_sales)；"
+        "当前值=80；上期值=100；变化量=-20；变化率=-20.0%。"
+    )
+
+    _, rels_a = builder.build_graph_from_document_data(
+        crm_data_type=CrmDataType.REVIEW_SESSION,
+        primary_data=primary_data,
+        secondary_data={},
+        document_id="doc_1",
+        chunk_id="chunk_a",
+        meta=meta,
+        chunk_text=chunk_text_a,
+    )
+    _, rels_b = builder.build_graph_from_document_data(
+        crm_data_type=CrmDataType.REVIEW_SESSION,
+        primary_data=primary_data,
+        secondary_data={},
+        document_id="doc_1",
+        chunk_id="chunk_b",
+        meta=meta,
+        chunk_text=chunk_text_b,
+    )
+
+    facts_a = [r for r in rels_a if r.get("meta", {}).get("relation_type") == "HAS_FACT"]
+    facts_b = [r for r in rels_b if r.get("meta", {}).get("relation_type") == "HAS_FACT"]
+    dept_rels_a = [
+        r
+        for r in rels_a
+        if r.get("meta", {}).get("relation_type") == "BELONGS_TO"
+        and r.get("target_entity") == "银行二部"
+    ]
+    assert len(facts_a) == 1
+    assert len(facts_b) == 1
+    assert len(dept_rels_a) == 1
+    assert dept_rels_a[0]["meta"]["target_type"] == CrmDataType.DEPARTMENT
+    assert facts_a[0]["meta"]["fact_scope_name"] == "张三"
+    assert facts_b[0]["meta"]["fact_scope_name"] == "李四"
+    assert facts_a[0]["meta"]["session_id"] == "rs_1"
+    assert facts_b[0]["meta"]["session_id"] == "rs_1"
+    assert facts_a[0]["meta"]["snapshot_period"] == "2026-W15"
+    assert facts_b[0]["meta"]["snapshot_period"] == "2026-W15"
+    assert facts_a[0]["meta"]["stage"] == "first_calc_ready"
+    assert facts_b[0]["meta"]["stage"] == "first_calc_ready"
+    assert facts_a[0]["meta"]["fact_metric_key"] == "commit_sales"
+    assert facts_b[0]["meta"]["fact_metric_key"] == "commit_sales"
+    assert facts_a[0]["meta"]["fact_hash"]
+    assert facts_b[0]["meta"]["fact_hash"]
+    assert facts_a[0]["meta"]["fact_hash"] != facts_b[0]["meta"]["fact_hash"]
+    assert facts_a[0]["meta"]["chunk_id"] == "chunk_a"
+    assert facts_b[0]["meta"]["chunk_id"] == "chunk_b"
+    assert facts_a[0]["relationship_desc"] != facts_b[0]["relationship_desc"]
+
+
+def test_review_session_department_relation_only_on_primary_chunk():
+    builder = CRMKnowledgeGraphBuilder()
+    primary_data = {
+        "session_id": "rs_1",
+        "session_name": "华东大区W15复盘",
+        "department_name": "银行二部",
+        "period": "2026-W15",
+        "stage": "first_calc_ready",
+    }
+    meta_non_primary = {
+        "crm_data_type": CrmDataType.REVIEW_SESSION,
+        "session_id": "rs_1",
+        "is_primary_chunk_for_document": False,
+    }
+    _, rels = builder.build_graph_from_document_data(
+        crm_data_type=CrmDataType.REVIEW_SESSION,
+        primary_data=primary_data,
+        secondary_data={},
+        document_id="doc_1",
+        chunk_id="chunk_b",
+        meta=meta_non_primary,
+        chunk_text="- [部门范围] 部门=银行二部；指标=已成单 (closed)；当前值=0；上期值=0；变化量=0；变化率=0.0%。",
+    )
+    dept_rels = [
+        r
+        for r in rels
+        if r.get("meta", {}).get("relation_type") == "BELONGS_TO"
+        and r.get("target_entity") == "银行二部"
+    ]
+    assert dept_rels == []

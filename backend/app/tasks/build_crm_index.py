@@ -53,6 +53,21 @@ def build_crm_graph_index_for_document(
         # Extract CRM data from document metadata
         meta = db_document.meta or {}
             
+    crm_data_type = meta.get("crm_data_type")
+    if not crm_data_type:
+        logger.warning("Missing crm_data_type in metadata, unable to determine entity type")
+        return
+
+    review_chunk_level_types = {
+        CrmDataType.REVIEW_SESSION,
+        CrmDataType.REVIEW_SNAPSHOT,
+        CrmDataType.REVIEW_RISK_PROGRESS,
+    }
+    is_review_chunk_level = crm_data_type in review_chunk_level_types
+
+    chunk_ids_for_graph = []
+    chunk_text_by_id = {}
+    chunks_to_update = []
     with Session(engine, expire_on_commit=False) as session:
         # Check chunk.
         chunk_repo = ChunkRepo(get_kb_chunk_model(kb))
@@ -62,31 +77,50 @@ def build_crm_graph_index_for_document(
             logger.error(f"Chunk for CRM document #{document_id} is not found")
             return
 
-        if len(chunks) > 1:
-            logger.error(f"Multiple chunks found for CRM document #{document_id}")
+        pending_chunks = [
+            c
+            for c in chunks
+            if c.crm_index_status in (
+                CrmKgIndexStatus.PENDING,
+                CrmKgIndexStatus.NOT_STARTED,
+            )
+        ]
+        if not pending_chunks:
+            logger.info(
+                "All CRM chunks for document #%s are already processed, skip.",
+                document_id,
+            )
             return
-        
-        chunk = chunks[0]
-        chunk_id = str(chunk.id) if isinstance(chunk.id, UUID) else chunk.id
-        if chunk.crm_index_status not in (
-            CrmKgIndexStatus.PENDING,
-            CrmKgIndexStatus.NOT_STARTED,
-        ):
-            logger.info(f"CRM chunk #{chunk.id} is not in pending state")
-            return
-            
-        chunk.crm_index_status = CrmKgIndexStatus.RUNNING
-        session.add(chunk)
+
+        if is_review_chunk_level:
+            chunk_ids_for_graph = [c.id for c in pending_chunks]
+            chunk_text_by_id = {c.id: (c.text or "") for c in pending_chunks}
+            logger.info(
+                "CRM review document #%s will be processed by chunk (%s chunks).",
+                document_id,
+                len(chunk_ids_for_graph),
+            )
+        else:
+            if len(chunks) > 1:
+                logger.info(
+                    "Multiple chunks found for CRM document #%s (%s chunks), use first pending chunk as anchor for non-review type.",
+                    document_id,
+                    len(chunks),
+                )
+            chunk_ids_for_graph = [pending_chunks[0].id]
+
+        chunks_to_update = list(chunk_ids_for_graph)
+        for c in pending_chunks:
+            if c.id not in chunk_ids_for_graph:
+                continue
+            c.crm_index_status = CrmKgIndexStatus.RUNNING
+            session.add(c)
         session.commit()
                
     try:
-        # 获取CRM数据类型，确定是哪种实体类型的文档
-        crm_data_type = meta.get("crm_data_type")
-        if not crm_data_type:
-            logger.warning("Missing crm_data_type in metadata, unable to determine entity type")
-            return
-            
         logger.info(f"Building graph for CRM entity type: {crm_data_type}")
+        saved_chunks = 0
+        has_fact_relations = 0
 
         # 初始化CRM数据结构
         primary_data = {}
@@ -98,6 +132,8 @@ def build_crm_graph_index_for_document(
         order_data = {}
         payment_plan_data = {}
          
+        chunk_id = str(chunk_ids_for_graph[0]) if isinstance(chunk_ids_for_graph[0], UUID) else chunk_ids_for_graph[0]
+
         # 根据不同的实体类型处理
         if crm_data_type == CrmDataType.OPPORTUNITY:
             # 获取商机ID
@@ -328,54 +364,85 @@ def build_crm_graph_index_for_document(
         
         logger.debug(f"primary_data: {primary_data}")
         logger.debug(f"secondary_data: {secondary_data}")
-        entities_data, relationships_data = builder.build_graph_from_document_data(
-            crm_data_type=crm_data_type,
-            primary_data=primary_data,
-            secondary_data=secondary_data,
-            document_id=document_id,
-            chunk_id=chunk_id,
-            meta=meta
-        )
-                  
-        # 3. 创建 DataFrame
-        entities_df = pd.DataFrame(entities_data)
-        if entities_df.empty:
-            logger.warning(f"No entity data generated for CRM document #{document_id}, skipping graph construction")
-            return
-        
-        relationships_df = pd.DataFrame(relationships_data)
-        logger.debug(f"entities_df: {entities_df}")
-        logger.debug(f"relationships_df: {relationships_df}")
-        # 4. 保存实体和关系
-        graph_store.save(chunk.id, entities_df, relationships_df)
+        for idx, chunk_obj_id in enumerate(chunk_ids_for_graph):
+            chunk_id = str(chunk_obj_id) if isinstance(chunk_obj_id, UUID) else chunk_obj_id
+            secondary_data_for_chunk = dict(secondary_data) if secondary_data else {}
+            if secondary_data_for_chunk:
+                secondary_data_for_chunk["chunk_id"] = chunk_id
+            meta_for_chunk = dict(meta)
+            meta_for_chunk["chunk_id"] = chunk_id
+            meta_for_chunk["is_primary_chunk_for_document"] = idx == 0
+            chunk_text = chunk_text_by_id.get(chunk_obj_id, "")
+            entities_data, relationships_data = builder.build_graph_from_document_data(
+                crm_data_type=crm_data_type,
+                primary_data=primary_data,
+                secondary_data=secondary_data_for_chunk,
+                document_id=document_id,
+                chunk_id=chunk_id,
+                meta=meta_for_chunk,
+                chunk_text=chunk_text,
+            )
+            has_fact_relations += sum(
+                1
+                for rel in relationships_data
+                if (rel.get("meta") or {}).get("relation_type") == "HAS_FACT"
+            )
+
+            # 3. 创建 DataFrame
+            entities_df = pd.DataFrame(entities_data)
+            if entities_df.empty:
+                logger.warning(
+                    "No entity data generated for CRM document #%s chunk #%s, skipping graph save.",
+                    document_id,
+                    chunk_id,
+                )
+                continue
+
+            relationships_df = pd.DataFrame(relationships_data)
+            logger.debug(f"entities_df: {entities_df}")
+            logger.debug(f"relationships_df: {relationships_df}")
+            # 4. 保存实体和关系
+            graph_store.save(chunk_obj_id, entities_df, relationships_df)
+            saved_chunks += 1
                         
         with Session(engine) as session:
             chunk_model = get_kb_chunk_model(kb)
-            db_chunk = session.get(chunk_model, chunk.id)
-            if db_chunk is None:
-                logger.error(f"Chunk #{chunk.id} is not found when marking CRM index completed")
-                return
-            db_chunk.crm_index_status = CrmKgIndexStatus.COMPLETED
-            session.add(db_chunk)
+            for cid in chunks_to_update:
+                db_chunk = session.get(chunk_model, cid)
+                if db_chunk is None:
+                    logger.error(f"Chunk #{cid} is not found when marking CRM index completed")
+                    continue
+                db_chunk.crm_index_status = CrmKgIndexStatus.COMPLETED
+                session.add(db_chunk)
             session.commit()
             logger.info(
-                f"Built crm knowledge graph index for chunk #{chunk.id} successfully."
+                (
+                    "Built crm knowledge graph index for document #%s successfully "
+                    "(processed_chunks=%s, saved_chunks=%s, has_fact_relations=%s, "
+                    "review_chunk_level=%s)."
+                ),
+                document_id,
+                len(chunks_to_update),
+                saved_chunks,
+                has_fact_relations,
+                is_review_chunk_level,
             )       
     except Exception:
         with Session(engine) as session:
             error_msg = traceback.format_exc()
             logger.error(
-                f"Failed to build crm knowledge graph index for chunk #{chunk.id}",
+                f"Failed to build crm knowledge graph index for document #{document_id}",
                 exc_info=True,
             )
             chunk_model = get_kb_chunk_model(kb)
-            db_chunk = session.get(chunk_model, chunk.id)
-            if db_chunk is None:
-                logger.error(f"Chunk #{chunk.id} is not found when marking CRM index failed")
-                return
-            db_chunk.crm_index_status = CrmKgIndexStatus.FAILED
-            db_chunk.crm_index_result = error_msg
-            session.add(db_chunk)
+            for cid in chunks_to_update:
+                db_chunk = session.get(chunk_model, cid)
+                if db_chunk is None:
+                    logger.error(f"Chunk #{cid} is not found when marking CRM index failed")
+                    continue
+                db_chunk.crm_index_status = CrmKgIndexStatus.FAILED
+                db_chunk.crm_index_result = error_msg
+                session.add(db_chunk)
             session.commit()
 
 def _parse_owner(owner_str: str) -> List[str]:

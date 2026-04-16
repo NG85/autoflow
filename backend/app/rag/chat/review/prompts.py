@@ -1,25 +1,10 @@
 """Prompt templates for the Review Session Q&A feature."""
+from app.rag.chat.review.metric_catalog import build_metric_glossary_markdown
 
 # ---------------------------------------------------------------------------
 # Metric glossary (shared across prompts)
 # ---------------------------------------------------------------------------
-METRIC_GLOSSARY = """\
-| 中文名 | metric_name | 说明 |
-|--------|-------------|------|
-| 商机数 | opp_count | 本周期商机总数 |
-| 目标 | target | 部门/个人销售目标金额 |
-| 已成单 | closed | 已关单赢单金额 |
-| 差额 | gap | 目标与已成单之差（target − closed） |
-| 倍数 | pipeline_coverage | Pipeline 覆盖倍数 = (commit_sales + upside_sales) / gap（gap ≤ 0 时为 0） |
-| 销售确定下单 | commit_sales | 销售自己判定会成单的金额 |
-| AI确定下单 | commit_ai | AI 判定会成单的金额 |
-| 销售可能下单 | upside_sales | 销售判定可能成单的金额 |
-
-每个指标的数据字段:
-- metric_value: 本次 review session 的值
-- metric_value_prev: 上次的值
-- metric_delta: 本次与上次的变化量
-- metric_rate: 本次与上次的变化率（小数，如 0.15 = 15%）"""
+METRIC_GLOSSARY = build_metric_glossary_markdown()
 
 # ---------------------------------------------------------------------------
 # Intent classification
