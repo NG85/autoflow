@@ -9,6 +9,6 @@ class QuestionAnalysisResult(BaseModel):
     comparison_aspects: List[str] = Field(default_factory=list, description="List of aspects being compared")
     needs_technical_details: bool = Field(default=False, description="Whether technical details are needed")
     
-    class Config:
-        """Pydantic model configuration"""
-        arbitrary_types_allowed = True
+    model_config = {
+        "arbitrary_types_allowed": True,
+    }

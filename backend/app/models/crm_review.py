@@ -26,8 +26,7 @@ from app.models.base import UUIDBaseModel, UpdatableBaseModel
 class CRMReviewDepartment(SQLModel, table=True):
     """List of departments that require review sessions"""
 
-    class Config:
-        orm_mode = True
+    model_config = {"from_attributes": True}
 
     __tablename__ = "crm_review_department"
 
@@ -108,8 +107,7 @@ class CRMReviewDepartment(SQLModel, table=True):
 class CRMReviewSession(SQLModel, table=True):
     """Review session registry with 4-phase lifecycle"""
 
-    class Config:
-        orm_mode = True
+    model_config = {"from_attributes": True}
 
     __tablename__ = "crm_review_session"
 
@@ -338,8 +336,7 @@ class CRMReviewSession(SQLModel, table=True):
 class CRMReviewAttendee(SQLModel, table=True):
     """Attendees per review session with submission tracking"""
 
-    class Config:
-        orm_mode = True
+    model_config = {"from_attributes": True}
 
     __tablename__ = "crm_review_attendee"
 
@@ -547,8 +544,7 @@ class CRMReviewOppBranchSnapshotBasicOut(SQLModel):
 class CRMReviewOppBranchSnapshot(CRMReviewOppBranchSnapshotBasicOut, table=True):
     """Owner-based branch snapshot (shared across sessions via owner_id)"""
 
-    class Config:
-        orm_mode = True
+    model_config = {"from_attributes": True}
 
     __tablename__ = "crm_review_opp_branch_snapshot"
 
@@ -746,8 +742,7 @@ class CRMReviewOppBranchSnapshot(CRMReviewOppBranchSnapshotBasicOut, table=True)
 class CRMReviewKpiMetrics(SQLModel, table=True):
     """Structured KPI metrics per scope per review session with delta/rate"""
 
-    class Config:
-        orm_mode = True
+    model_config = {"from_attributes": True}
 
     __tablename__ = "crm_review_kpi_metrics"
 
@@ -888,8 +883,7 @@ class CRMReviewKpiMetrics(SQLModel, table=True):
 class CRMReviewOppRiskProgress(SQLModel, table=True):
     """Risk and progress tracking with scope_type pattern."""
 
-    class Config:
-        orm_mode = True
+    model_config = {"from_attributes": True}
 
     __tablename__ = "crm_review_opp_risk_progress"
 
@@ -1120,8 +1114,7 @@ class CRMReviewOppRiskProgress(SQLModel, table=True):
 class CRMReviewRiskOpportunityRelation(SQLModel, table=True):
     """Risk to opportunity relation for review insights."""
 
-    class Config:
-        orm_mode = True
+    model_config = {"from_attributes": True}
 
     __tablename__ = "crm_review_risk_opportunity_relation"
 
@@ -1222,8 +1215,7 @@ class CRMReviewOppAuditLog(UUIDBaseModel, UpdatableBaseModel, table=True):
     约定：一次“整体提交/批量提交”对应一条审计记录；old_value/new_value 以 Text 存放结构化 JSON。
     """
 
-    class Config:
-        orm_mode = True
+    model_config = {"from_attributes": True}
 
     __tablename__ = "crm_review_opp_audit_log"
 

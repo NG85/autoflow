@@ -2,9 +2,7 @@ from typing import Optional
 from sqlmodel import Field, SQLModel
 
 class CRMUser(SQLModel, table=True):
-    class Config:
-        orm_mode = True
-        read_only = True
+    model_config = {"from_attributes": True}
         
     """用户表"""
     id: Optional[int] = Field(default=None, primary_key=True)

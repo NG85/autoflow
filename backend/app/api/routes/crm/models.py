@@ -549,10 +549,11 @@ class VisitRecordResponse(BaseModel):
     department: Optional[str] = Field(default=None, description="拜访人所在部门")
 
 
-    class Config:
+    model_config = {
         # 允许从ORM / dict 创建，并忽略多余字段
-        from_attributes = True
-        extra = "ignore"
+        "from_attributes": True,
+        "extra": "ignore",
+    }
 
 class CRMComment(BaseModel):
     """通用评论结构（拜访记录/周总结复用）"""

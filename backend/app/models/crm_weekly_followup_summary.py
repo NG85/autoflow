@@ -14,8 +14,7 @@ class CRMWeeklyFollowupSummary(UUIDBaseModel, UpdatableBaseModel, table=True):
     - summary_type = "department": 部门级（department_name 必填）
     """
 
-    class Config:
-        orm_mode = True
+    model_config = {"from_attributes": True}
 
     __tablename__ = "crm_weekly_followup_summary"
 

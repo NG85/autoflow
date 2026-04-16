@@ -118,6 +118,5 @@ class LocalContactResponse(BaseModel):
     synced_at: Optional[str] = None
     is_existing: Optional[bool] = Field(default=None, description="是否为已存在的联系人（创建时返回）")
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 

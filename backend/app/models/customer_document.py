@@ -30,5 +30,4 @@ class CustomerDocument(SQLModel, table=True):
     # 关联文档内容表（只读关联，用于获取文档内容信息）
     document_content: Optional["DocumentContent"] = Relationship()
     
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = {"arbitrary_types_allowed": True}

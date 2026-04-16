@@ -16,8 +16,7 @@ class CRMWeeklyFollowupEntitySummary(UUIDBaseModel, UpdatableBaseModel, table=Tr
     entity_type 优先级：opportunity -> account -> partner
     """
 
-    class Config:
-        orm_mode = True
+    model_config = {"from_attributes": True}
 
     __tablename__ = "crm_weekly_followup_entity_summary"
 

@@ -1,11 +1,9 @@
-from typing import Optional
+from typing import ClassVar, Optional
 from datetime import datetime
 from sqlmodel import Field, Column, DateTime, SQLModel
 
 class CRMAccount(SQLModel, table=True):
-    class Config:
-        orm_mode = True
-        read_only = True
+    model_config = {"from_attributes": True}
         
     """客户表"""
     id: Optional[int] = Field(default=None, primary_key=True)
