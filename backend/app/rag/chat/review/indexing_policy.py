@@ -14,6 +14,7 @@ ALLOWED_REVIEW_DATA_TYPES: Set[str] = {
     CrmDataType.REVIEW_RISK_PROGRESS.value,
 }
 DEFAULT_REVIEW_DATA_TYPES: List[str] = [
+    CrmDataType.REVIEW_SESSION.value,
     CrmDataType.REVIEW_SNAPSHOT.value,
     CrmDataType.REVIEW_RISK_PROGRESS.value,
 ]
@@ -58,32 +59,21 @@ def validate_review_index_scope_by_stage(stage: str, review_data_types: List[str
     Rules:
     - REVIEW_RISK_PROGRESS: allowed only at first_calc_ready and later.
     - REVIEW_SESSION: allowed only at first_calc_ready and later.
-    - REVIEW_SNAPSHOT: disallowed at initial_edit, allowed in all later stages.
+    - REVIEW_SNAPSHOT: allowed only at first_calc_ready and later.
     """
     stage_key = str(stage or "").strip()
     stage_rank = REVIEW_STAGE_ORDER.get(stage_key, -1)
-    min_risk_rank = REVIEW_STAGE_ORDER["first_calc_ready"]
+    min_allowed_rank = REVIEW_STAGE_ORDER["first_calc_ready"]
     violations: List[str] = []
+    guarded_types = (
+        CrmDataType.REVIEW_RISK_PROGRESS.value,
+        CrmDataType.REVIEW_SESSION.value,
+        CrmDataType.REVIEW_SNAPSHOT.value,
+    )
 
-    if (
-        CrmDataType.REVIEW_RISK_PROGRESS.value in review_data_types
-        and stage_rank < min_risk_rank
-    ):
-        violations.append(
-            "crm_review_risk_progress 仅可在 first_calc_ready 及后续阶段构建"
-        )
-    if (
-        CrmDataType.REVIEW_SESSION.value in review_data_types
-        and stage_rank < min_risk_rank
-    ):
-        violations.append(
-            "crm_review_session 仅可在 first_calc_ready 及后续阶段构建"
-        )
-    if (
-        CrmDataType.REVIEW_SNAPSHOT.value in review_data_types
-        and stage_key == "initial_edit"
-    ):
-        violations.append("crm_review_snapshot 在 initial_edit 阶段不可构建")
+    for dt in guarded_types:
+        if dt in review_data_types and stage_rank < min_allowed_rank:
+            violations.append(f"{dt} 仅可在 first_calc_ready 及后续阶段构建")
 
     if violations:
         raise ValueError(

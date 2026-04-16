@@ -179,7 +179,7 @@ def format_snapshot_info(snapshot) -> List[str]:
     lines.append(f"# 商机快照: {opp_display}")
     lines.append("")
     lines.append(f"- **客户**: {getattr(snapshot, 'account_name', '') or ''}")
-    lines.append(f"- **负责人**: {getattr(snapshot, 'owner_name', '') or ''}")
+    lines.append(f"- **负责人（商机负责销售，属本期参会人）**: {getattr(snapshot, 'owner_name', '') or ''}")
     lines.append(f"- **负责人部门**: {getattr(snapshot, 'owner_department_name', '') or ''}")
     lines.append(f"- **快照周期**: {getattr(snapshot, 'snapshot_period', '')}")
     lines.append("")
@@ -188,49 +188,65 @@ def format_snapshot_info(snapshot) -> List[str]:
     baseline_forecast = getattr(snapshot, "baseline_forecast_type", None)
     baseline_amount = getattr(snapshot, "baseline_forecast_amount", None)
     baseline_stage = getattr(snapshot, "baseline_opportunity_stage", None)
-    lines.append("## 报告基线数据（报告分析依据）")
-    lines.append("")
-    lines.append(f"- **预测状态**: {baseline_forecast or getattr(snapshot, 'forecast_type', '') or ''}")
-    lines.append(f"- **签约金额**: {_fmt(baseline_amount if baseline_amount is not None else getattr(snapshot, 'forecast_amount', None))}")
-    lines.append(f"- **商机阶段**: {baseline_stage or getattr(snapshot, 'opportunity_stage', '') or ''}")
-    lines.append(f"- **预计成交日期**: {getattr(snapshot, 'baseline_expected_closing_date', '') or getattr(snapshot, 'expected_closing_date', '') or ''}")
-    lines.append(f"- **阶段停留天数**: {_fmt(getattr(snapshot, 'stage_stay', 0))}")
-    lines.append("")
+    baseline_close_date = getattr(snapshot, "baseline_expected_closing_date", None)
+    current_forecast = getattr(snapshot, "forecast_type", "") or ""
+    current_amount = getattr(snapshot, "forecast_amount", None)
+    current_stage = getattr(snapshot, "opportunity_stage", "") or ""
+    current_close_date = getattr(snapshot, "expected_closing_date", "") or ""
 
-    # Current values (latest, may have been modified by user after T2)
-    lines.append("## 最新预测数据（销售可修改）")
+    forecast_val = baseline_forecast if baseline_forecast not in (None, "") else current_forecast
+    amount_val = baseline_amount if baseline_amount is not None else current_amount
+    stage_val = baseline_stage if baseline_stage not in (None, "") else current_stage
+    close_date_val = baseline_close_date if baseline_close_date not in (None, "") else current_close_date
+
+    forecast_is_fallback = baseline_forecast in (None, "") and current_forecast
+    amount_is_fallback = baseline_amount is None and current_amount is not None
+    stage_is_fallback = baseline_stage in (None, "") and current_stage
+    close_date_is_fallback = baseline_close_date in (None, "") and current_close_date
+    forecast_source = "补齐" if forecast_is_fallback else "原始"
+    amount_source = "补齐" if amount_is_fallback else "原始"
+    stage_source = "补齐" if stage_is_fallback else "原始"
+    close_date_source = "补齐" if close_date_is_fallback else "原始"
+    lines.append("## 销售判断（最终确认值）vs AI判断")
     lines.append("")
-    lines.append(f"- **预测状态**: {getattr(snapshot, 'forecast_type', '') or ''}")
-    lines.append(f"- **签约金额**: {_fmt(getattr(snapshot, 'forecast_amount', None))}")
-    lines.append(f"- **商机阶段**: {getattr(snapshot, 'opportunity_stage', '') or ''}")
-    lines.append(f"- **预计成交日期**: {getattr(snapshot, 'expected_closing_date', '') or ''}")
+    lines.append(f"- 销售判断 - 预测状态={forecast_val or '缺失'}；基线来源={forecast_source}")
+    lines.append(f"- 销售判断 - 签约金额={_fmt(amount_val) or '缺失'}；基线来源={amount_source}")
+    lines.append(f"- 销售判断 - 商机阶段={stage_val or '缺失'}；基线来源={stage_source}")
+    lines.append(f"- 销售判断 - 预计成交日期={close_date_val or '缺失'}；基线来源={close_date_source}")
+    lines.append(f"- 销售判断 - 阶段停留天数={_fmt(getattr(snapshot, 'stage_stay', None)) or '缺失'}")
     lines.append("")
 
     # AI evaluations
     ai_commit = getattr(snapshot, "ai_commit", None)
     ai_stage = getattr(snapshot, "ai_stage", None)
-    if ai_commit or ai_stage:
-        lines.append("## AI 评估（AI给出的判断结果）")
-        lines.append("")
-        if ai_commit:
-            lines.append(f"- **AI 判断的预测状态**: {ai_commit}")
-        if ai_stage:
-            lines.append(f"- **AI 判断的商机阶段**: {ai_stage}")
-        ai_close = getattr(snapshot, "ai_expected_closing_date", None)
-        if ai_close:
-            lines.append(f"- **AI 判断的预计成交日期**: {ai_close}")
-        lines.append("")
+    ai_close = getattr(snapshot, "ai_expected_closing_date", None)
+    lines.append("- AI判断 - 预测状态=" + (ai_commit or "缺失"))
+    lines.append("- AI判断 - 商机阶段=" + (ai_stage or "缺失"))
+    lines.append("- AI判断 - 预计成交日期=" + (ai_close or "缺失"))
+    lines.append("")
+    lines.append(
+        "- 销售与AI是否一致 - 预测状态="
+        + ("一致" if (forecast_val or "") == (ai_commit or "") and (forecast_val or ai_commit) else "不一致")
+    )
+    lines.append(
+        "- 销售与AI是否一致 - 商机阶段="
+        + ("一致" if (stage_val or "") == (ai_stage or "") and (stage_val or ai_stage) else "不一致")
+    )
+    lines.append(
+        "- 销售与AI是否一致 - 预计成交日期="
+        + ("一致" if (close_date_val or "") == (ai_close or "") and (close_date_val or ai_close) else "不一致")
+    )
+    lines.append("")
 
     # Change tracking
     was_modified = getattr(snapshot, "was_modified", False)
     # Optional[int] may be NULL from DB; avoid TypeError on comparison.
     modification_count = getattr(snapshot, "modification_count", 0) or 0
     if was_modified or modification_count > 0:
-        lines.append("## 变更记录")
+        lines.append("## 变更状态")
         lines.append("")
-        lines.append(f"- 最后修改时间: {_fmt(getattr(snapshot, 'update_time', None))}")
-        lines.append(f"- 最后修改人: {getattr(snapshot, 'last_modified_by', '')}")
-        lines.append(f"- 修改次数: {modification_count}")
+        lines.append("- 变更状态=有变更")
+        lines.append(f"- 修改次数={modification_count}")
         lines.append("")
 
     return lines

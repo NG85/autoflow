@@ -105,6 +105,7 @@ class ReviewDataSource:
         metadata = self._base_metadata(CrmDataType.REVIEW_SESSION)
         metadata["unique_id"] = session_obj.unique_id
         metadata["session_id"] = session_obj.unique_id
+        metadata["session_name"] = session_obj.session_name or ""
         metadata["department_id"] = session_obj.department_id
         metadata["department_name"] = session_obj.department_name or ""
         metadata["period"] = session_obj.period
@@ -187,14 +188,30 @@ class ReviewDataSource:
             metadata = self._base_metadata(CrmDataType.REVIEW_SNAPSHOT)
             metadata["unique_id"] = snap.unique_id
             metadata["session_id"] = session_obj.unique_id
+            metadata["session_name"] = session_obj.session_name or ""
             metadata["opportunity_id"] = snap.opportunity_id
+            metadata["opportunity_name"] = snap.opportunity_name or ""
             metadata["account_id"] = snap.account_id or ""
             metadata["account_name"] = snap.account_name or ""
             metadata["owner_id"] = snap.owner_id
             metadata["owner_name"] = snap.owner_name or ""
+            metadata["owner_department_id"] = getattr(snap, "owner_department_id", "") or ""
+            metadata["owner_department_name"] = getattr(snap, "owner_department_name", "") or ""
             metadata["snapshot_period"] = snap.snapshot_period
             metadata["forecast_type"] = snap.forecast_type or ""
             metadata["opportunity_stage"] = snap.opportunity_stage or ""
+            metadata["expected_closing_date"] = snap.expected_closing_date or ""
+            metadata["baseline_forecast_type"] = snap.baseline_forecast_type or ""
+            metadata["baseline_forecast_amount"] = (
+                float(snap.baseline_forecast_amount)
+                if snap.baseline_forecast_amount is not None
+                else None
+            )
+            metadata["baseline_opportunity_stage"] = snap.baseline_opportunity_stage or ""
+            metadata["baseline_expected_closing_date"] = snap.baseline_expected_closing_date or ""
+            metadata["ai_commit"] = snap.ai_commit or ""
+            metadata["ai_stage"] = snap.ai_stage or ""
+            metadata["ai_expected_closing_date"] = snap.ai_expected_closing_date or ""
 
             doc_datetime = datetime.now()
             snap_label = snap.opportunity_name or snap.opportunity_id
@@ -301,13 +318,16 @@ class ReviewDataSource:
             metadata["unique_id"] = rp.unique_id
             metadata["session_id"] = session_obj.unique_id
             metadata["record_type"] = rp.record_type
+            metadata["type_name"] = rp.type_name or ""
             metadata["type_code"] = rp.type_code
             metadata["scope_type"] = rp.scope_type
             metadata["scope_id"] = rp.scope_id or ""
             metadata["snapshot_period"] = rp.snapshot_period
             metadata["calc_phase"] = rp.calc_phase
+            metadata["severity"] = rp.severity or ""
             if rp.opportunity_id:
                 metadata["opportunity_id"] = rp.opportunity_id
+                metadata["opportunity_name"] = opp_name_map.get(rp.opportunity_id, "")
             if rp.owner_id:
                 metadata["owner_id"] = rp.owner_id
 

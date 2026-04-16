@@ -10,6 +10,7 @@ from app.rag.chat.review.data_retriever import (
     ReviewDataRetriever,
 )
 from app.rag.chat.review.intent_router import ReviewIntent, ReviewIntentRouter
+from app.rag.datasource.review import ReviewDataSource
 from app.rag.chat.review.indexing_policy import (
     build_review_datasource_name,
     get_or_create_review_datasource_id,
@@ -18,6 +19,35 @@ from app.rag.chat.review.indexing_policy import (
 )
 from app.rag.indices.knowledge_graph.crm.builder import CRMKnowledgeGraphBuilder
 from app.rag.types import CrmDataType
+
+
+class _FakeExecResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def all(self):
+        return self._rows
+
+
+class _FakeSnapshotDBSession:
+    def __init__(self, snapshots):
+        self._snapshots = snapshots
+
+    def exec(self, _stmt):
+        return _FakeExecResult(self._snapshots)
+
+
+class _FakeRiskProgressDBSession:
+    def __init__(self, records):
+        self._records = records
+
+    def exec(self, _stmt):
+        return _FakeExecResult(self._records)
+
+
+class _FakeNoopDBSession:
+    def exec(self, _stmt):
+        return _FakeExecResult([])
 
 
 def test_soft_boundary_guard_only_applies_to_data_query():
@@ -317,8 +347,9 @@ def test_review_index_scope_allow_risk_from_first_calc_ready(stage):
     )
 
 
-def test_normalize_review_data_types_defaults_to_snapshot_and_risk():
+def test_normalize_review_data_types_defaults_to_session_snapshot_and_risk():
     assert normalize_review_data_types(None) == [
+        "crm_review_session",
         "crm_review_snapshot",
         "crm_review_risk_progress",
     ]
@@ -512,3 +543,298 @@ def test_review_session_department_relation_only_on_primary_chunk():
         and r.get("target_entity") == "银行二部"
     ]
     assert dept_rels == []
+
+
+def test_review_snapshot_adds_sales_ai_match_relations():
+    builder = CRMKnowledgeGraphBuilder()
+    primary_data = {
+        "unique_id": "snap_1",
+        "session_id": "rs_1",
+        "snapshot_period": "2026-W15",
+        "opportunity_id": "opp_1",
+        "opportunity_name": "某重点商机",
+        "account_id": "acc_1",
+        "account_name": "某重点客户",
+        "owner_name": "张三",
+        "forecast_type": "commit",
+        "opportunity_stage": "谈判",
+        "expected_closing_date": "2026-04-20",
+        "ai_commit": "upside",
+        "ai_stage": "方案",
+        "ai_expected_closing_date": "2026-05-01",
+    }
+    _, rels = builder.build_graph_from_document_data(
+        crm_data_type=CrmDataType.REVIEW_SNAPSHOT,
+        primary_data=primary_data,
+        secondary_data={"session_id": "rs_1", "session_name": "W15复盘"},
+        document_id="doc_1",
+        chunk_id="chunk_1",
+        meta={"crm_data_type": CrmDataType.REVIEW_SNAPSHOT, "session_id": "rs_1"},
+        chunk_text="",
+    )
+    rel_type_to_state = {
+        r.get("meta", {}).get("relation_type"): r.get("meta", {}).get("match_state")
+        for r in rels
+        if r.get("meta", {}).get("relation_type", "").startswith("SALES_AI_")
+    }
+    assert rel_type_to_state["SALES_AI_FORECAST_MATCH"] == "不一致"
+    assert rel_type_to_state["SALES_AI_STAGE_MATCH"] == "不一致"
+    assert rel_type_to_state["SALES_AI_CLOSE_DATE_MATCH"] == "不一致"
+    customer_rels = [
+        r
+        for r in rels
+        if r.get("meta", {}).get("relation_type") == "BELONGS_TO_CUSTOMER"
+    ]
+    assert len(customer_rels) == 1
+    assert customer_rels[0]["target_entity"] == "某重点客户"
+    assert customer_rels[0]["meta"]["account_id"] == "acc_1"
+    snapshot_of_rel = next(
+        r for r in rels if r.get("meta", {}).get("relation_type") == "SNAPSHOT_OF"
+    )
+    assert snapshot_of_rel["meta"]["opportunity_id"] == "opp_1"
+
+
+def test_review_snapshot_fallback_uses_placeholder_name_not_id():
+    builder = CRMKnowledgeGraphBuilder()
+    opp_id = "6785154dea998b00015b2933"
+    primary_data = {
+        "unique_id": "snap_2",
+        "session_id": "rs_2",
+        "snapshot_period": "2026-W11",
+        "opportunity_id": opp_id,
+        "forecast_type": "commit",
+    }
+    entities, rels = builder.build_graph_from_document_data(
+        crm_data_type=CrmDataType.REVIEW_SNAPSHOT,
+        primary_data=primary_data,
+        secondary_data={"session_id": "rs_2", "session_name": "W11复盘"},
+        document_id="doc_2",
+        chunk_id="chunk_2",
+        meta={"crm_data_type": CrmDataType.REVIEW_SNAPSHOT, "session_id": "rs_2"},
+        chunk_text="",
+    )
+
+    snapshot_entity = next(e for e in entities if e.get("meta", {}).get("snapshot_period") == "2026-W11")
+    assert snapshot_entity["name"] == "未命名商机_2026-W11"
+    assert opp_id not in snapshot_entity["description"]
+
+    opp_entity = next(e for e in entities if e.get("meta", {}).get("opportunity_id") == opp_id and e["name"] == "未命名商机")
+    assert opp_entity["meta"]["opportunity_id"] == opp_id
+
+    snapshot_of_rel = next(r for r in rels if r.get("meta", {}).get("relation_type") == "SNAPSHOT_OF")
+    assert opp_id not in snapshot_of_rel["relationship_desc"]
+    assert snapshot_of_rel["target_entity"] == "未命名商机"
+
+
+def test_review_snapshot_document_metadata_includes_opportunity_name():
+    snapshot = SimpleNamespace(
+        unique_id="snap_meta_1",
+        opportunity_id="opp_meta_1",
+        opportunity_name="华东重点商机",
+        account_id="acc_1",
+        account_name="重点客户A",
+        owner_id="owner_1",
+        owner_name="张三",
+        snapshot_period="2026-W11",
+        forecast_type="commit",
+        opportunity_stage="谈判",
+        expected_closing_date="2026-04-20",
+        baseline_forecast_type=None,
+        baseline_forecast_amount=None,
+        baseline_opportunity_stage=None,
+        baseline_expected_closing_date=None,
+        ai_commit=None,
+        ai_stage=None,
+        ai_expected_closing_date=None,
+        forecast_amount=None,
+        stage_stay=None,
+        was_modified=False,
+        modification_count=0,
+    )
+    fake_db = _FakeSnapshotDBSession([snapshot])
+    ds = ReviewDataSource(
+        db_session=fake_db,
+        knowledge_base_id=1,
+        data_source_id=1,
+        user_id=1,
+        review_session_id="rs_meta_1",
+    )
+    ds._get_session_attendee_owner_ids = lambda _session_id: ["owner_1"]
+    session_obj = SimpleNamespace(unique_id="rs_meta_1", period="2026-W11", session_name="华东大区W11复盘")
+
+    docs = list(ds._load_snapshot_documents(session_obj))
+    assert len(docs) == 1
+    assert docs[0].meta["opportunity_id"] == "opp_meta_1"
+    assert docs[0].meta["opportunity_name"] == "华东重点商机"
+    assert docs[0].meta["session_name"] == "华东大区W11复盘"
+
+
+def test_review_snapshot_document_metadata_includes_owner_department_fields():
+    snapshot = SimpleNamespace(
+        unique_id="snap_meta_2",
+        opportunity_id="opp_meta_2",
+        opportunity_name="华南重点商机",
+        account_id="acc_2",
+        account_name="重点客户B",
+        owner_id="owner_2",
+        owner_name="李四",
+        owner_department_id="dept_2",
+        owner_department_name="华南销售部",
+        snapshot_period="2026-W12",
+        forecast_type="upside",
+        opportunity_stage="方案",
+        expected_closing_date="2026-05-10",
+        baseline_forecast_type=None,
+        baseline_forecast_amount=None,
+        baseline_opportunity_stage=None,
+        baseline_expected_closing_date=None,
+        ai_commit=None,
+        ai_stage=None,
+        ai_expected_closing_date=None,
+        forecast_amount=None,
+        stage_stay=None,
+        was_modified=False,
+        modification_count=0,
+    )
+    fake_db = _FakeSnapshotDBSession([snapshot])
+    ds = ReviewDataSource(
+        db_session=fake_db,
+        knowledge_base_id=1,
+        data_source_id=1,
+        user_id=1,
+        review_session_id="rs_meta_2",
+    )
+    ds._get_session_attendee_owner_ids = lambda _session_id: ["owner_2"]
+    session_obj = SimpleNamespace(unique_id="rs_meta_2", period="2026-W12", session_name="W12复盘会")
+
+    docs = list(ds._load_snapshot_documents(session_obj))
+    assert len(docs) == 1
+    assert docs[0].meta["owner_department_id"] == "dept_2"
+    assert docs[0].meta["owner_department_name"] == "华南销售部"
+    assert docs[0].meta["session_name"] == "W12复盘会"
+
+    builder = CRMKnowledgeGraphBuilder()
+    entities, rels = builder.build_graph_from_document_data(
+        crm_data_type=CrmDataType.REVIEW_SNAPSHOT,
+        primary_data=dict(docs[0].meta),
+        secondary_data={"session_id": "rs_meta_2", "session_name": "W12复盘"},
+        document_id="doc_meta_2",
+        chunk_id="chunk_meta_2",
+        meta={"crm_data_type": CrmDataType.REVIEW_SNAPSHOT, "session_id": "rs_meta_2"},
+        chunk_text="",
+    )
+    owner_entity = next(e for e in entities if e["name"] == "李四")
+    assert owner_entity["meta"]["internal_owner_id"] == "owner_2"
+    assert owner_entity["meta"]["internal_department"] == "华南销售部"
+    assert "主属部门华南销售部" in owner_entity["description"]
+
+    handled_by_rel = next(
+        r for r in rels if r.get("meta", {}).get("relation_type") == "HANDLED_BY"
+    )
+    assert handled_by_rel["meta"]["owner_id"] == "owner_2"
+    assert handled_by_rel["meta"]["owner_department_id"] == "dept_2"
+    assert handled_by_rel["meta"]["owner_department_name"] == "华南销售部"
+
+    snapshot_belongs_to_session = next(
+        r for r in rels if r.get("meta", {}).get("relation_type") == "BELONGS_TO"
+    )
+    assert snapshot_belongs_to_session["target_entity"] == "W12复盘"
+
+
+def test_review_risk_progress_metadata_includes_type_and_opportunity_name():
+    rp = SimpleNamespace(
+        unique_id="rp_meta_1",
+        record_type="RISK",
+        type_name="阶段停滞",
+        type_code="stage_stall",
+        scope_type="opportunity",
+        scope_id="opp_3",
+        snapshot_period="2026-W12",
+        calc_phase="first_calc_ready",
+        severity="HIGH",
+        opportunity_id="opp_3",
+        owner_id="owner_3",
+        department_id="dept_3",
+        # fields used by formatter
+        category=None,
+        ai_assessment=None,
+        sales_assessment=None,
+        judgment_rule=None,
+        summary=None,
+        gap_description=None,
+        detail_description=None,
+        solution=None,
+        evidence=None,
+        financial_impact=None,
+        previous_value=None,
+        current_value=None,
+        rate_of_change=None,
+        status=None,
+        detected_at=None,
+        resolved_at=None,
+        resolved_by=None,
+        resolution_type=None,
+        resolution_note=None,
+        created_at=None,
+        updated_at=None,
+        created_by=None,
+        updated_by=None,
+        metadata_=None,
+    )
+    fake_db = _FakeRiskProgressDBSession([rp])
+    ds = ReviewDataSource(
+        db_session=fake_db,
+        knowledge_base_id=1,
+        data_source_id=1,
+        user_id=1,
+        review_session_id="rs_meta_rp",
+    )
+    ds._build_scope_name_maps = lambda _session_obj: {
+        "opportunity": {"opp_3": "华北大单"},
+        "owner": {"owner_3": "王五"},
+        "department": {"dept_3": "华北销售部"},
+    }
+    session_obj = SimpleNamespace(unique_id="rs_meta_rp")
+
+    docs = list(ds._load_risk_progress_documents(session_obj))
+    assert len(docs) == 1
+    assert docs[0].meta["type_name"] == "阶段停滞"
+    assert docs[0].meta["severity"] == "HIGH"
+    assert docs[0].meta["opportunity_id"] == "opp_3"
+    assert docs[0].meta["opportunity_name"] == "华北大单"
+
+
+def test_review_session_metadata_includes_session_name_and_builder_uses_it():
+    ds = ReviewDataSource(
+        db_session=_FakeNoopDBSession(),
+        knowledge_base_id=1,
+        data_source_id=1,
+        user_id=1,
+        review_session_id="rs_meta_session",
+    )
+    ds._get_kpi_metrics = lambda _session_obj: []
+    session_obj = SimpleNamespace(
+        unique_id="rs_meta_session",
+        session_name="华东大区W15复盘",
+        department_id="dept_s_1",
+        department_name="银行二部",
+        period="2026-W15",
+        stage="first_calc_ready",
+    )
+
+    docs = list(ds._load_session_document(session_obj))
+    assert len(docs) == 1
+    assert docs[0].meta["session_name"] == "华东大区W15复盘"
+
+    builder = CRMKnowledgeGraphBuilder()
+    entities, _ = builder.build_graph_from_document_data(
+        crm_data_type=CrmDataType.REVIEW_SESSION,
+        primary_data=dict(docs[0].meta),
+        secondary_data={},
+        document_id="doc_session_1",
+        chunk_id="chunk_session_1",
+        meta={"crm_data_type": CrmDataType.REVIEW_SESSION, "session_id": "rs_meta_session"},
+        chunk_text="",
+    )
+    session_entity = next(e for e in entities if e["meta"].get("session_id") == "rs_meta_session")
+    assert session_entity["name"] == "华东大区W15复盘"
