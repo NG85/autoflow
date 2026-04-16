@@ -317,11 +317,13 @@ class ReviewDataSource:
             metadata = self._base_metadata(CrmDataType.REVIEW_RISK_PROGRESS)
             metadata["unique_id"] = rp.unique_id
             metadata["session_id"] = session_obj.unique_id
+            metadata["session_name"] = getattr(session_obj, "session_name", "") or ""
             metadata["record_type"] = rp.record_type
             metadata["type_name"] = rp.type_name or ""
             metadata["type_code"] = rp.type_code
             metadata["scope_type"] = rp.scope_type
             metadata["scope_id"] = rp.scope_id or ""
+            metadata["scope_name"] = resolved_scope_name or ""
             metadata["snapshot_period"] = rp.snapshot_period
             metadata["calc_phase"] = rp.calc_phase
             metadata["severity"] = rp.severity or ""

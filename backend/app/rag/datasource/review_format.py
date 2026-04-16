@@ -5,7 +5,6 @@ Each function returns a list of markdown lines, following the same pattern
 established in ``crm_format.py``.
 """
 
-import json
 import logging
 from datetime import date, datetime
 from decimal import Decimal
@@ -14,6 +13,16 @@ from app.rag.chat.review.metric_catalog import METRIC_DISPLAY_NAMES
 
 logger = logging.getLogger(__name__)
 
+
+# Formatting guardrails for review markdown:
+# - Keep body text focused on business semantics that users naturally ask about
+#   and KG extraction can reliably turn into entities/relations.
+# - Keep system/governance/control fields in Document.meta (filtering/routing),
+#   instead of embedding them into body text.
+# - Typical meta-only fields: calc phase, task/runtime status, raw IDs, audit
+#   payloads, and low-level debug metadata.
+# - When uncertain, prefer less noisy body text and add explicit structured
+#   relations/metadata in the graph builder.
 
 # ``CRMReviewOppRiskProgress.scope_type``: granularity of the row; ``scope_id``
 # points at the corresponding entity (opportunity / owner / dept). ``company``
@@ -76,7 +85,6 @@ def format_review_session_info(
     lines.append("")
     lines.append(f"- **部门**: {dept_name}")
     lines.append(f"- **周期**: {period}")
-    lines.append(f"- **周期类型**: {_fmt(getattr(session, 'period_type', ''))}")
     lines.append(f"- **周期起止**: {_fmt(getattr(session, 'period_start', ''))} ~ {_fmt(getattr(session, 'period_end', ''))}")
     lines.append(f"- **阶段**: {stage}")
     lines.append(f"- **Review 类型**: {_fmt(getattr(session, 'review_type', ''))}")
@@ -129,9 +137,7 @@ def format_review_session_info(
             # Keep one metric per line with explicit current/prev/delta/rate semantics.
             lines.append("#### KG/Vector Facts")
             lines.append("")
-            lines.append(
-                f"- 事实维度：周期={period or ''}；阶段={stage or ''}；范围分组={title}"
-            )
+            lines.append(f"- 事实维度：周期={period or ''}；范围分组={title}")
             for scope in sorted_scopes:
                 scope_type = scope["scope_type"]
                 scope_name = scope["scope_name"]
@@ -140,9 +146,6 @@ def format_review_session_info(
                     m = scope["metrics"].get(metric_name)
                     metric_display = METRIC_DISPLAY_NAMES.get(metric_name, metric_name)
                     if not m:
-                        lines.append(
-                            f"- [{title}] {scope_kv_key}={scope_name}；指标={metric_display} ({metric_name})；当前值=缺失；上期值=缺失；变化量=缺失；变化率=缺失。"
-                        )
                         continue
                     metric_value = _fmt(_kv(m, "metric_value", None))
                     metric_prev = _fmt(_kv(m, "metric_value_prev", None))
@@ -203,16 +206,12 @@ def format_snapshot_info(snapshot) -> List[str]:
     amount_is_fallback = baseline_amount is None and current_amount is not None
     stage_is_fallback = baseline_stage in (None, "") and current_stage
     close_date_is_fallback = baseline_close_date in (None, "") and current_close_date
-    forecast_source = "补齐" if forecast_is_fallback else "原始"
-    amount_source = "补齐" if amount_is_fallback else "原始"
-    stage_source = "补齐" if stage_is_fallback else "原始"
-    close_date_source = "补齐" if close_date_is_fallback else "原始"
     lines.append("## 销售判断（最终确认值）vs AI判断")
     lines.append("")
-    lines.append(f"- 销售判断 - 预测状态={forecast_val or '缺失'}；基线来源={forecast_source}")
-    lines.append(f"- 销售判断 - 签约金额={_fmt(amount_val) or '缺失'}；基线来源={amount_source}")
-    lines.append(f"- 销售判断 - 商机阶段={stage_val or '缺失'}；基线来源={stage_source}")
-    lines.append(f"- 销售判断 - 预计成交日期={close_date_val or '缺失'}；基线来源={close_date_source}")
+    lines.append(f"- 销售判断 - 预测状态={forecast_val or '缺失'}")
+    lines.append(f"- 销售判断 - 签约金额={_fmt(amount_val) or '缺失'}")
+    lines.append(f"- 销售判断 - 商机阶段={stage_val or '缺失'}")
+    lines.append(f"- 销售判断 - 预计成交日期={close_date_val or '缺失'}")
     lines.append(f"- 销售判断 - 阶段停留天数={_fmt(getattr(snapshot, 'stage_stay', None)) or '缺失'}")
     lines.append("")
 
@@ -237,17 +236,6 @@ def format_snapshot_info(snapshot) -> List[str]:
         + ("一致" if (close_date_val or "") == (ai_close or "") and (close_date_val or ai_close) else "不一致")
     )
     lines.append("")
-
-    # Change tracking
-    was_modified = getattr(snapshot, "was_modified", False)
-    # Optional[int] may be NULL from DB; avoid TypeError on comparison.
-    modification_count = getattr(snapshot, "modification_count", 0) or 0
-    if was_modified or modification_count > 0:
-        lines.append("## 变更状态")
-        lines.append("")
-        lines.append("- 变更状态=有变更")
-        lines.append(f"- 修改次数={modification_count}")
-        lines.append("")
 
     return lines
 
@@ -311,7 +299,7 @@ def format_risk_progress_info(
     lines.append("")
     lines.append(f"- **记录性质**: {type_label}（`{record_type}`）")
     if category:
-        lines.append(f"- **大类**: {category}")
+        lines.append(f"- **归类**: {category}")
     lines.append(f"- **具体类型**: {type_name}")
     st = getattr(risk_progress, "scope_type", "") or ""
     st_key = st.strip().lower()
@@ -337,12 +325,42 @@ def format_risk_progress_info(
     if owner_name:
         lines.append(f"- **负责人**: {owner_name}")
     lines.append(f"- **快照周期**: {getattr(risk_progress, 'snapshot_period', '')}")
-    lines.append(f"- **计算阶段**: {getattr(risk_progress, 'calc_phase', '')}")
+    lines.append("")
+    severity = getattr(risk_progress, "severity", None)
+    # KG-friendly normalized fact lines to improve stable extraction.
+    scope_tail_for_fact = scope_tail or "全局"
+    lines.append("## KG/Vector Facts")
+    lines.append("")
+    fact_parts = [
+        f"记录性质={type_label}",
+        f"类型={type_name or '缺失'}",
+        f"范围类型={st_zh or st or '缺失'}",
+        f"范围名称={scope_tail_for_fact}",
+        f"快照周期={getattr(risk_progress, 'snapshot_period', '') or '缺失'}",
+    ]
+    # Scope-aware dimensions: only include relevant attributes to reduce noise.
+    if st_key == "opportunity":
+        fact_parts.append(f"关联商机={opp_name or '范围名称未解析'}")
+        if owner_name:
+            fact_parts.append(f"负责人={owner_name}")
+        if department_name:
+            fact_parts.append(f"部门={department_name}")
+    elif st_key == "owner":
+        fact_parts.append(f"负责人={scope_tail_for_fact}")
+        if department_name:
+            fact_parts.append(f"部门={department_name}")
+    elif st_key == "department":
+        fact_parts.append(f"部门={scope_tail_for_fact}")
+    elif st_key == "company":
+        fact_parts.append("公司范围=全公司")
+
+    lines.append(f"- [事实] {'；'.join(fact_parts)}。")
+    if severity:
+        lines.append(f"- [事实] 严重程度={severity}")
     lines.append("")
 
     # --- BRD dimensions (category is under 上下文 as 大类) ---
     level = getattr(risk_progress, "level", None)
-    severity = getattr(risk_progress, "severity", None)
     source = getattr(risk_progress, "source", None)
     metric_name = getattr(risk_progress, "metric_name", None)
     brd_lines: List[str] = []
@@ -407,15 +425,8 @@ def format_risk_progress_info(
         lines.append(solution)
         lines.append("")
 
-    evidence = getattr(risk_progress, "evidence", None)
-    if evidence:
-        lines.append("## 依据数据")
-        lines.append("")
-        try:
-            lines.append(json.dumps(evidence, ensure_ascii=False, default=str))
-        except (TypeError, ValueError):
-            lines.append(str(evidence))
-        lines.append("")
+    # NOTE(review-rp): `evidence` is intentionally excluded from indexed text for
+    # now. Re-enable after evidence schema/query usage is finalized.
 
     fin_impact = getattr(risk_progress, "financial_impact", None)
     prev_val = getattr(risk_progress, "previous_value", None)
@@ -450,22 +461,7 @@ def format_risk_progress_info(
         lines.append(f"- **解决说明**: {resolution_note}")
     lines.append("")
 
-    lines.append("## 记录审计")
-    lines.append("")
-    lines.append(f"- **创建时间**: {_fmt(getattr(risk_progress, 'created_at', None))}")
-    lines.append(f"- **更新时间**: {_fmt(getattr(risk_progress, 'updated_at', None))}")
-    lines.append(f"- **创建人**: {getattr(risk_progress, 'created_by', '') or ''}")
-    lines.append(f"- **更新人**: {getattr(risk_progress, 'updated_by', '') or ''}")
-    lines.append("")
-
-    meta = getattr(risk_progress, "metadata_", None)
-    if meta:
-        lines.append("## 扩展元数据")
-        lines.append("")
-        try:
-            lines.append(json.dumps(meta, ensure_ascii=False, default=str))
-        except (TypeError, ValueError):
-            lines.append(str(meta))
-        lines.append("")
+    # NOTE(review-rp): Audit fields are intentionally excluded from indexed text
+    # to keep retrieval focused on business signals.
 
     return lines

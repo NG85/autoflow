@@ -16,7 +16,16 @@ from app.rag.types import CrmDataType
 from app.models.enums import GraphType
 
 class CRMKnowledgeGraphBuilder:
-    """CRM knowledge graph builder."""
+    """CRM knowledge graph builder.
+
+    Guardrails:
+    - Use human-readable business names in entity/relationship text for semantic
+      retrieval quality.
+    - Keep stable identifiers (IDs/codes/system stage) in `meta` for exact
+      filtering, routing, and governance.
+    - When text detail and structured filtering conflict, prefer clean text +
+      richer meta/relations.
+    """
     def __init__(self):
         pass
 
@@ -1128,13 +1137,16 @@ class CRMKnowledgeGraphBuilder:
                              "target_type": CrmDataType.REVIEW_RISK_PROGRESS},
                 })
             # RiskProgress → ReviewSession
+            # Keep session display name in relation text; session_id stays in meta.
             if secondary_data and secondary_data.get("session_id"):
-                session_name = secondary_data.get("session_name") or secondary_data.get("session_id", "")
-                session_entity = ReviewSessionEntity(
-                    id=None,
-                    name=session_name,
-                    description=f"Review会议 {session_name}",
-                    metadata={"session_id": secondary_data["session_id"]},
+                session_entity = self.create_review_session_entity(
+                    {
+                        "session_id": secondary_data.get("session_id"),
+                        "session_name": secondary_data.get("session_name"),
+                        "department_name": secondary_data.get("department_name", ""),
+                        "period": secondary_data.get("period") or primary_data.get("snapshot_period", ""),
+                        "stage": secondary_data.get("stage") or primary_data.get("stage", "") or meta.get("stage", ""),
+                    }
                 )
                 entities_data.append({
                     "name": session_entity.name,
@@ -1148,11 +1160,36 @@ class CRMKnowledgeGraphBuilder:
                     "source_entity_description": rp_entity.description,
                     "target_entity_description": session_entity.description,
                     "relationship_desc": f"{rp_entity.name}属于Review会议{session_entity.name}",
-                    "meta": {**rel_meta_base, "relation_type": "BELONGS_TO",
-                             "source_type": CrmDataType.REVIEW_RISK_PROGRESS,
-                             "target_type": CrmDataType.REVIEW_SESSION},
+                    "meta": {
+                        **rel_meta_base,
+                        "relation_type": "BELONGS_TO",
+                        "relation_subtype": "BELONGS_TO_SESSION",
+                        "source_type": CrmDataType.REVIEW_RISK_PROGRESS,
+                        "target_type": CrmDataType.REVIEW_SESSION,
+                    },
+                })
+            scope_type_key = str(primary_data.get("scope_type", "")).strip().lower()
+            scope_name = str(primary_data.get("scope_name", "")).strip()
+            scope_id = str(primary_data.get("scope_id", "")).strip()
+            if scope_type_key == "department" and scope_name:
+                dept_description = f"部门{scope_name}"
+                relationships_data.append({
+                    "source_entity": rp_entity.name,
+                    "target_entity": scope_name,
+                    "source_entity_description": rp_entity.description,
+                    "target_entity_description": dept_description,
+                    "relationship_desc": f"{rp_entity.name}影响部门{scope_name}",
+                    "meta": {
+                        **rel_meta_base,
+                        "relation_type": "AFFECTS_DEPARTMENT",
+                        "source_type": CrmDataType.REVIEW_RISK_PROGRESS,
+                        "target_type": CrmDataType.DEPARTMENT,
+                        "department_id": scope_id,
+                        "department_name": scope_name,
+                    },
                 })
             # RiskProgress → Opportunity (if opportunity-level)
+            # Use opportunity display name in text; keep opportunity_id in meta.
             opp_id = primary_data.get("opportunity_id")
             if opp_id:
                 display_name = self._resolve_opportunity_display_name(primary_data)
@@ -1172,9 +1209,13 @@ class CRMKnowledgeGraphBuilder:
                     "source_entity_description": rp_entity.description,
                     "target_entity_description": opp_entity.description,
                     "relationship_desc": f"{rp_entity.name}关联商机{opp_entity.name}",
-                    "meta": {**rel_meta_base, "relation_type": "DETECTED_IN",
-                             "source_type": CrmDataType.REVIEW_RISK_PROGRESS,
-                             "target_type": CrmDataType.OPPORTUNITY},
+                    "meta": {
+                        **rel_meta_base,
+                        "relation_type": "DETECTED_IN",
+                        "source_type": CrmDataType.REVIEW_RISK_PROGRESS,
+                        "target_type": CrmDataType.OPPORTUNITY,
+                        "opportunity_id": opp_id or "",
+                    },
                 })
             self._append_review_chunk_facts(
                 relationships_data,

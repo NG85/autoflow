@@ -17,6 +17,10 @@ from app.rag.chat.review.indexing_policy import (
     normalize_review_data_types,
     validate_review_index_scope_by_stage,
 )
+from app.rag.datasource.review_format import (
+    format_review_session_info,
+    format_snapshot_info,
+)
 from app.rag.indices.knowledge_graph.crm.builder import CRMKnowledgeGraphBuilder
 from app.rag.types import CrmDataType
 
@@ -779,7 +783,7 @@ def test_review_risk_progress_metadata_includes_type_and_opportunity_name():
         updated_at=None,
         created_by=None,
         updated_by=None,
-        metadata_=None,
+        metadata_={"debug": "noise"},
     )
     fake_db = _FakeRiskProgressDBSession([rp])
     ds = ReviewDataSource(
@@ -794,7 +798,7 @@ def test_review_risk_progress_metadata_includes_type_and_opportunity_name():
         "owner": {"owner_3": "王五"},
         "department": {"dept_3": "华北销售部"},
     }
-    session_obj = SimpleNamespace(unique_id="rs_meta_rp")
+    session_obj = SimpleNamespace(unique_id="rs_meta_rp", session_name="W12复盘会")
 
     docs = list(ds._load_risk_progress_documents(session_obj))
     assert len(docs) == 1
@@ -802,6 +806,145 @@ def test_review_risk_progress_metadata_includes_type_and_opportunity_name():
     assert docs[0].meta["severity"] == "HIGH"
     assert docs[0].meta["opportunity_id"] == "opp_3"
     assert docs[0].meta["opportunity_name"] == "华北大单"
+    assert docs[0].meta["session_name"] == "W12复盘会"
+    assert "## KG/Vector Facts" in docs[0].content
+    assert "- **计算阶段**:" not in docs[0].content
+    assert "计算阶段=" not in docs[0].content
+    assert "## 扩展元数据" not in docs[0].content
+    assert "- [事实] 记录性质=风险；类型=阶段停滞；范围类型=商机" in docs[0].content
+    assert "- [事实] 严重程度=HIGH" in docs[0].content
+    assert "## 依据数据" not in docs[0].content
+    assert "## 记录审计" not in docs[0].content
+
+
+def test_review_risk_progress_fact_line_is_scope_aware_for_company_scope():
+    rp = SimpleNamespace(
+        unique_id="rp_meta_company_1",
+        record_type="PROGRESS",
+        type_name="整体推进",
+        type_code="overall_progress",
+        scope_type="company",
+        scope_id="",
+        snapshot_period="2026-W12",
+        calc_phase="first_calc_ready",
+        severity=None,
+        opportunity_id=None,
+        owner_id=None,
+        department_id=None,
+        # fields used by formatter
+        category=None,
+        ai_assessment=None,
+        sales_assessment=None,
+        judgment_rule=None,
+        summary=None,
+        gap_description=None,
+        detail_description=None,
+        solution=None,
+        evidence=None,
+        financial_impact=None,
+        previous_value=None,
+        current_value=None,
+        rate_of_change=None,
+        status=None,
+        detected_at=None,
+        resolved_at=None,
+        resolved_by=None,
+        resolution_type=None,
+        resolution_note=None,
+        created_at=None,
+        updated_at=None,
+        created_by=None,
+        updated_by=None,
+        metadata_=None,
+    )
+    fake_db = _FakeRiskProgressDBSession([rp])
+    ds = ReviewDataSource(
+        db_session=fake_db,
+        knowledge_base_id=1,
+        data_source_id=1,
+        user_id=1,
+        review_session_id="rs_meta_company",
+    )
+    ds._build_scope_name_maps = lambda _session_obj: {"opportunity": {}, "owner": {}, "department": {}}
+    session_obj = SimpleNamespace(unique_id="rs_meta_company")
+
+    docs = list(ds._load_risk_progress_documents(session_obj))
+    assert len(docs) == 1
+    assert "公司范围=全公司" in docs[0].content
+    assert "关联商机=缺失" not in docs[0].content
+    assert "负责人=缺失" not in docs[0].content
+
+
+def test_review_risk_progress_relations_include_session_name_and_opportunity_id():
+    builder = CRMKnowledgeGraphBuilder()
+    primary_data = {
+        "unique_id": "rp_rel_1",
+        "session_id": "rs_rel_1",
+        "snapshot_period": "2026-W12",
+        "calc_phase": "first_calc_ready",
+        "record_type": "RISK",
+        "type_name": "阶段停滞",
+        "type_code": "stage_stall",
+        "scope_type": "opportunity",
+        "scope_id": "opp_3",
+        "opportunity_id": "opp_3",
+        "opportunity_name": "华北大单",
+    }
+    entities, rels = builder.build_graph_from_document_data(
+        crm_data_type=CrmDataType.REVIEW_RISK_PROGRESS,
+        primary_data=primary_data,
+        secondary_data={"session_id": "rs_rel_1", "session_name": "W12复盘会", "period": "2026-W12"},
+        document_id="doc_rp_1",
+        chunk_id="chunk_rp_1",
+        meta={"crm_data_type": CrmDataType.REVIEW_RISK_PROGRESS, "session_id": "rs_rel_1"},
+        chunk_text="",
+    )
+
+    belongs_to_session = next(
+        r for r in rels if r.get("meta", {}).get("relation_type") == "BELONGS_TO"
+    )
+    assert belongs_to_session["target_entity"] == "W12复盘会"
+    assert belongs_to_session["meta"]["relation_subtype"] == "BELONGS_TO_SESSION"
+
+    detected_in_opp = next(
+        r for r in rels if r.get("meta", {}).get("relation_type") == "DETECTED_IN"
+    )
+    assert detected_in_opp["meta"]["opportunity_id"] == "opp_3"
+    assert detected_in_opp["target_entity"] == "华北大单"
+
+    rp_entity = next(e for e in entities if e["meta"].get("type_code") == "stage_stall")
+    assert rp_entity["name"] == "阶段停滞_2026-W12"
+
+
+def test_review_risk_progress_department_scope_adds_department_relation():
+    builder = CRMKnowledgeGraphBuilder()
+    primary_data = {
+        "unique_id": "rp_rel_dept_1",
+        "session_id": "rs_rel_dept_1",
+        "snapshot_period": "2026-W12",
+        "calc_phase": "first_calc_ready",
+        "record_type": "RISK",
+        "type_name": "覆盖不足",
+        "type_code": "dept_gap",
+        "scope_type": "department",
+        "scope_id": "dept_42",
+        "scope_name": "华北销售部",
+    }
+    _, rels = builder.build_graph_from_document_data(
+        crm_data_type=CrmDataType.REVIEW_RISK_PROGRESS,
+        primary_data=primary_data,
+        secondary_data={"session_id": "rs_rel_dept_1", "session_name": "W12复盘会"},
+        document_id="doc_rp_dept_1",
+        chunk_id="chunk_rp_dept_1",
+        meta={"crm_data_type": CrmDataType.REVIEW_RISK_PROGRESS, "session_id": "rs_rel_dept_1"},
+        chunk_text="",
+    )
+    affects_dept = next(
+        r for r in rels if r.get("meta", {}).get("relation_type") == "AFFECTS_DEPARTMENT"
+    )
+    assert affects_dept["target_entity"] == "华北销售部"
+    assert affects_dept["meta"]["department_id"] == "dept_42"
+    assert affects_dept["meta"]["department_name"] == "华北销售部"
 
 
 def test_review_session_metadata_includes_session_name_and_builder_uses_it():
@@ -838,3 +981,87 @@ def test_review_session_metadata_includes_session_name_and_builder_uses_it():
     )
     session_entity = next(e for e in entities if e["meta"].get("session_id") == "rs_meta_session")
     assert session_entity["name"] == "华东大区W15复盘"
+
+
+def test_review_session_formatter_excludes_period_type_and_stage_fact_dimension():
+    session_obj = SimpleNamespace(
+        session_name="华东大区W15复盘",
+        department_name="银行二部",
+        period="2026-W15",
+        period_type="WEEKLY",
+        period_start="2026-04-06",
+        period_end="2026-04-12",
+        stage="first_calc_ready",
+        review_type="regular",
+        fiscal_year=2026,
+        report_date="2026-04-13",
+    )
+    kpi_metrics = [
+        SimpleNamespace(
+            scope_type="department",
+            scope_name="银行二部",
+            metric_name="target",
+            metric_value=100,
+            metric_value_prev=90,
+            metric_delta=10,
+            metric_rate=0.111,
+        )
+    ]
+    lines = format_review_session_info(session_obj, kpi_metrics=kpi_metrics)
+    content = "\n".join(lines)
+    assert "- **周期类型**:" not in content
+    assert "事实维度：周期=2026-W15；范围分组=部门范围" in content
+    assert "阶段=first_calc_ready" not in content
+
+
+def test_review_session_formatter_omits_missing_kpi_fact_lines():
+    session_obj = SimpleNamespace(
+        session_name="华东大区W15复盘",
+        department_name="银行二部",
+        period="2026-W15",
+        stage="first_calc_ready",
+    )
+    kpi_metrics = [
+        SimpleNamespace(
+            scope_type="department",
+            scope_name="银行二部",
+            metric_name="target",
+            metric_value=100,
+            metric_value_prev=90,
+            metric_delta=10,
+            metric_rate=0.111,
+        )
+    ]
+    lines = format_review_session_info(session_obj, kpi_metrics=kpi_metrics)
+    content = "\n".join(lines)
+    assert "指标=目标 (target)" in content
+    assert "当前值=缺失" not in content
+
+
+def test_snapshot_formatter_excludes_baseline_source_and_change_tracking():
+    snapshot = SimpleNamespace(
+        opportunity_name="华北大单",
+        account_name="甲方集团",
+        owner_name="王五",
+        owner_department_name="华北销售部",
+        snapshot_period="2026-W15",
+        baseline_forecast_type="COMMIT",
+        baseline_forecast_amount=1000000,
+        baseline_opportunity_stage="谈判",
+        baseline_expected_closing_date="2026-05-01",
+        forecast_type="UPSIDE",
+        forecast_amount=1200000,
+        opportunity_stage="方案",
+        expected_closing_date="2026-05-15",
+        stage_stay=12,
+        ai_commit="COMMIT",
+        ai_stage="谈判",
+        ai_expected_closing_date="2026-05-01",
+        was_modified=True,
+        modification_count=3,
+    )
+    lines = format_snapshot_info(snapshot)
+    content = "\n".join(lines)
+    assert "基线来源=" not in content
+    assert "## 变更状态" not in content
+    assert "修改次数=" not in content
