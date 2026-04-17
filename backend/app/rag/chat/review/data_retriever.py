@@ -563,8 +563,23 @@ class ReviewDataRetriever:
             # Risk/progress focused query: skip KPI/detail retrieval.
             risk_type_codes = plan.get("risk_type_codes") if isinstance(plan, dict) else None
             force_opportunity_scope_all = False
+            effective_intent = intent.model_copy(deep=True)
             if not isinstance(risk_type_codes, list):
                 risk_type_codes = None
+            if not template_id and (effective_intent.scope_type or "").strip().lower() == "owner":
+                owner_scope_id = (effective_intent.scope_id or "").strip()
+                if owner_scope_id == "__CURRENT_USER__":
+                    owner_scope_id = (current_owner_id or "").strip()
+                if not owner_scope_id:
+                    owner_name = str((detail_filters or {}).get("owner_name") or "").strip()
+                    if owner_name:
+                        owner_scope_id = self._resolve_owner_id_by_name(
+                            db_session=db_session,
+                            snapshot_period=snapshot_period,
+                            owner_name=owner_name,
+                        ) or ""
+                if owner_scope_id:
+                    effective_intent.scope_id = owner_scope_id
             if template_id == "target_action_to_hit_goal":
                 risk_type_codes = self._resolve_target_action_risk_type_codes(
                     db_session=db_session,
@@ -579,7 +594,12 @@ class ReviewDataRetriever:
             # - opportunity/customer/owner scope -> opp risk-progress chain
             # - unspecified scope -> merge both chains
             if not template_id and not risk_type_codes:
-                scope = (intent.scope_type or "").strip().lower()
+                plan_scope = (
+                    plan.get("risk_scope_type")
+                    if isinstance(plan, dict)
+                    else None
+                )
+                scope = str(plan_scope or intent.scope_type or "").strip().lower()
                 if scope in ("department", "company"):
                     risk_type_codes = list(BUSINESS_RISK_TYPE_CODES)
                 elif scope in ("opportunity", "customer", "owner"):
@@ -605,7 +625,7 @@ class ReviewDataRetriever:
                     db_session,
                     session_id,
                     snapshot_period,
-                    intent,
+                    effective_intent,
                     risk_type_codes=None,
                 )
                 ctx.risks = [r for r in risks_and_progress if r.get("record_type") == "RISK"]
@@ -652,7 +672,7 @@ class ReviewDataRetriever:
                 return ctx
             if not template_id and force_opportunity_scope_all:
                 risks_and_progress = self._query_risk_progress(
-                    db_session, session_id, snapshot_period, intent, risk_type_codes=None
+                    db_session, session_id, snapshot_period, effective_intent, risk_type_codes=None
                 )
                 ctx.risks = [
                     r for r in risks_and_progress if r.get("record_type") in ("RISK", "OPP_SUMMARY")
@@ -669,7 +689,7 @@ class ReviewDataRetriever:
                     ctx.query_note = (
                         "### 风险查询结果\n"
                         f"- 当前结论：共识别到 {opp_count} 个风险商机。\n"
-                        f"- 风险与对象：范围为商机/客户级风险，涉及商机包括 {opp_list_text}。\n"
+                        f"- 风险与对象：范围为商机/客户层面风险，涉及商机包括 {opp_list_text}。\n"
                         f"- 查看路径：进入经营洞察卡片，点击{card_hint}查看商机与风险详情。"
                     )
                 else:
@@ -690,11 +710,12 @@ class ReviewDataRetriever:
                     session_id=session_id,
                     snapshot_period=snapshot_period,
                     relation_type_names=relation_type_names,
+                    owner_id=effective_intent.scope_id if (effective_intent.scope_type or "").strip().lower() == "owner" else None,
                 )
                 card_hint = "达成风险卡片" if "业绩达成风险" in relation_type_names else "经营洞察卡片"
             elif opportunity_codes and not business_codes:
                 risks_and_progress = self._query_risk_progress(
-                    db_session, session_id, snapshot_period, intent, risk_type_codes=opportunity_codes
+                    db_session, session_id, snapshot_period, effective_intent, risk_type_codes=opportunity_codes
                 )
                 ctx.risks = [
                     r for r in risks_and_progress if r.get("record_type") in ("RISK", "OPP_SUMMARY")
@@ -708,9 +729,10 @@ class ReviewDataRetriever:
                     session_id=session_id,
                     snapshot_period=snapshot_period,
                     relation_type_names=relation_type_names,
+                    owner_id=effective_intent.scope_id if (effective_intent.scope_type or "").strip().lower() == "owner" else None,
                 ) if business_codes else []
                 opp_risks = self._query_risk_progress(
-                    db_session, session_id, snapshot_period, intent, risk_type_codes=opportunity_codes
+                    db_session, session_id, snapshot_period, effective_intent, risk_type_codes=opportunity_codes
                 ) if opportunity_codes else []
                 opp_risks = [r for r in opp_risks if r.get("record_type") in ("RISK", "OPP_SUMMARY")]
                 ctx.risks = relation_risks + opp_risks
@@ -1136,6 +1158,7 @@ class ReviewDataRetriever:
         session_id: str,
         snapshot_period: str,
         relation_type_names: List[str],
+        owner_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         RR = CRMReviewRiskOpportunityRelation
         stmt = select(RR).where(
@@ -1144,6 +1167,8 @@ class ReviewDataRetriever:
         )
         if relation_type_names:
             stmt = stmt.where(RR.type_name.in_(relation_type_names))
+        if owner_id:
+            stmt = stmt.where(RR.owner_id == owner_id)
         rows = list(db_session.exec(stmt).all())
         opportunity_ids = [r.opportunity_id for r in rows if getattr(r, "opportunity_id", None)]
         opp_name_map: Dict[str, str] = {}
@@ -1173,6 +1198,25 @@ class ReviewDataRetriever:
                 }
             )
         return out
+
+    @staticmethod
+    def _resolve_owner_id_by_name(
+        db_session: Session,
+        snapshot_period: str,
+        owner_name: str,
+    ) -> Optional[str]:
+        if not owner_name:
+            return None
+        S = CRMReviewOppBranchSnapshot
+        row = db_session.exec(
+            select(S).where(
+                S.snapshot_period == snapshot_period,
+                S.owner_name == owner_name,
+            )
+        ).first()
+        if row and getattr(row, "owner_id", None):
+            return str(row.owner_id)
+        return None
 
     def _snapshot_row_to_detail(self, row: CRMReviewOppBranchSnapshot) -> Dict[str, Any]:
         return {

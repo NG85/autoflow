@@ -148,9 +148,9 @@ def test_risk_context_includes_solution_and_detail():
     )
 
     text = ctx.to_risk_context_text()
-    assert "Suggested action" in text
-    assert "Detail" in text
-    assert "Next step" in text
+    assert "建议动作" in text
+    assert "详情" in text
+    assert "下一步建议" in text
 
 
 def test_soft_boundary_guard_sets_query_plan_defaults():
@@ -700,6 +700,8 @@ def test_router_non_template_risk_query_auto_scopes_to_department():
     )
     assert guarded.query_type == "risk_progress"
     assert guarded.scope_type == "department"
+    assert guarded.query_plan["risk_scope_type"] == "department"
+    assert guarded.query_plan["risk_scope_source"] == "auto_inferred"
     assert guarded.needs_clarification is False
 
 
@@ -711,7 +713,33 @@ def test_router_non_template_risk_query_auto_scopes_to_opportunity():
     )
     assert guarded.query_type == "risk_progress"
     assert guarded.scope_type == "opportunity"
+    assert guarded.query_plan["risk_scope_type"] == "opportunity"
+    assert guarded.query_plan["risk_scope_source"] == "auto_inferred"
     assert guarded.needs_clarification is False
+
+
+def test_router_non_template_risk_query_self_owner_scope():
+    intent = ReviewIntent(intent_type="data_query")
+    guarded = ReviewIntentRouter._apply_soft_boundary_guard(
+        intent,
+        "我负责的商机有哪些风险？",
+    )
+    assert guarded.query_type == "risk_progress"
+    assert guarded.scope_type == "owner"
+    assert guarded.scope_id == "__CURRENT_USER__"
+    assert guarded.query_plan["risk_scope_type"] == "owner"
+
+
+def test_router_non_template_risk_query_named_owner_scope():
+    intent = ReviewIntent(intent_type="data_query")
+    guarded = ReviewIntentRouter._apply_soft_boundary_guard(
+        intent,
+        "销售张三有哪些风险？",
+    )
+    assert guarded.query_type == "risk_progress"
+    assert guarded.scope_type == "owner"
+    assert guarded.detail_filters.get("owner_name") == "张三"
+    assert guarded.query_plan["risk_scope_type"] == "owner"
 
 
 def test_router_non_template_risk_query_asks_clarification_when_scope_ambiguous():
@@ -722,8 +750,26 @@ def test_router_non_template_risk_query_asks_clarification_when_scope_ambiguous(
     )
     assert guarded.query_type == "risk_progress"
     assert guarded.scope_type is None
+    assert guarded.query_plan["risk_scope_type"] is None
+    assert guarded.query_plan["risk_scope_source"] == "unspecified"
     assert guarded.needs_clarification is True
-    assert "部门/公司层面的经营风险" in guarded.clarifying_question
+    assert "部门/公司层面风险" in guarded.clarifying_question
+
+
+def test_router_non_template_risk_query_followup_short_scope_reply_uses_history():
+    intent = ReviewIntent(intent_type="data_query")
+    guarded = ReviewIntentRouter._apply_soft_boundary_guard(
+        intent,
+        "看商机/客户层面",
+        chat_history=[
+            {"role": "assistant", "content": "你更想看哪一类风险：部门/公司层面风险，还是商机/客户层面风险？"}
+        ],
+    )
+    assert guarded.query_type == "risk_progress"
+    assert guarded.scope_type == "opportunity"
+    assert guarded.needs_clarification is False
+    assert guarded.query_plan["risk_scope_type"] == "opportunity"
+    assert guarded.query_plan["risk_scope_source"] == "auto_inferred"
 
 
 def test_retrieve_opportunity_risk_taxonomy_groups_by_category(monkeypatch):
@@ -837,10 +883,43 @@ def test_retrieve_non_template_opportunity_scope_uses_opp_risk_chain(monkeypatch
         db_session=None,
         review_session=review_session,
         intent=intent,
-        user_question="商机层面都有哪些风险？",
+        user_question="商机/客户层面都有哪些风险？",
     )
-    assert "范围为商机/客户级风险" in (ctx.query_note or "")
+    assert "范围为商机/客户层面风险" in (ctx.query_note or "")
     assert "华东续签" in (ctx.query_note or "")
+
+
+def test_retrieve_non_template_owner_scope_uses_current_owner_id(monkeypatch):
+    retriever = ReviewDataRetriever()
+    review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
+    intent = ReviewIntent(
+        intent_type="data_query",
+        query_type="risk_progress",
+        scope_type="owner",
+        scope_id="__CURRENT_USER__",
+    )
+    captured = {}
+
+    def _mock_risk_progress(_db, _sid, _period, eff_intent, risk_type_codes=None):
+        captured["scope_type"] = eff_intent.scope_type
+        captured["scope_id"] = eff_intent.scope_id
+        return [{"record_type": "RISK", "opportunity_name": "华东续签"}]
+
+    monkeypatch.setattr(
+        retriever,
+        "_query_risk_opportunity_relations",
+        lambda *a, **k: pytest.fail("relation chain should not be called"),
+    )
+    monkeypatch.setattr(retriever, "_query_risk_progress", _mock_risk_progress)
+    retriever.retrieve(
+        db_session=None,
+        review_session=review_session,
+        intent=intent,
+        user_question="我负责的商机有哪些风险？",
+        current_owner_id="owner_123",
+    )
+    assert captured["scope_type"] == "owner"
+    assert captured["scope_id"] == "owner_123"
 
 
 @pytest.mark.parametrize(

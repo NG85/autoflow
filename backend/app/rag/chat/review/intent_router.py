@@ -129,7 +129,7 @@ class ReviewIntentRouter:
             chat_history=chat_history or [],
         )
         intent = self._parse_intent(raw)
-        return self._apply_soft_boundary_guard(intent, user_question)
+        return self._apply_soft_boundary_guard(intent, user_question, chat_history=chat_history)
 
     @staticmethod
     def _parse_intent(raw: str) -> ReviewIntent:
@@ -156,7 +156,11 @@ class ReviewIntentRouter:
         return resolve_requested_risk_type_codes(intent.template_params)
 
     @staticmethod
-    def _apply_soft_boundary_guard(intent: ReviewIntent, user_question: str) -> ReviewIntent:
+    def _apply_soft_boundary_guard(
+        intent: ReviewIntent,
+        user_question: str,
+        chat_history: Optional[List] = None,
+    ) -> ReviewIntent:
         """Apply lightweight boundary rules for precision-first data_query."""
         if intent.intent_type != "data_query":
             return intent
@@ -216,6 +220,52 @@ class ReviewIntentRouter:
         q = (user_question or "").strip().lower()
         if not q:
             return intent
+
+        def _infer_risk_scope_from_text(text: str) -> Optional[str]:
+            t = (text or "").lower()
+            has_dept_company_scope = any(k in t for k in ("部门", "公司", "经营", "团队", "大区"))
+            has_opp_customer_scope = any(k in t for k in ("商机", "客户", "owner", "销售"))
+            if has_dept_company_scope and not has_opp_customer_scope:
+                return "department"
+            if has_opp_customer_scope and not has_dept_company_scope:
+                return "opportunity"
+            return None
+
+        def _extract_role_content(msg) -> tuple[str, str]:
+            role = ""
+            content = ""
+            if hasattr(msg, "role"):
+                role = str(getattr(msg, "role") or "").lower()
+                content = str(getattr(msg, "content") or "")
+            elif isinstance(msg, dict):
+                role = str(msg.get("role") or "").lower()
+                content = str(msg.get("content") or "")
+            return role, content
+
+        # Clarification follow-up handling:
+        # If user gives a short scope-only reply after risk-scope clarification,
+        # map it back to risk_progress query automatically.
+        inferred_scope_from_short_reply = _infer_risk_scope_from_text(q)
+        if (
+            inferred_scope_from_short_reply
+            and not intent.preset_template
+            and not intent.query_type
+            and len(q) <= 24
+            and isinstance(chat_history, list)
+        ):
+            last_assistant_text = ""
+            for msg in reversed(chat_history):
+                role, content = _extract_role_content(msg)
+                if role == "assistant":
+                    last_assistant_text = content
+                    break
+            if (
+                "你更想看哪一类风险" in last_assistant_text
+                or "部门/公司层面风险" in last_assistant_text
+                or "商机/客户层面风险" in last_assistant_text
+            ):
+                intent.query_type = "risk_progress"
+                intent.scope_type = inferred_scope_from_short_reply
 
         # Soft boundary: for "sales vs AI mismatch list" without explicit dimension,
         # ask one clarification instead of defaulting to a potentially wrong mapping.
@@ -335,6 +385,7 @@ class ReviewIntentRouter:
         if (
             "商机" in q
             and "风险" in q
+            and not any(k in q for k in ("我负责", "我名下", "我这边", "我的", "销售", "负责人", "owner"))
             and any(
                 k in q
                 for k in (
@@ -385,10 +436,38 @@ class ReviewIntentRouter:
         )
         has_dept_company_scope = any(k in q for k in ("部门", "公司", "经营", "团队", "大区"))
         has_opp_customer_scope = any(k in q for k in ("商机", "客户", "owner", "销售"))
+        has_self_owner_scope = any(k in q for k in ("我自己", "我负责", "我名下", "我这边", "我的"))
+        owner_name_match = re.search(
+            r"(?:销售|负责人|owner)\s*(?:是|为|叫|=)?\s*([^\s，。,；;：:]{2,20})",
+            user_question or "",
+            re.IGNORECASE,
+        )
+        owner_name_value = (
+            owner_name_match.group(1).strip()
+            if owner_name_match and owner_name_match.group(1).strip() not in ("我", "自己", "本人")
+            else ""
+        )
+        if owner_name_value:
+            owner_name_value = owner_name_value.rstrip("？?。.!！")
+            owner_name_value = re.sub(
+                r"(?:有哪些风险|有啥风险|有什么风险|有哪些|有啥|有什么|风险.*)$",
+                "",
+                owner_name_value,
+                flags=re.IGNORECASE,
+            ).strip()
         if has_risk_lookup and not intent.query_type:
             intent.query_type = "risk_progress"
         if has_risk_lookup and not intent.preset_template and not intent.scope_type:
-            if has_dept_company_scope and not has_opp_customer_scope:
+            if has_self_owner_scope:
+                intent.scope_type = "owner"
+                intent.scope_id = "__CURRENT_USER__"
+            elif owner_name_value:
+                intent.scope_type = "owner"
+                intent.detail_filters = {
+                    **(intent.detail_filters or {}),
+                    "owner_name": owner_name_value,
+                }
+            elif has_dept_company_scope and not has_opp_customer_scope:
                 intent.scope_type = "department"
             elif has_opp_customer_scope and not has_dept_company_scope:
                 intent.scope_type = "opportunity"
@@ -420,6 +499,15 @@ class ReviewIntentRouter:
         if (
             intent.query_type == "risk_progress"
             and not intent.preset_template
+        ):
+            # Make non-template risk routing explicit for downstream execution/audit.
+            intent.query_plan["risk_scope_type"] = intent.scope_type
+            intent.query_plan["risk_scope_source"] = (
+                "auto_inferred" if intent.scope_type else "unspecified"
+            )
+        if (
+            intent.query_type == "risk_progress"
+            and not intent.preset_template
             and not intent.needs_clarification
         ):
             plan_risk_codes = intent.query_plan.get("risk_type_codes")
@@ -427,7 +515,7 @@ class ReviewIntentRouter:
             if not intent.scope_type and not has_risk_codes:
                 intent.needs_clarification = True
                 intent.clarifying_question = (
-                    "你更想看哪一类风险：部门/公司层面的经营风险，还是商机/客户层面的具体风险？"
+                    "你更想看哪一类风险：部门/公司层面风险，还是商机/客户层面风险？"
                 )
         # Accuracy-first: for low-confidence detail/mismatch routing, ask once before execution.
         if (
