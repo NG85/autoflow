@@ -278,6 +278,19 @@ class ChatFlow:
                 knowledge_bases=self.knowledge_bases,
             )
             self._retrieve_flow_initialized = True
+
+    @staticmethod
+    def _extract_stream_delta(chunk: Any, response_text: str) -> str:
+        delta = getattr(chunk, "delta", None) or ""
+        if delta:
+            return delta
+
+        # Some providers stream cumulative `text` instead of incremental `delta`.
+        # Emit only the unseen suffix to avoid duplicated final output.
+        chunk_text = getattr(chunk, "text", "") or ""
+        if chunk_text.startswith(response_text):
+            return chunk_text[len(response_text):]
+        return chunk_text
     
     def chat(self) -> Generator[ChatEvent | str, None, None]:
         try:
@@ -1933,9 +1946,7 @@ class ChatFlow:
                 prompt_text = prompt_template.format(**format_kwargs)
                 stream_resp = self._llm.stream_complete(prompt_text)
                 for chunk in stream_resp:
-                    delta = getattr(chunk, "delta", None)
-                    if not delta:
-                        delta = getattr(chunk, "text", "") or ""
+                    delta = self._extract_stream_delta(chunk, response_text)
                     if not delta:
                         continue
                     response_text += delta
@@ -1944,13 +1955,21 @@ class ChatFlow:
                         payload=delta,
                     )
             except Exception as e:
-                logger.warning("Review answer streaming failed; fallback to non-streaming predict: %s", e)
-                response_text = self._llm.predict(prompt_template, **format_kwargs)
                 if response_text:
-                    yield ChatEvent(
-                        event_type=ChatEventType.TEXT_PART,
-                        payload=response_text,
+                    # If streaming already emitted partial text, avoid fallback full-text emission
+                    # to prevent duplicated content on the client.
+                    logger.warning(
+                        "Review answer streaming interrupted after partial output; use partial response only: %s",
+                        e,
                     )
+                else:
+                    logger.warning("Review answer streaming failed; fallback to non-streaming predict: %s", e)
+                    response_text = self._llm.predict(prompt_template, **format_kwargs)
+                    if response_text:
+                        yield ChatEvent(
+                            event_type=ChatEventType.TEXT_PART,
+                            payload=response_text,
+                        )
             span.end(output=response_text)
 
         if not response_text:
