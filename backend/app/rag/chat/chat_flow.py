@@ -1694,12 +1694,8 @@ class ChatFlow:
                     rel_session = str(rel_meta.get("session_id", "") or "")
                     if rel_period and rel_period != session_ctx.period:
                         continue
-                    # Snapshot is shared by period across sessions; do not over-filter by session.
-                    if (
-                        rel_type != CrmDataType.REVIEW_SNAPSHOT.value
-                        and rel_session
-                        and rel_session != session_ctx.session_id
-                    ):
+                    # When session_id exists in metadata, enforce same-session scope.
+                    if rel_session and rel_session != session_ctx.session_id:
                         continue
                     filtered_relationships.append(rel)
                 if filtered_relationships:
@@ -1732,12 +1728,8 @@ class ChatFlow:
                     chunk_session = str(meta.get("session_id", "") or "")
                     if chunk_period and chunk_period != session_ctx.period:
                         continue
-                    # Snapshot is shared by period across sessions; do not over-filter by session.
-                    if (
-                        chunk_type != CrmDataType.REVIEW_SNAPSHOT.value
-                        and chunk_session
-                        and chunk_session != session_ctx.session_id
-                    ):
+                    # When session_id exists in metadata, enforce same-session scope.
+                    if chunk_session and chunk_session != session_ctx.session_id:
                         continue
                     filtered_chunks.append(chunk)
                 relevant_chunks = filtered_chunks
@@ -1779,12 +1771,8 @@ class ChatFlow:
                     rel_session = str(rel_meta.get("session_id", "") or "")
                     if rel_period and rel_period != session_ctx.period:
                         continue
-                    # Snapshot is shared by period across sessions; do not over-filter by session.
-                    if (
-                        rel_type != CrmDataType.REVIEW_SNAPSHOT.value
-                        and rel_session
-                        and rel_session != session_ctx.session_id
-                    ):
+                    # When session_id exists in metadata, enforce same-session scope.
+                    if rel_session and rel_session != session_ctx.session_id:
                         continue
                     filtered_relationships.append(rel)
                 if filtered_relationships:
@@ -1817,12 +1805,8 @@ class ChatFlow:
                     chunk_session = str(meta.get("session_id", "") or "")
                     if chunk_period and chunk_period != session_ctx.period:
                         continue
-                    # Snapshot is shared by period across sessions; do not over-filter by session.
-                    if (
-                        chunk_type != CrmDataType.REVIEW_SNAPSHOT.value
-                        and chunk_session
-                        and chunk_session != session_ctx.session_id
-                    ):
+                    # When session_id exists in metadata, enforce same-session scope.
+                    if chunk_session and chunk_session != session_ctx.session_id:
                         continue
                     filtered_chunks.append(chunk)
                 max_chunk_count = 2 if should_data_query_light_enhancement else 3
