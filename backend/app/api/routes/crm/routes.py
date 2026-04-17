@@ -3,7 +3,7 @@ import io
 import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -804,6 +804,8 @@ class ReviewSessionChatRequest(BaseModel):
     chat_engine: str = "default"
     chat_id: Optional[UUID] = None
     stream: bool = True
+    preset_template: Optional[str] = None
+    template_params: Dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("messages")
     @classmethod
@@ -852,6 +854,12 @@ def review_session_chat(
     origin = request.headers.get("Origin") or request.headers.get("Referer")
     browser_id = getattr(request.state, "browser_id", "")
 
+    context: Dict[str, Any] = {"review_session_id": session_id}
+    if chat_request.preset_template is not None:
+        context["preset_template"] = chat_request.preset_template
+    if isinstance(chat_request.template_params, dict) and chat_request.template_params:
+        context["template_params"] = chat_request.template_params
+
     chat_flow = ChatFlow(
         db_session=db_session,
         user=user,
@@ -861,7 +869,7 @@ def review_session_chat(
         chat_messages=chat_request.messages,
         engine_name=chat_request.chat_engine,
         chat_type=ChatType.REVIEW_SESSION,
-        context={"review_session_id": session_id},
+        context=context,
     )
 
     if chat_request.stream:
