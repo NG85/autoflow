@@ -772,6 +772,17 @@ def test_router_non_template_risk_query_followup_short_scope_reply_uses_history(
     assert guarded.query_plan["risk_scope_source"] == "auto_inferred"
 
 
+def test_router_clarifies_when_question_requests_non_current_period():
+    intent = ReviewIntent(intent_type="data_query")
+    guarded = ReviewIntentRouter._apply_soft_boundary_guard(
+        intent,
+        "和上期比，哪些商机风险变化最大？",
+    )
+    assert guarded.needs_clarification is True
+    assert "只支持本期数据" in guarded.clarifying_question
+    assert guarded.time_comparison == "current_only"
+
+
 def test_retrieve_opportunity_risk_taxonomy_groups_by_category(monkeypatch):
     retriever = ReviewDataRetriever()
     review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
@@ -920,6 +931,35 @@ def test_retrieve_non_template_owner_scope_uses_current_owner_id(monkeypatch):
     )
     assert captured["scope_type"] == "owner"
     assert captured["scope_id"] == "owner_123"
+
+
+def test_retrieve_non_template_owner_scope_named_owner_not_found_returns_clarify_note(monkeypatch):
+    retriever = ReviewDataRetriever()
+    review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
+    intent = ReviewIntent(
+        intent_type="data_query",
+        query_type="risk_progress",
+        scope_type="owner",
+        detail_filters={"owner_name": "张三"},
+    )
+    monkeypatch.setattr(
+        retriever,
+        "_resolve_owner_id_by_name",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        retriever,
+        "_query_risk_progress",
+        lambda *a, **k: pytest.fail("risk query should not be called when owner unresolved"),
+    )
+    ctx = retriever.retrieve(
+        db_session=None,
+        review_session=review_session,
+        intent=intent,
+        user_question="销售张三有哪些风险？",
+    )
+    assert "需确认销售人员" in (ctx.query_note or "")
+    assert "暂未识别到“张三”对应的销售人员" in (ctx.query_note or "")
 
 
 @pytest.mark.parametrize(

@@ -315,10 +315,33 @@ class ReviewIntentRouter:
                 "closing date",
             )
         )
+        has_non_current_time = any(
+            k in q
+            for k in (
+                "上期",
+                "上周",
+                "上月",
+                "环比",
+                "同比",
+                "历史",
+                "趋势",
+                "去年",
+                "去年同期",
+            )
+        )
+        has_current_time = any(k in q for k in ("当前", "本期", "目前", "这期"))
         # Domain boundary:
         # - Session-level KPI has AI amount metric (e.g. commit_ai).
         # - Per-opportunity snapshot does NOT have AI amount field.
         # Therefore only clarify when user is asking opportunity-level mismatch list.
+        if has_non_current_time and not has_current_time:
+            intent.needs_clarification = True
+            intent.clarifying_question = (
+                "当前 review 问答先只支持本期数据。"
+                "你可以先用本期口径提问，我会基于当前会话给你结果。"
+            )
+            intent.time_comparison = "current_only"
+            return intent
         if has_ai and asks_amount and has_diff and has_opportunity and has_list:
             intent.needs_clarification = True
             intent.clarifying_question = (

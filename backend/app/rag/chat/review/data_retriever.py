@@ -578,6 +578,13 @@ class ReviewDataRetriever:
                             snapshot_period=snapshot_period,
                             owner_name=owner_name,
                         ) or ""
+                        if not owner_scope_id:
+                            ctx.query_note = (
+                                "### 需确认销售人员\n"
+                                f"- 暂未识别到“{owner_name}”对应的销售人员。"
+                                "请确认姓名后重试，或改用“我负责的商机风险”进行查询。"
+                            )
+                            return ctx
                 if owner_scope_id:
                     effective_intent.scope_id = owner_scope_id
             if template_id == "target_action_to_hit_goal":
