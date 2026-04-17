@@ -1621,8 +1621,11 @@ class ChatFlow:
         relevant_chunks = []
         should_data_query_fallback = (
             intent.intent_type == "data_query"
-            and intent.query_type in ("opportunity_detail", "mismatch_list")
-            and not data_ctx.opportunity_snapshot_rows
+            and intent.query_type in ("opportunity_detail", "mismatch_list", "risk_progress")
+            and (
+                (intent.query_type in ("opportunity_detail", "mismatch_list") and not data_ctx.opportunity_snapshot_rows)
+                or (intent.query_type == "risk_progress" and not data_ctx.risks)
+            )
             and not intent.needs_clarification
         )
 
@@ -1872,6 +1875,9 @@ class ChatFlow:
         }
         if intent.intent_type in ("root_cause", "strategy"):
             format_kwargs["risk_context"] = risk_context
+        if intent.intent_type == "data_query":
+            format_kwargs["risk_context"] = risk_context
+            format_kwargs["kb_context"] = kb_context
         if intent.intent_type == "strategy":
             format_kwargs["kb_context"] = kb_context
 

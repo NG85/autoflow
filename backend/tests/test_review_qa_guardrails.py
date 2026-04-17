@@ -418,6 +418,72 @@ def test_retrieve_risk_progress_opportunity_level_types_use_opp_risk_chain(monke
     assert "商机风险卡片" in (ctx.query_note or "")
 
 
+def test_retrieve_target_action_template_uses_commit_high_risk_when_commit_gt_gap(monkeypatch):
+    retriever = ReviewDataRetriever()
+    review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
+    intent = ReviewIntent(
+        intent_type="data_query",
+        query_plan={"route": "risk_progress", "template_id": "target_action_to_hit_goal"},
+    )
+    monkeypatch.setattr(
+        "app.rag.chat.review.data_retriever.load_risk_type_name_map",
+        lambda _db, _codes=None: {
+            "ACHIEVEMENT_GAP_COMMIT_HIGH_RISK": "有高风险commit商机",
+            "ACHIEVEMENT_GAP_UPSIDE_INSUFFICIENT": "commit商机储备不足风险",
+        },
+    )
+    monkeypatch.setattr(
+        retriever,
+        "_resolve_target_action_risk_type_codes",
+        lambda **kwargs: ["ACHIEVEMENT_GAP_COMMIT_HIGH_RISK"],
+    )
+    captured = {}
+    def _mock_risk_relation(*args, **kwargs):
+        captured["relation_type_names"] = kwargs.get("relation_type_names")
+        return []
+    monkeypatch.setattr(retriever, "_query_risk_opportunity_relations", _mock_risk_relation)
+    retriever.retrieve(
+        db_session=None,
+        review_session=review_session,
+        intent=intent,
+        user_question="需要做什么才能达成目标？",
+    )
+    assert captured["relation_type_names"] == ["业绩达成风险"]
+
+
+def test_retrieve_target_action_template_uses_upside_insufficient_when_commit_lt_gap(monkeypatch):
+    retriever = ReviewDataRetriever()
+    review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
+    intent = ReviewIntent(
+        intent_type="data_query",
+        query_plan={"route": "risk_progress", "template_id": "target_action_to_hit_goal"},
+    )
+    monkeypatch.setattr(
+        "app.rag.chat.review.data_retriever.load_risk_type_name_map",
+        lambda _db, _codes=None: {
+            "ACHIEVEMENT_GAP_COMMIT_HIGH_RISK": "有高风险commit商机",
+            "ACHIEVEMENT_GAP_UPSIDE_INSUFFICIENT": "commit商机储备不足风险",
+        },
+    )
+    monkeypatch.setattr(
+        retriever,
+        "_resolve_target_action_risk_type_codes",
+        lambda **kwargs: ["ACHIEVEMENT_GAP_UPSIDE_INSUFFICIENT"],
+    )
+    captured = {}
+    def _mock_risk_relation(*args, **kwargs):
+        captured["relation_type_names"] = kwargs.get("relation_type_names")
+        return []
+    monkeypatch.setattr(retriever, "_query_risk_opportunity_relations", _mock_risk_relation)
+    retriever.retrieve(
+        db_session=None,
+        review_session=review_session,
+        intent=intent,
+        user_question="需要做什么才能达成目标？",
+    )
+    assert captured["relation_type_names"] == ["业绩达成风险"]
+
+
 def test_router_respects_frontend_preset_template_for_achievement_risk():
     intent = ReviewIntent(
         intent_type="data_query",
@@ -475,6 +541,15 @@ def test_router_template_params_only_invalid_codes_are_kept_for_retriever_valida
     )
     guarded = ReviewIntentRouter._apply_soft_boundary_guard(intent, "x")
     assert guarded.query_plan["risk_type_codes"] == ["NOT_A_REAL_CODE"]
+
+
+def test_router_sets_target_action_template_route():
+    intent = ReviewIntent(intent_type="data_query")
+    guarded = ReviewIntentRouter._apply_soft_boundary_guard(intent, "需要做什么才能达成目标？")
+    assert guarded.query_type == "risk_progress"
+    assert guarded.preset_template == "target_action_to_hit_goal"
+    assert guarded.query_plan["template_id"] == "target_action_to_hit_goal"
+    assert guarded.query_plan["route"] == "risk_progress"
 
 
 @pytest.mark.parametrize(

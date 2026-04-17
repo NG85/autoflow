@@ -528,14 +528,30 @@ class ReviewDataRetriever:
                 )
         elif query_type == "risk_progress":
             # Risk/progress focused query: skip KPI/detail retrieval.
+            template_id = plan.get("template_id") if isinstance(plan, dict) else None
             risk_type_codes = plan.get("risk_type_codes") if isinstance(plan, dict) else None
             if not isinstance(risk_type_codes, list):
                 risk_type_codes = None
+            if template_id == "target_action_to_hit_goal":
+                risk_type_codes = self._resolve_target_action_risk_type_codes(
+                    db_session=db_session,
+                    session_id=session_id,
+                    department_id=review_session.department_id,
+                )
             risk_universe_map = load_risk_type_name_map(db_session, None)
             if risk_type_codes:
                 risk_type_codes, _ = validate_risk_type_codes(risk_type_codes, risk_universe_map)
-            if not risk_type_codes:
+            if not risk_type_codes and template_id != "target_action_to_hit_goal":
                 risk_type_codes = list(ACHIEVEMENT_RISK_TYPE_CODES_DEFAULT)
+            if template_id == "target_action_to_hit_goal" and not risk_type_codes:
+                ctx.risks = []
+                ctx.progresses = []
+                ctx.query_note = (
+                    "### 达成目标建议\n"
+                    "- 当前 commit 与 gap 持平，未触发“高风险commit”或“upside储备不足”风险筛选。\n"
+                    "- 请持续关注经营洞察卡片中的新增风险。"
+                )
+                return ctx
             risk_name_map = load_risk_type_name_map(db_session, risk_type_codes)
             business_codes, opportunity_codes = split_business_vs_opportunity_risk_codes(risk_type_codes)
             ctx.progresses = []
@@ -593,13 +609,22 @@ class ReviewDataRetriever:
                     f"- 风险类型：{selected_risk_text}。\n"
                     f"- 当前共识别到 {opp_count} 个达成风险商机。\n"
                     f"- 涉及商机：{opp_list_text}。\n"
-                    f"- 请点击页面经营洞察 - {card_hint}，查看风险详情与处置建议。"
+                    + (
+                        f"- 进入经营洞察卡片，点击{card_hint}，再点击查看对应商机列表。"
+                        if template_id == "achievement_risk_overview"
+                        else (
+                            f"- 进入经营洞察卡片，点击{card_hint}中的链接，"
+                            "跳转到商机列表页后查看对应商机。"
+                            if template_id == "target_action_to_hit_goal"
+                            else f"- 进入经营洞察卡片，点击{card_hint}查看对应商机与风险详情。"
+                        )
+                    )
                 )
             else:
                 ctx.query_note = (
                     "### 达成风险查询结果\n"
                     "- 当前未识别到达成风险商机。\n"
-                    "- 请在页面风险卡片中继续关注其他风险。"
+                    f"- 你仍可进入经营洞察卡片，点击{card_hint}继续关注新增风险。"
                 )
             return ctx
         else:
@@ -843,6 +868,53 @@ class ReviewDataRetriever:
             }
             for r in rows
         ]
+
+    def _resolve_target_action_risk_type_codes(
+        self,
+        db_session: Session,
+        session_id: str,
+        department_id: Optional[str],
+    ) -> List[str]:
+        """Resolve risk type by comparing commit_sales vs gap for current session."""
+        K = CRMReviewKpiMetrics
+        stmt = select(K).where(
+            K.session_id == session_id,
+            K.metric_name.in_(["gap", "commit_sales"]),
+        )
+        rows = list(db_session.exec(stmt).all())
+        if not rows:
+            return []
+
+        def _sum_metric(metric: str, scope_type: Optional[str], scope_id: Optional[str] = None) -> Optional[float]:
+            values = []
+            for r in rows:
+                if r.metric_name != metric:
+                    continue
+                if scope_type is not None and r.scope_type != scope_type:
+                    continue
+                if scope_id is not None and r.scope_id != scope_id:
+                    continue
+                if r.metric_value is not None:
+                    values.append(float(r.metric_value))
+            if not values:
+                return None
+            return float(sum(values))
+
+        gap = _sum_metric("gap", "department", department_id) if department_id else None
+        commit = _sum_metric("commit_sales", "department", department_id) if department_id else None
+        if gap is None or commit is None:
+            gap = _sum_metric("gap", "company")
+            commit = _sum_metric("commit_sales", "company")
+        if gap is None or commit is None:
+            gap = _sum_metric("gap", None)
+            commit = _sum_metric("commit_sales", None)
+        if gap is None or commit is None:
+            return []
+        if commit >= gap:
+            return ["ACHIEVEMENT_GAP_COMMIT_HIGH_RISK"]
+        if commit < gap:
+            return ["ACHIEVEMENT_GAP_UPSIDE_INSUFFICIENT"]
+        return []
 
     def _query_risk_opportunity_relations(
         self,

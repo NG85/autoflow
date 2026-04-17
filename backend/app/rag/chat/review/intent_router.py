@@ -173,6 +173,16 @@ class ReviewIntentRouter:
             intent.needs_clarification = False
             intent.clarifying_question = ""
             return intent
+        if intent.preset_template == "target_action_to_hit_goal":
+            intent.query_type = "risk_progress"
+            intent.query_plan = {
+                "template_id": "target_action_to_hit_goal",
+                "route": "risk_progress",
+                "use_kpi": False,
+            }
+            intent.needs_clarification = False
+            intent.clarifying_question = ""
+            return intent
         q = (user_question or "").strip().lower()
         if not q:
             return intent
@@ -261,6 +271,20 @@ class ReviewIntentRouter:
                 "use_kpi": False,
             }
             intent.preset_template = "achievement_risk_overview"
+            intent.needs_clarification = False
+            intent.clarifying_question = ""
+            return intent
+        if (
+            ("达成目标" in q or "完成目标" in q)
+            and ("需要做什么" in q or "怎么做" in q or "如何做" in q)
+        ):
+            intent.query_type = "risk_progress"
+            intent.query_plan = {
+                "template_id": "target_action_to_hit_goal",
+                "route": "risk_progress",
+                "use_kpi": False,
+            }
+            intent.preset_template = "target_action_to_hit_goal"
             intent.needs_clarification = False
             intent.clarifying_question = ""
             return intent

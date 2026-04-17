@@ -160,6 +160,12 @@ lookup question within a review session.
 ## Structured Data
 {{structured_context}}
 
+## Risk Signals (if available)
+{{risk_context}}
+
+## Knowledge Base Clues (if available)
+{{kb_context}}
+
 ## User Question
 {{user_question}}
 
@@ -189,7 +195,9 @@ assumption in one sentence, then provide the data.
 opportunity detail / mismatch lists for stage, forecast status, expected closing date). \
 If the question is outside scope or mismatch dimension is unclear, ask one short \
 clarifying question first.
-12. Keep the answer concise and data-driven.
+12. Keep the answer concise and data-driven, but natural and fluent: \
+start with one-sentence conclusion, then give key evidence points, then a clear next-step suggestion.
+13. If structured data is sparse but Risk Signals / Knowledge Base Clues exist, use them as辅助线索并明确“可能/建议”，不要伪造确定性事实.
 
 Answer:
 """
