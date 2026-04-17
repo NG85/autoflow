@@ -17,12 +17,20 @@ from app.models.crm_review import (
     CRMReviewKpiMetrics,
     CRMReviewOppBranchSnapshot,
     CRMReviewOppRiskProgress,
+    CRMReviewRiskOpportunityRelation,
     CRMReviewSession,
 )
 from app.rag.chat.review.intent_router import ReviewIntent
 from app.rag.chat.review.metric_catalog import (
     AMOUNT_METRIC_NAMES,
     METRIC_DISPLAY_NAMES,
+)
+from app.rag.chat.review.risk_type_helper import (
+    ACHIEVEMENT_RISK_TYPE_CODES_DEFAULT,
+    load_risk_type_name_map,
+    resolve_business_relation_type_names,
+    split_business_vs_opportunity_risk_codes,
+    validate_risk_type_codes,
 )
 
 logger = logging.getLogger(__name__)
@@ -520,7 +528,80 @@ class ReviewDataRetriever:
                 )
         elif query_type == "risk_progress":
             # Risk/progress focused query: skip KPI/detail retrieval.
-            pass
+            risk_type_codes = plan.get("risk_type_codes") if isinstance(plan, dict) else None
+            if not isinstance(risk_type_codes, list):
+                risk_type_codes = None
+            risk_universe_map = load_risk_type_name_map(db_session, None)
+            if risk_type_codes:
+                risk_type_codes, _ = validate_risk_type_codes(risk_type_codes, risk_universe_map)
+            if not risk_type_codes:
+                risk_type_codes = list(ACHIEVEMENT_RISK_TYPE_CODES_DEFAULT)
+            risk_name_map = load_risk_type_name_map(db_session, risk_type_codes)
+            business_codes, opportunity_codes = split_business_vs_opportunity_risk_codes(risk_type_codes)
+            ctx.progresses = []
+            card_hint = "风险卡片"
+            if business_codes and not opportunity_codes:
+                relation_type_names = resolve_business_relation_type_names(business_codes)
+                ctx.risks = self._query_risk_opportunity_relations(
+                    db_session=db_session,
+                    session_id=session_id,
+                    snapshot_period=snapshot_period,
+                    relation_type_names=relation_type_names,
+                )
+                card_hint = "达成风险卡片" if "业绩达成风险" in relation_type_names else "经营洞察卡片"
+            elif opportunity_codes and not business_codes:
+                risks_and_progress = self._query_risk_progress(
+                    db_session, session_id, snapshot_period, intent, risk_type_codes=opportunity_codes
+                )
+                ctx.risks = [
+                    r for r in risks_and_progress if r.get("record_type") in ("RISK", "OPP_SUMMARY")
+                ]
+                card_hint = "商机风险卡片"
+            else:
+                # Mixed selection: merge both chains and keep generic card hint.
+                relation_type_names = resolve_business_relation_type_names(business_codes)
+                relation_risks = self._query_risk_opportunity_relations(
+                    db_session=db_session,
+                    session_id=session_id,
+                    snapshot_period=snapshot_period,
+                    relation_type_names=relation_type_names,
+                ) if business_codes else []
+                opp_risks = self._query_risk_progress(
+                    db_session, session_id, snapshot_period, intent, risk_type_codes=opportunity_codes
+                ) if opportunity_codes else []
+                opp_risks = [r for r in opp_risks if r.get("record_type") in ("RISK", "OPP_SUMMARY")]
+                ctx.risks = relation_risks + opp_risks
+                card_hint = "风险卡片"
+
+            opp_names: List[str] = []
+            for r in ctx.risks:
+                name = (r.get("opportunity_name") or "").strip()
+                if name and name not in opp_names:
+                    opp_names.append(name)
+            if ctx.risks:
+                selected_risk_names = [
+                    risk_name_map.get(code, code)
+                    for code in (risk_type_codes or [])
+                ]
+                selected_risk_text = (
+                    "、".join(selected_risk_names) if selected_risk_names else "达成相关风险"
+                )
+                opp_list_text = "、".join(opp_names) if opp_names else "（未解析到商机名称）"
+                opp_count = len(opp_names) if opp_names else len(ctx.risks)
+                ctx.query_note = (
+                    "### 达成风险查询结果\n"
+                    f"- 风险类型：{selected_risk_text}。\n"
+                    f"- 当前共识别到 {opp_count} 个达成风险商机。\n"
+                    f"- 涉及商机：{opp_list_text}。\n"
+                    f"- 请点击页面经营洞察 - {card_hint}，查看风险详情与处置建议。"
+                )
+            else:
+                ctx.query_note = (
+                    "### 达成风险查询结果\n"
+                    "- 当前未识别到达成风险商机。\n"
+                    "- 请在页面风险卡片中继续关注其他风险。"
+                )
+            return ctx
         else:
             ctx.kpi_metrics = self._query_kpi_metrics(
                 db_session, session_id, intent
@@ -541,7 +622,7 @@ class ReviewDataRetriever:
             )
 
         risks_and_progress = self._query_risk_progress(
-            db_session, session_id, snapshot_period, intent
+            db_session, session_id, snapshot_period, intent, risk_type_codes=None
         )
         ctx.risks = [
             r for r in risks_and_progress if r.get("record_type") in ("RISK", "OPP_SUMMARY")
@@ -762,6 +843,50 @@ class ReviewDataRetriever:
             }
             for r in rows
         ]
+
+    def _query_risk_opportunity_relations(
+        self,
+        db_session: Session,
+        session_id: str,
+        snapshot_period: str,
+        relation_type_names: List[str],
+    ) -> List[Dict[str, Any]]:
+        RR = CRMReviewRiskOpportunityRelation
+        stmt = select(RR).where(
+            RR.session_id == session_id,
+            RR.snapshot_period == snapshot_period,
+        )
+        if relation_type_names:
+            stmt = stmt.where(RR.type_name.in_(relation_type_names))
+        rows = list(db_session.exec(stmt).all())
+        opportunity_ids = [r.opportunity_id for r in rows if getattr(r, "opportunity_id", None)]
+        opp_name_map: Dict[str, str] = {}
+        if opportunity_ids:
+            S = CRMReviewOppBranchSnapshot
+            opp_rows = db_session.exec(
+                select(S).where(
+                    S.snapshot_period == snapshot_period,
+                    S.opportunity_id.in_(opportunity_ids),
+                )
+            ).all()
+            opp_name_map = {
+                o.opportunity_id: (o.opportunity_name or "")
+                for o in opp_rows
+                if getattr(o, "opportunity_id", None)
+            }
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            out.append(
+                {
+                    "record_type": "RISK",
+                    "type_name": r.type_name or "",
+                    "opportunity_id": r.opportunity_id,
+                    "opportunity_name": opp_name_map.get(r.opportunity_id or "", ""),
+                    "owner_id": r.owner_id,
+                    "scope_type": "department_or_company",
+                }
+            )
+        return out
 
     def _snapshot_row_to_detail(self, row: CRMReviewOppBranchSnapshot) -> Dict[str, Any]:
         return {
@@ -993,6 +1118,7 @@ class ReviewDataRetriever:
         session_id: str,
         snapshot_period: str,
         intent: ReviewIntent,
+        risk_type_codes: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         R = CRMReviewOppRiskProgress
         stmt = select(R).where(
@@ -1006,10 +1132,30 @@ class ReviewDataRetriever:
             stmt = stmt.where(R.scope_id == intent.scope_id)
         if intent.opportunity_id:
             stmt = stmt.where(R.opportunity_id == intent.opportunity_id)
+        if risk_type_codes:
+            stmt = stmt.where(R.type_code.in_(risk_type_codes))
 
         stmt = stmt.order_by(R.record_type, R.type_code)
 
         rows = db_session.exec(stmt).all()
+        opportunity_ids = [
+            r.opportunity_id for r in rows
+            if getattr(r, "opportunity_id", None)
+        ]
+        opp_name_map: Dict[str, str] = {}
+        if opportunity_ids:
+            S = CRMReviewOppBranchSnapshot
+            opp_rows = db_session.exec(
+                select(S).where(
+                    S.snapshot_period == snapshot_period,
+                    S.opportunity_id.in_(opportunity_ids),
+                )
+            ).all()
+            opp_name_map = {
+                o.opportunity_id: (o.opportunity_name or "")
+                for o in opp_rows
+                if getattr(o, "opportunity_id", None)
+            }
         return [
             {
                 "record_type": r.record_type,
@@ -1030,6 +1176,7 @@ class ReviewDataRetriever:
                 "scope_type": r.scope_type,
                 "scope_id": r.scope_id,
                 "opportunity_id": r.opportunity_id,
+                "opportunity_name": opp_name_map.get(r.opportunity_id or "", ""),
                 "owner_id": r.owner_id,
             }
             for r in rows

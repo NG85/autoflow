@@ -1525,6 +1525,18 @@ class ChatFlow:
             )
             span.end(output=intent.model_dump())
 
+        # Frontend may pass preset template + template_params via chat context (authoritative over LLM slots).
+        chat_ctx = self.context or {}
+        merged_preset = False
+        if chat_ctx.get("preset_template") is not None:
+            intent.preset_template = chat_ctx.get("preset_template")
+            merged_preset = True
+        if isinstance(chat_ctx.get("template_params"), dict):
+            intent.template_params = chat_ctx["template_params"]
+            merged_preset = True
+        if merged_preset:
+            intent = ReviewIntentRouter._apply_soft_boundary_guard(intent, self.user_question)
+
         logger.info(
             "Review intent: type=%s, metrics=%s, scope=%s",
             intent.intent_type,
@@ -1870,16 +1882,34 @@ class ChatFlow:
                 "user_question": self.user_question,
             },
         ) as span:
-            response_text = self._llm.predict(prompt_template, **format_kwargs)
+            response_text = ""
+            try:
+                # Prefer streaming output for better UX parity with normal chat flow.
+                prompt_text = prompt_template.format(**format_kwargs)
+                stream_resp = self._llm.stream_complete(prompt_text)
+                for chunk in stream_resp:
+                    delta = getattr(chunk, "delta", None)
+                    if not delta:
+                        delta = getattr(chunk, "text", "") or ""
+                    if not delta:
+                        continue
+                    response_text += delta
+                    yield ChatEvent(
+                        event_type=ChatEventType.TEXT_PART,
+                        payload=delta,
+                    )
+            except Exception as e:
+                logger.warning("Review answer streaming failed; fallback to non-streaming predict: %s", e)
+                response_text = self._llm.predict(prompt_template, **format_kwargs)
+                if response_text:
+                    yield ChatEvent(
+                        event_type=ChatEventType.TEXT_PART,
+                        payload=response_text,
+                    )
             span.end(output=response_text)
 
         if not response_text:
             response_text = "未能生成回答，请稍后重试。"
-
-        yield ChatEvent(
-            event_type=ChatEventType.TEXT_PART,
-            payload=response_text,
-        )
 
         yield from self._chat_finish(
             db_assistant_message=db_assistant_message,

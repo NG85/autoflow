@@ -1111,6 +1111,42 @@ class CRMReviewOppRiskProgress(SQLModel, table=True):
     )
 
 
+class CRMReviewRiskCategory(SQLModel, table=True):
+    """Risk category dictionary (code/name/group) for review risk typing."""
+
+    model_config = {"from_attributes": True}
+
+    __tablename__ = "crm_review_risk_category"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    unique_id: str = Field(sa_column=Column(String(255), nullable=False))
+    code: str = Field(sa_column=Column(String(64), nullable=False))
+    name_zh: str = Field(sa_column=Column(String(128), nullable=False))
+    name_en: Optional[str] = Field(default=None, sa_column=Column(String(128)))
+    category_group: Optional[str] = Field(default=None, sa_column=Column(String(64)))
+    is_active: Optional[bool] = Field(default=True, sa_column=Column(Boolean, default=True))
+    sort_order: Optional[int] = Field(default=None, sa_column=Column(Integer))
+    created_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime, nullable=False, server_default=func.now()),
+    )
+    updated_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(
+            DateTime,
+            nullable=False,
+            server_default=func.now(),
+            onupdate=func.now(),
+        ),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("code", name="code"),
+        Index("idx_category_group", "category_group"),
+        Index("idx_is_active", "is_active"),
+    )
+
+
 class CRMReviewRiskOpportunityRelation(SQLModel, table=True):
     """Risk to opportunity relation for review insights."""
 

@@ -51,6 +51,10 @@ Return a JSON object with the following fields:
     "opportunity_name_keyword": "<short name substring or null>",
     "query_type": "kpi_aggregation" | "opportunity_detail" | "mismatch_list" | "risk_progress" | null,
     "mismatch_type": "stage" | "forecast" | "close_date" | null,
+    "preset_template": "<template id or null>",
+    "template_params": {
+        "risk_type_codes": ["<type_code>", "..."]
+    },
     "detail_filters": {
         "owner_name": "<string, optional>",
         "opportunity_stage": "<string, optional>",
@@ -60,6 +64,7 @@ Return a JSON object with the following fields:
         "forecast_amount_value": "<number, optional>"
     },
     "query_plan": {
+        "template_id": "<template id or null>",
         "route": "kpi_aggregation" | "opportunity_detail" | "mismatch_list" | "risk_progress",
         "mismatch_type": "stage" | "forecast" | "close_date" | null,
         "detail_filters": {},
@@ -113,6 +118,10 @@ implicit keyword matching: \
 query for owner/stage/forecast/amount/expected close date if available.
 - **query_plan**: provide an executable plan for retriever. Keep it concise and consistent \
 with `query_type` and slots.
+- **preset_template**: if frontend passes a preset template ID, keep it unchanged. \
+For preset templates, prefer fixed route/filters in `query_plan` instead of free-form inference.
+- **template_params**: optional structured args for a preset (e.g. `risk_type_codes` for \
+`achievement_risk_overview`). Backend validates against an allowlist; omit or use [] to mean defaults.
 - **intent_confidence**: confidence in [0,1]. If confidence < 0.6 and ambiguity may affect \
 retrieval correctness, set `needs_clarification=true`.
 - **accuracy-first extraction**: do not guess slot values when the user expression is vague. \

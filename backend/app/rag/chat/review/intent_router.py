@@ -7,9 +7,9 @@ from llama_index.core.prompts.rich import RichPromptTemplate
 from pydantic import BaseModel, Field
 
 from app.rag.chat.review.prompts import REVIEW_INTENT_CLASSIFICATION_PROMPT
+from app.rag.chat.review.risk_type_helper import resolve_requested_risk_type_codes
 
 logger = logging.getLogger(__name__)
-
 
 class ReviewIntent(BaseModel):
     intent_type: Literal["data_query", "root_cause", "strategy"] = Field(
@@ -67,6 +67,20 @@ class ReviewIntent(BaseModel):
     query_plan: Dict[str, Any] = Field(
         default_factory=dict,
         description="Executable retrieval plan used by downstream retriever.",
+    )
+    preset_template: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional frontend preset template identifier. "
+            "When provided, backend should execute fixed retrieval logic."
+        ),
+    )
+    template_params: Dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Optional parameters for preset_template (e.g. risk_type_codes override). "
+            "Must stay within backend-supported ranges."
+        ),
     )
     intent_confidence: float = Field(
         default=0.0,
@@ -137,9 +151,27 @@ class ReviewIntentRouter:
         return text.strip()
 
     @staticmethod
+    def _resolve_achievement_risk_type_codes(intent: ReviewIntent) -> List[str]:
+        """Resolve risk_type_codes from template params with defaults and dedup."""
+        return resolve_requested_risk_type_codes(intent.template_params)
+
+    @staticmethod
     def _apply_soft_boundary_guard(intent: ReviewIntent, user_question: str) -> ReviewIntent:
         """Apply lightweight boundary rules for precision-first data_query."""
         if intent.intent_type != "data_query":
+            return intent
+        # Frontend preset templates should use fixed backend execution logic.
+        if intent.preset_template == "achievement_risk_overview":
+            risk_codes = ReviewIntentRouter._resolve_achievement_risk_type_codes(intent)
+            intent.query_type = "risk_progress"
+            intent.query_plan = {
+                "template_id": "achievement_risk_overview",
+                "route": "risk_progress",
+                "risk_type_codes": risk_codes,
+                "use_kpi": False,
+            }
+            intent.needs_clarification = False
+            intent.clarifying_question = ""
             return intent
         q = (user_question or "").strip().lower()
         if not q:
@@ -214,6 +246,23 @@ class ReviewIntentRouter:
             intent.clarifying_question = (
                 "你想看哪一类差异：商机阶段、预测状态，还是预计成交日期？"
             )
+            return intent
+        # Preset MVP #1: "当前业绩有哪些达成风险？"
+        if (
+            ("达成风险" in q or "业绩风险" in q)
+            and ("当前" in q or "本期" in q or "目前" in q)
+        ):
+            risk_codes = ReviewIntentRouter._resolve_achievement_risk_type_codes(intent)
+            intent.query_type = "risk_progress"
+            intent.query_plan = {
+                "template_id": "achievement_risk_overview",
+                "route": "risk_progress",
+                "risk_type_codes": risk_codes,
+                "use_kpi": False,
+            }
+            intent.preset_template = "achievement_risk_overview"
+            intent.needs_clarification = False
+            intent.clarifying_question = ""
             return intent
 
         # Route normalization: keep backward compatibility while making retrieval explicit.

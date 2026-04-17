@@ -258,6 +258,225 @@ def test_retrieve_passes_current_owner_context_for_self_queries(monkeypatch):
     assert captured["owner_name"] == "张三"
 
 
+def test_retrieve_risk_progress_route_for_achievement_gap_preset(monkeypatch):
+    retriever = ReviewDataRetriever()
+    review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
+    intent = ReviewIntent(
+        intent_type="data_query",
+        query_plan={
+            "route": "risk_progress",
+            "risk_type_codes": [
+                "ACHIEVEMENT_GAP_COMMIT_HIGH_RISK",
+                "ACHIEVEMENT_GAP_UPSIDE_INSUFFICIENT",
+            ],
+            "use_kpi": False,
+        },
+    )
+    captured = {"relation_type_names": None}
+
+    def _mock_risk_relation(*args, **kwargs):
+        captured["relation_type_names"] = kwargs.get("relation_type_names")
+        return [
+            {
+                "opportunity_id": "opp_1",
+                "opportunity_name": "华北大单",
+                "type_name": "业绩达成风险",
+            },
+            {
+                "opportunity_id": "opp_2",
+                "opportunity_name": "华东续签",
+                "type_name": "业绩达成风险",
+            },
+        ]
+
+    monkeypatch.setattr(retriever, "_query_kpi_metrics", lambda *a, **k: pytest.fail("kpi should not be called"))
+    monkeypatch.setattr(retriever, "_query_snapshot_aggregations", lambda *a, **k: pytest.fail("agg should not be called"))
+    monkeypatch.setattr(retriever, "_query_typical_opportunity_details", lambda *a, **k: pytest.fail("detail should not be called"))
+    monkeypatch.setattr(retriever, "_query_risk_progress", lambda *a, **k: pytest.fail("opp risk chain should not be called"))
+    monkeypatch.setattr(retriever, "_query_risk_opportunity_relations", _mock_risk_relation)
+
+    ctx = retriever.retrieve(
+        db_session=None,
+        review_session=review_session,
+        intent=intent,
+        user_question="当前业绩有哪些达成风险？",
+    )
+    assert captured["relation_type_names"] == ["业绩达成风险"]
+    assert len(ctx.risks) == 2
+    assert "风险类型：有高风险commit商机、commit商机储备不足风险" in (ctx.query_note or "")
+    assert "2 个达成风险商机" in (ctx.query_note or "")
+    assert "华北大单、华东续签" in (ctx.query_note or "")
+    assert "达成风险卡片" in (ctx.query_note or "")
+
+
+def test_retrieve_risk_progress_counts_unique_opportunities(monkeypatch):
+    retriever = ReviewDataRetriever()
+    review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
+    intent = ReviewIntent(
+        intent_type="data_query",
+        query_plan={
+            "route": "risk_progress",
+            "risk_type_codes": [
+                "ACHIEVEMENT_GAP_COMMIT_HIGH_RISK",
+                "ACHIEVEMENT_GAP_UPSIDE_INSUFFICIENT",
+            ],
+            "use_kpi": False,
+        },
+    )
+
+    monkeypatch.setattr(
+        retriever,
+        "_query_risk_opportunity_relations",
+        lambda *a, **k: [
+            {
+                "opportunity_id": "opp_1",
+                "opportunity_name": "华北大单",
+                "type_name": "业绩达成风险",
+            },
+            {
+                "opportunity_id": "opp_1",
+                "opportunity_name": "华北大单",
+                "type_name": "业绩达成风险",
+            },
+        ],
+    )
+    monkeypatch.setattr(retriever, "_query_risk_progress", lambda *a, **k: pytest.fail("opp risk chain should not be called"))
+    ctx = retriever.retrieve(
+        db_session=None,
+        review_session=review_session,
+        intent=intent,
+        user_question="当前业绩有哪些达成风险？",
+    )
+    assert "1 个达成风险商机" in (ctx.query_note or "")
+
+
+def test_retrieve_risk_progress_filters_type_codes_by_risk_universe(monkeypatch):
+    retriever = ReviewDataRetriever()
+    review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
+    intent = ReviewIntent(
+        intent_type="data_query",
+        query_plan={
+            "route": "risk_progress",
+            "risk_type_codes": ["NOT_A_REAL_CODE"],
+            "use_kpi": False,
+        },
+    )
+    captured = {}
+
+    def _mock_risk_relation(*args, **kwargs):
+        captured["relation_type_names"] = kwargs.get("relation_type_names")
+        return []
+
+    monkeypatch.setattr(retriever, "_query_risk_progress", lambda *a, **k: pytest.fail("opp risk chain should not be called"))
+    monkeypatch.setattr(retriever, "_query_risk_opportunity_relations", _mock_risk_relation)
+    retriever.retrieve(
+        db_session=None,
+        review_session=review_session,
+        intent=intent,
+        user_question="当前业绩有哪些达成风险？",
+    )
+    assert captured["relation_type_names"] == ["业绩达成风险"]
+
+
+def test_retrieve_risk_progress_opportunity_level_types_use_opp_risk_chain(monkeypatch):
+    retriever = ReviewDataRetriever()
+    review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
+    intent = ReviewIntent(
+        intent_type="data_query",
+        query_plan={
+            "route": "risk_progress",
+            "risk_type_codes": ["CUSTOMER_DECISION_RISK"],
+            "use_kpi": False,
+        },
+    )
+    captured = {}
+    monkeypatch.setattr(
+        "app.rag.chat.review.data_retriever.load_risk_type_name_map",
+        lambda _db, _codes=None: {"CUSTOMER_DECISION_RISK": "客户决策风险"},
+    )
+
+    def _mock_risk_progress(*args, **kwargs):
+        captured["risk_type_codes"] = kwargs.get("risk_type_codes")
+        return [
+            {
+                "record_type": "RISK",
+                "type_code": "CUSTOMER_DECISION_RISK",
+                "opportunity_id": "opp_x",
+                "opportunity_name": "客户A续签",
+            }
+        ]
+
+    monkeypatch.setattr(retriever, "_query_risk_opportunity_relations", lambda *a, **k: pytest.fail("business risk chain should not be called"))
+    monkeypatch.setattr(retriever, "_query_risk_progress", _mock_risk_progress)
+    ctx = retriever.retrieve(
+        db_session=None,
+        review_session=review_session,
+        intent=intent,
+        user_question="当前业绩有哪些达成风险？",
+    )
+    assert captured["risk_type_codes"] == ["CUSTOMER_DECISION_RISK"]
+    assert "商机风险卡片" in (ctx.query_note or "")
+
+
+def test_router_respects_frontend_preset_template_for_achievement_risk():
+    intent = ReviewIntent(
+        intent_type="data_query",
+        preset_template="achievement_risk_overview",
+        query_type="kpi_aggregation",
+    )
+    guarded = ReviewIntentRouter._apply_soft_boundary_guard(intent, "任意文案")
+    assert guarded.query_type == "risk_progress"
+    assert guarded.query_plan["template_id"] == "achievement_risk_overview"
+    assert guarded.query_plan["route"] == "risk_progress"
+    assert guarded.query_plan["risk_type_codes"] == [
+        "ACHIEVEMENT_GAP_COMMIT_HIGH_RISK",
+        "ACHIEVEMENT_GAP_UPSIDE_INSUFFICIENT",
+    ]
+
+
+def test_router_template_params_filters_achievement_risk_type_codes():
+    intent = ReviewIntent(
+        intent_type="data_query",
+        preset_template="achievement_risk_overview",
+        template_params={
+            "risk_type_codes": [
+                "ACHIEVEMENT_GAP_UPSIDE_INSUFFICIENT",
+                "ACHIEVEMENT_GAP_COMMIT_HIGH_RISK",
+                "UNKNOWN_CODE",
+            ],
+        },
+    )
+    guarded = ReviewIntentRouter._apply_soft_boundary_guard(intent, "x")
+    assert guarded.query_plan["risk_type_codes"] == [
+        "ACHIEVEMENT_GAP_UPSIDE_INSUFFICIENT",
+        "ACHIEVEMENT_GAP_COMMIT_HIGH_RISK",
+        "UNKNOWN_CODE",
+    ]
+
+
+def test_router_template_params_empty_list_falls_back_to_default_achievement_codes():
+    intent = ReviewIntent(
+        intent_type="data_query",
+        preset_template="achievement_risk_overview",
+        template_params={"risk_type_codes": []},
+    )
+    guarded = ReviewIntentRouter._apply_soft_boundary_guard(intent, "x")
+    assert guarded.query_plan["risk_type_codes"] == [
+        "ACHIEVEMENT_GAP_COMMIT_HIGH_RISK",
+        "ACHIEVEMENT_GAP_UPSIDE_INSUFFICIENT",
+    ]
+
+
+def test_router_template_params_only_invalid_codes_are_kept_for_retriever_validation():
+    intent = ReviewIntent(
+        intent_type="data_query",
+        preset_template="achievement_risk_overview",
+        template_params={"risk_type_codes": ["NOT_A_REAL_CODE"]},
+    )
+    guarded = ReviewIntentRouter._apply_soft_boundary_guard(intent, "x")
+    assert guarded.query_plan["risk_type_codes"] == ["NOT_A_REAL_CODE"]
+
+
 @pytest.mark.parametrize(
     "question,expected_route,expected_mismatch",
     [
@@ -286,6 +505,11 @@ def test_retrieve_passes_current_owner_context_for_self_queries(monkeypatch):
             "opportunity_detail",
             None,
         ),
+        (
+            "当前业绩有哪些达成风险？",
+            "risk_progress",
+            None,
+        ),
     ],
 )
 def test_preset_question_router_guardrails(question, expected_route, expected_mismatch):
@@ -297,6 +521,13 @@ def test_preset_question_router_guardrails(question, expected_route, expected_mi
     if expected_mismatch is not None:
         assert guarded.mismatch_type == expected_mismatch
         assert guarded.query_plan["mismatch_type"] == expected_mismatch
+    if expected_route == "risk_progress":
+        assert guarded.preset_template == "achievement_risk_overview"
+        assert guarded.query_plan["template_id"] == "achievement_risk_overview"
+        assert guarded.query_plan["risk_type_codes"] == [
+            "ACHIEVEMENT_GAP_COMMIT_HIGH_RISK",
+            "ACHIEVEMENT_GAP_UPSIDE_INSUFFICIENT",
+        ]
 
 
 @pytest.mark.parametrize(
