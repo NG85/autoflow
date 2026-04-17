@@ -202,6 +202,8 @@ clarifying question first.
 13. For ranking/comparison questions, explicitly name the top item first, then briefly mention 1-3 other items for context.
 14. If structured data is sparse but Risk Signals / Knowledge Base Clues exist, use them as辅助线索并明确“可能/建议”，不要伪造确定性事实.
 15. If the provided context already includes explicit "查看路径" or "建议动作" wording (e.g., from query_note), prioritize reusing that wording in your final answer instead of rewriting it with different terms.
+16. 面向销售人员回答：优先使用业务口语（如“签单机会”“跟进动作”“风险点”），避免输出数据库字段名、表名、代码术语。
+17. 保持“结论-证据-路径/动作”的回答骨架，但表达不要模板化重复；可按问题类型自然调整语气（盘点类、对比类、行动建议类）。
 
 Answer:
 """

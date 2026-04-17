@@ -6,8 +6,9 @@ structured context objects that can be serialized into LLM-readable text.
 
 import logging
 import re
+from collections import defaultdict
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 from sqlalchemy import or_
@@ -27,6 +28,8 @@ from app.rag.chat.review.metric_catalog import (
 )
 from app.rag.chat.review.risk_type_helper import (
     ACHIEVEMENT_RISK_TYPE_CODES_DEFAULT,
+    BUSINESS_RISK_TYPE_CODES,
+    load_risk_code_meta,
     load_risk_type_name_map,
     resolve_business_relation_type_names,
     split_business_vs_opportunity_risk_codes,
@@ -331,6 +334,10 @@ class ReviewDataContext(BaseModel):
     )
     risks: List[Dict[str, Any]] = Field(default_factory=list)
     progresses: List[Dict[str, Any]] = Field(default_factory=list)
+    risk_category_breakdown: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Per category_group stats for opportunity-level RISK rows.",
+    )
     comparison_data: Optional[Dict[str, Any]] = None
     query_note: Optional[str] = None
 
@@ -341,6 +348,7 @@ class ReviewDataContext(BaseModel):
             and not self.opportunity_snapshot_rows
             and not self.risks
             and not self.progresses
+            and not self.risk_category_breakdown
             and not self.query_note
         )
 
@@ -392,27 +400,51 @@ class ReviewDataContext(BaseModel):
                         f"{row.get('ai_label')}={row.get('ai_value') or ''}"
                     )
         elif self.snapshot_aggregations:
-            parts.append("\n### Opportunity Snapshot Aggregations")
+            parts.append("\n### 商机分组汇总")
             for agg in self.snapshot_aggregations:
                 parts.append(
-                    f"- {agg.get('group_label', 'N/A')}: "
-                    f"count={agg.get('count', 0)}, "
-                    f"total_amount={agg.get('total_amount', 0)}"
+                    f"- {agg.get('group_label', 'N/A')}："
+                    f"商机数={agg.get('count', 0)}，"
+                    f"签约金额合计={agg.get('total_amount', 0)}"
                 )
 
         if self.comparison_data:
-            parts.append("\n### Period Comparison")
+            parts.append("\n### 周期对比")
             for key, val in self.comparison_data.items():
                 parts.append(f"- {key}: {val}")
 
-        return "\n".join(parts) if parts else "(No structured data available)"
+        if self.risk_category_breakdown:
+            parts.append("\n### 商机风险分类统计")
+            for block in self.risk_category_breakdown:
+                cg = block.get("category_group", "")
+                cnt = block.get("opportunity_count", 0)
+                names = block.get("opportunity_names") or []
+                shown = names[:25]
+                suffix = f" 等共 {cnt} 个" if len(names) > len(shown) else ""
+                parts.append(
+                    f"- **{cg}**：{cnt} 个商机 — "
+                    f"{('、'.join(shown) if shown else '（无商机名）')}{suffix}"
+                )
+                for t in block.get("by_risk_type") or []:
+                    tc = t.get("type_code", "")
+                    tname = t.get("name_zh", tc)
+                    tcnt = t.get("opportunity_count", 0)
+                    tnames = t.get("opportunity_names") or []
+                    tshown = tnames[:15]
+                    tsfx = f" 等共 {tcnt} 个" if len(tnames) > len(tshown) else ""
+                    parts.append(
+                        f"  - {tname}（{tc}）：{tcnt} 个商机 — "
+                        f"{('、'.join(tshown) if tshown else '（无商机名）')}{tsfx}"
+                    )
+
+        return "\n".join(parts) if parts else "（暂时没有可展示的数据）"
 
     def to_risk_context_text(self) -> str:
         """Serialize risk/progress signals to LLM-readable text."""
         parts: List[str] = []
 
         if self.risks:
-            parts.append("### Risks")
+            parts.append("### 风险信号")
             for r in self.risks:
                 severity = r.get("severity", "")
                 sev_tag = f" [{severity}]" if severity else ""
@@ -421,25 +453,25 @@ class ReviewDataContext(BaseModel):
                     f"{r.get('summary', r.get('detail_description', 'N/A'))}"
                 )
                 if r.get("gap_description"):
-                    parts.append(f"  Gap: {r['gap_description']}")
+                    parts.append(f"  差距说明：{r['gap_description']}")
                 if r.get("financial_impact") is not None:
-                    parts.append(f"  Financial impact: {r['financial_impact']}")
+                    parts.append(f"  影响金额：{r['financial_impact']}")
                 if r.get("solution"):
-                    parts.append(f"  Suggested action: {r['solution']}")
+                    parts.append(f"  建议动作：{r['solution']}")
                 if r.get("detail_description") and r.get("detail_description") != r.get("summary"):
-                    parts.append(f"  Detail: {r['detail_description']}")
+                    parts.append(f"  详情：{r['detail_description']}")
 
         if self.progresses:
-            parts.append("\n### Progress Signals")
+            parts.append("\n### 进展信号")
             for p in self.progresses:
                 parts.append(
                     f"- {p.get('type_name', p.get('type_code', ''))}: "
                     f"{p.get('summary', p.get('detail_description', 'N/A'))}"
                 )
                 if p.get("solution"):
-                    parts.append(f"  Next step: {p['solution']}")
+                    parts.append(f"  下一步建议：{p['solution']}")
 
-        return "\n".join(parts) if parts else "(No risk/progress signals)"
+        return "\n".join(parts) if parts else "（暂无风险/进展信号）"
 
 
 class ReviewDataRetriever:
@@ -530,6 +562,7 @@ class ReviewDataRetriever:
         elif query_type == "risk_progress":
             # Risk/progress focused query: skip KPI/detail retrieval.
             risk_type_codes = plan.get("risk_type_codes") if isinstance(plan, dict) else None
+            force_opportunity_scope_all = False
             if not isinstance(risk_type_codes, list):
                 risk_type_codes = None
             if template_id == "target_action_to_hit_goal":
@@ -541,10 +574,22 @@ class ReviewDataRetriever:
             risk_universe_map = load_risk_type_name_map(db_session, None)
             if risk_type_codes:
                 risk_type_codes, _ = validate_risk_type_codes(risk_type_codes, risk_universe_map)
+            # For normal (non-template) risk questions:
+            # - department/company scope -> business-risk relation chain
+            # - opportunity/customer/owner scope -> opp risk-progress chain
+            # - unspecified scope -> merge both chains
+            if not template_id and not risk_type_codes:
+                scope = (intent.scope_type or "").strip().lower()
+                if scope in ("department", "company"):
+                    risk_type_codes = list(BUSINESS_RISK_TYPE_CODES)
+                elif scope in ("opportunity", "customer", "owner"):
+                    risk_type_codes = []
+                    force_opportunity_scope_all = True
             if not risk_type_codes and template_id not in (
                 "target_action_to_hit_goal",
                 "focus_risky_opportunities",
-            ):
+                "opportunity_risk_taxonomy",
+            ) and not force_opportunity_scope_all:
                 risk_type_codes = list(ACHIEVEMENT_RISK_TYPE_CODES_DEFAULT)
             if template_id == "target_action_to_hit_goal" and not risk_type_codes:
                 ctx.risks = []
@@ -573,10 +618,17 @@ class ReviewDataRetriever:
                 opp_count = len(opp_names) if opp_names else len(ctx.risks)
                 opp_list_text = "、".join(opp_names) if opp_names else "（未解析到商机名称）"
                 if ctx.risks:
+                    top_solutions = self._collect_top_solutions(ctx.risks, limit=1)
+                    action_line = (
+                        f"- 可优先动作：{top_solutions[0]}。\n"
+                        if top_solutions
+                        else ""
+                    )
                     ctx.query_note = (
                         "### 重点关注商机\n"
                         f"- 当前结论：共识别到 {opp_count} 个需重点关注的风险商机。\n"
                         f"- 涉及商机：{opp_list_text}。\n"
+                        f"{action_line}"
                         "- 查看路径：点击商机评估Agent，筛选有风险的商机，点击商机详情。"
                     )
                 else:
@@ -584,6 +636,47 @@ class ReviewDataRetriever:
                         "### 重点关注商机\n"
                         "- 当前结论：暂未识别到风险商机。\n"
                         "- 建议动作：点击商机评估Agent，筛选有风险的商机，持续关注新增风险后再查看商机详情。"
+                    )
+                return ctx
+            if template_id == "opportunity_risk_taxonomy":
+                breakdown, note = self._build_opportunity_risk_taxonomy_breakdown(
+                    db_session=db_session,
+                    session_id=session_id,
+                    snapshot_period=snapshot_period,
+                    intent=intent,
+                )
+                ctx.risk_category_breakdown = breakdown
+                ctx.risks = []
+                ctx.progresses = []
+                ctx.query_note = note
+                return ctx
+            if not template_id and force_opportunity_scope_all:
+                risks_and_progress = self._query_risk_progress(
+                    db_session, session_id, snapshot_period, intent, risk_type_codes=None
+                )
+                ctx.risks = [
+                    r for r in risks_and_progress if r.get("record_type") in ("RISK", "OPP_SUMMARY")
+                ]
+                card_hint = "商机风险卡片"
+                opp_names: List[str] = []
+                for r in ctx.risks:
+                    name = (r.get("opportunity_name") or "").strip()
+                    if name and name not in opp_names:
+                        opp_names.append(name)
+                opp_list_text = "、".join(opp_names) if opp_names else "（未解析到商机名称）"
+                opp_count = len(opp_names) if opp_names else len(ctx.risks)
+                if ctx.risks:
+                    ctx.query_note = (
+                        "### 风险查询结果\n"
+                        f"- 当前结论：共识别到 {opp_count} 个风险商机。\n"
+                        f"- 风险与对象：范围为商机/客户级风险，涉及商机包括 {opp_list_text}。\n"
+                        f"- 查看路径：进入经营洞察卡片，点击{card_hint}查看商机与风险详情。"
+                    )
+                else:
+                    ctx.query_note = (
+                        "### 风险查询结果\n"
+                        f"- 当前结论：暂未识别到风险商机。\n"
+                        f"- 建议动作：进入经营洞察卡片，点击{card_hint}持续关注新增风险。"
                     )
                 return ctx
             risk_name_map = load_risk_type_name_map(db_session, risk_type_codes)
@@ -647,12 +740,34 @@ class ReviewDataRetriever:
                     )
                 else:
                     path_text = f"- 查看路径：进入经营洞察卡片，点击{card_hint}查看商机与风险详情。"
-                ctx.query_note = (
-                    "### 达成风险查询结果\n"
-                    f"- 当前结论：共识别到 {opp_count} 个达成风险商机。\n"
-                    f"- 风险与对象：风险类型为{selected_risk_text}，涉及商机包括 {opp_list_text}。\n"
-                    f"{path_text}"
-                )
+                if template_id == "target_action_to_hit_goal":
+                    top_solutions = self._collect_top_solutions(ctx.risks, limit=3)
+                    action_text = (
+                        f"- 建议动作（优先执行）：{'；'.join(top_solutions)}。\n"
+                        if top_solutions
+                        else "- 建议动作：优先处理高风险商机并跟进关键阻塞点。\n"
+                    )
+                    ctx.query_note = (
+                        "### 达成目标建议\n"
+                        f"- 当前结论：共识别到 {opp_count} 个需要优先处理的风险商机。\n"
+                        f"- 重点对象：涉及商机包括 {opp_list_text}。\n"
+                        f"{action_text}"
+                        f"{path_text}"
+                    )
+                else:
+                    top_solutions = self._collect_top_solutions(ctx.risks, limit=1)
+                    action_line = (
+                        f"- 可优先动作：{top_solutions[0]}。\n"
+                        if top_solutions
+                        else ""
+                    )
+                    ctx.query_note = (
+                        "### 达成风险查询结果\n"
+                        f"- 当前结论：共识别到 {opp_count} 个达成风险商机。\n"
+                        f"- 风险与对象：风险类型为{selected_risk_text}，涉及商机包括 {opp_list_text}。\n"
+                        f"{action_line}"
+                        f"{path_text}"
+                    )
             else:
                 ctx.query_note = (
                     "### 达成风险查询结果\n"
@@ -1282,6 +1397,176 @@ class ReviewDataRetriever:
             }
             for r in rows
         ]
+
+    @staticmethod
+    def _risk_taxonomy_ordered_names(
+        opp_ids: set,
+        id_to_display: Dict[str, str],
+    ) -> List[str]:
+        missing_oid = "__missing_opportunity_id__"
+        names: List[str] = []
+        seen: set[str] = set()
+        for oid in opp_ids:
+            if oid == missing_oid:
+                disp = id_to_display.get(missing_oid, "未知商机")
+            else:
+                disp = (id_to_display.get(oid) or oid or "").strip()
+            if not disp:
+                continue
+            if disp not in seen:
+                seen.add(disp)
+                names.append(disp)
+        names.sort()
+        return names
+
+    @staticmethod
+    def _collect_top_solutions(
+        rows: List[Dict[str, Any]],
+        limit: int = 3,
+    ) -> List[str]:
+        solutions: List[str] = []
+        seen: set[str] = set()
+        for row in rows:
+            s = str(row.get("solution") or "").strip()
+            if not s or s in seen:
+                continue
+            seen.add(s)
+            solutions.append(s)
+            if len(solutions) >= limit:
+                break
+        return solutions
+
+    def _build_opportunity_risk_taxonomy_breakdown(
+        self,
+        db_session: Session,
+        session_id: str,
+        snapshot_period: str,
+        intent: ReviewIntent,
+    ) -> Tuple[List[Dict[str, Any]], str]:
+        """Aggregate RISK rows by crm_review_risk_category.category_group (+ per type_code)."""
+        meta = load_risk_code_meta(db_session)
+        rows = self._query_risk_progress(
+            db_session,
+            session_id,
+            snapshot_period,
+            intent,
+            risk_type_codes=None,
+        )
+        risk_rows = [r for r in rows if r.get("record_type") == "RISK"]
+        missing_oid = "__missing_opportunity_id__"
+        cat_opp: Dict[str, set] = defaultdict(set)
+        cat_type_opp: Dict[str, Dict[str, set]] = defaultdict(
+            lambda: defaultdict(set)
+        )
+        cat_type_name: Dict[str, Dict[str, str]] = defaultdict(dict)
+        cat_solutions: Dict[str, List[str]] = defaultdict(list)
+        id_to_display: Dict[str, str] = {}
+
+        for r in risk_rows:
+            code_raw = str(r.get("type_code") or "").strip()
+            code = code_raw or "__MISSING_TYPE_CODE__"
+            row_meta = meta.get(code_raw) if code_raw else None
+            if row_meta:
+                cg = row_meta["category_group"]
+                name_zh = row_meta["name_zh"]
+            else:
+                cg = "未在配置表命中"
+                name_zh = (str(r.get("type_name") or "").strip() or code)
+            oid = str(r.get("opportunity_id") or "").strip()
+            if not oid:
+                oid = missing_oid
+            oname = (r.get("opportunity_name") or "").strip()
+            display = oname or ("" if oid == missing_oid else oid)
+            if oid == missing_oid:
+                id_to_display.setdefault(missing_oid, "未知商机")
+            elif display:
+                id_to_display[oid] = display
+            cat_opp[cg].add(oid)
+            cat_type_opp[cg][code].add(oid)
+            cat_type_name[cg][code] = name_zh
+            solution = str(r.get("solution") or "").strip()
+            if solution and solution not in cat_solutions[cg]:
+                cat_solutions[cg].append(solution)
+
+        breakdown: List[Dict[str, Any]] = []
+        for cg, opp_ids in cat_opp.items():
+            by_types: List[Dict[str, Any]] = []
+            for tcode, oset in sorted(
+                cat_type_opp[cg].items(),
+                key=lambda x: (-len(x[1]), x[0]),
+            ):
+                by_types.append(
+                    {
+                        "type_code": tcode,
+                        "name_zh": cat_type_name[cg].get(tcode, tcode),
+                        "opportunity_count": len(oset),
+                        "opportunity_names": self._risk_taxonomy_ordered_names(
+                            oset, id_to_display
+                        ),
+                    }
+                )
+            breakdown.append(
+                {
+                    "category_group": cg,
+                    "opportunity_count": len(opp_ids),
+                    "opportunity_names": self._risk_taxonomy_ordered_names(
+                        opp_ids, id_to_display
+                    ),
+                    "by_risk_type": by_types,
+                }
+            )
+
+        breakdown.sort(
+            key=lambda b: (-b["opportunity_count"], str(b["category_group"]))
+        )
+
+        path_line = (
+            "- 查看路径：点击商机评估Agent，筛选有风险的商机，点击商机详情。"
+        )
+        if not breakdown:
+            return (
+                [],
+                "### 商机风险分类统计\n"
+                "- 当前结论：本期在商机风险进度中暂未识别到 RISK 记录。\n"
+                "- 说明：风险类型范围以系统当前风险配置为准；以下为本期统计结果。\n"
+                f"{path_line}",
+            )
+
+        all_opp_ids: set[str] = set()
+        for s in cat_opp.values():
+            all_opp_ids |= s
+        total_opp = len(all_opp_ids)
+        n_cat = len(breakdown)
+
+        lines = [
+            "### 商机风险分类统计",
+            f"- 当前结论：按配置表风险类别汇总，本期共 {n_cat} 个类别出现风险命中，"
+            f"涉及 {total_opp} 个不同商机。",
+            "- 分类明细：",
+        ]
+        for b in breakdown:
+            cg = b["category_group"]
+            cnt = b["opportunity_count"]
+            names = b["opportunity_names"]
+            shown = names[:12]
+            tail = f" 等共 {cnt} 个" if len(names) > len(shown) else ""
+            lines.append(
+                f"  - **{cg}**：{cnt} 个商机 — "
+                f"{('、'.join(shown) if shown else '（无可用商机名称）')}{tail}"
+            )
+            if cat_solutions.get(cg):
+                lines.append(f"    · 建议动作参考：{'；'.join(cat_solutions[cg][:2])}")
+            for t in b.get("by_risk_type") or []:
+                tcnt = t["opportunity_count"]
+                tnames = t["opportunity_names"]
+                tshown = tnames[:8]
+                ttail = f" 等共 {tcnt} 个" if len(tnames) > len(tshown) else ""
+                lines.append(
+                    f"    · {t['name_zh']}（{t['type_code']}）：{tcnt} 个商机 — "
+                    f"{('、'.join(tshown) if tshown else '（无可用商机名称）')}{ttail}"
+                )
+        lines.append(path_line)
+        return breakdown, "\n".join(lines)
 
     def _query_risk_progress(
         self,

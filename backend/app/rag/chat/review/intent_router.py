@@ -203,6 +203,16 @@ class ReviewIntentRouter:
             intent.needs_clarification = False
             intent.clarifying_question = ""
             return intent
+        if intent.preset_template == "opportunity_risk_taxonomy":
+            intent.query_type = "risk_progress"
+            intent.query_plan = {
+                "template_id": "opportunity_risk_taxonomy",
+                "route": "risk_progress",
+                "use_kpi": False,
+            }
+            intent.needs_clarification = False
+            intent.clarifying_question = ""
+            return intent
         q = (user_question or "").strip().lower()
         if not q:
             return intent
@@ -323,6 +333,32 @@ class ReviewIntentRouter:
             intent.clarifying_question = ""
             return intent
         if (
+            "商机" in q
+            and "风险" in q
+            and any(
+                k in q
+                for k in (
+                    "哪些风险",
+                    "什么风险",
+                    "都有什么风险",
+                    "有哪些风险",
+                    "几类风险",
+                    "风险有几类",
+                    "风险分类",
+                )
+            )
+        ):
+            intent.query_type = "risk_progress"
+            intent.query_plan = {
+                "template_id": "opportunity_risk_taxonomy",
+                "route": "risk_progress",
+                "use_kpi": False,
+            }
+            intent.preset_template = "opportunity_risk_taxonomy"
+            intent.needs_clarification = False
+            intent.clarifying_question = ""
+            return intent
+        if (
             ("重点关注" in q or "有风险" in q)
             and ("哪些商机" in q or "商机" in q)
         ):
@@ -336,6 +372,26 @@ class ReviewIntentRouter:
             intent.needs_clarification = False
             intent.clarifying_question = ""
             return intent
+
+        # Non-template risk query heuristics:
+        # - Route generic risk lookup to risk_progress.
+        # - Infer scope when wording is explicit.
+        has_risk_lookup = (
+            ("风险" in q or "risk" in q)
+            and any(
+                k in q
+                for k in ("哪些", "什么", "有没有", "情况", "列表", "清单", "盘点", "分类", "有哪些")
+            )
+        )
+        has_dept_company_scope = any(k in q for k in ("部门", "公司", "经营", "团队", "大区"))
+        has_opp_customer_scope = any(k in q for k in ("商机", "客户", "owner", "销售"))
+        if has_risk_lookup and not intent.query_type:
+            intent.query_type = "risk_progress"
+        if has_risk_lookup and not intent.preset_template and not intent.scope_type:
+            if has_dept_company_scope and not has_opp_customer_scope:
+                intent.scope_type = "department"
+            elif has_opp_customer_scope and not has_dept_company_scope:
+                intent.scope_type = "opportunity"
 
         # Route normalization: keep backward compatibility while making retrieval explicit.
         if intent.query_type is None:
@@ -361,6 +417,18 @@ class ReviewIntentRouter:
                 "detail_filters": intent.detail_filters or {},
                 "use_kpi": bool((intent.query_type or "kpi_aggregation") == "kpi_aggregation"),
             }
+        if (
+            intent.query_type == "risk_progress"
+            and not intent.preset_template
+            and not intent.needs_clarification
+        ):
+            plan_risk_codes = intent.query_plan.get("risk_type_codes")
+            has_risk_codes = isinstance(plan_risk_codes, list) and bool(plan_risk_codes)
+            if not intent.scope_type and not has_risk_codes:
+                intent.needs_clarification = True
+                intent.clarifying_question = (
+                    "你更想看哪一类风险：部门/公司层面的经营风险，还是商机/客户层面的具体风险？"
+                )
         # Accuracy-first: for low-confidence detail/mismatch routing, ask once before execution.
         if (
             (intent.intent_confidence or 0.0) > 0

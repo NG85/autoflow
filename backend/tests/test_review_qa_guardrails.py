@@ -484,6 +484,50 @@ def test_retrieve_target_action_template_uses_upside_insufficient_when_commit_lt
     assert captured["relation_type_names"] == ["业绩达成风险"]
 
 
+def test_retrieve_target_action_template_prioritizes_solution_actions(monkeypatch):
+    retriever = ReviewDataRetriever()
+    review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
+    intent = ReviewIntent(
+        intent_type="data_query",
+        query_plan={"route": "risk_progress", "template_id": "target_action_to_hit_goal"},
+    )
+    monkeypatch.setattr(
+        "app.rag.chat.review.data_retriever.load_risk_type_name_map",
+        lambda _db, _codes=None: {"CUSTOMER_DECISION_RISK": "客户决策风险"},
+    )
+    monkeypatch.setattr(
+        retriever,
+        "_resolve_target_action_risk_type_codes",
+        lambda **kwargs: ["CUSTOMER_DECISION_RISK"],
+    )
+    monkeypatch.setattr(
+        retriever,
+        "_query_risk_opportunity_relations",
+        lambda *a, **k: [],
+    )
+    monkeypatch.setattr(
+        retriever,
+        "_query_risk_progress",
+        lambda *a, **k: [
+            {
+                "record_type": "RISK",
+                "type_code": "CUSTOMER_DECISION_RISK",
+                "opportunity_name": "华北大单",
+                "solution": "推动关键决策人共识会，锁定下周决策时间窗",
+            }
+        ],
+    )
+    ctx = retriever.retrieve(
+        db_session=None,
+        review_session=review_session,
+        intent=intent,
+        user_question="需要做什么才能达成目标？",
+    )
+    assert "### 达成目标建议" in (ctx.query_note or "")
+    assert "建议动作（优先执行）" in (ctx.query_note or "")
+    assert "推动关键决策人共识会" in (ctx.query_note or "")
+
+
 def test_router_respects_frontend_preset_template_for_achievement_risk():
     intent = ReviewIntent(
         intent_type="data_query",
@@ -636,6 +680,169 @@ def test_retrieve_focus_risky_opportunities_lists_risk_opps(monkeypatch):
     assert "查看路径：点击商机评估Agent，筛选有风险的商机，点击商机详情。" in (ctx.query_note or "")
 
 
+def test_router_sets_opportunity_risk_taxonomy_template_route():
+    intent = ReviewIntent(intent_type="data_query")
+    guarded = ReviewIntentRouter._apply_soft_boundary_guard(
+        intent,
+        "目前商机都存在哪些风险？",
+    )
+    assert guarded.query_type == "risk_progress"
+    assert guarded.preset_template == "opportunity_risk_taxonomy"
+    assert guarded.query_plan["template_id"] == "opportunity_risk_taxonomy"
+    assert guarded.query_plan["route"] == "risk_progress"
+
+
+def test_router_non_template_risk_query_auto_scopes_to_department():
+    intent = ReviewIntent(intent_type="data_query")
+    guarded = ReviewIntentRouter._apply_soft_boundary_guard(
+        intent,
+        "部门目前有哪些风险？",
+    )
+    assert guarded.query_type == "risk_progress"
+    assert guarded.scope_type == "department"
+    assert guarded.needs_clarification is False
+
+
+def test_router_non_template_risk_query_auto_scopes_to_opportunity():
+    intent = ReviewIntent(intent_type="data_query")
+    guarded = ReviewIntentRouter._apply_soft_boundary_guard(
+        intent,
+        "商机侧风险情况怎么样？",
+    )
+    assert guarded.query_type == "risk_progress"
+    assert guarded.scope_type == "opportunity"
+    assert guarded.needs_clarification is False
+
+
+def test_router_non_template_risk_query_asks_clarification_when_scope_ambiguous():
+    intent = ReviewIntent(intent_type="data_query")
+    guarded = ReviewIntentRouter._apply_soft_boundary_guard(
+        intent,
+        "目前有哪些风险？",
+    )
+    assert guarded.query_type == "risk_progress"
+    assert guarded.scope_type is None
+    assert guarded.needs_clarification is True
+    assert "部门/公司层面的经营风险" in guarded.clarifying_question
+
+
+def test_retrieve_opportunity_risk_taxonomy_groups_by_category(monkeypatch):
+    retriever = ReviewDataRetriever()
+    review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
+    intent = ReviewIntent(
+        intent_type="data_query",
+        query_plan={"route": "risk_progress", "template_id": "opportunity_risk_taxonomy"},
+    )
+    monkeypatch.setattr(
+        "app.rag.chat.review.data_retriever.load_risk_code_meta",
+        lambda _db: {
+            "RISK_A": {
+                "name_zh": "风险甲",
+                "category_group": "客户类",
+                "sort_order": 1,
+            },
+            "RISK_B": {
+                "name_zh": "风险乙",
+                "category_group": "客户类",
+                "sort_order": 2,
+            },
+            "RISK_C": {
+                "name_zh": "风险丙",
+                "category_group": "交付类",
+                "sort_order": 3,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        retriever,
+        "_query_risk_progress",
+        lambda *a, **k: [
+            {
+                "record_type": "RISK",
+                "type_code": "RISK_A",
+                "opportunity_id": "o1",
+                "opportunity_name": "华北大单",
+            },
+            {
+                "record_type": "RISK",
+                "type_code": "RISK_A",
+                "opportunity_id": "o2",
+                "opportunity_name": "华南项目",
+            },
+            {
+                "record_type": "RISK",
+                "type_code": "RISK_B",
+                "opportunity_id": "o2",
+                "opportunity_name": "华南项目",
+            },
+            {
+                "record_type": "RISK",
+                "type_code": "RISK_C",
+                "opportunity_id": "o3",
+                "opportunity_name": "华东续签",
+            },
+            {"record_type": "PROGRESS", "type_code": "RISK_A", "opportunity_id": "o1"},
+        ],
+    )
+    ctx = retriever.retrieve(
+        db_session=None,
+        review_session=review_session,
+        intent=intent,
+        user_question="目前商机都存在哪些风险？",
+    )
+    assert ctx.risks == []
+    assert len(ctx.risk_category_breakdown) == 2
+    by_cat = {b["category_group"]: b for b in ctx.risk_category_breakdown}
+    assert by_cat["客户类"]["opportunity_count"] == 2
+    assert set(by_cat["客户类"]["opportunity_names"]) == {"华北大单", "华南项目"}
+    assert by_cat["交付类"]["opportunity_count"] == 1
+    assert "按配置表风险类别汇总" in (ctx.query_note or "")
+    assert "客户类" in (ctx.query_note or "")
+    assert "风险甲（RISK_A）" in (ctx.query_note or "")
+    assert "查看路径：点击商机评估Agent，筛选有风险的商机，点击商机详情。" in (ctx.query_note or "")
+
+
+def test_retrieve_non_template_department_scope_prefers_business_risks(monkeypatch):
+    retriever = ReviewDataRetriever()
+    review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
+    intent = ReviewIntent(intent_type="data_query", query_type="risk_progress", scope_type="department")
+    called = {}
+
+    def _mock_relation(*args, **kwargs):
+        called["relation"] = True
+        return [{"record_type": "RISK", "type_name": "业绩达成风险", "opportunity_name": "华北大单"}]
+
+    monkeypatch.setattr(retriever, "_query_risk_opportunity_relations", _mock_relation)
+    monkeypatch.setattr(retriever, "_query_risk_progress", lambda *a, **k: pytest.fail("opp chain should not be called"))
+    retriever.retrieve(
+        db_session=None,
+        review_session=review_session,
+        intent=intent,
+        user_question="部门目前有哪些风险？",
+    )
+    assert called.get("relation") is True
+
+
+def test_retrieve_non_template_opportunity_scope_uses_opp_risk_chain(monkeypatch):
+    retriever = ReviewDataRetriever()
+    review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
+    intent = ReviewIntent(intent_type="data_query", query_type="risk_progress", scope_type="opportunity")
+    monkeypatch.setattr(retriever, "_query_risk_opportunity_relations", lambda *a, **k: pytest.fail("relation chain should not be called"))
+    monkeypatch.setattr(
+        retriever,
+        "_query_risk_progress",
+        lambda *a, **k: [{"record_type": "RISK", "opportunity_name": "华东续签"}],
+    )
+    ctx = retriever.retrieve(
+        db_session=None,
+        review_session=review_session,
+        intent=intent,
+        user_question="商机层面都有哪些风险？",
+    )
+    assert "范围为商机/客户级风险" in (ctx.query_note or "")
+    assert "华东续签" in (ctx.query_note or "")
+
+
 @pytest.mark.parametrize(
     "question,expected_route,expected_mismatch",
     [
@@ -674,6 +881,11 @@ def test_retrieve_focus_risky_opportunities_lists_risk_opps(monkeypatch):
             "risk_progress",
             None,
         ),
+        (
+            "目前商机都存在哪些风险？",
+            "risk_progress",
+            None,
+        ),
     ],
 )
 def test_preset_question_router_guardrails(question, expected_route, expected_mismatch):
@@ -696,6 +908,9 @@ def test_preset_question_router_guardrails(question, expected_route, expected_mi
         elif question == "哪些商机需要重点关注？":
             assert guarded.preset_template == "focus_risky_opportunities"
             assert guarded.query_plan["template_id"] == "focus_risky_opportunities"
+        elif question == "目前商机都存在哪些风险？":
+            assert guarded.preset_template == "opportunity_risk_taxonomy"
+            assert guarded.query_plan["template_id"] == "opportunity_risk_taxonomy"
 
 
 @pytest.mark.parametrize(

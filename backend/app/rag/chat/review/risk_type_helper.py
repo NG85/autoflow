@@ -1,6 +1,7 @@
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
+from sqlalchemy import or_
 from sqlmodel import Session, select
 
 from app.models.crm_review import CRMReviewRiskCategory
@@ -89,6 +90,45 @@ def load_risk_type_name_map(
             continue
         name_map.setdefault(code, fallback_name)
     return name_map
+
+
+def load_risk_code_meta(db_session: Optional[Session]) -> Dict[str, Dict[str, Any]]:
+    """Load risk type_code metadata from crm_review_risk_category (plus business fallbacks).
+
+    Returns
+    -------
+    dict
+        code -> {name_zh, category_group, sort_order}
+    """
+    meta: Dict[str, Dict[str, Any]] = {}
+    if db_session is not None:
+        try:
+            R = CRMReviewRiskCategory
+            stmt = select(R.code, R.name_zh, R.category_group, R.sort_order).where(
+                or_(R.is_active.is_(None), R.is_active == True)  # noqa: E712
+            )
+            rows = db_session.exec(stmt).all()
+            for code, name_zh, category_group, sort_order in rows:
+                c = str(code or "").strip()
+                if not c:
+                    continue
+                meta[c] = {
+                    "name_zh": str(name_zh or "").strip() or c,
+                    "category_group": (str(category_group).strip() if category_group else "") or "未分类",
+                    "sort_order": int(sort_order) if sort_order is not None else 10_000,
+                }
+        except Exception as e:
+            logger.warning("Failed to load crm_review_risk_category meta: %s", e)
+    for code, fallback_name in BUSINESS_RISK_TYPE_NAME_FALLBACK.items():
+        meta.setdefault(
+            code,
+            {
+                "name_zh": fallback_name,
+                "category_group": "经营风险",
+                "sort_order": 100,
+            },
+        )
+    return meta
 
 
 def validate_risk_type_codes(
