@@ -1,13 +1,11 @@
-from typing import Optional, Dict, Any
+from typing import ClassVar, Optional, Dict, Any
 from datetime import datetime
 from sqlmodel import Field, Column, Relationship, SQLModel, Text, JSON
 from sqlalchemy import DECIMAL
 
 
 class CRMOrder(SQLModel, table=True):
-    class Config:
-        orm_mode = True
-        read_only = True
+    model_config = {"from_attributes": True}
     
     """订单表"""
     id: Optional[int] = Field(default=None, primary_key=True, description="主键ID（自增序列）")

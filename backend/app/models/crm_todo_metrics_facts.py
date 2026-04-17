@@ -60,6 +60,5 @@ class CRMTodoMetricsFacts(UUIDBaseModel, UpdatableBaseModel, table=True):
 
     value_int: int = Field(default=0, sa_column=Column(Integer, nullable=False))
 
-    class Config:
-        orm_mode = True
+    model_config = {"from_attributes": True}
 

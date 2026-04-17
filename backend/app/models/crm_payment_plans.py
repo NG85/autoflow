@@ -5,9 +5,7 @@ from sqlalchemy import DECIMAL, Boolean
 
 
 class CRMPaymentPlan(SQLModel, table=True):
-    class Config:
-        orm_mode = True
-        read_only = True
+    model_config = {"from_attributes": True}
     
     """回款计划表"""
     id: Optional[int] = Field(default=None, primary_key=True, description="主键ID（自增序列）")

@@ -17,8 +17,7 @@ class CRMWeeklyFollowupLeaderEngagement(UUIDBaseModel, UpdatableBaseModel, table
     唯一键：summary_id + leader_user_id（幂等 upsert）。
     """
 
-    class Config:
-        orm_mode = True
+    model_config = {"from_attributes": True}
 
     __tablename__ = "crm_weekly_followup_leader_engagement"
 

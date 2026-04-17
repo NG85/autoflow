@@ -36,6 +36,5 @@ class UserDepartmentRelation(SQLModel, table=True):
     
     is_active: bool = Field(default=True, index=True)
 
-    class Config:
-        orm_mode = True
+    model_config = {"from_attributes": True}
 

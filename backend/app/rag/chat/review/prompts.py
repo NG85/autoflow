@@ -1,25 +1,10 @@
 """Prompt templates for the Review Session Q&A feature."""
+from app.rag.chat.review.metric_catalog import build_metric_glossary_markdown
 
 # ---------------------------------------------------------------------------
 # Metric glossary (shared across prompts)
 # ---------------------------------------------------------------------------
-METRIC_GLOSSARY = """\
-| 中文名 | metric_name | 说明 |
-|--------|-------------|------|
-| 商机数 | opp_count | 本周期商机总数 |
-| 目标 | target | 部门/个人销售目标金额 |
-| 已成单 | closed | 已关单赢单金额 |
-| 差额 | gap | 目标与已成单之差（target − closed） |
-| 倍数 | pipeline_coverage | Pipeline 覆盖倍数 = (commit_sales + upside_sales) / gap（gap ≤ 0 时为 0） |
-| 销售确定下单 | commit_sales | 销售自己判定会成单的金额 |
-| AI确定下单 | commit_ai | AI 判定会成单的金额 |
-| 销售可能下单 | upside_sales | 销售判定可能成单的金额 |
-
-每个指标的数据字段:
-- metric_value: 本次 review session 的值
-- metric_value_prev: 上次的值
-- metric_delta: 本次与上次的变化量
-- metric_rate: 本次与上次的变化率（小数，如 0.15 = 15%）"""
+METRIC_GLOSSARY = build_metric_glossary_markdown()
 
 # ---------------------------------------------------------------------------
 # Intent classification
@@ -66,6 +51,10 @@ Return a JSON object with the following fields:
     "opportunity_name_keyword": "<short name substring or null>",
     "query_type": "kpi_aggregation" | "opportunity_detail" | "mismatch_list" | "risk_progress" | null,
     "mismatch_type": "stage" | "forecast" | "close_date" | null,
+    "preset_template": "<template id or null>",
+    "template_params": {
+        "risk_type_codes": ["<type_code>", "..."]
+    },
     "detail_filters": {
         "owner_name": "<string, optional>",
         "opportunity_stage": "<string, optional>",
@@ -75,6 +64,7 @@ Return a JSON object with the following fields:
         "forecast_amount_value": "<number, optional>"
     },
     "query_plan": {
+        "template_id": "<template id or null>",
         "route": "kpi_aggregation" | "opportunity_detail" | "mismatch_list" | "risk_progress",
         "mismatch_type": "stage" | "forecast" | "close_date" | null,
         "detail_filters": {},
@@ -128,6 +118,10 @@ implicit keyword matching: \
 query for owner/stage/forecast/amount/expected close date if available.
 - **query_plan**: provide an executable plan for retriever. Keep it concise and consistent \
 with `query_type` and slots.
+- **preset_template**: if frontend passes a preset template ID, keep it unchanged. \
+For preset templates, prefer fixed route/filters in `query_plan` instead of free-form inference.
+- **template_params**: optional structured args for a preset (e.g. `risk_type_codes` for \
+`achievement_risk_overview`). Backend validates against an allowlist; omit or use [] to mean defaults.
 - **intent_confidence**: confidence in [0,1]. If confidence < 0.6 and ambiguity may affect \
 retrieval correctness, set `needs_clarification=true`.
 - **accuracy-first extraction**: do not guess slot values when the user expression is vague. \
@@ -166,6 +160,12 @@ lookup question within a review session.
 ## Structured Data
 {{structured_context}}
 
+## Risk Signals (if available)
+{{risk_context}}
+
+## Knowledge Base Clues (if available)
+{{kb_context}}
+
 ## User Question
 {{user_question}}
 
@@ -181,7 +181,7 @@ present the change information (e.g., "较上期变化 +10.5万, 增长 15.2%").
 5. For pipeline_coverage (倍数), remember it = (commit_sales + upside_sales) / \
 gap. If the user asks about coverage adequacy, 1.0x means exactly covered, \
 >3x is generally healthy.
-6. Present numbers clearly — use tables (markdown) when comparing multiple items.
+6. Present numbers clearly — prefer compact bullets over large tables unless the user explicitly asks for a table.
 7. Use the same language as the user's question.
 8. Before answering, normalize user wording to canonical business terms in the \
 Metric Glossary. Treat colloquial synonyms as the same metric intent \
@@ -195,7 +195,15 @@ assumption in one sentence, then provide the data.
 opportunity detail / mismatch lists for stage, forecast status, expected closing date). \
 If the question is outside scope or mismatch dimension is unclear, ask one short \
 clarifying question first.
-12. Keep the answer concise and data-driven.
+12. Keep the answer concise, data-driven, and natural. Use this structure:
+   - **结论**: 先用 1 句话回答用户最关心的问题（如“谁差额最大/风险有多少”）
+   - **证据**: 再给 2-4 条关键数据点（数量、对象、变化）
+   - **路径/建议动作**: 最后给明确下一步（去哪里看明细，或建议做什么）
+13. For ranking/comparison questions, explicitly name the top item first, then briefly mention 1-3 other items for context.
+14. If structured data is sparse but Risk Signals / Knowledge Base Clues exist, use them as辅助线索并明确“可能/建议”，不要伪造确定性事实.
+15. If the provided context already includes explicit "查看路径" or "建议动作" wording (e.g., from query_note), prioritize reusing that wording in your final answer instead of rewriting it with different terms.
+16. 面向销售人员回答：优先使用业务口语（如“签单机会”“跟进动作”“风险点”），避免输出数据库字段名、表名、代码术语。
+17. 保持“结论-证据-路径/动作”的回答骨架，但表达不要模板化重复；可按问题类型自然调整语气（盘点类、对比类、行动建议类）。
 
 Answer:
 """

@@ -6,8 +6,7 @@ from sqlmodel import Field, Column, DateTime, func, SQLModel, Integer, String, D
 class CRMDepartmentDailySummary(SQLModel, table=True):
     """部门/公司日报汇总表（只读）"""
     
-    class Config:
-        orm_mode = True
+    model_config = {"from_attributes": True}
         
     __tablename__ = 'crm_department_daily_summary'
 

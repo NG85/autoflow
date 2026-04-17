@@ -40,8 +40,7 @@ class DocumentCategory(str, enum.Enum):
 
 class DocumentMetadata(BaseModel):
     category: DocumentCategory = DocumentCategory.GENERAL
-    class Config:
-        extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
 
 class Document(UpdatableBaseModel, table=True):

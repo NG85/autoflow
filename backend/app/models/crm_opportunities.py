@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import ClassVar, List, Optional
 from datetime import datetime
 from sqlalchemy import ForeignKey, Integer
 from sqlmodel import Field, Column, DateTime, Relationship, SQLModel, Text
@@ -6,9 +6,7 @@ from sqlmodel import Field, Column, DateTime, Relationship, SQLModel, Text
 from app.models.crm_accounts import CRMAccount
 
 class CRMOpportunity(SQLModel, table=True):
-    class Config:
-        orm_mode = True
-        read_only = True
+    model_config = {"from_attributes": True}
         
     """商机表"""
     id: Optional[int] = Field(default=None, primary_key=True)

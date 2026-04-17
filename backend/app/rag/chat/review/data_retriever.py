@@ -6,8 +6,9 @@ structured context objects that can be serialized into LLM-readable text.
 
 import logging
 import re
+from collections import defaultdict
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 from sqlalchemy import or_
@@ -17,24 +18,32 @@ from app.models.crm_review import (
     CRMReviewKpiMetrics,
     CRMReviewOppBranchSnapshot,
     CRMReviewOppRiskProgress,
+    CRMReviewRiskOpportunityRelation,
     CRMReviewSession,
 )
 from app.rag.chat.review.intent_router import ReviewIntent
+from app.rag.chat.review.metric_catalog import (
+    AMOUNT_METRIC_NAMES,
+    METRIC_DISPLAY_NAMES,
+)
+from app.rag.chat.review.query_plan_contract import (
+    ALLOWED_QUERY_ROUTES,
+    ALLOWED_SCOPE_TYPES,
+    ALLOWED_TIME_MODES,
+)
+from app.rag.chat.review.risk_type_helper import (
+    ACHIEVEMENT_RISK_TYPE_CODES_DEFAULT,
+    BUSINESS_RISK_TYPE_CODES,
+    load_risk_code_meta,
+    load_risk_type_name_map,
+    resolve_business_relation_type_names,
+    split_business_vs_opportunity_risk_codes,
+    validate_risk_type_codes,
+)
 
 logger = logging.getLogger(__name__)
 
-METRIC_DISPLAY_NAMES = {
-    "opp_count": "商机数",
-    "target": "目标",
-    "closed": "已成单",
-    "gap": "差额",
-    "pipeline_coverage": "倍数",
-    "commit_sales": "销售确定下单",
-    "commit_ai": "AI确定下单",
-    "upside_sales": "销售可能下单",
-}
-
-AMOUNT_METRICS = {"target", "closed", "gap", "commit_sales", "commit_ai", "upside_sales"}
+AMOUNT_METRICS = AMOUNT_METRIC_NAMES
 
 MISMATCH_QUERY_CONFIGS = {
     "stage": {
@@ -330,6 +339,10 @@ class ReviewDataContext(BaseModel):
     )
     risks: List[Dict[str, Any]] = Field(default_factory=list)
     progresses: List[Dict[str, Any]] = Field(default_factory=list)
+    risk_category_breakdown: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Per category_group stats for opportunity-level RISK rows.",
+    )
     comparison_data: Optional[Dict[str, Any]] = None
     query_note: Optional[str] = None
 
@@ -340,6 +353,7 @@ class ReviewDataContext(BaseModel):
             and not self.opportunity_snapshot_rows
             and not self.risks
             and not self.progresses
+            and not self.risk_category_breakdown
             and not self.query_note
         )
 
@@ -391,27 +405,51 @@ class ReviewDataContext(BaseModel):
                         f"{row.get('ai_label')}={row.get('ai_value') or ''}"
                     )
         elif self.snapshot_aggregations:
-            parts.append("\n### Opportunity Snapshot Aggregations")
+            parts.append("\n### 商机分组汇总")
             for agg in self.snapshot_aggregations:
                 parts.append(
-                    f"- {agg.get('group_label', 'N/A')}: "
-                    f"count={agg.get('count', 0)}, "
-                    f"total_amount={agg.get('total_amount', 0)}"
+                    f"- {agg.get('group_label', 'N/A')}："
+                    f"商机数={agg.get('count', 0)}，"
+                    f"签约金额合计={agg.get('total_amount', 0)}"
                 )
 
         if self.comparison_data:
-            parts.append("\n### Period Comparison")
+            parts.append("\n### 周期对比")
             for key, val in self.comparison_data.items():
                 parts.append(f"- {key}: {val}")
 
-        return "\n".join(parts) if parts else "(No structured data available)"
+        if self.risk_category_breakdown:
+            parts.append("\n### 商机风险分类统计")
+            for block in self.risk_category_breakdown:
+                cg = block.get("category_group", "")
+                cnt = block.get("opportunity_count", 0)
+                names = block.get("opportunity_names") or []
+                shown = names[:25]
+                suffix = f" 等共 {cnt} 个" if len(names) > len(shown) else ""
+                parts.append(
+                    f"- **{cg}**：{cnt} 个商机 — "
+                    f"{('、'.join(shown) if shown else '（无商机名）')}{suffix}"
+                )
+                for t in block.get("by_risk_type") or []:
+                    tc = t.get("type_code", "")
+                    tname = t.get("name_zh", tc)
+                    tcnt = t.get("opportunity_count", 0)
+                    tnames = t.get("opportunity_names") or []
+                    tshown = tnames[:15]
+                    tsfx = f" 等共 {tcnt} 个" if len(tnames) > len(tshown) else ""
+                    parts.append(
+                        f"  - {tname}（{tc}）：{tcnt} 个商机 — "
+                        f"{('、'.join(tshown) if tshown else '（无商机名）')}{tsfx}"
+                    )
+
+        return "\n".join(parts) if parts else "（暂时没有可展示的数据）"
 
     def to_risk_context_text(self) -> str:
         """Serialize risk/progress signals to LLM-readable text."""
         parts: List[str] = []
 
         if self.risks:
-            parts.append("### Risks")
+            parts.append("### 风险信号")
             for r in self.risks:
                 severity = r.get("severity", "")
                 sev_tag = f" [{severity}]" if severity else ""
@@ -420,29 +458,116 @@ class ReviewDataContext(BaseModel):
                     f"{r.get('summary', r.get('detail_description', 'N/A'))}"
                 )
                 if r.get("gap_description"):
-                    parts.append(f"  Gap: {r['gap_description']}")
+                    parts.append(f"  差距说明：{r['gap_description']}")
                 if r.get("financial_impact") is not None:
-                    parts.append(f"  Financial impact: {r['financial_impact']}")
+                    parts.append(f"  影响金额：{r['financial_impact']}")
                 if r.get("solution"):
-                    parts.append(f"  Suggested action: {r['solution']}")
+                    parts.append(f"  建议动作：{r['solution']}")
                 if r.get("detail_description") and r.get("detail_description") != r.get("summary"):
-                    parts.append(f"  Detail: {r['detail_description']}")
+                    parts.append(f"  详情：{r['detail_description']}")
 
         if self.progresses:
-            parts.append("\n### Progress Signals")
+            parts.append("\n### 进展信号")
             for p in self.progresses:
                 parts.append(
                     f"- {p.get('type_name', p.get('type_code', ''))}: "
                     f"{p.get('summary', p.get('detail_description', 'N/A'))}"
                 )
                 if p.get("solution"):
-                    parts.append(f"  Next step: {p['solution']}")
+                    parts.append(f"  下一步建议：{p['solution']}")
 
-        return "\n".join(parts) if parts else "(No risk/progress signals)"
+        return "\n".join(parts) if parts else "（暂无风险/进展信号）"
 
 
 class ReviewDataRetriever:
     """Retrieves structured data from CRM review tables based on intent parameters."""
+
+    @staticmethod
+    def _build_opportunity_list_preview(
+        rows: List[Dict[str, Any]],
+        title: str,
+        max_items: int = 8,
+    ) -> str:
+        if not rows:
+            return ""
+        lines = [f"### {title}（Top {min(max_items, len(rows))}）"]
+        for idx, row in enumerate(rows[:max_items], 1):
+            opp_name = row.get("opportunity_name") or row.get("opportunity_id") or "未知商机"
+            owner_name = row.get("owner_name") or "未知负责人"
+            forecast_amount = row.get("forecast_amount")
+            amount_text = (
+                _fmt_value("commit_sales", forecast_amount)
+                if forecast_amount is not None
+                else "N/A"
+            )
+            mismatch_text = ""
+            if row.get("mismatch_type"):
+                mismatch_text = (
+                    f"；差异={row.get('sales_label')}:{row.get('sales_value') or 'N/A'}"
+                    f" vs {row.get('ai_label')}:{row.get('ai_value') or 'N/A'}"
+                )
+            lines.append(
+                f"- {idx}. {opp_name}｜负责人:{owner_name}｜金额:{amount_text}{mismatch_text}"
+            )
+        if len(rows) > max_items:
+            lines.append(f"- 其余 {len(rows) - max_items} 条请在明细页查看。")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _build_owner_gap_preview(
+        rows: List[Dict[str, Any]],
+        max_items: int = 8,
+    ) -> str:
+        if not rows:
+            return ""
+        lines = [f"### 销售差额清单（Top {min(max_items, len(rows))}）"]
+        for idx, row in enumerate(rows[:max_items], 1):
+            owner = row.get("scope_name") or row.get("scope_id") or "未知销售"
+            gap_value = _safe_float(row.get("metric_value")) or 0.0
+            lines.append(f"- {idx}. {owner}｜差额:{gap_value:,.0f}")
+        if len(rows) > max_items:
+            lines.append(f"- 其余 {len(rows) - max_items} 位销售请在人员分组查看。")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _normalize_execution_scope_and_time(
+        intent: ReviewIntent,
+        current_owner_id: Optional[str] = None,
+    ) -> Tuple[str, str, str, Dict[str, Any]]:
+        """Normalize query_plan scope/time for route execution."""
+        plan = intent.query_plan if isinstance(intent.query_plan, dict) else {}
+        plan_time_scope_obj = (
+            plan.get("time_scope")
+            if isinstance(plan.get("time_scope"), dict)
+            else {}
+        )
+        time_mode = str(
+            plan_time_scope_obj.get("mode")
+            or intent.time_comparison
+            or "current_only"
+        ).strip().lower()
+        if time_mode not in ALLOWED_TIME_MODES:
+            time_mode = "current_only"
+        plan_scope_obj = (
+            plan.get("scope")
+            if isinstance(plan.get("scope"), dict)
+            else {}
+        )
+        effective_scope_type = str(
+            plan_scope_obj.get("type")
+            or intent.scope_type
+            or ""
+        ).strip().lower()
+        if effective_scope_type not in ALLOWED_SCOPE_TYPES:
+            effective_scope_type = ""
+        effective_scope_id = str(
+            plan_scope_obj.get("id")
+            or intent.scope_id
+            or ""
+        ).strip()
+        if effective_scope_type == "owner" and effective_scope_id == "__CURRENT_USER__":
+            effective_scope_id = str(current_owner_id or "").strip()
+        return time_mode, effective_scope_type, effective_scope_id, plan_scope_obj
 
     def retrieve(
         self,
@@ -459,7 +584,23 @@ class ReviewDataRetriever:
         snapshot_period = review_session.period
         question = user_question or ""
         plan = intent.query_plan or {}
-        query_type = plan.get("route") or intent.query_type
+        template_id = plan.get("template_id") if isinstance(plan, dict) else None
+        query_type = str(plan.get("route") or intent.query_type or "").strip().lower()
+        if query_type not in ALLOWED_QUERY_ROUTES:
+            query_type = None
+        time_mode, effective_scope_type, effective_scope_id, plan_scope_obj = (
+            self._normalize_execution_scope_and_time(
+                intent=intent,
+                current_owner_id=current_owner_id,
+            )
+        )
+        if time_mode not in ("", "current_only"):
+            ctx.query_note = (
+                "### 时间范围说明\n"
+                "- 当前 review 问答先只支持本期数据。\n"
+                "- 请改用本期口径提问，我会基于当前会话给你结果。"
+            )
+            return ctx
         mismatch_type = (
             plan.get("mismatch_type")
             or intent.mismatch_type
@@ -470,6 +611,15 @@ class ReviewDataRetriever:
             or (intent.detail_filters if isinstance(intent.detail_filters, dict) else None)
             or _extract_detail_query_filters(question)
         )
+        # Replay execution contract (M2):
+        # - All routes should read scope from query_plan.scope first.
+        # - The normalized execution intent below is the single source of truth
+        #   passed into downstream query functions.
+        # - Do not use raw `intent.scope_*` directly in new branches, otherwise
+        #   replay/audit behavior may diverge across routes.
+        intent_for_execution = intent.model_copy(deep=True)
+        intent_for_execution.scope_type = effective_scope_type or None
+        intent_for_execution.scope_id = effective_scope_id or None
         if query_type is None:
             if mismatch_type:
                 query_type = "mismatch_list"
@@ -478,12 +628,17 @@ class ReviewDataRetriever:
             else:
                 query_type = "kpi_aggregation"
 
+        # Route-level rule:
+        # use `intent_for_execution` (or effective_scope_*) for filters so
+        # mismatch_list/opportunity_detail/risk_progress/kpi_aggregation remain
+        # consistent under query_plan replay.
         if query_type == "mismatch_list" and mismatch_type:
             cfg = MISMATCH_QUERY_CONFIGS[mismatch_type]
             ctx.opportunity_snapshot_rows = self._query_field_mismatch_opportunities(
                 db_session=db_session,
                 snapshot_period=snapshot_period,
                 department_id=review_session.department_id,
+                owner_id=effective_scope_id if effective_scope_type == "owner" else None,
                 sales_field=cfg["sales_field"],
                 ai_field=cfg["ai_field"],
                 sales_label=cfg["sales_label"],
@@ -499,6 +654,12 @@ class ReviewDataRetriever:
                     f"- 已按“{cfg['sales_label']} vs {cfg['ai_label']}”检索，"
                     f"共找到 {len(ctx.opportunity_snapshot_rows)} 个不一致商机。"
                 )
+                list_preview = self._build_opportunity_list_preview(
+                    ctx.opportunity_snapshot_rows,
+                    title="差异商机清单",
+                )
+                if list_preview:
+                    ctx.query_note = f"{ctx.query_note}\n\n{list_preview}"
             else:
                 ctx.query_note = (
                     f"### 差异查询结果\n"
@@ -510,6 +671,7 @@ class ReviewDataRetriever:
                 db_session=db_session,
                 snapshot_period=snapshot_period,
                 department_id=review_session.department_id,
+                scope_owner_id=effective_scope_id if effective_scope_type == "owner" else None,
                 detail_filters=detail_filters,
                 current_owner_id=current_owner_id,
                 current_owner_name=current_owner_name,
@@ -520,6 +682,12 @@ class ReviewDataRetriever:
                     "### 商机明细查询结果\n"
                     f"- 已按典型字段条件检索，共返回 {len(ctx.opportunity_snapshot_rows)} 条商机明细。"
                 )
+                list_preview = self._build_opportunity_list_preview(
+                    ctx.opportunity_snapshot_rows,
+                    title="商机明细清单",
+                )
+                if list_preview:
+                    ctx.query_note = f"{ctx.query_note}\n\n{list_preview}"
             else:
                 ctx.query_note = (
                     "### 商机明细查询结果\n"
@@ -527,15 +695,302 @@ class ReviewDataRetriever:
                 )
         elif query_type == "risk_progress":
             # Risk/progress focused query: skip KPI/detail retrieval.
-            pass
-        else:
-            ctx.kpi_metrics = self._query_kpi_metrics(
-                db_session, session_id, intent
+            risk_type_codes = plan.get("risk_type_codes") if isinstance(plan, dict) else None
+            force_opportunity_scope_all = False
+            effective_intent = intent_for_execution.model_copy(deep=True)
+            # M1 execution rule: prefer normalized query_plan scope for replay/audit.
+            effective_intent.scope_type = (
+                str(plan_scope_obj.get("type") or effective_intent.scope_type or "").strip()
+                or None
             )
+            effective_intent.scope_id = (
+                str(plan_scope_obj.get("id") or effective_intent.scope_id or "").strip()
+                or None
+            )
+            if not isinstance(risk_type_codes, list):
+                risk_type_codes = None
+            if not template_id and (effective_intent.scope_type or "").strip().lower() == "owner":
+                owner_scope_id = (effective_intent.scope_id or "").strip()
+                if owner_scope_id == "__CURRENT_USER__":
+                    owner_scope_id = (current_owner_id or "").strip()
+                if not owner_scope_id:
+                    owner_name = str((detail_filters or {}).get("owner_name") or "").strip()
+                    if owner_name:
+                        owner_scope_id = self._resolve_owner_id_by_name(
+                            db_session=db_session,
+                            snapshot_period=snapshot_period,
+                            owner_name=owner_name,
+                        ) or ""
+                        if not owner_scope_id:
+                            ctx.query_note = (
+                                "### 需确认销售人员\n"
+                                f"- 暂未识别到“{owner_name}”对应的销售人员。"
+                                "请确认姓名后重试，或改用“我负责的商机风险”进行查询。"
+                            )
+                            return ctx
+                if owner_scope_id:
+                    effective_intent.scope_id = owner_scope_id
+            if template_id == "target_action_to_hit_goal":
+                risk_type_codes = self._resolve_target_action_risk_type_codes(
+                    db_session=db_session,
+                    session_id=session_id,
+                    department_id=review_session.department_id,
+                )
+            risk_universe_map = load_risk_type_name_map(db_session, None)
+            if risk_type_codes:
+                risk_type_codes, _ = validate_risk_type_codes(risk_type_codes, risk_universe_map)
+            # For normal (non-template) risk questions:
+            # - department/company scope -> business-risk relation chain
+            # - opportunity/customer/owner scope -> opp risk-progress chain
+            # - unspecified scope -> merge both chains
+            if not template_id and not risk_type_codes:
+                scope = str(
+                    plan_scope_obj.get("type")
+                    or effective_intent.scope_type
+                    or ""
+                ).strip().lower()
+                if scope in ("department", "company"):
+                    risk_type_codes = list(BUSINESS_RISK_TYPE_CODES)
+                elif scope in ("opportunity", "customer", "owner"):
+                    risk_type_codes = []
+                    force_opportunity_scope_all = True
+            if not risk_type_codes and template_id not in (
+                "target_action_to_hit_goal",
+                "focus_risky_opportunities",
+                "opportunity_risk_taxonomy",
+            ) and not force_opportunity_scope_all:
+                risk_type_codes = list(ACHIEVEMENT_RISK_TYPE_CODES_DEFAULT)
+            if template_id == "target_action_to_hit_goal" and not risk_type_codes:
+                ctx.risks = []
+                ctx.progresses = []
+                ctx.query_note = (
+                    "### 达成目标建议\n"
+                    "- 当前结论：commit 与 gap 基本持平，暂未触发重点达成风险。\n"
+                    "- 建议动作：继续跟进在途商机，并持续关注经营洞察卡片中的新增风险。"
+                )
+                return ctx
+            if template_id == "focus_risky_opportunities":
+                risks_and_progress = self._query_risk_progress(
+                    db_session,
+                    session_id,
+                    snapshot_period,
+                    effective_intent,
+                    risk_type_codes=None,
+                )
+                ctx.risks = [r for r in risks_and_progress if r.get("record_type") == "RISK"]
+                ctx.progresses = []
+                opp_names: List[str] = []
+                for r in ctx.risks:
+                    name = (r.get("opportunity_name") or "").strip()
+                    if name and name not in opp_names:
+                        opp_names.append(name)
+                opp_count = len(opp_names) if opp_names else len(ctx.risks)
+                opp_list_text = "、".join(opp_names) if opp_names else "（未解析到商机名称）"
+                if ctx.risks:
+                    top_solutions = self._collect_top_solutions(ctx.risks, limit=1)
+                    action_line = (
+                        f"- 可优先动作：{top_solutions[0]}。\n"
+                        if top_solutions
+                        else ""
+                    )
+                    ctx.query_note = (
+                        "### 重点关注商机\n"
+                        f"- 当前结论：共识别到 {opp_count} 个需重点关注的风险商机。\n"
+                        f"- 涉及商机：{opp_list_text}。\n"
+                        f"{action_line}"
+                        "- 查看路径：点击商机评估Agent，筛选有风险的商机，点击商机详情。"
+                    )
+                else:
+                    ctx.query_note = (
+                        "### 重点关注商机\n"
+                        "- 当前结论：暂未识别到风险商机。\n"
+                        "- 建议动作：点击商机评估Agent，筛选有风险的商机，持续关注新增风险后再查看商机详情。"
+                    )
+                return ctx
+            if template_id == "opportunity_risk_taxonomy":
+                breakdown, note = self._build_opportunity_risk_taxonomy_breakdown(
+                    db_session=db_session,
+                    session_id=session_id,
+                    snapshot_period=snapshot_period,
+                    intent=intent,
+                )
+                ctx.risk_category_breakdown = breakdown
+                ctx.risks = []
+                ctx.progresses = []
+                ctx.query_note = note
+                return ctx
+            if not template_id and force_opportunity_scope_all:
+                risks_and_progress = self._query_risk_progress(
+                    db_session, session_id, snapshot_period, effective_intent, risk_type_codes=None
+                )
+                ctx.risks = [
+                    r for r in risks_and_progress if r.get("record_type") in ("RISK", "OPP_SUMMARY")
+                ]
+                card_hint = "商机风险卡片"
+                opp_names: List[str] = []
+                for r in ctx.risks:
+                    name = (r.get("opportunity_name") or "").strip()
+                    if name and name not in opp_names:
+                        opp_names.append(name)
+                opp_list_text = "、".join(opp_names) if opp_names else "（未解析到商机名称）"
+                opp_count = len(opp_names) if opp_names else len(ctx.risks)
+                if ctx.risks:
+                    ctx.query_note = (
+                        "### 风险查询结果\n"
+                        f"- 当前结论：共识别到 {opp_count} 个风险商机。\n"
+                        f"- 风险与对象：范围为商机/客户层面风险，涉及商机包括 {opp_list_text}。\n"
+                        f"- 查看路径：进入经营洞察卡片，点击{card_hint}查看商机与风险详情。"
+                    )
+                else:
+                    ctx.query_note = (
+                        "### 风险查询结果\n"
+                        f"- 当前结论：暂未识别到风险商机。\n"
+                        f"- 建议动作：进入经营洞察卡片，点击{card_hint}持续关注新增风险。"
+                    )
+                return ctx
+            risk_name_map = load_risk_type_name_map(db_session, risk_type_codes)
+            business_codes, opportunity_codes = split_business_vs_opportunity_risk_codes(risk_type_codes)
+            ctx.progresses = []
+            card_hint = "风险卡片"
+            if business_codes and not opportunity_codes:
+                relation_type_names = resolve_business_relation_type_names(business_codes)
+                ctx.risks = self._query_risk_opportunity_relations(
+                    db_session=db_session,
+                    session_id=session_id,
+                    snapshot_period=snapshot_period,
+                    relation_type_names=relation_type_names,
+                    owner_id=effective_intent.scope_id if (effective_intent.scope_type or "").strip().lower() == "owner" else None,
+                )
+                card_hint = "达成风险卡片" if "业绩达成风险" in relation_type_names else "经营洞察卡片"
+            elif opportunity_codes and not business_codes:
+                risks_and_progress = self._query_risk_progress(
+                    db_session, session_id, snapshot_period, effective_intent, risk_type_codes=opportunity_codes
+                )
+                ctx.risks = [
+                    r for r in risks_and_progress if r.get("record_type") in ("RISK", "OPP_SUMMARY")
+                ]
+                card_hint = "商机风险卡片"
+            else:
+                # Mixed selection: merge both chains and keep generic card hint.
+                relation_type_names = resolve_business_relation_type_names(business_codes)
+                relation_risks = self._query_risk_opportunity_relations(
+                    db_session=db_session,
+                    session_id=session_id,
+                    snapshot_period=snapshot_period,
+                    relation_type_names=relation_type_names,
+                    owner_id=effective_intent.scope_id if (effective_intent.scope_type or "").strip().lower() == "owner" else None,
+                ) if business_codes else []
+                opp_risks = self._query_risk_progress(
+                    db_session, session_id, snapshot_period, effective_intent, risk_type_codes=opportunity_codes
+                ) if opportunity_codes else []
+                opp_risks = [r for r in opp_risks if r.get("record_type") in ("RISK", "OPP_SUMMARY")]
+                ctx.risks = relation_risks + opp_risks
+                card_hint = "风险卡片"
+
+            opp_names: List[str] = []
+            for r in ctx.risks:
+                name = (r.get("opportunity_name") or "").strip()
+                if name and name not in opp_names:
+                    opp_names.append(name)
+            if ctx.risks:
+                selected_risk_names = [
+                    risk_name_map.get(code, code)
+                    for code in (risk_type_codes or [])
+                ]
+                selected_risk_text = (
+                    "、".join(selected_risk_names) if selected_risk_names else "达成相关风险"
+                )
+                opp_list_text = "、".join(opp_names) if opp_names else "（未解析到商机名称）"
+                opp_count = len(opp_names) if opp_names else len(ctx.risks)
+                if template_id == "achievement_risk_overview":
+                    path_text = f"- 查看路径：进入经营洞察卡片，点击{card_hint}，再查看对应商机列表。"
+                elif template_id == "target_action_to_hit_goal":
+                    path_text = (
+                        f"- 查看路径：进入经营洞察卡片，点击{card_hint}中的链接，"
+                        "跳转到商机列表页查看明细。"
+                    )
+                else:
+                    path_text = f"- 查看路径：进入经营洞察卡片，点击{card_hint}查看商机与风险详情。"
+                if template_id == "target_action_to_hit_goal":
+                    top_solutions = self._collect_top_solutions(ctx.risks, limit=3)
+                    action_text = (
+                        f"- 建议动作（优先执行）：{'；'.join(top_solutions)}。\n"
+                        if top_solutions
+                        else "- 建议动作：优先处理高风险商机并跟进关键阻塞点。\n"
+                    )
+                    ctx.query_note = (
+                        "### 达成目标建议\n"
+                        f"- 当前结论：共识别到 {opp_count} 个需要优先处理的风险商机。\n"
+                        f"- 重点对象：涉及商机包括 {opp_list_text}。\n"
+                        f"{action_text}"
+                        f"{path_text}"
+                    )
+                else:
+                    top_solutions = self._collect_top_solutions(ctx.risks, limit=1)
+                    action_line = (
+                        f"- 可优先动作：{top_solutions[0]}。\n"
+                        if top_solutions
+                        else ""
+                    )
+                    ctx.query_note = (
+                        "### 达成风险查询结果\n"
+                        f"- 当前结论：共识别到 {opp_count} 个达成风险商机。\n"
+                        f"- 风险与对象：风险类型为{selected_risk_text}，涉及商机包括 {opp_list_text}。\n"
+                        f"{action_line}"
+                        f"{path_text}"
+                    )
+            else:
+                ctx.query_note = (
+                    "### 达成风险查询结果\n"
+                    "- 当前结论：暂未识别到达成风险商机。\n"
+                    f"- 建议动作：进入经营洞察卡片，点击{card_hint}持续关注新增风险。"
+                )
+            return ctx
+        else:
+            if template_id == "owner_gap_ranking":
+                ctx.kpi_metrics = self._query_owner_gap_ranking(
+                    db_session=db_session,
+                    session_id=session_id,
+                )
+                if ctx.kpi_metrics:
+                    top_seller = (
+                        ctx.kpi_metrics[0].get("scope_name")
+                        or ctx.kpi_metrics[0].get("scope_id")
+                        or "未知销售"
+                    )
+                    top_gap = _safe_float(ctx.kpi_metrics[0].get("metric_value")) or 0.0
+                    other_sellers = [
+                        m.get("scope_name") or m.get("scope_id") or "未知销售"
+                        for m in ctx.kpi_metrics[1:4]
+                    ]
+                    other_hint = (
+                        f"- 可进一步对比的销售：{'、'.join(other_sellers)}。"
+                        if other_sellers
+                        else "- 当前仅有 1 位销售数据，暂时没有可对比对象。"
+                    )
+                    ctx.query_note = (
+                        "### 销售达成差额排名\n"
+                        f"- 当前共统计 {len(ctx.kpi_metrics)} 位销售，已按达成差额从高到低排序。\n"
+                        f"- 目前差额最大的是 {top_seller}，差额约 {top_gap:,.0f}。\n"
+                        f"{other_hint}\n"
+                        "- 查看路径：点击商机评估Agent，选择“人员分组”，查看每个销售下的具体商机列表。"
+                    )
+                else:
+                    ctx.query_note = (
+                        "### 销售达成差额排名\n"
+                        "- 当前未查询到销售维度的达成差额数据。"
+                    )
+                owner_preview = self._build_owner_gap_preview(ctx.kpi_metrics)
+                if owner_preview:
+                    ctx.query_note = f"{ctx.query_note}\n\n{owner_preview}"
+            else:
+                ctx.kpi_metrics = self._query_kpi_metrics(
+                    db_session, session_id, intent_for_execution
+                )
             ctx.opportunity_snapshot_rows = self._collect_opportunity_snapshot_rows(
                 db_session,
                 review_session,
-                intent,
+                intent_for_execution,
                 user_question=question,
             )
 
@@ -543,12 +998,12 @@ class ReviewDataRetriever:
             ctx.snapshot_aggregations = self._query_snapshot_aggregations(
                 db_session,
                 snapshot_period,
-                intent,
+                intent_for_execution,
                 skip_opportunity_detail=bool(ctx.opportunity_snapshot_rows),
             )
 
         risks_and_progress = self._query_risk_progress(
-            db_session, session_id, snapshot_period, intent
+            db_session, session_id, snapshot_period, intent_for_execution, risk_type_codes=None
         )
         ctx.risks = [
             r for r in risks_and_progress if r.get("record_type") in ("RISK", "OPP_SUMMARY")
@@ -557,7 +1012,7 @@ class ReviewDataRetriever:
             r for r in risks_and_progress if r.get("record_type") == "PROGRESS"
         ]
 
-        if intent.time_comparison == "wow":
+        if intent_for_execution.time_comparison == "wow":
             ctx.comparison_data = self._build_wow_comparison(ctx.kpi_metrics)
 
         return ctx
@@ -567,6 +1022,7 @@ class ReviewDataRetriever:
         db_session: Session,
         snapshot_period: str,
         department_id: Optional[str],
+        scope_owner_id: Optional[str],
         detail_filters: Dict[str, Any],
         current_owner_id: Optional[str] = None,
         current_owner_name: Optional[str] = None,
@@ -576,6 +1032,8 @@ class ReviewDataRetriever:
         stmt = select(S).where(S.snapshot_period == snapshot_period)
         if department_id:
             stmt = stmt.where(S.owner_department_id == department_id)
+        if scope_owner_id:
+            stmt = stmt.where(S.owner_id == scope_owner_id)
 
         owner_name = (detail_filters.get("owner_name") or "").strip()
         if owner_name:
@@ -659,6 +1117,8 @@ class ReviewDataRetriever:
         if not rows and department_id:
             # fallback to full scope to reduce false negatives from dept slicing
             stmt2 = select(S).where(S.snapshot_period == snapshot_period)
+            if scope_owner_id:
+                stmt2 = stmt2.where(S.owner_id == scope_owner_id)
             if owner_name:
                 if _is_self_reference(owner_name):
                     if current_owner_id:
@@ -770,6 +1230,151 @@ class ReviewDataRetriever:
             for r in rows
         ]
 
+    def _query_owner_gap_ranking(
+        self,
+        db_session: Session,
+        session_id: str,
+    ) -> List[Dict[str, Any]]:
+        K = CRMReviewKpiMetrics
+        stmt = select(K).where(
+            K.session_id == session_id,
+            K.scope_type == "owner",
+            K.metric_name == "gap",
+        )
+        rows = list(db_session.exec(stmt).all())
+        rows = [r for r in rows if r.metric_value is not None]
+        rows.sort(key=lambda r: float(r.metric_value), reverse=True)
+        return [
+            {
+                "scope_type": r.scope_type,
+                "scope_id": r.scope_id,
+                "scope_name": r.scope_name,
+                "metric_category": r.metric_category,
+                "metric_name": r.metric_name,
+                "metric_value": _safe_float(r.metric_value),
+                "metric_value_prev": _safe_float(r.metric_value_prev),
+                "metric_delta": _safe_float(r.metric_delta),
+                "metric_rate": _safe_float(r.metric_rate),
+                "metric_unit": r.metric_unit,
+                "metric_content": r.metric_content,
+                "calc_phase": r.calc_phase,
+            }
+            for r in rows
+        ]
+
+    def _resolve_target_action_risk_type_codes(
+        self,
+        db_session: Session,
+        session_id: str,
+        department_id: Optional[str],
+    ) -> List[str]:
+        """Resolve risk type by comparing commit_sales vs gap for current session."""
+        K = CRMReviewKpiMetrics
+        stmt = select(K).where(
+            K.session_id == session_id,
+            K.metric_name.in_(["gap", "commit_sales"]),
+        )
+        rows = list(db_session.exec(stmt).all())
+        if not rows:
+            return []
+
+        def _sum_metric(metric: str, scope_type: Optional[str], scope_id: Optional[str] = None) -> Optional[float]:
+            values = []
+            for r in rows:
+                if r.metric_name != metric:
+                    continue
+                if scope_type is not None and r.scope_type != scope_type:
+                    continue
+                if scope_id is not None and r.scope_id != scope_id:
+                    continue
+                if r.metric_value is not None:
+                    values.append(float(r.metric_value))
+            if not values:
+                return None
+            return float(sum(values))
+
+        gap = _sum_metric("gap", "department", department_id) if department_id else None
+        commit = _sum_metric("commit_sales", "department", department_id) if department_id else None
+        if gap is None or commit is None:
+            gap = _sum_metric("gap", "company")
+            commit = _sum_metric("commit_sales", "company")
+        if gap is None or commit is None:
+            gap = _sum_metric("gap", None)
+            commit = _sum_metric("commit_sales", None)
+        if gap is None or commit is None:
+            return []
+        if commit >= gap:
+            return ["ACHIEVEMENT_GAP_COMMIT_HIGH_RISK"]
+        if commit < gap:
+            return ["ACHIEVEMENT_GAP_UPSIDE_INSUFFICIENT"]
+        return []
+
+    def _query_risk_opportunity_relations(
+        self,
+        db_session: Session,
+        session_id: str,
+        snapshot_period: str,
+        relation_type_names: List[str],
+        owner_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        RR = CRMReviewRiskOpportunityRelation
+        stmt = select(RR).where(
+            RR.session_id == session_id,
+            RR.snapshot_period == snapshot_period,
+        )
+        if relation_type_names:
+            stmt = stmt.where(RR.type_name.in_(relation_type_names))
+        if owner_id:
+            stmt = stmt.where(RR.owner_id == owner_id)
+        rows = list(db_session.exec(stmt).all())
+        opportunity_ids = [r.opportunity_id for r in rows if getattr(r, "opportunity_id", None)]
+        opp_name_map: Dict[str, str] = {}
+        if opportunity_ids:
+            S = CRMReviewOppBranchSnapshot
+            opp_rows = db_session.exec(
+                select(S).where(
+                    S.snapshot_period == snapshot_period,
+                    S.opportunity_id.in_(opportunity_ids),
+                )
+            ).all()
+            opp_name_map = {
+                o.opportunity_id: (o.opportunity_name or "")
+                for o in opp_rows
+                if getattr(o, "opportunity_id", None)
+            }
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            out.append(
+                {
+                    "record_type": "RISK",
+                    "type_name": r.type_name or "",
+                    "opportunity_id": r.opportunity_id,
+                    "opportunity_name": opp_name_map.get(r.opportunity_id or "", ""),
+                    "owner_id": r.owner_id,
+                    "scope_type": "department_or_company",
+                }
+            )
+        return out
+
+    @staticmethod
+    def _resolve_owner_id_by_name(
+        db_session: Session,
+        snapshot_period: str,
+        owner_name: str,
+    ) -> Optional[str]:
+        if not owner_name:
+            return None
+        S = CRMReviewOppBranchSnapshot
+        row = db_session.exec(
+            select(S).where(
+                S.snapshot_period == snapshot_period,
+                S.owner_name == owner_name,
+            )
+        ).first()
+        if row and getattr(row, "owner_id", None):
+            return str(row.owner_id)
+        return None
+
     def _snapshot_row_to_detail(self, row: CRMReviewOppBranchSnapshot) -> Dict[str, Any]:
         return {
             "opportunity_id": row.opportunity_id,
@@ -791,6 +1396,7 @@ class ReviewDataRetriever:
         db_session: Session,
         snapshot_period: str,
         department_id: Optional[str],
+        owner_id: Optional[str],
         sales_field: str,
         ai_field: str,
         sales_label: str,
@@ -809,6 +1415,8 @@ class ReviewDataRetriever:
         )
         if department_id:
             stmt = stmt.where(S.owner_department_id == department_id)
+        if owner_id:
+            stmt = stmt.where(S.owner_id == owner_id)
         stmt = stmt.order_by(S.opportunity_name).limit(limit)
         rows = list(db_session.exec(stmt).all())
         if not rows and department_id:
@@ -824,6 +1432,8 @@ class ReviewDataRetriever:
                 .order_by(S.opportunity_name)
                 .limit(limit)
             )
+            if owner_id:
+                stmt2 = stmt2.where(S.owner_id == owner_id)
             rows = list(db_session.exec(stmt2).all())
         detailed_rows: List[Dict[str, Any]] = []
         for r in rows:
@@ -994,12 +1604,183 @@ class ReviewDataRetriever:
             for r in rows
         ]
 
+    @staticmethod
+    def _risk_taxonomy_ordered_names(
+        opp_ids: set,
+        id_to_display: Dict[str, str],
+    ) -> List[str]:
+        missing_oid = "__missing_opportunity_id__"
+        names: List[str] = []
+        seen: set[str] = set()
+        for oid in opp_ids:
+            if oid == missing_oid:
+                disp = id_to_display.get(missing_oid, "未知商机")
+            else:
+                disp = (id_to_display.get(oid) or oid or "").strip()
+            if not disp:
+                continue
+            if disp not in seen:
+                seen.add(disp)
+                names.append(disp)
+        names.sort()
+        return names
+
+    @staticmethod
+    def _collect_top_solutions(
+        rows: List[Dict[str, Any]],
+        limit: int = 3,
+    ) -> List[str]:
+        solutions: List[str] = []
+        seen: set[str] = set()
+        for row in rows:
+            s = str(row.get("solution") or "").strip()
+            if not s or s in seen:
+                continue
+            seen.add(s)
+            solutions.append(s)
+            if len(solutions) >= limit:
+                break
+        return solutions
+
+    def _build_opportunity_risk_taxonomy_breakdown(
+        self,
+        db_session: Session,
+        session_id: str,
+        snapshot_period: str,
+        intent: ReviewIntent,
+    ) -> Tuple[List[Dict[str, Any]], str]:
+        """Aggregate RISK rows by crm_review_risk_category.category_group (+ per type_code)."""
+        meta = load_risk_code_meta(db_session)
+        rows = self._query_risk_progress(
+            db_session,
+            session_id,
+            snapshot_period,
+            intent,
+            risk_type_codes=None,
+        )
+        risk_rows = [r for r in rows if r.get("record_type") == "RISK"]
+        missing_oid = "__missing_opportunity_id__"
+        cat_opp: Dict[str, set] = defaultdict(set)
+        cat_type_opp: Dict[str, Dict[str, set]] = defaultdict(
+            lambda: defaultdict(set)
+        )
+        cat_type_name: Dict[str, Dict[str, str]] = defaultdict(dict)
+        cat_solutions: Dict[str, List[str]] = defaultdict(list)
+        id_to_display: Dict[str, str] = {}
+
+        for r in risk_rows:
+            code_raw = str(r.get("type_code") or "").strip()
+            code = code_raw or "__MISSING_TYPE_CODE__"
+            row_meta = meta.get(code_raw) if code_raw else None
+            if row_meta:
+                cg = row_meta["category_group"]
+                name_zh = row_meta["name_zh"]
+            else:
+                cg = "未在配置表命中"
+                name_zh = (str(r.get("type_name") or "").strip() or code)
+            oid = str(r.get("opportunity_id") or "").strip()
+            if not oid:
+                oid = missing_oid
+            oname = (r.get("opportunity_name") or "").strip()
+            display = oname or ("" if oid == missing_oid else oid)
+            if oid == missing_oid:
+                id_to_display.setdefault(missing_oid, "未知商机")
+            elif display:
+                id_to_display[oid] = display
+            cat_opp[cg].add(oid)
+            cat_type_opp[cg][code].add(oid)
+            cat_type_name[cg][code] = name_zh
+            solution = str(r.get("solution") or "").strip()
+            if solution and solution not in cat_solutions[cg]:
+                cat_solutions[cg].append(solution)
+
+        breakdown: List[Dict[str, Any]] = []
+        for cg, opp_ids in cat_opp.items():
+            by_types: List[Dict[str, Any]] = []
+            for tcode, oset in sorted(
+                cat_type_opp[cg].items(),
+                key=lambda x: (-len(x[1]), x[0]),
+            ):
+                by_types.append(
+                    {
+                        "type_code": tcode,
+                        "name_zh": cat_type_name[cg].get(tcode, tcode),
+                        "opportunity_count": len(oset),
+                        "opportunity_names": self._risk_taxonomy_ordered_names(
+                            oset, id_to_display
+                        ),
+                    }
+                )
+            breakdown.append(
+                {
+                    "category_group": cg,
+                    "opportunity_count": len(opp_ids),
+                    "opportunity_names": self._risk_taxonomy_ordered_names(
+                        opp_ids, id_to_display
+                    ),
+                    "by_risk_type": by_types,
+                }
+            )
+
+        breakdown.sort(
+            key=lambda b: (-b["opportunity_count"], str(b["category_group"]))
+        )
+
+        path_line = (
+            "- 查看路径：点击商机评估Agent，筛选有风险的商机，点击商机详情。"
+        )
+        if not breakdown:
+            return (
+                [],
+                "### 商机风险分类统计\n"
+                "- 当前结论：本期在商机风险进度中暂未识别到 RISK 记录。\n"
+                "- 说明：风险类型范围以系统当前风险配置为准；以下为本期统计结果。\n"
+                f"{path_line}",
+            )
+
+        all_opp_ids: set[str] = set()
+        for s in cat_opp.values():
+            all_opp_ids |= s
+        total_opp = len(all_opp_ids)
+        n_cat = len(breakdown)
+
+        lines = [
+            "### 商机风险分类统计",
+            f"- 当前结论：按配置表风险类别汇总，本期共 {n_cat} 个类别出现风险命中，"
+            f"涉及 {total_opp} 个不同商机。",
+            "- 分类明细：",
+        ]
+        for b in breakdown:
+            cg = b["category_group"]
+            cnt = b["opportunity_count"]
+            names = b["opportunity_names"]
+            shown = names[:12]
+            tail = f" 等共 {cnt} 个" if len(names) > len(shown) else ""
+            lines.append(
+                f"  - **{cg}**：{cnt} 个商机 — "
+                f"{('、'.join(shown) if shown else '（无可用商机名称）')}{tail}"
+            )
+            if cat_solutions.get(cg):
+                lines.append(f"    · 建议动作参考：{'；'.join(cat_solutions[cg][:2])}")
+            for t in b.get("by_risk_type") or []:
+                tcnt = t["opportunity_count"]
+                tnames = t["opportunity_names"]
+                tshown = tnames[:8]
+                ttail = f" 等共 {tcnt} 个" if len(tnames) > len(tshown) else ""
+                lines.append(
+                    f"    · {t['name_zh']}（{t['type_code']}）：{tcnt} 个商机 — "
+                    f"{('、'.join(tshown) if tshown else '（无可用商机名称）')}{ttail}"
+                )
+        lines.append(path_line)
+        return breakdown, "\n".join(lines)
+
     def _query_risk_progress(
         self,
         db_session: Session,
         session_id: str,
         snapshot_period: str,
         intent: ReviewIntent,
+        risk_type_codes: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         R = CRMReviewOppRiskProgress
         stmt = select(R).where(
@@ -1013,10 +1794,30 @@ class ReviewDataRetriever:
             stmt = stmt.where(R.scope_id == intent.scope_id)
         if intent.opportunity_id:
             stmt = stmt.where(R.opportunity_id == intent.opportunity_id)
+        if risk_type_codes:
+            stmt = stmt.where(R.type_code.in_(risk_type_codes))
 
         stmt = stmt.order_by(R.record_type, R.type_code)
 
         rows = db_session.exec(stmt).all()
+        opportunity_ids = [
+            r.opportunity_id for r in rows
+            if getattr(r, "opportunity_id", None)
+        ]
+        opp_name_map: Dict[str, str] = {}
+        if opportunity_ids:
+            S = CRMReviewOppBranchSnapshot
+            opp_rows = db_session.exec(
+                select(S).where(
+                    S.snapshot_period == snapshot_period,
+                    S.opportunity_id.in_(opportunity_ids),
+                )
+            ).all()
+            opp_name_map = {
+                o.opportunity_id: (o.opportunity_name or "")
+                for o in opp_rows
+                if getattr(o, "opportunity_id", None)
+            }
         return [
             {
                 "record_type": r.record_type,
@@ -1037,6 +1838,7 @@ class ReviewDataRetriever:
                 "scope_type": r.scope_type,
                 "scope_id": r.scope_id,
                 "opportunity_id": r.opportunity_id,
+                "opportunity_name": opp_name_map.get(r.opportunity_id or "", ""),
                 "owner_id": r.owner_id,
             }
             for r in rows

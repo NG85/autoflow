@@ -4,9 +4,7 @@ from sqlalchemy import Index, select, String
 from sqlmodel import Field, Column, DateTime, Date, SQLModel, Text, Session, Relationship
 
 class CRMSalesActivities(SQLModel, table=True):
-    class Config:
-        orm_mode = True
-        read_only = True
+    model_config = {"from_attributes": True}
         
     """销售活动记录表"""
     id: Optional[int] = Field(default=None, primary_key=True)

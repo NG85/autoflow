@@ -39,7 +39,7 @@ class ReviewContextBuilder:
         intent: ReviewIntent,
         data_ctx: ReviewDataContext,
     ) -> str:
-        if intent.intent_type == "data_query":
+        if intent.intent_type == "data_query" and intent.query_type != "risk_progress":
             return ""
         return data_ctx.to_risk_context_text()
 

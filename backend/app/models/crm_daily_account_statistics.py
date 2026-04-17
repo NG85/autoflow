@@ -6,8 +6,7 @@ from sqlmodel import Field, Column, DateTime, func, SQLModel, Integer, String, D
 class CRMDailyAccountStatistics(SQLModel, table=True):
     """销售个人日报统计表 - 对应现有数据表 crm_daily_account_statistics"""
     
-    class Config:
-        orm_mode = True
+    model_config = {"from_attributes": True}
         
     __tablename__ = 'crm_daily_account_statistics'
 

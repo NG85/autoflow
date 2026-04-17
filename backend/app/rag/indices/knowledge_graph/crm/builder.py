@@ -1,5 +1,6 @@
+import hashlib
 from copy import deepcopy
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from app.rag.indices.knowledge_graph.crm.entity import (
     AccountEntity,
     ContactEntity,
@@ -15,9 +16,24 @@ from app.rag.types import CrmDataType
 from app.models.enums import GraphType
 
 class CRMKnowledgeGraphBuilder:
-    """CRM knowledge graph builder."""
+    """CRM knowledge graph builder.
+
+    Guardrails:
+    - Use human-readable business names in entity/relationship text for semantic
+      retrieval quality.
+    - Keep stable identifiers (IDs/codes/system stage) in `meta` for exact
+      filtering, routing, and governance.
+    - When text detail and structured filtering conflict, prefer clean text +
+      richer meta/relations.
+    """
     def __init__(self):
         pass
+
+    @staticmethod
+    def _resolve_opportunity_display_name(data: Dict, fallback: str = "未命名商机") -> str:
+        """Prefer business name for display text; keep id in metadata only."""
+        name = (data.get("opportunity_name") or "").strip()
+        return name or fallback
            
     def create_account_entity(self, account_data: Dict) -> AccountEntity:
         """Create account entity."""
@@ -39,6 +55,7 @@ class CRMKnowledgeGraphBuilder:
         """Create internal owner entity."""
         internal_owner = data.get("internal_owner")
         internal_department = data.get("internal_department")
+        internal_owner_id = data.get("internal_owner_id", "")
         if not internal_owner:
             return []
 
@@ -47,9 +64,10 @@ class CRMKnowledgeGraphBuilder:
             InternalOwnerEntity(
                 id=None,
                 name=owner,
-                description=f"我方对接人{owner}" + (f", 主属部门{internal_department}" if internal_department else ""),
+                description=f"负责销售{owner}" + (f", 主属部门{internal_department}" if internal_department else ""),
                 metadata={
                     "internal_owner": owner,
+                    "internal_owner_id": internal_owner_id,
                     "internal_department": internal_department,
                 }
             )
@@ -194,7 +212,7 @@ class CRMKnowledgeGraphBuilder:
         )
 
     def create_review_snapshot_entity(self, data: Dict) -> ReviewSnapshotEntity:
-        opp_name = data.get("opportunity_name") or data.get("opportunity_id", "")
+        opp_name = self._resolve_opportunity_display_name(data)
         period = data.get("snapshot_period", "")
         metadata = {
             "opportunity_id": data.get("opportunity_id", ""),
@@ -236,6 +254,113 @@ class CRMKnowledgeGraphBuilder:
             metadata=metadata,
         )
 
+    def _match_state(self, sales_value: Any, ai_value: Any) -> str:
+        sales = str(sales_value or "").strip()
+        ai = str(ai_value or "").strip()
+        if not sales or not ai:
+            return "缺失"
+        return "一致" if sales == ai else "不一致"
+
+    def _extract_review_fact_lines(self, chunk_text: Optional[str]) -> List[str]:
+        """Extract normalized fact lines from review chunk text."""
+        text = (chunk_text or "").strip()
+        if not text:
+            return []
+        out: List[str] = []
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line.startswith("- "):
+                continue
+            # Keep only structured fact bullets to avoid noisy generic bullets.
+            if "指标=" not in line:
+                continue
+            if ("范围类型=" not in line) and ("部门=" not in line) and ("负责销售=" not in line):
+                continue
+            out.append(line[2:].strip())
+        return out
+
+    def _parse_review_fact_kvs(self, fact_line: str) -> Dict[str, str]:
+        """Parse key-value pairs from one fact line."""
+        result: Dict[str, str] = {}
+        for seg in fact_line.split("；"):
+            s = seg.strip().rstrip("。")
+            if "=" not in s:
+                continue
+            k, v = s.split("=", 1)
+            key = k.strip()
+            value = v.strip()
+            if key:
+                result[key] = value
+        return result
+
+    def _append_review_chunk_facts(
+        self,
+        relationships_data: List[Dict[str, Any]],
+        *,
+        source_entity_name: str,
+        source_entity_description: str,
+        rel_meta_base: Dict[str, Any],
+        crm_data_type: CrmDataType,
+        chunk_text: Optional[str],
+    ) -> None:
+        """Append chunk-level fact relations so each chunk can contribute distinct facts."""
+        fact_lines = self._extract_review_fact_lines(chunk_text)
+        for idx, fact_line in enumerate(fact_lines):
+            parsed = self._parse_review_fact_kvs(fact_line)
+            scope_type = parsed.get("范围类型", "")
+            scope_name = parsed.get("范围名称", "")
+            if not scope_type and "部门" in parsed:
+                scope_type = "部门"
+                scope_name = parsed.get("部门", "")
+            if not scope_type and "负责销售" in parsed:
+                scope_type = "负责人"
+                scope_name = parsed.get("负责销售", "")
+            metric_raw = parsed.get("指标", "")
+            metric_key = ""
+            if "(" in metric_raw and ")" in metric_raw:
+                metric_key = metric_raw.rsplit("(", 1)[-1].rstrip(")").strip()
+            fact_fingerprint = "|".join(
+                [
+                    str(rel_meta_base.get("session_id", "")),
+                    str(rel_meta_base.get("snapshot_period", "")),
+                    str(rel_meta_base.get("chunk_id", "")),
+                    str(scope_type),
+                    str(scope_name),
+                    str(metric_key or metric_raw),
+                    str(parsed.get("当前值", "")),
+                    str(parsed.get("上期值", "")),
+                    str(parsed.get("变化量", "")),
+                    str(parsed.get("变化率", "")),
+                ]
+            )
+            fact_hash = hashlib.sha1(fact_fingerprint.encode("utf-8")).hexdigest()
+            relationships_data.append(
+                {
+                    "source_entity": source_entity_name,
+                    "target_entity": source_entity_name,
+                    "source_entity_description": source_entity_description,
+                    "target_entity_description": source_entity_description,
+                    "relationship_desc": fact_line,
+                    "meta": {
+                        **rel_meta_base,
+                        "relation_type": "HAS_FACT",
+                        "crm_data_type": crm_data_type,
+                        "source_type": crm_data_type,
+                        "target_type": crm_data_type,
+                        "fact_index": idx,
+                        "fact_scope_type": scope_type,
+                        "fact_scope_name": scope_name,
+                        "fact_metric": metric_raw,
+                        "fact_metric_key": metric_key,
+                        "fact_current_value": parsed.get("当前值", ""),
+                        "fact_prev_value": parsed.get("上期值", ""),
+                        "fact_delta": parsed.get("变化量", ""),
+                        "fact_rate": parsed.get("变化率", ""),
+                        "fact_hash": fact_hash,
+                    },
+                }
+            )
+
     def build_graph_from_document_data(
         self,
         crm_data_type: CrmDataType,
@@ -243,7 +368,8 @@ class CRMKnowledgeGraphBuilder:
         secondary_data: Dict[str, Any],
         document_id: str = None,
         chunk_id: str = None,
-        meta: Dict[str, Any] = None
+        meta: Dict[str, Any] = None,
+        chunk_text: str = None,
     ) -> tuple[List[Dict], List[Dict]]:
         """Build CRM knowledge graph from document data"""
         # 初始化实体和关系列表
@@ -691,22 +817,32 @@ class CRMKnowledgeGraphBuilder:
                 "document_id": document_id,
                 "chunk_id": chunk_id,
                 "crm_data_type": crm_data_type,
+                "session_id": primary_data.get("session_id") or primary_data.get("unique_id", ""),
                 "snapshot_period": primary_data.get("period", ""),
+                "stage": primary_data.get("stage", "") or meta.get("stage", ""),
+                "calc_phase": primary_data.get("calc_phase", "") or meta.get("calc_phase", ""),
                 "unique_id": primary_data.get("session_id") or primary_data.get("unique_id", ""),
             }
-            relationships_data.append({
-                "source_entity": session_entity.name,
-                "target_entity": session_entity.name,
-                "source_entity_description": session_entity.description,
-                "target_entity_description": session_entity.description,
-                "relationship_desc": f"Review会议{session_entity.name}包含更多详细信息",
-                "meta": {**rel_meta_base, "relation_type": "HAS_DETAIL",
-                         "source_type": CrmDataType.REVIEW_SESSION,
-                         "target_type": CrmDataType.REVIEW_SESSION},
-            })
+            include_self_detail_relation = bool(
+                (meta or {}).get("include_self_detail_relation", False)
+            )
+            if include_self_detail_relation:
+                relationships_data.append({
+                    "source_entity": session_entity.name,
+                    "target_entity": session_entity.name,
+                    "source_entity_description": session_entity.description,
+                    "target_entity_description": session_entity.description,
+                    "relationship_desc": f"Review会议{session_entity.name}包含更多详细信息",
+                    "meta": {**rel_meta_base, "relation_type": "HAS_DETAIL",
+                             "source_type": CrmDataType.REVIEW_SESSION,
+                             "target_type": CrmDataType.REVIEW_SESSION},
+                })
             # Session → Department
             dept_name = primary_data.get("department_name")
-            if dept_name:
+            is_primary_chunk_for_document = bool(
+                (meta or {}).get("is_primary_chunk_for_document", True)
+            )
+            if dept_name and is_primary_chunk_for_document:
                 dept_entity = AccountEntity(
                     id=None,
                     name=dept_name,
@@ -728,8 +864,16 @@ class CRMKnowledgeGraphBuilder:
                     "relationship_desc": f"Review会议{session_entity.name}属于部门{dept_name}",
                     "meta": {**rel_meta_base, "relation_type": "BELONGS_TO",
                              "source_type": CrmDataType.REVIEW_SESSION,
-                             "target_type": CrmDataType.ACCOUNT},
+                             "target_type": CrmDataType.DEPARTMENT},
                 })
+            self._append_review_chunk_facts(
+                relationships_data,
+                source_entity_name=session_entity.name,
+                source_entity_description=session_entity.description,
+                rel_meta_base=rel_meta_base,
+                crm_data_type=crm_data_type,
+                chunk_text=chunk_text,
+            )
 
         elif crm_data_type == CrmDataType.REVIEW_SNAPSHOT:
             snapshot_entity = self.create_review_snapshot_entity(primary_data)
@@ -744,26 +888,36 @@ class CRMKnowledgeGraphBuilder:
                 "document_id": document_id,
                 "chunk_id": chunk_id,
                 "crm_data_type": crm_data_type,
+                "session_id": primary_data.get("session_id") or meta.get("session_id", ""),
                 "snapshot_period": primary_data.get("snapshot_period", ""),
+                "stage": primary_data.get("stage", "") or meta.get("stage", ""),
+                "calc_phase": primary_data.get("calc_phase", "") or meta.get("calc_phase", ""),
                 "unique_id": primary_data.get("unique_id", ""),
             }
-            relationships_data.append({
-                "source_entity": snapshot_entity.name,
-                "target_entity": snapshot_entity.name,
-                "source_entity_description": snapshot_entity.description,
-                "target_entity_description": snapshot_entity.description,
-                "relationship_desc": f"商机快照{snapshot_entity.name}包含更多详细信息",
-                "meta": {**rel_meta_base, "relation_type": "HAS_DETAIL",
-                         "source_type": CrmDataType.REVIEW_SNAPSHOT,
-                         "target_type": CrmDataType.REVIEW_SNAPSHOT},
-            })
+            include_self_detail_relation = bool(
+                (meta or {}).get("include_self_detail_relation", False)
+            )
+            if include_self_detail_relation:
+                relationships_data.append({
+                    "source_entity": snapshot_entity.name,
+                    "target_entity": snapshot_entity.name,
+                    "source_entity_description": snapshot_entity.description,
+                    "target_entity_description": snapshot_entity.description,
+                    "relationship_desc": f"商机快照{snapshot_entity.name}包含更多详细信息",
+                    "meta": {**rel_meta_base, "relation_type": "HAS_DETAIL",
+                             "source_type": CrmDataType.REVIEW_SNAPSHOT,
+                             "target_type": CrmDataType.REVIEW_SNAPSHOT},
+                })
             # Snapshot → Opportunity
             opp_name = primary_data.get("opportunity_name")
             opp_id = primary_data.get("opportunity_id")
             if opp_name or opp_id:
+                display_name = self._resolve_opportunity_display_name(primary_data)
+                snapshot_period = primary_data.get("snapshot_period", "")
+                period_prefix = f"{snapshot_period}周期" if snapshot_period else ""
                 opp_entity = self.create_opportunity_entity({
                     "opportunity_id": opp_id,
-                    "opportunity_name": opp_name or opp_id,
+                    "opportunity_name": display_name,
                 })
                 entities_data.append({
                     "name": opp_entity.name,
@@ -776,19 +930,59 @@ class CRMKnowledgeGraphBuilder:
                     "target_entity": opp_entity.name,
                     "source_entity_description": snapshot_entity.description,
                     "target_entity_description": opp_entity.description,
-                    "relationship_desc": f"商机快照{snapshot_entity.name}是商机{opp_entity.name}的周期快照",
-                    "meta": {**rel_meta_base, "relation_type": "SNAPSHOT_OF",
-                             "source_type": CrmDataType.REVIEW_SNAPSHOT,
-                             "target_type": CrmDataType.OPPORTUNITY},
+                    "relationship_desc": f"商机快照{snapshot_entity.name}是商机{opp_entity.name}的{period_prefix}快照",
+                    "meta": {
+                        **rel_meta_base,
+                        "relation_type": "SNAPSHOT_OF",
+                        "source_type": CrmDataType.REVIEW_SNAPSHOT,
+                        "target_type": CrmDataType.OPPORTUNITY,
+                        "opportunity_id": opp_id or "",
+                    },
                 })
+            # Snapshot → Account(Customer)
+            account_name = primary_data.get("account_name", "")
+            account_id = primary_data.get("account_id", "")
+            if account_name or account_id:
+                account_entity = self.create_account_entity(
+                    {
+                        "account_id": account_id,
+                        "account_name": account_name or account_id,
+                    }
+                )
+                entities_data.append(
+                    {
+                        "name": account_entity.name,
+                        "description": account_entity.description,
+                        "meta": account_entity.metadata,
+                        "graph_type": GraphType.crm,
+                    }
+                )
+                relationships_data.append(
+                    {
+                        "source_entity": snapshot_entity.name,
+                        "target_entity": account_entity.name,
+                        "source_entity_description": snapshot_entity.description,
+                        "target_entity_description": account_entity.description,
+                        "relationship_desc": f"商机快照{snapshot_entity.name}属于客户{account_entity.name}",
+                        "meta": {
+                            **rel_meta_base,
+                            "relation_type": "BELONGS_TO_CUSTOMER",
+                            "source_type": CrmDataType.REVIEW_SNAPSHOT,
+                            "target_type": CrmDataType.ACCOUNT,
+                            "account_id": account_id or "",
+                        },
+                    }
+                )
             # Snapshot → ReviewSession
             if secondary_data and secondary_data.get("session_id"):
-                session_name = secondary_data.get("session_name") or secondary_data.get("session_id", "")
-                session_entity = ReviewSessionEntity(
-                    id=None,
-                    name=session_name,
-                    description=f"Review会议 {session_name}",
-                    metadata={"session_id": secondary_data["session_id"]},
+                session_entity = self.create_review_session_entity(
+                    {
+                        "session_id": secondary_data.get("session_id"),
+                        "session_name": secondary_data.get("session_name"),
+                        "department_name": secondary_data.get("department_name", ""),
+                        "period": secondary_data.get("period") or primary_data.get("snapshot_period", ""),
+                        "stage": secondary_data.get("stage") or primary_data.get("stage", "") or meta.get("stage", ""),
+                    }
                 )
                 entities_data.append({
                     "name": session_entity.name,
@@ -811,6 +1005,7 @@ class CRMKnowledgeGraphBuilder:
             if owner_name:
                 owner_entities = self.create_internal_owner_entity({
                     "internal_owner": owner_name,
+                    "internal_owner_id": primary_data.get("owner_id", ""),
                     "internal_department": primary_data.get("owner_department_name", ""),
                 })
                 for owner_entity in owner_entities:
@@ -826,10 +1021,87 @@ class CRMKnowledgeGraphBuilder:
                         "source_entity_description": snapshot_entity.description,
                         "target_entity_description": owner_entity.description,
                         "relationship_desc": f"商机快照{snapshot_entity.name}由{owner_entity.name}负责",
-                        "meta": {**rel_meta_base, "relation_type": "HANDLED_BY",
-                                 "source_type": CrmDataType.REVIEW_SNAPSHOT,
-                                 "target_type": CrmDataType.INTERNAL_OWNER},
+                        "meta": {
+                            **rel_meta_base,
+                            "relation_type": "HANDLED_BY",
+                            "source_type": CrmDataType.REVIEW_SNAPSHOT,
+                            "target_type": CrmDataType.INTERNAL_OWNER,
+                            "owner_id": primary_data.get("owner_id", ""),
+                            "owner_department_id": primary_data.get("owner_department_id", ""),
+                            "owner_department_name": primary_data.get("owner_department_name", ""),
+                        },
                     })
+            sales_forecast = primary_data.get("baseline_forecast_type") or primary_data.get("forecast_type", "")
+            sales_stage = primary_data.get("baseline_opportunity_stage") or primary_data.get("opportunity_stage", "")
+            sales_close = primary_data.get("baseline_expected_closing_date") or primary_data.get("expected_closing_date", "")
+            ai_forecast = primary_data.get("ai_commit", "")
+            ai_stage = primary_data.get("ai_stage", "")
+            ai_close = primary_data.get("ai_expected_closing_date", "")
+            relationships_data.append({
+                "source_entity": snapshot_entity.name,
+                "target_entity": snapshot_entity.name,
+                "source_entity_description": snapshot_entity.description,
+                "target_entity_description": snapshot_entity.description,
+                "relationship_desc": (
+                    f"商机快照{snapshot_entity.name}销售判断与AI判断在预测状态上"
+                    f"{self._match_state(sales_forecast, ai_forecast)}"
+                ),
+                "meta": {
+                    **rel_meta_base,
+                    "relation_type": "SALES_AI_FORECAST_MATCH",
+                    "source_type": CrmDataType.REVIEW_SNAPSHOT,
+                    "target_type": CrmDataType.REVIEW_SNAPSHOT,
+                    "sales_value": sales_forecast,
+                    "ai_value": ai_forecast,
+                    "match_state": self._match_state(sales_forecast, ai_forecast),
+                },
+            })
+            relationships_data.append({
+                "source_entity": snapshot_entity.name,
+                "target_entity": snapshot_entity.name,
+                "source_entity_description": snapshot_entity.description,
+                "target_entity_description": snapshot_entity.description,
+                "relationship_desc": (
+                    f"商机快照{snapshot_entity.name}销售判断与AI判断在商机阶段上"
+                    f"{self._match_state(sales_stage, ai_stage)}"
+                ),
+                "meta": {
+                    **rel_meta_base,
+                    "relation_type": "SALES_AI_STAGE_MATCH",
+                    "source_type": CrmDataType.REVIEW_SNAPSHOT,
+                    "target_type": CrmDataType.REVIEW_SNAPSHOT,
+                    "sales_value": sales_stage,
+                    "ai_value": ai_stage,
+                    "match_state": self._match_state(sales_stage, ai_stage),
+                },
+            })
+            relationships_data.append({
+                "source_entity": snapshot_entity.name,
+                "target_entity": snapshot_entity.name,
+                "source_entity_description": snapshot_entity.description,
+                "target_entity_description": snapshot_entity.description,
+                "relationship_desc": (
+                    f"商机快照{snapshot_entity.name}销售判断与AI判断在预计成交日期上"
+                    f"{self._match_state(sales_close, ai_close)}"
+                ),
+                "meta": {
+                    **rel_meta_base,
+                    "relation_type": "SALES_AI_CLOSE_DATE_MATCH",
+                    "source_type": CrmDataType.REVIEW_SNAPSHOT,
+                    "target_type": CrmDataType.REVIEW_SNAPSHOT,
+                    "sales_value": sales_close,
+                    "ai_value": ai_close,
+                    "match_state": self._match_state(sales_close, ai_close),
+                },
+            })
+            self._append_review_chunk_facts(
+                relationships_data,
+                source_entity_name=snapshot_entity.name,
+                source_entity_description=snapshot_entity.description,
+                rel_meta_base=rel_meta_base,
+                crm_data_type=crm_data_type,
+                chunk_text=chunk_text,
+            )
 
         elif crm_data_type == CrmDataType.REVIEW_RISK_PROGRESS:
             rp_entity = self.create_review_risk_progress_entity(primary_data)
@@ -844,28 +1116,37 @@ class CRMKnowledgeGraphBuilder:
                 "document_id": document_id,
                 "chunk_id": chunk_id,
                 "crm_data_type": crm_data_type,
+                "session_id": primary_data.get("session_id") or meta.get("session_id", ""),
                 "snapshot_period": primary_data.get("snapshot_period", ""),
                 "calc_phase": primary_data.get("calc_phase", ""),
+                "stage": primary_data.get("stage", "") or meta.get("stage", ""),
                 "unique_id": primary_data.get("unique_id", ""),
             }
-            relationships_data.append({
-                "source_entity": rp_entity.name,
-                "target_entity": rp_entity.name,
-                "source_entity_description": rp_entity.description,
-                "target_entity_description": rp_entity.description,
-                "relationship_desc": f"{rp_entity.name}包含更多详细信息",
-                "meta": {**rel_meta_base, "relation_type": "HAS_DETAIL",
-                         "source_type": CrmDataType.REVIEW_RISK_PROGRESS,
-                         "target_type": CrmDataType.REVIEW_RISK_PROGRESS},
-            })
+            include_self_detail_relation = bool(
+                (meta or {}).get("include_self_detail_relation", False)
+            )
+            if include_self_detail_relation:
+                relationships_data.append({
+                    "source_entity": rp_entity.name,
+                    "target_entity": rp_entity.name,
+                    "source_entity_description": rp_entity.description,
+                    "target_entity_description": rp_entity.description,
+                    "relationship_desc": f"{rp_entity.name}包含更多详细信息",
+                    "meta": {**rel_meta_base, "relation_type": "HAS_DETAIL",
+                             "source_type": CrmDataType.REVIEW_RISK_PROGRESS,
+                             "target_type": CrmDataType.REVIEW_RISK_PROGRESS},
+                })
             # RiskProgress → ReviewSession
+            # Keep session display name in relation text; session_id stays in meta.
             if secondary_data and secondary_data.get("session_id"):
-                session_name = secondary_data.get("session_name") or secondary_data.get("session_id", "")
-                session_entity = ReviewSessionEntity(
-                    id=None,
-                    name=session_name,
-                    description=f"Review会议 {session_name}",
-                    metadata={"session_id": secondary_data["session_id"]},
+                session_entity = self.create_review_session_entity(
+                    {
+                        "session_id": secondary_data.get("session_id"),
+                        "session_name": secondary_data.get("session_name"),
+                        "department_name": secondary_data.get("department_name", ""),
+                        "period": secondary_data.get("period") or primary_data.get("snapshot_period", ""),
+                        "stage": secondary_data.get("stage") or primary_data.get("stage", "") or meta.get("stage", ""),
+                    }
                 )
                 entities_data.append({
                     "name": session_entity.name,
@@ -879,16 +1160,42 @@ class CRMKnowledgeGraphBuilder:
                     "source_entity_description": rp_entity.description,
                     "target_entity_description": session_entity.description,
                     "relationship_desc": f"{rp_entity.name}属于Review会议{session_entity.name}",
-                    "meta": {**rel_meta_base, "relation_type": "BELONGS_TO",
-                             "source_type": CrmDataType.REVIEW_RISK_PROGRESS,
-                             "target_type": CrmDataType.REVIEW_SESSION},
+                    "meta": {
+                        **rel_meta_base,
+                        "relation_type": "BELONGS_TO",
+                        "relation_subtype": "BELONGS_TO_SESSION",
+                        "source_type": CrmDataType.REVIEW_RISK_PROGRESS,
+                        "target_type": CrmDataType.REVIEW_SESSION,
+                    },
+                })
+            scope_type_key = str(primary_data.get("scope_type", "")).strip().lower()
+            scope_name = str(primary_data.get("scope_name", "")).strip()
+            scope_id = str(primary_data.get("scope_id", "")).strip()
+            if scope_type_key == "department" and scope_name:
+                dept_description = f"部门{scope_name}"
+                relationships_data.append({
+                    "source_entity": rp_entity.name,
+                    "target_entity": scope_name,
+                    "source_entity_description": rp_entity.description,
+                    "target_entity_description": dept_description,
+                    "relationship_desc": f"{rp_entity.name}影响部门{scope_name}",
+                    "meta": {
+                        **rel_meta_base,
+                        "relation_type": "AFFECTS_DEPARTMENT",
+                        "source_type": CrmDataType.REVIEW_RISK_PROGRESS,
+                        "target_type": CrmDataType.DEPARTMENT,
+                        "department_id": scope_id,
+                        "department_name": scope_name,
+                    },
                 })
             # RiskProgress → Opportunity (if opportunity-level)
+            # Use opportunity display name in text; keep opportunity_id in meta.
             opp_id = primary_data.get("opportunity_id")
             if opp_id:
+                display_name = self._resolve_opportunity_display_name(primary_data)
                 opp_entity = self.create_opportunity_entity({
                     "opportunity_id": opp_id,
-                    "opportunity_name": opp_id,
+                    "opportunity_name": display_name,
                 })
                 entities_data.append({
                     "name": opp_entity.name,
@@ -902,9 +1209,21 @@ class CRMKnowledgeGraphBuilder:
                     "source_entity_description": rp_entity.description,
                     "target_entity_description": opp_entity.description,
                     "relationship_desc": f"{rp_entity.name}关联商机{opp_entity.name}",
-                    "meta": {**rel_meta_base, "relation_type": "DETECTED_IN",
-                             "source_type": CrmDataType.REVIEW_RISK_PROGRESS,
-                             "target_type": CrmDataType.OPPORTUNITY},
+                    "meta": {
+                        **rel_meta_base,
+                        "relation_type": "DETECTED_IN",
+                        "source_type": CrmDataType.REVIEW_RISK_PROGRESS,
+                        "target_type": CrmDataType.OPPORTUNITY,
+                        "opportunity_id": opp_id or "",
+                    },
                 })
+            self._append_review_chunk_facts(
+                relationships_data,
+                source_entity_name=rp_entity.name,
+                source_entity_description=rp_entity.description,
+                rel_meta_base=rel_meta_base,
+                crm_data_type=crm_data_type,
+                chunk_text=chunk_text,
+            )
     
         return entities_data, relationships_data

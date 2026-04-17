@@ -107,8 +107,7 @@ class UserProfile(SQLModel, table=True):
     )
     __tablename__ = "user_profiles"
     
-    class Config:
-        orm_mode = True
+    model_config = {"from_attributes": True}
     
     @property
     def oauth_user(self) -> Optional["UserOAuthAccount"]:

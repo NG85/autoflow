@@ -6,8 +6,7 @@ from sqlmodel import Field, Column, DateTime, func, SQLModel, String, Date, Bool
 class CRMAccountOpportunityAssessment(SQLModel, table=True):
     """客户商机评估表（只读）"""
     
-    class Config:
-        orm_mode = True
+    model_config = {"from_attributes": True}
         
     __tablename__ = 'crm_account_opportunity_assessment'
 
