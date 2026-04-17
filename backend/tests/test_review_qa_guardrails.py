@@ -223,6 +223,83 @@ def test_retrieve_prefers_query_plan_opportunity_detail_route(monkeypatch):
     assert len(ctx.opportunity_snapshot_rows) == 1
 
 
+def test_opportunity_detail_query_note_includes_default_list_preview(monkeypatch):
+    retriever = ReviewDataRetriever()
+    review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
+    intent = ReviewIntent(
+        intent_type="data_query",
+        query_plan={
+            "route": "opportunity_detail",
+            "detail_filters": {"owner_name": "张三"},
+            "use_kpi": False,
+        },
+    )
+    monkeypatch.setattr(
+        retriever,
+        "_query_typical_opportunity_details",
+        lambda *a, **k: [
+            {
+                "opportunity_id": "o1",
+                "opportunity_name": "华北大单",
+                "owner_name": "张三",
+                "forecast_amount": 1200000,
+            }
+        ],
+    )
+    monkeypatch.setattr(retriever, "_query_kpi_metrics", lambda *a, **k: [])
+    monkeypatch.setattr(retriever, "_query_snapshot_aggregations", lambda *a, **k: [])
+    monkeypatch.setattr(retriever, "_query_risk_progress", lambda *a, **k: [])
+    ctx = retriever.retrieve(
+        db_session=None,
+        review_session=review_session,
+        intent=intent,
+        user_question="查询负责人张三的商机明细",
+    )
+    assert "商机明细清单" in (ctx.query_note or "")
+    assert "华北大单" in (ctx.query_note or "")
+
+
+def test_mismatch_query_note_includes_default_list_preview(monkeypatch):
+    retriever = ReviewDataRetriever()
+    review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
+    intent = ReviewIntent(
+        intent_type="data_query",
+        query_plan={
+            "route": "mismatch_list",
+            "mismatch_type": "stage",
+            "use_kpi": False,
+        },
+    )
+    monkeypatch.setattr(
+        retriever,
+        "_query_field_mismatch_opportunities",
+        lambda *a, **k: [
+            {
+                "opportunity_id": "o2",
+                "opportunity_name": "华东续签",
+                "owner_name": "李四",
+                "forecast_amount": 800000,
+                "mismatch_type": "stage",
+                "sales_label": "销售商机阶段",
+                "ai_label": "AI商机阶段",
+                "sales_value": "谈判",
+                "ai_value": "方案",
+            }
+        ],
+    )
+    monkeypatch.setattr(retriever, "_query_kpi_metrics", lambda *a, **k: [])
+    monkeypatch.setattr(retriever, "_query_snapshot_aggregations", lambda *a, **k: [])
+    monkeypatch.setattr(retriever, "_query_risk_progress", lambda *a, **k: [])
+    ctx = retriever.retrieve(
+        db_session=None,
+        review_session=review_session,
+        intent=intent,
+        user_question="销售和AI阶段不一致的商机有哪些",
+    )
+    assert "差异商机清单" in (ctx.query_note or "")
+    assert "华东续签" in (ctx.query_note or "")
+
+
 def test_retrieve_passes_current_owner_context_for_self_queries(monkeypatch):
     retriever = ReviewDataRetriever()
     review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")

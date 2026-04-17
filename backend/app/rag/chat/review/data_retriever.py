@@ -483,6 +483,53 @@ class ReviewDataRetriever:
     """Retrieves structured data from CRM review tables based on intent parameters."""
 
     @staticmethod
+    def _build_opportunity_list_preview(
+        rows: List[Dict[str, Any]],
+        title: str,
+        max_items: int = 8,
+    ) -> str:
+        if not rows:
+            return ""
+        lines = [f"### {title}（Top {min(max_items, len(rows))}）"]
+        for idx, row in enumerate(rows[:max_items], 1):
+            opp_name = row.get("opportunity_name") or row.get("opportunity_id") or "未知商机"
+            owner_name = row.get("owner_name") or "未知负责人"
+            forecast_amount = row.get("forecast_amount")
+            amount_text = (
+                _fmt_value("commit_sales", forecast_amount)
+                if forecast_amount is not None
+                else "N/A"
+            )
+            mismatch_text = ""
+            if row.get("mismatch_type"):
+                mismatch_text = (
+                    f"；差异={row.get('sales_label')}:{row.get('sales_value') or 'N/A'}"
+                    f" vs {row.get('ai_label')}:{row.get('ai_value') or 'N/A'}"
+                )
+            lines.append(
+                f"- {idx}. {opp_name}｜负责人:{owner_name}｜金额:{amount_text}{mismatch_text}"
+            )
+        if len(rows) > max_items:
+            lines.append(f"- 其余 {len(rows) - max_items} 条请在明细页查看。")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _build_owner_gap_preview(
+        rows: List[Dict[str, Any]],
+        max_items: int = 8,
+    ) -> str:
+        if not rows:
+            return ""
+        lines = [f"### 销售差额清单（Top {min(max_items, len(rows))}）"]
+        for idx, row in enumerate(rows[:max_items], 1):
+            owner = row.get("scope_name") or row.get("scope_id") or "未知销售"
+            gap_value = _safe_float(row.get("metric_value")) or 0.0
+            lines.append(f"- {idx}. {owner}｜差额:{gap_value:,.0f}")
+        if len(rows) > max_items:
+            lines.append(f"- 其余 {len(rows) - max_items} 位销售请在人员分组查看。")
+        return "\n".join(lines)
+
+    @staticmethod
     def _normalize_execution_scope_and_time(
         intent: ReviewIntent,
         current_owner_id: Optional[str] = None,
@@ -607,6 +654,12 @@ class ReviewDataRetriever:
                     f"- 已按“{cfg['sales_label']} vs {cfg['ai_label']}”检索，"
                     f"共找到 {len(ctx.opportunity_snapshot_rows)} 个不一致商机。"
                 )
+                list_preview = self._build_opportunity_list_preview(
+                    ctx.opportunity_snapshot_rows,
+                    title="差异商机清单",
+                )
+                if list_preview:
+                    ctx.query_note = f"{ctx.query_note}\n\n{list_preview}"
             else:
                 ctx.query_note = (
                     f"### 差异查询结果\n"
@@ -629,6 +682,12 @@ class ReviewDataRetriever:
                     "### 商机明细查询结果\n"
                     f"- 已按典型字段条件检索，共返回 {len(ctx.opportunity_snapshot_rows)} 条商机明细。"
                 )
+                list_preview = self._build_opportunity_list_preview(
+                    ctx.opportunity_snapshot_rows,
+                    title="商机明细清单",
+                )
+                if list_preview:
+                    ctx.query_note = f"{ctx.query_note}\n\n{list_preview}"
             else:
                 ctx.query_note = (
                     "### 商机明细查询结果\n"
@@ -921,6 +980,9 @@ class ReviewDataRetriever:
                         "### 销售达成差额排名\n"
                         "- 当前未查询到销售维度的达成差额数据。"
                     )
+                owner_preview = self._build_owner_gap_preview(ctx.kpi_metrics)
+                if owner_preview:
+                    ctx.query_note = f"{ctx.query_note}\n\n{owner_preview}"
             else:
                 ctx.kpi_metrics = self._query_kpi_metrics(
                     db_session, session_id, intent_for_execution
