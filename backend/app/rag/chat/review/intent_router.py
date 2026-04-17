@@ -7,9 +7,15 @@ from llama_index.core.prompts.rich import RichPromptTemplate
 from pydantic import BaseModel, Field
 
 from app.rag.chat.review.prompts import REVIEW_INTENT_CLASSIFICATION_PROMPT
+from app.rag.chat.review.query_plan_contract import (
+    ALLOWED_QUERY_ROUTES,
+    ALLOWED_SCOPE_TYPES,
+    ALLOWED_TIME_MODES,
+)
 from app.rag.chat.review.risk_type_helper import resolve_requested_risk_type_codes
 
 logger = logging.getLogger(__name__)
+
 
 class ReviewIntent(BaseModel):
     intent_type: Literal["data_query", "root_cause", "strategy"] = Field(
@@ -156,6 +162,101 @@ class ReviewIntentRouter:
         return resolve_requested_risk_type_codes(intent.template_params)
 
     @staticmethod
+    def _stamp_query_plan_meta(intent: ReviewIntent, scope_source: str = "intent") -> None:
+        """Attach normalized query plan metadata for downstream execution/audit."""
+        if not isinstance(intent.query_plan, dict):
+            intent.query_plan = {}
+        intent.query_plan.setdefault("plan_version", "v1")
+        if not isinstance(intent.query_plan.get("scope"), dict):
+            intent.query_plan["scope"] = {
+                "type": intent.scope_type,
+                "id": intent.scope_id,
+                "source": scope_source,
+            }
+        else:
+            intent.query_plan["scope"].setdefault("type", intent.scope_type)
+            intent.query_plan["scope"].setdefault("id", intent.scope_id)
+            intent.query_plan["scope"].setdefault("source", scope_source)
+        if not isinstance(intent.query_plan.get("time_scope"), dict):
+            intent.query_plan["time_scope"] = {
+                "mode": intent.time_comparison or "current_only",
+                "source": "intent",
+            }
+        else:
+            intent.query_plan["time_scope"].setdefault(
+                "mode", intent.time_comparison or "current_only"
+            )
+            intent.query_plan["time_scope"].setdefault("source", "intent")
+
+    @staticmethod
+    def _normalize_query_plan_contract(
+        intent: ReviewIntent,
+        scope_source: str = "auto_inferred",
+    ) -> None:
+        """Ensure query_plan uses the normalized v1 contract shape."""
+        if not isinstance(intent.query_plan, dict) or not intent.query_plan:
+            intent.query_plan = {
+                "route": intent.query_type or "kpi_aggregation",
+                "mismatch_type": intent.mismatch_type,
+                "detail_filters": intent.detail_filters or {},
+                "use_kpi": bool((intent.query_type or "kpi_aggregation") == "kpi_aggregation"),
+            }
+        normalized_query_type = str(intent.query_type or "").strip().lower()
+        if normalized_query_type not in ALLOWED_QUERY_ROUTES:
+            normalized_query_type = "kpi_aggregation"
+        intent.query_type = normalized_query_type
+        # Keep route aligned with final query_type when missing/invalid.
+        route_value = str(intent.query_plan.get("route") or "").strip().lower()
+        if route_value not in ALLOWED_QUERY_ROUTES:
+            intent.query_plan["route"] = normalized_query_type
+        else:
+            intent.query_plan["route"] = route_value
+        if "mismatch_type" not in intent.query_plan:
+            intent.query_plan["mismatch_type"] = intent.mismatch_type
+        if "detail_filters" not in intent.query_plan:
+            intent.query_plan["detail_filters"] = intent.detail_filters or {}
+        if "use_kpi" not in intent.query_plan:
+            intent.query_plan["use_kpi"] = bool((normalized_query_type or "kpi_aggregation") == "kpi_aggregation")
+
+        ReviewIntentRouter._stamp_query_plan_meta(intent, scope_source=scope_source)
+        scope_obj = intent.query_plan.get("scope") if isinstance(intent.query_plan.get("scope"), dict) else {}
+        plan_scope_type = str(scope_obj.get("type") or "").strip().lower()
+        intent_scope_type = str(intent.scope_type or "").strip().lower()
+        if plan_scope_type in ALLOWED_SCOPE_TYPES:
+            scope_type = plan_scope_type
+        elif intent_scope_type in ALLOWED_SCOPE_TYPES:
+            scope_type = intent_scope_type
+        else:
+            scope_type = ""
+        intent.scope_type = scope_type or None
+        scope_obj["type"] = intent.scope_type
+        scope_obj["id"] = (scope_obj.get("id") or intent.scope_id) if intent.scope_type else None
+        intent.query_plan["scope"] = scope_obj
+
+        time_scope_obj = (
+            intent.query_plan.get("time_scope")
+            if isinstance(intent.query_plan.get("time_scope"), dict)
+            else {}
+        )
+        time_mode = str(time_scope_obj.get("mode") or intent.time_comparison or "current_only").strip().lower()
+        if time_mode not in ALLOWED_TIME_MODES:
+            time_mode = "current_only"
+        intent.time_comparison = time_mode
+        time_scope_obj["mode"] = time_mode
+        intent.query_plan["time_scope"] = time_scope_obj
+
+        if intent.query_type == "risk_progress" and not intent.preset_template:
+            # Non-template risk routing requires explicit scope source to support
+            # replay/audit decisions (auto inferred vs unspecified).
+            if not isinstance(intent.query_plan.get("scope"), dict):
+                intent.query_plan["scope"] = {}
+            intent.query_plan["scope"]["type"] = intent.scope_type
+            intent.query_plan["scope"]["id"] = intent.scope_id
+            intent.query_plan["scope"]["source"] = (
+                "auto_inferred" if intent.scope_type else "unspecified"
+            )
+
+    @staticmethod
     def _apply_soft_boundary_guard(
         intent: ReviewIntent,
         user_question: str,
@@ -174,6 +275,7 @@ class ReviewIntentRouter:
                 "risk_type_codes": risk_codes,
                 "use_kpi": False,
             }
+            ReviewIntentRouter._stamp_query_plan_meta(intent, scope_source="template")
             intent.needs_clarification = False
             intent.clarifying_question = ""
             return intent
@@ -184,6 +286,7 @@ class ReviewIntentRouter:
                 "route": "risk_progress",
                 "use_kpi": False,
             }
+            ReviewIntentRouter._stamp_query_plan_meta(intent, scope_source="template")
             intent.needs_clarification = False
             intent.clarifying_question = ""
             return intent
@@ -194,6 +297,7 @@ class ReviewIntentRouter:
                 "route": "kpi_aggregation",
                 "use_kpi": True,
             }
+            ReviewIntentRouter._stamp_query_plan_meta(intent, scope_source="template")
             intent.needs_clarification = False
             intent.clarifying_question = ""
             return intent
@@ -204,6 +308,7 @@ class ReviewIntentRouter:
                 "route": "risk_progress",
                 "use_kpi": False,
             }
+            ReviewIntentRouter._stamp_query_plan_meta(intent, scope_source="template")
             intent.needs_clarification = False
             intent.clarifying_question = ""
             return intent
@@ -214,6 +319,7 @@ class ReviewIntentRouter:
                 "route": "risk_progress",
                 "use_kpi": False,
             }
+            ReviewIntentRouter._stamp_query_plan_meta(intent, scope_source="template")
             intent.needs_clarification = False
             intent.clarifying_question = ""
             return intent
@@ -373,6 +479,7 @@ class ReviewIntentRouter:
                 "risk_type_codes": risk_codes,
                 "use_kpi": False,
             }
+            ReviewIntentRouter._stamp_query_plan_meta(intent, scope_source="template")
             intent.preset_template = "achievement_risk_overview"
             intent.needs_clarification = False
             intent.clarifying_question = ""
@@ -387,6 +494,7 @@ class ReviewIntentRouter:
                 "route": "risk_progress",
                 "use_kpi": False,
             }
+            ReviewIntentRouter._stamp_query_plan_meta(intent, scope_source="template")
             intent.preset_template = "target_action_to_hit_goal"
             intent.needs_clarification = False
             intent.clarifying_question = ""
@@ -401,6 +509,7 @@ class ReviewIntentRouter:
                 "route": "kpi_aggregation",
                 "use_kpi": True,
             }
+            ReviewIntentRouter._stamp_query_plan_meta(intent, scope_source="template")
             intent.preset_template = "owner_gap_ranking"
             intent.needs_clarification = False
             intent.clarifying_question = ""
@@ -428,6 +537,7 @@ class ReviewIntentRouter:
                 "route": "risk_progress",
                 "use_kpi": False,
             }
+            ReviewIntentRouter._stamp_query_plan_meta(intent, scope_source="template")
             intent.preset_template = "opportunity_risk_taxonomy"
             intent.needs_clarification = False
             intent.clarifying_question = ""
@@ -442,6 +552,7 @@ class ReviewIntentRouter:
                 "route": "risk_progress",
                 "use_kpi": False,
             }
+            ReviewIntentRouter._stamp_query_plan_meta(intent, scope_source="template")
             intent.preset_template = "focus_risky_opportunities"
             intent.needs_clarification = False
             intent.clarifying_question = ""
@@ -512,22 +623,10 @@ class ReviewIntentRouter:
                 intent.mismatch_type = "forecast"
             elif any(k in q for k in ("预计成交", "成交日期", "close date", "closing date")):
                 intent.mismatch_type = "close_date"
-        if not intent.query_plan:
-            intent.query_plan = {
-                "route": intent.query_type or "kpi_aggregation",
-                "mismatch_type": intent.mismatch_type,
-                "detail_filters": intent.detail_filters or {},
-                "use_kpi": bool((intent.query_type or "kpi_aggregation") == "kpi_aggregation"),
-            }
-        if (
-            intent.query_type == "risk_progress"
-            and not intent.preset_template
-        ):
-            # Make non-template risk routing explicit for downstream execution/audit.
-            intent.query_plan["risk_scope_type"] = intent.scope_type
-            intent.query_plan["risk_scope_source"] = (
-                "auto_inferred" if intent.scope_type else "unspecified"
-            )
+        ReviewIntentRouter._normalize_query_plan_contract(
+            intent,
+            scope_source="auto_inferred",
+        )
         if (
             intent.query_type == "risk_progress"
             and not intent.preset_template

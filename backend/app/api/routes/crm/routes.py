@@ -845,7 +845,8 @@ def review_session_chat(
     attendee = crm_review_attendee_repo.get_by_session_and_user_id(
         db_session, session_id=session_id, user_id=str(user.id)
     )
-    if not attendee:
+    # Superuser can bypass attendee restriction for emergency support/ops usage.
+    if not attendee and not bool(getattr(user, "is_superuser", False)):
         raise HTTPException(
             status_code=403,
             detail="User is not an attendee of this review session",

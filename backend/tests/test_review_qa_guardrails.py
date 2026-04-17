@@ -258,6 +258,113 @@ def test_retrieve_passes_current_owner_context_for_self_queries(monkeypatch):
     assert captured["owner_name"] == "张三"
 
 
+def test_retrieve_detail_query_prefers_query_plan_owner_scope_for_replay(monkeypatch):
+    retriever = ReviewDataRetriever()
+    review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
+    intent = ReviewIntent(
+        intent_type="data_query",
+        query_plan={
+            "route": "opportunity_detail",
+            "scope": {"type": "owner", "id": "owner_456", "source": "replay"},
+            "detail_filters": {"requested_fields": ["owner_name"]},
+            "use_kpi": False,
+        },
+    )
+    captured = {}
+
+    def _mock_detail(*args, **kwargs):
+        captured["scope_owner_id"] = kwargs.get("scope_owner_id")
+        return []
+
+    monkeypatch.setattr(retriever, "_query_typical_opportunity_details", _mock_detail)
+    monkeypatch.setattr(retriever, "_query_kpi_metrics", lambda *a, **k: [])
+    monkeypatch.setattr(retriever, "_query_snapshot_aggregations", lambda *a, **k: [])
+    monkeypatch.setattr(retriever, "_query_risk_progress", lambda *a, **k: [])
+
+    retriever.retrieve(
+        db_session=None,
+        review_session=review_session,
+        intent=intent,
+        user_question="回放：看某销售商机明细",
+    )
+    assert captured["scope_owner_id"] == "owner_456"
+
+
+def test_retrieve_mismatch_query_prefers_query_plan_owner_scope_for_replay(monkeypatch):
+    retriever = ReviewDataRetriever()
+    review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
+    intent = ReviewIntent(
+        intent_type="data_query",
+        query_plan={
+            "route": "mismatch_list",
+            "mismatch_type": "stage",
+            "scope": {"type": "owner", "id": "owner_789", "source": "replay"},
+            "use_kpi": False,
+        },
+    )
+    captured = {}
+
+    def _mock_mismatch(*args, **kwargs):
+        captured["owner_id"] = kwargs.get("owner_id")
+        return []
+
+    monkeypatch.setattr(retriever, "_query_field_mismatch_opportunities", _mock_mismatch)
+    monkeypatch.setattr(retriever, "_query_kpi_metrics", lambda *a, **k: [])
+    monkeypatch.setattr(retriever, "_query_snapshot_aggregations", lambda *a, **k: [])
+    monkeypatch.setattr(retriever, "_query_risk_progress", lambda *a, **k: [])
+
+    retriever.retrieve(
+        db_session=None,
+        review_session=review_session,
+        intent=intent,
+        user_question="回放：看阶段差异",
+    )
+    assert captured["owner_id"] == "owner_789"
+
+
+def test_retrieve_kpi_aggregation_prefers_query_plan_owner_scope_for_replay(monkeypatch):
+    retriever = ReviewDataRetriever()
+    review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
+    intent = ReviewIntent(
+        intent_type="data_query",
+        query_type="kpi_aggregation",
+        scope_type="department",
+        scope_id="dept_legacy",
+        query_plan={
+            "route": "kpi_aggregation",
+            "scope": {"type": "owner", "id": "owner_999", "source": "replay"},
+            "use_kpi": True,
+        },
+    )
+    captured = {"kpi_scope": None, "kpi_scope_id": None, "agg_scope": None, "agg_scope_id": None}
+
+    def _mock_kpi(_db_session, _session_id, scoped_intent):
+        captured["kpi_scope"] = scoped_intent.scope_type
+        captured["kpi_scope_id"] = scoped_intent.scope_id
+        return []
+
+    def _mock_agg(_db_session, _snapshot_period, scoped_intent, **_kwargs):
+        captured["agg_scope"] = scoped_intent.scope_type
+        captured["agg_scope_id"] = scoped_intent.scope_id
+        return []
+
+    monkeypatch.setattr(retriever, "_query_kpi_metrics", _mock_kpi)
+    monkeypatch.setattr(retriever, "_query_snapshot_aggregations", _mock_agg)
+    monkeypatch.setattr(retriever, "_collect_opportunity_snapshot_rows", lambda *a, **k: [])
+    monkeypatch.setattr(retriever, "_query_risk_progress", lambda *a, **k: [])
+
+    retriever.retrieve(
+        db_session=None,
+        review_session=review_session,
+        intent=intent,
+        user_question="回放：看某销售达成概览",
+    )
+    assert captured["kpi_scope"] == "owner"
+    assert captured["kpi_scope_id"] == "owner_999"
+    assert captured["agg_scope"] == "owner"
+    assert captured["agg_scope_id"] == "owner_999"
+
+
 def test_retrieve_risk_progress_route_for_achievement_gap_preset(monkeypatch):
     retriever = ReviewDataRetriever()
     review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
@@ -594,6 +701,8 @@ def test_router_sets_target_action_template_route():
     assert guarded.preset_template == "target_action_to_hit_goal"
     assert guarded.query_plan["template_id"] == "target_action_to_hit_goal"
     assert guarded.query_plan["route"] == "risk_progress"
+    assert guarded.query_plan["plan_version"] == "v1"
+    assert guarded.query_plan["scope"]["source"] == "template"
 
 
 def test_router_sets_owner_gap_ranking_template_route():
@@ -700,8 +809,11 @@ def test_router_non_template_risk_query_auto_scopes_to_department():
     )
     assert guarded.query_type == "risk_progress"
     assert guarded.scope_type == "department"
-    assert guarded.query_plan["risk_scope_type"] == "department"
-    assert guarded.query_plan["risk_scope_source"] == "auto_inferred"
+    assert guarded.query_plan["scope"]["type"] == "department"
+    assert guarded.query_plan["scope"]["source"] == "auto_inferred"
+    assert guarded.query_plan["plan_version"] == "v1"
+    assert guarded.query_plan["scope"]["type"] == "department"
+    assert guarded.query_plan["time_scope"]["mode"] == "current_only"
     assert guarded.needs_clarification is False
 
 
@@ -713,8 +825,8 @@ def test_router_non_template_risk_query_auto_scopes_to_opportunity():
     )
     assert guarded.query_type == "risk_progress"
     assert guarded.scope_type == "opportunity"
-    assert guarded.query_plan["risk_scope_type"] == "opportunity"
-    assert guarded.query_plan["risk_scope_source"] == "auto_inferred"
+    assert guarded.query_plan["scope"]["type"] == "opportunity"
+    assert guarded.query_plan["scope"]["source"] == "auto_inferred"
     assert guarded.needs_clarification is False
 
 
@@ -727,7 +839,7 @@ def test_router_non_template_risk_query_self_owner_scope():
     assert guarded.query_type == "risk_progress"
     assert guarded.scope_type == "owner"
     assert guarded.scope_id == "__CURRENT_USER__"
-    assert guarded.query_plan["risk_scope_type"] == "owner"
+    assert guarded.query_plan["scope"]["type"] == "owner"
 
 
 def test_router_non_template_risk_query_named_owner_scope():
@@ -739,7 +851,7 @@ def test_router_non_template_risk_query_named_owner_scope():
     assert guarded.query_type == "risk_progress"
     assert guarded.scope_type == "owner"
     assert guarded.detail_filters.get("owner_name") == "张三"
-    assert guarded.query_plan["risk_scope_type"] == "owner"
+    assert guarded.query_plan["scope"]["type"] == "owner"
 
 
 def test_router_non_template_risk_query_asks_clarification_when_scope_ambiguous():
@@ -750,8 +862,8 @@ def test_router_non_template_risk_query_asks_clarification_when_scope_ambiguous(
     )
     assert guarded.query_type == "risk_progress"
     assert guarded.scope_type is None
-    assert guarded.query_plan["risk_scope_type"] is None
-    assert guarded.query_plan["risk_scope_source"] == "unspecified"
+    assert guarded.query_plan["scope"]["type"] is None
+    assert guarded.query_plan["scope"]["source"] == "unspecified"
     assert guarded.needs_clarification is True
     assert "部门/公司层面风险" in guarded.clarifying_question
 
@@ -768,8 +880,8 @@ def test_router_non_template_risk_query_followup_short_scope_reply_uses_history(
     assert guarded.query_type == "risk_progress"
     assert guarded.scope_type == "opportunity"
     assert guarded.needs_clarification is False
-    assert guarded.query_plan["risk_scope_type"] == "opportunity"
-    assert guarded.query_plan["risk_scope_source"] == "auto_inferred"
+    assert guarded.query_plan["scope"]["type"] == "opportunity"
+    assert guarded.query_plan["scope"]["source"] == "auto_inferred"
 
 
 def test_router_clarifies_when_question_requests_non_current_period():
@@ -781,6 +893,31 @@ def test_router_clarifies_when_question_requests_non_current_period():
     assert guarded.needs_clarification is True
     assert "只支持本期数据" in guarded.clarifying_question
     assert guarded.time_comparison == "current_only"
+
+
+def test_router_normalizes_query_plan_contract_when_input_is_partial_or_dirty():
+    intent = ReviewIntent(
+        intent_type="data_query",
+        query_type="risk_progress",
+        scope_type="owner",
+        scope_id="owner_123",
+        query_plan={
+            "route": "not_a_route",
+            "scope": {"type": "not_a_scope", "id": "owner_999"},
+            "time_scope": {"mode": "not_a_time_mode"},
+        },
+    )
+    guarded = ReviewIntentRouter._apply_soft_boundary_guard(
+        intent,
+        "我负责的商机有哪些风险？",
+    )
+    assert guarded.query_plan["plan_version"] == "v1"
+    assert guarded.query_plan["route"] == "risk_progress"
+    assert guarded.query_plan["scope"]["type"] == "owner"
+    assert guarded.query_plan["scope"]["id"] == "owner_123"
+    assert guarded.query_plan["scope"]["source"] == "auto_inferred"
+    assert guarded.query_plan["time_scope"]["mode"] == "current_only"
+    assert guarded.query_plan["time_scope"]["source"] == "intent"
 
 
 def test_retrieve_opportunity_risk_taxonomy_groups_by_category(monkeypatch):
@@ -933,6 +1070,42 @@ def test_retrieve_non_template_owner_scope_uses_current_owner_id(monkeypatch):
     assert captured["scope_id"] == "owner_123"
 
 
+def test_retrieve_non_template_owner_scope_prefers_query_plan_scope_for_replay(monkeypatch):
+    retriever = ReviewDataRetriever()
+    review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
+    intent = ReviewIntent(
+        intent_type="data_query",
+        query_type="risk_progress",
+        scope_type=None,
+        scope_id=None,
+        query_plan={
+            "route": "risk_progress",
+            "scope": {"type": "owner", "id": "owner_456", "source": "replay"},
+        },
+    )
+    captured = {}
+
+    def _mock_risk_progress(_db, _sid, _period, eff_intent, risk_type_codes=None):
+        captured["scope_type"] = eff_intent.scope_type
+        captured["scope_id"] = eff_intent.scope_id
+        return [{"record_type": "RISK", "opportunity_name": "华东续签"}]
+
+    monkeypatch.setattr(
+        retriever,
+        "_query_risk_opportunity_relations",
+        lambda *a, **k: pytest.fail("relation chain should not be called"),
+    )
+    monkeypatch.setattr(retriever, "_query_risk_progress", _mock_risk_progress)
+    retriever.retrieve(
+        db_session=None,
+        review_session=review_session,
+        intent=intent,
+        user_question="回放：看指定销售风险",
+    )
+    assert captured["scope_type"] == "owner"
+    assert captured["scope_id"] == "owner_456"
+
+
 def test_retrieve_non_template_owner_scope_named_owner_not_found_returns_clarify_note(monkeypatch):
     retriever = ReviewDataRetriever()
     review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
@@ -960,6 +1133,64 @@ def test_retrieve_non_template_owner_scope_named_owner_not_found_returns_clarify
     )
     assert "需确认销售人员" in (ctx.query_note or "")
     assert "暂未识别到“张三”对应的销售人员" in (ctx.query_note or "")
+
+
+def test_retrieve_rejects_non_current_time_scope_from_query_plan():
+    retriever = ReviewDataRetriever()
+    review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
+    intent = ReviewIntent(
+        intent_type="data_query",
+        query_type="risk_progress",
+        query_plan={
+            "route": "risk_progress",
+            "time_scope": {"mode": "wow", "source": "replay"},
+        },
+    )
+    ctx = retriever.retrieve(
+        db_session=None,
+        review_session=review_session,
+        intent=intent,
+        user_question="环比看下风险变化",
+    )
+    assert "当前 review 问答先只支持本期数据" in (ctx.query_note or "")
+
+
+def test_retrieve_normalizes_dirty_query_plan_scope_and_time_for_execution(monkeypatch):
+    retriever = ReviewDataRetriever()
+    review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
+    intent = ReviewIntent(
+        intent_type="data_query",
+        query_type="kpi_aggregation",
+        scope_type="owner",
+        scope_id="__CURRENT_USER__",
+        query_plan={
+            "route": "unknown_route",
+            "scope": "invalid",
+            "time_scope": {"mode": "invalid_mode"},
+            "use_kpi": True,
+        },
+    )
+    captured = {"scope_type": None, "scope_id": None}
+
+    def _mock_kpi(_db_session, _session_id, scoped_intent):
+        captured["scope_type"] = scoped_intent.scope_type
+        captured["scope_id"] = scoped_intent.scope_id
+        return []
+
+    monkeypatch.setattr(retriever, "_query_kpi_metrics", _mock_kpi)
+    monkeypatch.setattr(retriever, "_query_snapshot_aggregations", lambda *a, **k: [])
+    monkeypatch.setattr(retriever, "_collect_opportunity_snapshot_rows", lambda *a, **k: [])
+    monkeypatch.setattr(retriever, "_query_risk_progress", lambda *a, **k: [])
+
+    retriever.retrieve(
+        db_session=None,
+        review_session=review_session,
+        intent=intent,
+        user_question="看我负责范围的达成情况",
+        current_owner_id="owner_abc",
+    )
+    assert captured["scope_type"] == "owner"
+    assert captured["scope_id"] == "owner_abc"
 
 
 @pytest.mark.parametrize(

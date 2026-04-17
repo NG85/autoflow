@@ -26,6 +26,11 @@ from app.rag.chat.review.metric_catalog import (
     AMOUNT_METRIC_NAMES,
     METRIC_DISPLAY_NAMES,
 )
+from app.rag.chat.review.query_plan_contract import (
+    ALLOWED_QUERY_ROUTES,
+    ALLOWED_SCOPE_TYPES,
+    ALLOWED_TIME_MODES,
+)
 from app.rag.chat.review.risk_type_helper import (
     ACHIEVEMENT_RISK_TYPE_CODES_DEFAULT,
     BUSINESS_RISK_TYPE_CODES,
@@ -477,6 +482,46 @@ class ReviewDataContext(BaseModel):
 class ReviewDataRetriever:
     """Retrieves structured data from CRM review tables based on intent parameters."""
 
+    @staticmethod
+    def _normalize_execution_scope_and_time(
+        intent: ReviewIntent,
+        current_owner_id: Optional[str] = None,
+    ) -> Tuple[str, str, str, Dict[str, Any]]:
+        """Normalize query_plan scope/time for route execution."""
+        plan = intent.query_plan if isinstance(intent.query_plan, dict) else {}
+        plan_time_scope_obj = (
+            plan.get("time_scope")
+            if isinstance(plan.get("time_scope"), dict)
+            else {}
+        )
+        time_mode = str(
+            plan_time_scope_obj.get("mode")
+            or intent.time_comparison
+            or "current_only"
+        ).strip().lower()
+        if time_mode not in ALLOWED_TIME_MODES:
+            time_mode = "current_only"
+        plan_scope_obj = (
+            plan.get("scope")
+            if isinstance(plan.get("scope"), dict)
+            else {}
+        )
+        effective_scope_type = str(
+            plan_scope_obj.get("type")
+            or intent.scope_type
+            or ""
+        ).strip().lower()
+        if effective_scope_type not in ALLOWED_SCOPE_TYPES:
+            effective_scope_type = ""
+        effective_scope_id = str(
+            plan_scope_obj.get("id")
+            or intent.scope_id
+            or ""
+        ).strip()
+        if effective_scope_type == "owner" and effective_scope_id == "__CURRENT_USER__":
+            effective_scope_id = str(current_owner_id or "").strip()
+        return time_mode, effective_scope_type, effective_scope_id, plan_scope_obj
+
     def retrieve(
         self,
         db_session: Session,
@@ -493,7 +538,22 @@ class ReviewDataRetriever:
         question = user_question or ""
         plan = intent.query_plan or {}
         template_id = plan.get("template_id") if isinstance(plan, dict) else None
-        query_type = plan.get("route") or intent.query_type
+        query_type = str(plan.get("route") or intent.query_type or "").strip().lower()
+        if query_type not in ALLOWED_QUERY_ROUTES:
+            query_type = None
+        time_mode, effective_scope_type, effective_scope_id, plan_scope_obj = (
+            self._normalize_execution_scope_and_time(
+                intent=intent,
+                current_owner_id=current_owner_id,
+            )
+        )
+        if time_mode not in ("", "current_only"):
+            ctx.query_note = (
+                "### 时间范围说明\n"
+                "- 当前 review 问答先只支持本期数据。\n"
+                "- 请改用本期口径提问，我会基于当前会话给你结果。"
+            )
+            return ctx
         mismatch_type = (
             plan.get("mismatch_type")
             or intent.mismatch_type
@@ -504,6 +564,15 @@ class ReviewDataRetriever:
             or (intent.detail_filters if isinstance(intent.detail_filters, dict) else None)
             or _extract_detail_query_filters(question)
         )
+        # Replay execution contract (M2):
+        # - All routes should read scope from query_plan.scope first.
+        # - The normalized execution intent below is the single source of truth
+        #   passed into downstream query functions.
+        # - Do not use raw `intent.scope_*` directly in new branches, otherwise
+        #   replay/audit behavior may diverge across routes.
+        intent_for_execution = intent.model_copy(deep=True)
+        intent_for_execution.scope_type = effective_scope_type or None
+        intent_for_execution.scope_id = effective_scope_id or None
         if query_type is None:
             if mismatch_type:
                 query_type = "mismatch_list"
@@ -512,12 +581,17 @@ class ReviewDataRetriever:
             else:
                 query_type = "kpi_aggregation"
 
+        # Route-level rule:
+        # use `intent_for_execution` (or effective_scope_*) for filters so
+        # mismatch_list/opportunity_detail/risk_progress/kpi_aggregation remain
+        # consistent under query_plan replay.
         if query_type == "mismatch_list" and mismatch_type:
             cfg = MISMATCH_QUERY_CONFIGS[mismatch_type]
             ctx.opportunity_snapshot_rows = self._query_field_mismatch_opportunities(
                 db_session=db_session,
                 snapshot_period=snapshot_period,
                 department_id=review_session.department_id,
+                owner_id=effective_scope_id if effective_scope_type == "owner" else None,
                 sales_field=cfg["sales_field"],
                 ai_field=cfg["ai_field"],
                 sales_label=cfg["sales_label"],
@@ -544,6 +618,7 @@ class ReviewDataRetriever:
                 db_session=db_session,
                 snapshot_period=snapshot_period,
                 department_id=review_session.department_id,
+                scope_owner_id=effective_scope_id if effective_scope_type == "owner" else None,
                 detail_filters=detail_filters,
                 current_owner_id=current_owner_id,
                 current_owner_name=current_owner_name,
@@ -563,7 +638,16 @@ class ReviewDataRetriever:
             # Risk/progress focused query: skip KPI/detail retrieval.
             risk_type_codes = plan.get("risk_type_codes") if isinstance(plan, dict) else None
             force_opportunity_scope_all = False
-            effective_intent = intent.model_copy(deep=True)
+            effective_intent = intent_for_execution.model_copy(deep=True)
+            # M1 execution rule: prefer normalized query_plan scope for replay/audit.
+            effective_intent.scope_type = (
+                str(plan_scope_obj.get("type") or effective_intent.scope_type or "").strip()
+                or None
+            )
+            effective_intent.scope_id = (
+                str(plan_scope_obj.get("id") or effective_intent.scope_id or "").strip()
+                or None
+            )
             if not isinstance(risk_type_codes, list):
                 risk_type_codes = None
             if not template_id and (effective_intent.scope_type or "").strip().lower() == "owner":
@@ -601,12 +685,11 @@ class ReviewDataRetriever:
             # - opportunity/customer/owner scope -> opp risk-progress chain
             # - unspecified scope -> merge both chains
             if not template_id and not risk_type_codes:
-                plan_scope = (
-                    plan.get("risk_scope_type")
-                    if isinstance(plan, dict)
-                    else None
-                )
-                scope = str(plan_scope or intent.scope_type or "").strip().lower()
+                scope = str(
+                    plan_scope_obj.get("type")
+                    or effective_intent.scope_type
+                    or ""
+                ).strip().lower()
                 if scope in ("department", "company"):
                     risk_type_codes = list(BUSINESS_RISK_TYPE_CODES)
                 elif scope in ("opportunity", "customer", "owner"):
@@ -840,12 +923,12 @@ class ReviewDataRetriever:
                     )
             else:
                 ctx.kpi_metrics = self._query_kpi_metrics(
-                    db_session, session_id, intent
+                    db_session, session_id, intent_for_execution
                 )
             ctx.opportunity_snapshot_rows = self._collect_opportunity_snapshot_rows(
                 db_session,
                 review_session,
-                intent,
+                intent_for_execution,
                 user_question=question,
             )
 
@@ -853,12 +936,12 @@ class ReviewDataRetriever:
             ctx.snapshot_aggregations = self._query_snapshot_aggregations(
                 db_session,
                 snapshot_period,
-                intent,
+                intent_for_execution,
                 skip_opportunity_detail=bool(ctx.opportunity_snapshot_rows),
             )
 
         risks_and_progress = self._query_risk_progress(
-            db_session, session_id, snapshot_period, intent, risk_type_codes=None
+            db_session, session_id, snapshot_period, intent_for_execution, risk_type_codes=None
         )
         ctx.risks = [
             r for r in risks_and_progress if r.get("record_type") in ("RISK", "OPP_SUMMARY")
@@ -867,7 +950,7 @@ class ReviewDataRetriever:
             r for r in risks_and_progress if r.get("record_type") == "PROGRESS"
         ]
 
-        if intent.time_comparison == "wow":
+        if intent_for_execution.time_comparison == "wow":
             ctx.comparison_data = self._build_wow_comparison(ctx.kpi_metrics)
 
         return ctx
@@ -877,6 +960,7 @@ class ReviewDataRetriever:
         db_session: Session,
         snapshot_period: str,
         department_id: Optional[str],
+        scope_owner_id: Optional[str],
         detail_filters: Dict[str, Any],
         current_owner_id: Optional[str] = None,
         current_owner_name: Optional[str] = None,
@@ -886,6 +970,8 @@ class ReviewDataRetriever:
         stmt = select(S).where(S.snapshot_period == snapshot_period)
         if department_id:
             stmt = stmt.where(S.owner_department_id == department_id)
+        if scope_owner_id:
+            stmt = stmt.where(S.owner_id == scope_owner_id)
 
         owner_name = (detail_filters.get("owner_name") or "").strip()
         if owner_name:
@@ -969,6 +1055,8 @@ class ReviewDataRetriever:
         if not rows and department_id:
             # fallback to full scope to reduce false negatives from dept slicing
             stmt2 = select(S).where(S.snapshot_period == snapshot_period)
+            if scope_owner_id:
+                stmt2 = stmt2.where(S.owner_id == scope_owner_id)
             if owner_name:
                 if _is_self_reference(owner_name):
                     if current_owner_id:
@@ -1246,6 +1334,7 @@ class ReviewDataRetriever:
         db_session: Session,
         snapshot_period: str,
         department_id: Optional[str],
+        owner_id: Optional[str],
         sales_field: str,
         ai_field: str,
         sales_label: str,
@@ -1264,6 +1353,8 @@ class ReviewDataRetriever:
         )
         if department_id:
             stmt = stmt.where(S.owner_department_id == department_id)
+        if owner_id:
+            stmt = stmt.where(S.owner_id == owner_id)
         stmt = stmt.order_by(S.opportunity_name).limit(limit)
         rows = list(db_session.exec(stmt).all())
         if not rows and department_id:
@@ -1279,6 +1370,8 @@ class ReviewDataRetriever:
                 .order_by(S.opportunity_name)
                 .limit(limit)
             )
+            if owner_id:
+                stmt2 = stmt2.where(S.owner_id == owner_id)
             rows = list(db_session.exec(stmt2).all())
         detailed_rows: List[Dict[str, Any]] = []
         for r in rows:
