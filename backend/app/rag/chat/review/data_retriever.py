@@ -460,6 +460,7 @@ class ReviewDataRetriever:
         snapshot_period = review_session.period
         question = user_question or ""
         plan = intent.query_plan or {}
+        template_id = plan.get("template_id") if isinstance(plan, dict) else None
         query_type = plan.get("route") or intent.query_type
         mismatch_type = (
             plan.get("mismatch_type")
@@ -528,7 +529,6 @@ class ReviewDataRetriever:
                 )
         elif query_type == "risk_progress":
             # Risk/progress focused query: skip KPI/detail retrieval.
-            template_id = plan.get("template_id") if isinstance(plan, dict) else None
             risk_type_codes = plan.get("risk_type_codes") if isinstance(plan, dict) else None
             if not isinstance(risk_type_codes, list):
                 risk_type_codes = None
@@ -548,8 +548,8 @@ class ReviewDataRetriever:
                 ctx.progresses = []
                 ctx.query_note = (
                     "### 达成目标建议\n"
-                    "- 当前 commit 与 gap 持平，未触发“高风险commit”或“upside储备不足”风险筛选。\n"
-                    "- 请持续关注经营洞察卡片中的新增风险。"
+                    "- 当前结论：commit 与 gap 基本持平，暂未触发重点达成风险。\n"
+                    "- 建议动作：继续跟进在途商机，并持续关注经营洞察卡片中的新增风险。"
                 )
                 return ctx
             risk_name_map = load_risk_type_name_map(db_session, risk_type_codes)
@@ -604,33 +604,66 @@ class ReviewDataRetriever:
                 )
                 opp_list_text = "、".join(opp_names) if opp_names else "（未解析到商机名称）"
                 opp_count = len(opp_names) if opp_names else len(ctx.risks)
+                if template_id == "achievement_risk_overview":
+                    path_text = f"- 查看路径：进入经营洞察卡片，点击{card_hint}，再查看对应商机列表。"
+                elif template_id == "target_action_to_hit_goal":
+                    path_text = (
+                        f"- 查看路径：进入经营洞察卡片，点击{card_hint}中的链接，"
+                        "跳转到商机列表页查看明细。"
+                    )
+                else:
+                    path_text = f"- 查看路径：进入经营洞察卡片，点击{card_hint}查看商机与风险详情。"
                 ctx.query_note = (
                     "### 达成风险查询结果\n"
-                    f"- 风险类型：{selected_risk_text}。\n"
-                    f"- 当前共识别到 {opp_count} 个达成风险商机。\n"
-                    f"- 涉及商机：{opp_list_text}。\n"
-                    + (
-                        f"- 进入经营洞察卡片，点击{card_hint}，再点击查看对应商机列表。"
-                        if template_id == "achievement_risk_overview"
-                        else (
-                            f"- 进入经营洞察卡片，点击{card_hint}中的链接，"
-                            "跳转到商机列表页后查看对应商机。"
-                            if template_id == "target_action_to_hit_goal"
-                            else f"- 进入经营洞察卡片，点击{card_hint}查看对应商机与风险详情。"
-                        )
-                    )
+                    f"- 当前结论：共识别到 {opp_count} 个达成风险商机。\n"
+                    f"- 风险与对象：风险类型为{selected_risk_text}，涉及商机包括 {opp_list_text}。\n"
+                    f"{path_text}"
                 )
             else:
                 ctx.query_note = (
                     "### 达成风险查询结果\n"
-                    "- 当前未识别到达成风险商机。\n"
-                    f"- 你仍可进入经营洞察卡片，点击{card_hint}继续关注新增风险。"
+                    "- 当前结论：暂未识别到达成风险商机。\n"
+                    f"- 建议动作：进入经营洞察卡片，点击{card_hint}持续关注新增风险。"
                 )
             return ctx
         else:
-            ctx.kpi_metrics = self._query_kpi_metrics(
-                db_session, session_id, intent
-            )
+            if template_id == "owner_gap_ranking":
+                ctx.kpi_metrics = self._query_owner_gap_ranking(
+                    db_session=db_session,
+                    session_id=session_id,
+                )
+                if ctx.kpi_metrics:
+                    top_seller = (
+                        ctx.kpi_metrics[0].get("scope_name")
+                        or ctx.kpi_metrics[0].get("scope_id")
+                        or "未知销售"
+                    )
+                    top_gap = _safe_float(ctx.kpi_metrics[0].get("metric_value")) or 0.0
+                    other_sellers = [
+                        m.get("scope_name") or m.get("scope_id") or "未知销售"
+                        for m in ctx.kpi_metrics[1:4]
+                    ]
+                    other_hint = (
+                        f"- 可进一步对比的销售：{'、'.join(other_sellers)}。"
+                        if other_sellers
+                        else "- 当前仅有 1 位销售数据，暂时没有可对比对象。"
+                    )
+                    ctx.query_note = (
+                        "### 销售达成差额排名\n"
+                        f"- 当前共统计 {len(ctx.kpi_metrics)} 位销售，已按达成差额从高到低排序。\n"
+                        f"- 目前差额最大的是 {top_seller}，差额约 {top_gap:,.0f}。\n"
+                        f"{other_hint}\n"
+                        "- 查看路径：点击商机评估Agent，选择“人员分组”，查看每个销售下的具体商机列表。"
+                    )
+                else:
+                    ctx.query_note = (
+                        "### 销售达成差额排名\n"
+                        "- 当前未查询到销售维度的达成差额数据。"
+                    )
+            else:
+                ctx.kpi_metrics = self._query_kpi_metrics(
+                    db_session, session_id, intent
+                )
             ctx.opportunity_snapshot_rows = self._collect_opportunity_snapshot_rows(
                 db_session,
                 review_session,
@@ -851,6 +884,38 @@ class ReviewDataRetriever:
         )
 
         rows = db_session.exec(stmt).all()
+        return [
+            {
+                "scope_type": r.scope_type,
+                "scope_id": r.scope_id,
+                "scope_name": r.scope_name,
+                "metric_category": r.metric_category,
+                "metric_name": r.metric_name,
+                "metric_value": _safe_float(r.metric_value),
+                "metric_value_prev": _safe_float(r.metric_value_prev),
+                "metric_delta": _safe_float(r.metric_delta),
+                "metric_rate": _safe_float(r.metric_rate),
+                "metric_unit": r.metric_unit,
+                "metric_content": r.metric_content,
+                "calc_phase": r.calc_phase,
+            }
+            for r in rows
+        ]
+
+    def _query_owner_gap_ranking(
+        self,
+        db_session: Session,
+        session_id: str,
+    ) -> List[Dict[str, Any]]:
+        K = CRMReviewKpiMetrics
+        stmt = select(K).where(
+            K.session_id == session_id,
+            K.scope_type == "owner",
+            K.metric_name == "gap",
+        )
+        rows = list(db_session.exec(stmt).all())
+        rows = [r for r in rows if r.metric_value is not None]
+        rows.sort(key=lambda r: float(r.metric_value), reverse=True)
         return [
             {
                 "scope_type": r.scope_type,

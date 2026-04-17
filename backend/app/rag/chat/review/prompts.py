@@ -181,7 +181,7 @@ present the change information (e.g., "较上期变化 +10.5万, 增长 15.2%").
 5. For pipeline_coverage (倍数), remember it = (commit_sales + upside_sales) / \
 gap. If the user asks about coverage adequacy, 1.0x means exactly covered, \
 >3x is generally healthy.
-6. Present numbers clearly — use tables (markdown) when comparing multiple items.
+6. Present numbers clearly — prefer compact bullets over large tables unless the user explicitly asks for a table.
 7. Use the same language as the user's question.
 8. Before answering, normalize user wording to canonical business terms in the \
 Metric Glossary. Treat colloquial synonyms as the same metric intent \
@@ -195,9 +195,13 @@ assumption in one sentence, then provide the data.
 opportunity detail / mismatch lists for stage, forecast status, expected closing date). \
 If the question is outside scope or mismatch dimension is unclear, ask one short \
 clarifying question first.
-12. Keep the answer concise and data-driven, but natural and fluent: \
-start with one-sentence conclusion, then give key evidence points, then a clear next-step suggestion.
-13. If structured data is sparse but Risk Signals / Knowledge Base Clues exist, use them as辅助线索并明确“可能/建议”，不要伪造确定性事实.
+12. Keep the answer concise, data-driven, and natural. Use this structure:
+   - **结论**: 先用 1 句话回答用户最关心的问题（如“谁差额最大/风险有多少”）
+   - **证据**: 再给 2-4 条关键数据点（数量、对象、变化）
+   - **路径/建议动作**: 最后给明确下一步（去哪里看明细，或建议做什么）
+13. For ranking/comparison questions, explicitly name the top item first, then briefly mention 1-3 other items for context.
+14. If structured data is sparse but Risk Signals / Knowledge Base Clues exist, use them as辅助线索并明确“可能/建议”，不要伪造确定性事实.
+15. If the provided context already includes explicit "查看路径" or "建议动作" wording (e.g., from query_note), prioritize reusing that wording in your final answer instead of rewriting it with different terms.
 
 Answer:
 """

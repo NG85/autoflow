@@ -303,7 +303,7 @@ def test_retrieve_risk_progress_route_for_achievement_gap_preset(monkeypatch):
     )
     assert captured["relation_type_names"] == ["业绩达成风险"]
     assert len(ctx.risks) == 2
-    assert "风险类型：有高风险commit商机、commit商机储备不足风险" in (ctx.query_note or "")
+    assert "风险与对象：风险类型为有高风险commit商机、commit商机储备不足风险" in (ctx.query_note or "")
     assert "2 个达成风险商机" in (ctx.query_note or "")
     assert "华北大单、华东续签" in (ctx.query_note or "")
     assert "达成风险卡片" in (ctx.query_note or "")
@@ -550,6 +550,50 @@ def test_router_sets_target_action_template_route():
     assert guarded.preset_template == "target_action_to_hit_goal"
     assert guarded.query_plan["template_id"] == "target_action_to_hit_goal"
     assert guarded.query_plan["route"] == "risk_progress"
+
+
+def test_router_sets_owner_gap_ranking_template_route():
+    intent = ReviewIntent(intent_type="data_query")
+    guarded = ReviewIntentRouter._apply_soft_boundary_guard(
+        intent,
+        "目前团队内每个销售的业绩达成情况，谁差的比较多？",
+    )
+    assert guarded.query_type == "kpi_aggregation"
+    assert guarded.preset_template == "owner_gap_ranking"
+    assert guarded.query_plan["template_id"] == "owner_gap_ranking"
+    assert guarded.query_plan["route"] == "kpi_aggregation"
+
+
+def test_retrieve_owner_gap_ranking_uses_desc_gap_order(monkeypatch):
+    retriever = ReviewDataRetriever()
+    review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
+    intent = ReviewIntent(
+        intent_type="data_query",
+        query_plan={"route": "kpi_aggregation", "template_id": "owner_gap_ranking"},
+    )
+    monkeypatch.setattr(
+        retriever,
+        "_query_owner_gap_ranking",
+        lambda *a, **k: [
+            {"scope_name": "王五", "metric_name": "gap", "metric_value": 120000.0},
+            {"scope_name": "李四", "metric_name": "gap", "metric_value": 90000.0},
+            {"scope_name": "张三", "metric_name": "gap", "metric_value": 50000.0},
+        ],
+    )
+    monkeypatch.setattr(retriever, "_query_snapshot_aggregations", lambda *a, **k: [])
+    monkeypatch.setattr(retriever, "_collect_opportunity_snapshot_rows", lambda *a, **k: [])
+    monkeypatch.setattr(retriever, "_query_risk_progress", lambda *a, **k: [])
+    ctx = retriever.retrieve(
+        db_session=None,
+        review_session=review_session,
+        intent=intent,
+        user_question="目前团队内每个销售的业绩达成情况，谁差的比较多？",
+    )
+    assert [m["scope_name"] for m in ctx.kpi_metrics] == ["王五", "李四", "张三"]
+    assert "已按达成差额从高到低排序" in (ctx.query_note or "")
+    assert "目前差额最大的是 王五" in (ctx.query_note or "")
+    assert "可进一步对比的销售：李四、张三" in (ctx.query_note or "")
+    assert "查看路径：点击商机评估Agent，选择“人员分组”" in (ctx.query_note or "")
 
 
 @pytest.mark.parametrize(

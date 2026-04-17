@@ -183,6 +183,16 @@ class ReviewIntentRouter:
             intent.needs_clarification = False
             intent.clarifying_question = ""
             return intent
+        if intent.preset_template == "owner_gap_ranking":
+            intent.query_type = "kpi_aggregation"
+            intent.query_plan = {
+                "template_id": "owner_gap_ranking",
+                "route": "kpi_aggregation",
+                "use_kpi": True,
+            }
+            intent.needs_clarification = False
+            intent.clarifying_question = ""
+            return intent
         q = (user_question or "").strip().lower()
         if not q:
             return intent
@@ -285,6 +295,20 @@ class ReviewIntentRouter:
                 "use_kpi": False,
             }
             intent.preset_template = "target_action_to_hit_goal"
+            intent.needs_clarification = False
+            intent.clarifying_question = ""
+            return intent
+        if (
+            ("每个销售" in q or "销售" in q or "owner" in q)
+            and ("差额" in q or "差得" in q or "谁差" in q or "达成情况" in q)
+        ):
+            intent.query_type = "kpi_aggregation"
+            intent.query_plan = {
+                "template_id": "owner_gap_ranking",
+                "route": "kpi_aggregation",
+                "use_kpi": True,
+            }
+            intent.preset_template = "owner_gap_ranking"
             intent.needs_clarification = False
             intent.clarifying_question = ""
             return intent
