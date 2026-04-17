@@ -47,7 +47,7 @@ from app.site_settings import SiteSetting
 from app.utils.tracing import LangfuseContextManager
 from app.rag import default_prompt
 from app.rag.chat.crm_authority import CRMAuthority, get_user_crm_authority
-from app.rag.chat.review.intent_router import ReviewIntentRouter, ReviewSessionContext
+from app.rag.chat.review.intent_router import ReviewIntent, ReviewIntentRouter, ReviewSessionContext
 from app.rag.chat.review.data_retriever import ReviewDataRetriever
 from app.rag.chat.review.context_builder import ReviewContextBuilder
 from app.rag.chat.review.metric_catalog import METRIC_DISPLAY_NAMES
@@ -1516,7 +1516,39 @@ class ChatFlow:
             review_phase=review_session.review_phase,
         )
 
-        # --- 1. Intent classification ---
+        chat_ctx = self.context or {}
+        preset_template_raw = chat_ctx.get("preset_template")
+        normalized_preset_template = ""
+        if isinstance(preset_template_raw, str):
+            normalized_preset_template = preset_template_raw.strip().lower()
+        elif preset_template_raw is not None:
+            normalized_preset_template = str(preset_template_raw).strip().lower()
+        template_params = chat_ctx.get("template_params")
+        normalized_template_params = (
+            template_params if isinstance(template_params, dict) else {}
+        )
+        supported_preset_templates = {
+            "achievement_risk_overview",
+            "target_action_to_hit_goal",
+            "owner_gap_ranking",
+            "focus_risky_opportunities",
+            "opportunity_risk_taxonomy",
+        }
+        auto_preset_template = ""
+        if not normalized_preset_template:
+            # Auto-reuse preset templates for semantically aligned non-template questions.
+            auto_probe_intent = ReviewIntent(intent_type="data_query")
+            auto_probe_intent = ReviewIntentRouter._apply_soft_boundary_guard(
+                auto_probe_intent,
+                self.user_question,
+                chat_history=self.chat_history,
+            )
+            auto_candidate = (auto_probe_intent.preset_template or "").strip().lower()
+            if auto_candidate in supported_preset_templates:
+                auto_preset_template = auto_candidate
+                normalized_preset_template = auto_candidate
+
+        # --- 1. Intent classification (or deterministic preset routing) ---
         yield ChatEvent(
             event_type=ChatEventType.MESSAGE_ANNOTATIONS_PART,
             payload=ChatStreamMessagePayload(
@@ -1524,31 +1556,55 @@ class ChatFlow:
                 display="Classifying question intent",
             ),
         )
-        self._ensure_llm_initialized()
-        intent_router = ReviewIntentRouter(fast_llm=self._fast_llm)
 
-        with self._trace_manager.span(
-            name="review_intent_classification",
-            input=self.user_question,
-        ) as span:
-            intent = intent_router.classify(
-                user_question=self.user_question,
-                session_context=session_ctx,
-                chat_history=self.chat_history,
-            )
-            span.end(output=intent.model_dump())
-
-        # Frontend may pass preset template + template_params via chat context (authoritative over LLM slots).
-        chat_ctx = self.context or {}
-        merged_preset = False
-        if chat_ctx.get("preset_template") is not None:
-            intent.preset_template = chat_ctx.get("preset_template")
-            merged_preset = True
-        if isinstance(chat_ctx.get("template_params"), dict):
-            intent.template_params = chat_ctx["template_params"]
-            merged_preset = True
-        if merged_preset:
-            intent = ReviewIntentRouter._apply_soft_boundary_guard(intent, self.user_question)
+        if normalized_preset_template in supported_preset_templates:
+            # Deterministic preset routing: bypass LLM intent classification entirely.
+            with self._trace_manager.span(
+                name="review_intent_classification",
+                input=self.user_question,
+            ) as span:
+                intent = ReviewIntent(
+                    intent_type="data_query",
+                    preset_template=normalized_preset_template,
+                    template_params=normalized_template_params,
+                )
+                intent = ReviewIntentRouter._apply_soft_boundary_guard(
+                    intent, self.user_question
+                )
+                span.end(
+                    output={
+                        **intent.model_dump(),
+                        "classification_mode": (
+                            "preset_deterministic"
+                            if not auto_preset_template
+                            else "auto_preset_deterministic"
+                        ),
+                        "auto_preset_template": auto_preset_template or None,
+                    }
+                )
+        else:
+            self._ensure_llm_initialized()
+            intent_router = ReviewIntentRouter(fast_llm=self._fast_llm)
+            with self._trace_manager.span(
+                name="review_intent_classification",
+                input=self.user_question,
+            ) as span:
+                intent = intent_router.classify(
+                    user_question=self.user_question,
+                    session_context=session_ctx,
+                    chat_history=self.chat_history,
+                )
+                # Frontend may still pass preset/template params in non-preset scenarios.
+                if normalized_preset_template:
+                    intent.preset_template = normalized_preset_template
+                    intent.intent_type = "data_query"
+                if normalized_template_params:
+                    intent.template_params = normalized_template_params
+                if normalized_preset_template or normalized_template_params:
+                    intent = ReviewIntentRouter._apply_soft_boundary_guard(
+                        intent, self.user_question
+                    )
+                span.end(output=intent.model_dump())
 
         logger.info(
             "Review intent: type=%s, metrics=%s, scope=%s",
