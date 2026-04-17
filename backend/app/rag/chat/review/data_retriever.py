@@ -541,7 +541,10 @@ class ReviewDataRetriever:
             risk_universe_map = load_risk_type_name_map(db_session, None)
             if risk_type_codes:
                 risk_type_codes, _ = validate_risk_type_codes(risk_type_codes, risk_universe_map)
-            if not risk_type_codes and template_id != "target_action_to_hit_goal":
+            if not risk_type_codes and template_id not in (
+                "target_action_to_hit_goal",
+                "focus_risky_opportunities",
+            ):
                 risk_type_codes = list(ACHIEVEMENT_RISK_TYPE_CODES_DEFAULT)
             if template_id == "target_action_to_hit_goal" and not risk_type_codes:
                 ctx.risks = []
@@ -551,6 +554,37 @@ class ReviewDataRetriever:
                     "- 当前结论：commit 与 gap 基本持平，暂未触发重点达成风险。\n"
                     "- 建议动作：继续跟进在途商机，并持续关注经营洞察卡片中的新增风险。"
                 )
+                return ctx
+            if template_id == "focus_risky_opportunities":
+                risks_and_progress = self._query_risk_progress(
+                    db_session,
+                    session_id,
+                    snapshot_period,
+                    intent,
+                    risk_type_codes=None,
+                )
+                ctx.risks = [r for r in risks_and_progress if r.get("record_type") == "RISK"]
+                ctx.progresses = []
+                opp_names: List[str] = []
+                for r in ctx.risks:
+                    name = (r.get("opportunity_name") or "").strip()
+                    if name and name not in opp_names:
+                        opp_names.append(name)
+                opp_count = len(opp_names) if opp_names else len(ctx.risks)
+                opp_list_text = "、".join(opp_names) if opp_names else "（未解析到商机名称）"
+                if ctx.risks:
+                    ctx.query_note = (
+                        "### 重点关注商机\n"
+                        f"- 当前结论：共识别到 {opp_count} 个需重点关注的风险商机。\n"
+                        f"- 涉及商机：{opp_list_text}。\n"
+                        "- 查看路径：点击商机评估Agent，筛选有风险的商机，点击商机详情。"
+                    )
+                else:
+                    ctx.query_note = (
+                        "### 重点关注商机\n"
+                        "- 当前结论：暂未识别到风险商机。\n"
+                        "- 建议动作：点击商机评估Agent，筛选有风险的商机，持续关注新增风险后再查看商机详情。"
+                    )
                 return ctx
             risk_name_map = load_risk_type_name_map(db_session, risk_type_codes)
             business_codes, opportunity_codes = split_business_vs_opportunity_risk_codes(risk_type_codes)

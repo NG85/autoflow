@@ -564,6 +564,18 @@ def test_router_sets_owner_gap_ranking_template_route():
     assert guarded.query_plan["route"] == "kpi_aggregation"
 
 
+def test_router_sets_focus_risky_opportunities_template_route():
+    intent = ReviewIntent(intent_type="data_query")
+    guarded = ReviewIntentRouter._apply_soft_boundary_guard(
+        intent,
+        "哪些商机需要重点关注？",
+    )
+    assert guarded.query_type == "risk_progress"
+    assert guarded.preset_template == "focus_risky_opportunities"
+    assert guarded.query_plan["template_id"] == "focus_risky_opportunities"
+    assert guarded.query_plan["route"] == "risk_progress"
+
+
 def test_retrieve_owner_gap_ranking_uses_desc_gap_order(monkeypatch):
     retriever = ReviewDataRetriever()
     review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
@@ -594,6 +606,34 @@ def test_retrieve_owner_gap_ranking_uses_desc_gap_order(monkeypatch):
     assert "目前差额最大的是 王五" in (ctx.query_note or "")
     assert "可进一步对比的销售：李四、张三" in (ctx.query_note or "")
     assert "查看路径：点击商机评估Agent，选择“人员分组”" in (ctx.query_note or "")
+
+
+def test_retrieve_focus_risky_opportunities_lists_risk_opps(monkeypatch):
+    retriever = ReviewDataRetriever()
+    review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
+    intent = ReviewIntent(
+        intent_type="data_query",
+        query_plan={"route": "risk_progress", "template_id": "focus_risky_opportunities"},
+    )
+    monkeypatch.setattr(
+        retriever,
+        "_query_risk_progress",
+        lambda *a, **k: [
+            {"record_type": "RISK", "opportunity_name": "华北大单"},
+            {"record_type": "PROGRESS", "opportunity_name": "华北大单"},
+            {"record_type": "RISK", "opportunity_name": "华东续签"},
+        ],
+    )
+    ctx = retriever.retrieve(
+        db_session=None,
+        review_session=review_session,
+        intent=intent,
+        user_question="哪些商机需要重点关注？",
+    )
+    assert len(ctx.risks) == 2
+    assert "共识别到 2 个需重点关注的风险商机" in (ctx.query_note or "")
+    assert "涉及商机：华北大单、华东续签" in (ctx.query_note or "")
+    assert "查看路径：点击商机评估Agent，筛选有风险的商机，点击商机详情。" in (ctx.query_note or "")
 
 
 @pytest.mark.parametrize(
@@ -629,6 +669,11 @@ def test_retrieve_owner_gap_ranking_uses_desc_gap_order(monkeypatch):
             "risk_progress",
             None,
         ),
+        (
+            "哪些商机需要重点关注？",
+            "risk_progress",
+            None,
+        ),
     ],
 )
 def test_preset_question_router_guardrails(question, expected_route, expected_mismatch):
@@ -641,12 +686,16 @@ def test_preset_question_router_guardrails(question, expected_route, expected_mi
         assert guarded.mismatch_type == expected_mismatch
         assert guarded.query_plan["mismatch_type"] == expected_mismatch
     if expected_route == "risk_progress":
-        assert guarded.preset_template == "achievement_risk_overview"
-        assert guarded.query_plan["template_id"] == "achievement_risk_overview"
-        assert guarded.query_plan["risk_type_codes"] == [
-            "ACHIEVEMENT_GAP_COMMIT_HIGH_RISK",
-            "ACHIEVEMENT_GAP_UPSIDE_INSUFFICIENT",
-        ]
+        if question == "当前业绩有哪些达成风险？":
+            assert guarded.preset_template == "achievement_risk_overview"
+            assert guarded.query_plan["template_id"] == "achievement_risk_overview"
+            assert guarded.query_plan["risk_type_codes"] == [
+                "ACHIEVEMENT_GAP_COMMIT_HIGH_RISK",
+                "ACHIEVEMENT_GAP_UPSIDE_INSUFFICIENT",
+            ]
+        elif question == "哪些商机需要重点关注？":
+            assert guarded.preset_template == "focus_risky_opportunities"
+            assert guarded.query_plan["template_id"] == "focus_risky_opportunities"
 
 
 @pytest.mark.parametrize(

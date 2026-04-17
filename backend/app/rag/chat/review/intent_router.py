@@ -193,6 +193,16 @@ class ReviewIntentRouter:
             intent.needs_clarification = False
             intent.clarifying_question = ""
             return intent
+        if intent.preset_template == "focus_risky_opportunities":
+            intent.query_type = "risk_progress"
+            intent.query_plan = {
+                "template_id": "focus_risky_opportunities",
+                "route": "risk_progress",
+                "use_kpi": False,
+            }
+            intent.needs_clarification = False
+            intent.clarifying_question = ""
+            return intent
         q = (user_question or "").strip().lower()
         if not q:
             return intent
@@ -309,6 +319,20 @@ class ReviewIntentRouter:
                 "use_kpi": True,
             }
             intent.preset_template = "owner_gap_ranking"
+            intent.needs_clarification = False
+            intent.clarifying_question = ""
+            return intent
+        if (
+            ("重点关注" in q or "有风险" in q)
+            and ("哪些商机" in q or "商机" in q)
+        ):
+            intent.query_type = "risk_progress"
+            intent.query_plan = {
+                "template_id": "focus_risky_opportunities",
+                "route": "risk_progress",
+                "use_kpi": False,
+            }
+            intent.preset_template = "focus_risky_opportunities"
             intent.needs_clarification = False
             intent.clarifying_question = ""
             return intent
