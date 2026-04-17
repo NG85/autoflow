@@ -1949,6 +1949,10 @@ class ChatFlow:
             ),
         )
 
+        # Ensure LLM is available for final answer generation regardless of
+        # deterministic preset routing or LLM-based intent classification path.
+        self._ensure_llm_initialized()
+
         prompt_map = {
             "data_query": review_prompts.REVIEW_DATA_QUERY_PROMPT,
             "root_cause": review_prompts.REVIEW_ROOT_CAUSE_PROMPT,
