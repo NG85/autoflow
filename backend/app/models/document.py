@@ -49,7 +49,7 @@ class Document(UpdatableBaseModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     hash: str = Field(max_length=32)
-    name: str = Field(max_length=256)
+    name: str = Field(max_length=512)
     content: str = Field(sa_column=Column(MEDIUMTEXT))
     mime_type: MimeTypes = Field(sa_column=Column(String(128), nullable=False))
     file_id: int = Field(foreign_key="uploads.id", nullable=True)
