@@ -33,6 +33,22 @@ from app.types import MimeTypes
 
 logger = logging.getLogger(__name__)
 
+# Align with Upload.name (255); Document.name allows 512 but we use the same string for both.
+_MAX_CRM_FILE_NAME_LEN = 255
+
+
+def _truncate_crm_file_name(file_name: str) -> str:
+    if len(file_name) <= _MAX_CRM_FILE_NAME_LEN:
+        return file_name
+    ext = ".md"
+    if file_name.lower().endswith(ext):
+        base = file_name[: -len(ext)]
+        max_base = _MAX_CRM_FILE_NAME_LEN - len(ext)
+        if max_base <= 0:
+            return file_name[:_MAX_CRM_FILE_NAME_LEN]
+        return base[:max_base] + ext
+    return file_name[:_MAX_CRM_FILE_NAME_LEN]
+
 
 class ReviewDataSource:
     """Generates ``Document`` objects from review tables for a given session.
@@ -114,7 +130,7 @@ class ReviewDataSource:
 
         doc_datetime = datetime.now()
         session_label = session_obj.session_name or f"{session_obj.department_name}_{session_obj.period}"
-        file_name = f"{session_label}_{session_obj.unique_id}.md"
+        file_name = _truncate_crm_file_name(f"{session_label}_{session_obj.unique_id}.md")
         upload = save_crm_to_file(
             "review_session", session_obj, content_str, doc_datetime, metadata,
             file_name=file_name,
@@ -215,7 +231,9 @@ class ReviewDataSource:
 
             doc_datetime = datetime.now()
             snap_label = snap.opportunity_name or snap.opportunity_id
-            file_name = f"{snap_label}_{snap.snapshot_period}_{snap.unique_id}.md"
+            file_name = _truncate_crm_file_name(
+                f"{snap_label}_{snap.snapshot_period}_{snap.unique_id}.md"
+            )
             upload = save_crm_to_file(
                 "review_snapshot", snap, content_str, doc_datetime, metadata,
                 file_name=file_name,
@@ -335,7 +353,9 @@ class ReviewDataSource:
 
             doc_datetime = datetime.now()
             rp_label = rp.type_name or rp.type_code
-            file_name = f"{rp_label}_{rp.snapshot_period}_{rp.unique_id}.md"
+            file_name = _truncate_crm_file_name(
+                f"{rp_label}_{rp.snapshot_period}_{rp.unique_id}.md"
+            )
             upload = save_crm_to_file(
                 "review_risk_progress", rp, content_str, doc_datetime, metadata,
                 file_name=file_name,
