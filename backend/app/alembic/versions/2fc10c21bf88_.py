@@ -59,7 +59,7 @@ def upgrade():
         ),
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("hash", sqlmodel.sql.sqltypes.AutoString(length=32), nullable=False),
-        sa.Column("name", sqlmodel.sql.sqltypes.AutoString(length=512), nullable=False),
+        sa.Column("name", sqlmodel.sql.sqltypes.AutoString(length=256), nullable=False),
         sa.Column("content", mysql.MEDIUMTEXT(), nullable=True),
         sa.Column(
             "mime_type", sqlmodel.sql.sqltypes.AutoString(length=64), nullable=False
