@@ -20,9 +20,18 @@ from app.repositories.chunk import ChunkRepo
 from app.models.entity import get_kb_entity_model
 from app.models.relationship import get_kb_relationship_model
 from app.models.document import DocumentCategory
+from app.rag.types import CrmDataType
 from app.tasks.build_playbook_index import build_playbook_index_for_document
 
 logger = get_task_logger(__name__)
+
+_REVIEW_CRM_DATA_TYPES = frozenset(
+    {
+        CrmDataType.REVIEW_SESSION,
+        CrmDataType.REVIEW_SNAPSHOT,
+        CrmDataType.REVIEW_RISK_PROGRESS,
+    }
+)
 
 
 # TODO: refactor: divide into two tasks: build_vector_index_for_document and build_kg_index_for_document
@@ -110,6 +119,16 @@ def build_index_for_document(self, knowledge_base_id: int, document_id: int):
     with Session(engine, expire_on_commit=False) as session:
         kb = knowledge_base_repo.must_get(session, knowledge_base_id)
         if IndexMethod.KNOWLEDGE_GRAPH not in kb.index_methods:
+            return
+        db_document = session.get(DBDocument, document_id)
+        crm_data_type = (db_document.meta or {}).get("crm_data_type") if db_document else None
+        if crm_data_type in _REVIEW_CRM_DATA_TYPES:
+            logger.info(
+                "Skip general KG extraction for review CRM document #%s (crm_data_type=%s); "
+                "CRM graph is built separately.",
+                document_id,
+                crm_data_type,
+            )
             return
         chunk_repo = ChunkRepo(get_kb_chunk_model(kb))
         chunks = chunk_repo.get_document_chunks(session, document_id)
