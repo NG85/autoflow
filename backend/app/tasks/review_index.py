@@ -58,7 +58,7 @@ def index_review_session_data(
         The ``unique_id`` of the review session to index.
     kb_id : int | None
         Knowledge base to store documents in.  Falls back to
-        ``settings.CRM_DAILY_KB_ID`` when not provided.
+        ``settings.CRM_REVIEW_KB_ID`` when not provided.
     """
     kb_id = kb_id or settings.CRM_REVIEW_KB_ID
     selected_types = normalize_review_data_types(review_data_types)

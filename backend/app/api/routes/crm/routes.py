@@ -893,16 +893,16 @@ def build_review_session_index(
     review_data_types: Optional[List[CrmDataType]] = Query(
         default=None,
         description=(
-            "可选：仅构建指定 review 数据类型。"
+            "可选：仅构建指定 review 数据类型（默认构建全部三种）。"
             "可多选：crm_review_session, crm_review_snapshot, crm_review_risk_progress"
         ),
     ),
 ):
     """手动触发某个 review session 的向量 + 知识图谱索引构建。
 
-    默认会构建该 session 下的商机快照与风险/进展数据，
+    默认会构建该 session 下三种 review 数据：
+    ``crm_review_session``、``crm_review_snapshot``、``crm_review_risk_progress``，
     生成 Document 并异步执行向量 embedding 和 CRM 知识图谱构建。
-    session 摘要索引默认不构建（可通过 ``review_data_types`` 显式开启）。
 
     支持部分构建：通过 ``review_data_types`` 仅构建指定类型，
     例如只构建 ``crm_review_risk_progress``。
