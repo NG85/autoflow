@@ -12,6 +12,8 @@ from app.models import (
     Upload,
 )
 from app.rag.datasource import get_data_source_loader
+from app.models.document import DocIndexTaskStatus
+from app.models.document import DocumentCategory
 from app.repositories import knowledge_base_repo, document_repo
 from .build_index import build_index_for_document
 from ..models.chunk import get_kb_chunk_model
@@ -25,6 +27,13 @@ from ..repositories.chunk import ChunkRepo
 from ..repositories.graph import GraphRepo
 
 logger = get_task_logger(__name__)
+
+
+def _normalize_crm_data_type(value) -> str | None:
+    if not value:
+        return None
+    # CrmDataType is a str Enum; str(member) is "CrmDataType.X", not enum value.
+    return str(getattr(value, "value", value))
 
 
 @celery_app.task
@@ -53,6 +62,13 @@ def import_documents_from_kb_datasource(kb_id: int, data_source_id: int):
             data_source = knowledge_base_repo.must_get_kb_datasource(
                 session, kb, data_source_id
             )
+            chunk_model = get_kb_chunk_model(kb)
+            chunk_repo = ChunkRepo(chunk_model)
+            graph_repo = GraphRepo(
+                get_kb_entity_model(kb),
+                get_kb_relationship_model(kb),
+                chunk_model,
+            )
 
             logger.info(
                 f"Loading documents from data source #{data_source_id} for knowledge base #{kb_id}"
@@ -66,10 +82,81 @@ def import_documents_from_kb_datasource(kb_id: int, data_source_id: int):
                 data_source.config,
             )
 
+            # Build an in-memory key index for CRM docs to support upsert by business key.
+            # Key: (crm_data_type, unique_id)
+            existing_crm_docs = {}
+            existing_docs = session.exec(
+                select(Document).where(Document.knowledge_base_id == kb_id)
+            ).all()
+            for db_doc in existing_docs:
+                meta = db_doc.meta or {}
+                if meta.get("category") != DocumentCategory.CRM:
+                    continue
+                crm_data_type = _normalize_crm_data_type(meta.get("crm_data_type"))
+                unique_id = meta.get("unique_id")
+                if crm_data_type and unique_id:
+                    existing_crm_docs[(str(crm_data_type), str(unique_id))] = db_doc
+
             for document in loader.load_documents():
+                meta = document.meta or {}
+                is_crm_doc = meta.get("category") == DocumentCategory.CRM
+                crm_data_type = _normalize_crm_data_type(meta.get("crm_data_type"))
+                unique_id = meta.get("unique_id")
+                upsert_key = (
+                    (str(crm_data_type), str(unique_id))
+                    if is_crm_doc and crm_data_type and unique_id
+                    else None
+                )
+
+                if upsert_key and upsert_key in existing_crm_docs:
+                    existing_doc = existing_crm_docs[upsert_key]
+                    old_file_id = existing_doc.file_id
+                    logger.info(
+                        "Upsert CRM document for key=%s (existing_id=%s, datasource=%s)",
+                        upsert_key,
+                        existing_doc.id,
+                        data_source_id,
+                    )
+                    # Remove old graph/chunks so re-index can rebuild from the latest content.
+                    graph_repo.delete_document_relationships(session, existing_doc.id)
+                    chunk_repo.delete_by_document(session, existing_doc.id)
+                    graph_repo.delete_orphaned_entities(session)
+
+                    existing_doc.name = document.name
+                    existing_doc.hash = document.hash
+                    existing_doc.content = document.content
+                    existing_doc.mime_type = document.mime_type
+                    existing_doc.data_source_id = document.data_source_id
+                    existing_doc.file_id = document.file_id
+                    existing_doc.source_uri = document.source_uri
+                    existing_doc.updated_at = document.updated_at
+                    existing_doc.last_modified_at = document.last_modified_at
+                    existing_doc.meta = document.meta
+                    existing_doc.index_status = DocIndexTaskStatus.NOT_STARTED
+                    existing_doc.index_result = None
+                    session.add(existing_doc)
+
+                    # Clean up old upload row if no other document references it.
+                    if old_file_id and old_file_id != existing_doc.file_id:
+                        file_ref_exists = session.exec(
+                            select(Document.id).where(
+                                Document.file_id == old_file_id,
+                                Document.id != existing_doc.id,
+                            )
+                        ).first()
+                        if not file_ref_exists:
+                            old_upload = session.get(Upload, old_file_id)
+                            if old_upload:
+                                session.delete(old_upload)
+
+                    session.commit()
+                    build_index_for_document.delay(kb_id, existing_doc.id)
+                    continue
+
                 session.add(document)
                 session.commit()
-
+                if upsert_key:
+                    existing_crm_docs[upsert_key] = document
                 build_index_for_document.delay(kb_id, document.id)
                     
         stats_for_knowledge_base.delay(kb_id)
