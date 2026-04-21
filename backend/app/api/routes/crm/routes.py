@@ -395,16 +395,12 @@ def query_review_snapshot_filter_enums(
     # 去重并保持顺序
     forecast_types = list(dict.fromkeys(forecast_types))
 
-    # TODO: support multiple handbook_ids (or configurable handbook set) for sales_stage options.
-    target_handbook_id = "pb_EXEC-RPT-SALES-PLAYBOOK-20250219-001-001"
     stage_rows = db_session.exec(
         text(
             "select handbook_id, sales_stage "
             "from diagnostic_playbook "
-            "where handbook_id = :handbook_id "
-            "and sales_stage is not null and sales_stage <> ''"
+            "where sales_stage is not null and sales_stage <> ''"
         )
-        .bindparams(handbook_id=target_handbook_id)
     ).all()
     stage_by_handbook: dict[str, list[str]] = {}
     for r in stage_rows:
