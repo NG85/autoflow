@@ -202,39 +202,84 @@ def format_snapshot_info(snapshot) -> List[str]:
     stage_val = baseline_stage if baseline_stage not in (None, "") else current_stage
     close_date_val = baseline_close_date if baseline_close_date not in (None, "") else current_close_date
 
-    forecast_is_fallback = baseline_forecast in (None, "") and current_forecast
-    amount_is_fallback = baseline_amount is None and current_amount is not None
-    stage_is_fallback = baseline_stage in (None, "") and current_stage
-    close_date_is_fallback = baseline_close_date in (None, "") and current_close_date
-    lines.append("## 销售判断（最终确认值）vs AI判断")
-    lines.append("")
-    lines.append(f"- 销售判断 - 预测状态={forecast_val or '缺失'}")
-    lines.append(f"- 销售判断 - 签约金额={_fmt(amount_val) or '缺失'}")
-    lines.append(f"- 销售判断 - 商机阶段={stage_val or '缺失'}")
-    lines.append(f"- 销售判断 - 预计成交日期={close_date_val or '缺失'}")
-    lines.append(f"- 销售判断 - 阶段停留天数={_fmt(getattr(snapshot, 'stage_stay', None)) or '缺失'}")
-    lines.append("")
-
-    # AI evaluations
     ai_commit = getattr(snapshot, "ai_commit", None)
     ai_stage = getattr(snapshot, "ai_stage", None)
     ai_close = getattr(snapshot, "ai_expected_closing_date", None)
-    lines.append("- AI判断 - 预测状态=" + (ai_commit or "缺失"))
-    lines.append("- AI判断 - 商机阶段=" + (ai_stage or "缺失"))
-    lines.append("- AI判断 - 预计成交日期=" + (ai_close or "缺失"))
+
+    has_ai_commit = ai_commit not in (None, "")
+    has_ai_stage = ai_stage not in (None, "")
+    has_ai_close = ai_close not in (None, "")
+    has_any_ai = has_ai_commit or has_ai_stage or has_ai_close
+
+    lines.append("## 销售判断与AI判断" if has_any_ai else "## 销售判断")
+    lines.append("")
+    lines.append(f"- 销售判断 - 预测状态={forecast_val or '缺失'}")
+    lines.append(f"- 销售判断 - 签约金额={_fmt(amount_val) or '缺失'}（仅销售字段，AI不做判断）")
+    lines.append(f"- 销售判断 - 商机阶段={stage_val or '缺失'}")
+    lines.append(f"- 销售判断 - 预计成交日期={close_date_val or '缺失'}")
+    lines.append(
+        f"- 销售判断 - 阶段停留天数={_fmt(getattr(snapshot, 'stage_stay', None)) or '缺失'}（仅销售字段，AI不做判断）"
+    )
+    lines.append("")
+
+    if has_ai_commit or has_ai_stage or has_ai_close:
+        if has_ai_commit:
+            lines.append("- AI判断 - 预测状态=" + ai_commit)
+        if has_ai_stage:
+            lines.append("- AI判断 - 商机阶段=" + ai_stage)
+        if has_ai_close:
+            lines.append("- AI判断 - 预计成交日期=" + ai_close)
+        lines.append("")
+        if has_ai_commit:
+            lines.append(
+                "- 销售与AI是否一致 - 预测状态="
+                + ("一致" if (forecast_val or "") == ai_commit and forecast_val else "不一致")
+            )
+        if has_ai_stage:
+            lines.append(
+                "- 销售与AI是否一致 - 商机阶段="
+                + ("一致" if (stage_val or "") == ai_stage and stage_val else "不一致")
+            )
+        if has_ai_close:
+            lines.append(
+                "- 销售与AI是否一致 - 预计成交日期="
+                + ("一致" if (close_date_val or "") == ai_close and close_date_val else "不一致")
+            )
+        lines.append("")
+
+    # Minimal structured facts for chunk-level HAS_FACT extraction.
+    lines.append("## KG/Vector Facts")
     lines.append("")
     lines.append(
-        "- 销售与AI是否一致 - 预测状态="
-        + ("一致" if (forecast_val or "") == (ai_commit or "") and (forecast_val or ai_commit) else "不一致")
+        f"- [事实] 范围类型=商机；范围名称={opp_display}；指标=销售判断预测状态 (sales_forecast)；当前值={forecast_val or '缺失'}。"
     )
     lines.append(
-        "- 销售与AI是否一致 - 商机阶段="
-        + ("一致" if (stage_val or "") == (ai_stage or "") and (stage_val or ai_stage) else "不一致")
+        f"- [事实] 范围类型=商机；范围名称={opp_display}；指标=销售判断商机阶段 (sales_stage)；当前值={stage_val or '缺失'}。"
     )
     lines.append(
-        "- 销售与AI是否一致 - 预计成交日期="
-        + ("一致" if (close_date_val or "") == (ai_close or "") and (close_date_val or ai_close) else "不一致")
+        f"- [事实] 范围类型=商机；范围名称={opp_display}；指标=销售判断预计成交日期 (sales_close_date)；当前值={close_date_val or '缺失'}。"
     )
+    if has_ai_commit:
+        lines.append(
+            "- [事实] 范围类型=商机；范围名称="
+            f"{opp_display}；指标=销售与AI预测状态一致性 (sales_ai_forecast_match)；"
+            f"当前值={'一致' if (forecast_val or '') == ai_commit and forecast_val else '不一致'}；"
+            f"销售值={forecast_val or '缺失'}；AI值={ai_commit}。"
+        )
+    if has_ai_stage:
+        lines.append(
+            "- [事实] 范围类型=商机；范围名称="
+            f"{opp_display}；指标=销售与AI商机阶段一致性 (sales_ai_stage_match)；"
+            f"当前值={'一致' if (stage_val or '') == ai_stage and stage_val else '不一致'}；"
+            f"销售值={stage_val or '缺失'}；AI值={ai_stage}。"
+        )
+    if has_ai_close:
+        lines.append(
+            "- [事实] 范围类型=商机；范围名称="
+            f"{opp_display}；指标=销售与AI预计成交日期一致性 (sales_ai_close_date_match)；"
+            f"当前值={'一致' if (close_date_val or '') == ai_close and close_date_val else '不一致'}；"
+            f"销售值={close_date_val or '缺失'}；AI值={ai_close}。"
+        )
     lines.append("")
 
     return lines

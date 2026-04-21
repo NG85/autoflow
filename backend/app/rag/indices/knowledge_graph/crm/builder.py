@@ -1037,63 +1037,66 @@ class CRMKnowledgeGraphBuilder:
             ai_forecast = primary_data.get("ai_commit", "")
             ai_stage = primary_data.get("ai_stage", "")
             ai_close = primary_data.get("ai_expected_closing_date", "")
-            relationships_data.append({
-                "source_entity": snapshot_entity.name,
-                "target_entity": snapshot_entity.name,
-                "source_entity_description": snapshot_entity.description,
-                "target_entity_description": snapshot_entity.description,
-                "relationship_desc": (
-                    f"商机快照{snapshot_entity.name}销售判断与AI判断在预测状态上"
-                    f"{self._match_state(sales_forecast, ai_forecast)}"
-                ),
-                "meta": {
-                    **rel_meta_base,
-                    "relation_type": "SALES_AI_FORECAST_MATCH",
-                    "source_type": CrmDataType.REVIEW_SNAPSHOT,
-                    "target_type": CrmDataType.REVIEW_SNAPSHOT,
-                    "sales_value": sales_forecast,
-                    "ai_value": ai_forecast,
-                    "match_state": self._match_state(sales_forecast, ai_forecast),
-                },
-            })
-            relationships_data.append({
-                "source_entity": snapshot_entity.name,
-                "target_entity": snapshot_entity.name,
-                "source_entity_description": snapshot_entity.description,
-                "target_entity_description": snapshot_entity.description,
-                "relationship_desc": (
-                    f"商机快照{snapshot_entity.name}销售判断与AI判断在商机阶段上"
-                    f"{self._match_state(sales_stage, ai_stage)}"
-                ),
-                "meta": {
-                    **rel_meta_base,
-                    "relation_type": "SALES_AI_STAGE_MATCH",
-                    "source_type": CrmDataType.REVIEW_SNAPSHOT,
-                    "target_type": CrmDataType.REVIEW_SNAPSHOT,
-                    "sales_value": sales_stage,
-                    "ai_value": ai_stage,
-                    "match_state": self._match_state(sales_stage, ai_stage),
-                },
-            })
-            relationships_data.append({
-                "source_entity": snapshot_entity.name,
-                "target_entity": snapshot_entity.name,
-                "source_entity_description": snapshot_entity.description,
-                "target_entity_description": snapshot_entity.description,
-                "relationship_desc": (
-                    f"商机快照{snapshot_entity.name}销售判断与AI判断在预计成交日期上"
-                    f"{self._match_state(sales_close, ai_close)}"
-                ),
-                "meta": {
-                    **rel_meta_base,
-                    "relation_type": "SALES_AI_CLOSE_DATE_MATCH",
-                    "source_type": CrmDataType.REVIEW_SNAPSHOT,
-                    "target_type": CrmDataType.REVIEW_SNAPSHOT,
-                    "sales_value": sales_close,
-                    "ai_value": ai_close,
-                    "match_state": self._match_state(sales_close, ai_close),
-                },
-            })
+            if str(ai_forecast or "").strip():
+                relationships_data.append({
+                    "source_entity": snapshot_entity.name,
+                    "target_entity": snapshot_entity.name,
+                    "source_entity_description": snapshot_entity.description,
+                    "target_entity_description": snapshot_entity.description,
+                    "relationship_desc": (
+                        f"商机快照{snapshot_entity.name}销售判断与AI判断在预测状态上"
+                        f"{self._match_state(sales_forecast, ai_forecast)}"
+                    ),
+                    "meta": {
+                        **rel_meta_base,
+                        "relation_type": "SALES_AI_FORECAST_MATCH",
+                        "source_type": CrmDataType.REVIEW_SNAPSHOT,
+                        "target_type": CrmDataType.REVIEW_SNAPSHOT,
+                        "sales_value": sales_forecast,
+                        "ai_value": ai_forecast,
+                        "match_state": self._match_state(sales_forecast, ai_forecast),
+                    },
+                })
+            if str(ai_stage or "").strip():
+                relationships_data.append({
+                    "source_entity": snapshot_entity.name,
+                    "target_entity": snapshot_entity.name,
+                    "source_entity_description": snapshot_entity.description,
+                    "target_entity_description": snapshot_entity.description,
+                    "relationship_desc": (
+                        f"商机快照{snapshot_entity.name}销售判断与AI判断在商机阶段上"
+                        f"{self._match_state(sales_stage, ai_stage)}"
+                    ),
+                    "meta": {
+                        **rel_meta_base,
+                        "relation_type": "SALES_AI_STAGE_MATCH",
+                        "source_type": CrmDataType.REVIEW_SNAPSHOT,
+                        "target_type": CrmDataType.REVIEW_SNAPSHOT,
+                        "sales_value": sales_stage,
+                        "ai_value": ai_stage,
+                        "match_state": self._match_state(sales_stage, ai_stage),
+                    },
+                })
+            if str(ai_close or "").strip():
+                relationships_data.append({
+                    "source_entity": snapshot_entity.name,
+                    "target_entity": snapshot_entity.name,
+                    "source_entity_description": snapshot_entity.description,
+                    "target_entity_description": snapshot_entity.description,
+                    "relationship_desc": (
+                        f"商机快照{snapshot_entity.name}销售判断与AI判断在预计成交日期上"
+                        f"{self._match_state(sales_close, ai_close)}"
+                    ),
+                    "meta": {
+                        **rel_meta_base,
+                        "relation_type": "SALES_AI_CLOSE_DATE_MATCH",
+                        "source_type": CrmDataType.REVIEW_SNAPSHOT,
+                        "target_type": CrmDataType.REVIEW_SNAPSHOT,
+                        "sales_value": sales_close,
+                        "ai_value": ai_close,
+                        "match_state": self._match_state(sales_close, ai_close),
+                    },
+                })
             self._append_review_chunk_facts(
                 relationships_data,
                 source_entity_name=snapshot_entity.name,
