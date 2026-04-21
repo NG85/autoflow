@@ -9,7 +9,11 @@ from zoneinfo import ZoneInfo
 
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
 from app.models.crm_accounts import CRMAccount
-from app.api.routes.crm.models import VisitAttachment, VisitRecordQueryRequest, VisitRecordResponse
+from app.api.routes.crm.models import (
+    VisitAttachment,
+    VisitRecordQueryRequest,
+    VisitRecordResponse,
+)
 from app.policies.visit_record_access import VisitRecordAccessPolicy
 from app.repositories.base_repo import BaseRepo
 from app.repositories.user_profile import user_profile_repo

@@ -226,6 +226,8 @@ class CRMOpportunity(SQLModel, table=True):
     sales_order_review_status: Optional[str] = Field(nullable=True, max_length=255, description="销售订单审核状态")
     
     owner_id: Optional[str] = Field(nullable=True, max_length=255, description="负责人ID")
+    owner_department_id: Optional[str] = Field(nullable=True, max_length=255, description="负责人部门ID")
+    owner_department_name: Optional[str] = Field(nullable=True, max_length=255, description="负责人部门名称")
 
     __tablename__ = "crm_opportunities"
     

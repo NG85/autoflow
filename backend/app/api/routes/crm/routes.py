@@ -61,6 +61,7 @@ from app.api.routes.crm.models import (
     ReviewSessionProgressCategoryGroupBasicOut,
     ReviewSessionInsightDetailOut,
     ReviewSessionInsightRiskOpportunityOut,
+    DailyCustomerFollowupQueryRequest,
 )
 from app.crm.save_engine import (
     save_visit_record_to_crm_table, 
@@ -72,6 +73,7 @@ from app.services.customer_document_service import CustomerDocumentService
 from app.services.document_processing_service import document_processing_service
 from app.repositories.user_profile import UserProfileRepo
 from app.repositories.visit_record import visit_record_repo
+from app.repositories.crm_account_opportunity_assessment import crm_account_opportunity_assessment_repo
 from app.repositories.document_content import DocumentContentRepo
 from sqlmodel import select, or_, distinct, func, and_
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
@@ -2033,6 +2035,34 @@ def query_visit_records(
                 "page_size": result.size,
                 "pages": result.pages
             }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(e)
+        raise InternalServerError()
+
+
+@router.post("/crm/daily_customer_followups/query")
+def query_daily_customer_followups(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    request: DailyCustomerFollowupQueryRequest,
+):
+    """
+    查询每日客户跟进（红黄绿灯评估明细）
+    基于 crm_account_opportunity_assessment，按条件筛选并分页返回。
+    """
+    try:
+        _ = user
+        response = crm_account_opportunity_assessment_repo.query_daily_customer_followups(
+            session=db_session,
+            request=request,
+        )
+        return {
+            "code": 0,
+            "message": "success",
+            "data": response.model_dump(),
         }
     except HTTPException:
         raise
