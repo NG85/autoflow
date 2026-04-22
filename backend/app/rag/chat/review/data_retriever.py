@@ -577,6 +577,7 @@ class ReviewDataRetriever:
         user_question: Optional[str] = None,
         current_owner_id: Optional[str] = None,
         current_owner_name: Optional[str] = None,
+        enforced_owner_id: Optional[str] = None,
     ) -> ReviewDataContext:
         ctx = ReviewDataContext()
 
@@ -594,6 +595,15 @@ class ReviewDataRetriever:
                 current_owner_id=current_owner_id,
             )
         )
+        if enforced_owner_id:
+            enforced_owner_id = str(enforced_owner_id).strip()
+            if enforced_owner_id:
+                effective_scope_type = "owner"
+                effective_scope_id = enforced_owner_id
+                if not isinstance(plan_scope_obj, dict):
+                    plan_scope_obj = {}
+                plan_scope_obj["type"] = "owner"
+                plan_scope_obj["id"] = enforced_owner_id
         if time_mode not in ("", "current_only"):
             ctx.query_note = (
                 "### 时间范围说明\n"
@@ -951,6 +961,7 @@ class ReviewDataRetriever:
                 ctx.kpi_metrics = self._query_owner_gap_ranking(
                     db_session=db_session,
                     session_id=session_id,
+                    owner_id=enforced_owner_id,
                 )
                 if ctx.kpi_metrics:
                     top_seller = (
@@ -1234,6 +1245,7 @@ class ReviewDataRetriever:
         self,
         db_session: Session,
         session_id: str,
+        owner_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         K = CRMReviewKpiMetrics
         stmt = select(K).where(
@@ -1241,6 +1253,8 @@ class ReviewDataRetriever:
             K.scope_type == "owner",
             K.metric_name == "gap",
         )
+        if owner_id:
+            stmt = stmt.where(K.scope_id == owner_id)
         rows = list(db_session.exec(stmt).all())
         rows = [r for r in rows if r.metric_value is not None]
         rows.sort(key=lambda r: float(r.metric_value), reverse=True)

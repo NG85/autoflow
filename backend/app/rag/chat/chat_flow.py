@@ -1527,6 +1527,12 @@ class ChatFlow:
         normalized_template_params = (
             template_params if isinstance(template_params, dict) else {}
         )
+        enforced_owner_id_raw = chat_ctx.get("enforced_owner_id")
+        enforced_owner_id = (
+            str(enforced_owner_id_raw or "").strip()
+            if enforced_owner_id_raw is not None
+            else ""
+        )
         supported_preset_templates = {
             "achievement_risk_overview",
             "target_action_to_hit_goal",
@@ -1676,6 +1682,7 @@ class ChatFlow:
                 user_question=self.user_question,
                 current_owner_id=str(current_owner_id) if current_owner_id else None,
                 current_owner_name=current_owner_name,
+                enforced_owner_id=enforced_owner_id or None,
             )
             span.end(output={
                 "kpi_count": len(data_ctx.kpi_metrics),
@@ -1684,6 +1691,43 @@ class ChatFlow:
                 "risk_count": len(data_ctx.risks),
                 "progress_count": len(data_ctx.progresses),
             })
+
+        if enforced_owner_id:
+            scope_notice = "你当前为普通参会人，结果已按“仅本人数据”过滤。"
+            scope_block_notice = (
+                "该问题涉及他人或团队范围，你当前权限仅支持本人数据；如需团队范围，请由leader查看。"
+            )
+            previous_assistant_text = "\n".join(
+                str(getattr(m, "content", "") or "")
+                for m in (self.chat_history or [])
+                if str(getattr(m, "role", "")).lower().endswith("assistant")
+            )
+            should_show_scope_notice = scope_notice not in previous_assistant_text
+
+            question = str(self.user_question or "").strip()
+            broad_scope_keywords = (
+                "团队", "部门", "公司", "全员", "每个销售", "大家", "别人", "他人", "排名"
+            )
+            self_scope_keywords = ("我", "本人", "我负责", "我名下", "我的")
+            asks_broad_scope = any(k in question for k in broad_scope_keywords)
+            asks_self_scope = any(k in question for k in self_scope_keywords)
+            should_show_scope_block_notice = (
+                asks_broad_scope
+                and not asks_self_scope
+                and scope_block_notice not in previous_assistant_text
+            )
+
+            scope_lines: List[str] = []
+            if should_show_scope_notice:
+                scope_lines.append(scope_notice)
+            if should_show_scope_block_notice:
+                scope_lines.append(scope_block_notice)
+            if scope_lines:
+                scope_note = "### 范围说明\n" + "\n".join(f"- {line}" for line in scope_lines)
+                existing_note = (data_ctx.query_note or "").strip()
+                data_ctx.query_note = (
+                    f"{scope_note}\n\n{existing_note}" if existing_note else scope_note
+                )
 
         # --- 3. KG + vector retrieval (strategy, or data_query zero-result fallback) ---
         knowledge_graph_context = ""

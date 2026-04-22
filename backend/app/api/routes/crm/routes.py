@@ -850,10 +850,16 @@ def review_session_chat(
             detail="User is not an attendee of this review session",
         )
 
+    is_attendee_leader = bool(getattr(attendee, "is_leader", False)) if attendee else False
     origin = request.headers.get("Origin") or request.headers.get("Referer")
     browser_id = getattr(request.state, "browser_id", "")
 
     context: Dict[str, Any] = {"review_session_id": session_id}
+    if attendee and not is_attendee_leader:
+        owner_id = str(getattr(attendee, "crm_user_id", "") or "").strip()
+        if not owner_id:
+            raise HTTPException(status_code=422, detail="attendee has no crm_user_id")
+        context["enforced_owner_id"] = owner_id
     if chat_request.preset_template is not None:
         context["preset_template"] = chat_request.preset_template
     if isinstance(chat_request.template_params, dict) and chat_request.template_params:
