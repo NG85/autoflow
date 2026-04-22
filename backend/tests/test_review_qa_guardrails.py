@@ -1183,6 +1183,103 @@ def test_retrieve_non_template_owner_scope_prefers_query_plan_scope_for_replay(m
     assert captured["scope_id"] == "owner_456"
 
 
+def test_retrieve_enforced_owner_scope_overrides_query_plan_for_detail_route(monkeypatch):
+    retriever = ReviewDataRetriever()
+    review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
+    intent = ReviewIntent(
+        intent_type="data_query",
+        query_plan={
+            "route": "opportunity_detail",
+            "scope": {"type": "owner", "id": "owner_from_query_plan", "source": "replay"},
+            "detail_filters": {"requested_fields": ["owner_name"]},
+            "use_kpi": False,
+        },
+    )
+    captured = {}
+
+    def _mock_detail(*args, **kwargs):
+        captured["scope_owner_id"] = kwargs.get("scope_owner_id")
+        return []
+
+    monkeypatch.setattr(retriever, "_query_typical_opportunity_details", _mock_detail)
+    monkeypatch.setattr(retriever, "_query_kpi_metrics", lambda *a, **k: [])
+    monkeypatch.setattr(retriever, "_query_snapshot_aggregations", lambda *a, **k: [])
+    monkeypatch.setattr(retriever, "_query_risk_progress", lambda *a, **k: [])
+
+    retriever.retrieve(
+        db_session=None,
+        review_session=review_session,
+        intent=intent,
+        user_question="回放：看销售商机明细",
+        enforced_owner_id="owner_enforced",
+    )
+    assert captured["scope_owner_id"] == "owner_enforced"
+
+
+def test_retrieve_enforced_owner_scope_overrides_query_plan_for_risk_route(monkeypatch):
+    retriever = ReviewDataRetriever()
+    review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
+    intent = ReviewIntent(
+        intent_type="data_query",
+        query_type="risk_progress",
+        query_plan={
+            "route": "risk_progress",
+            "scope": {"type": "owner", "id": "owner_from_query_plan", "source": "replay"},
+        },
+    )
+    captured = {}
+
+    def _mock_risk_progress(_db, _sid, _period, eff_intent, risk_type_codes=None):
+        captured["scope_type"] = eff_intent.scope_type
+        captured["scope_id"] = eff_intent.scope_id
+        return [{"record_type": "RISK", "opportunity_name": "华东续签"}]
+
+    monkeypatch.setattr(
+        retriever,
+        "_query_risk_opportunity_relations",
+        lambda *a, **k: pytest.fail("relation chain should not be called"),
+    )
+    monkeypatch.setattr(retriever, "_query_risk_progress", _mock_risk_progress)
+
+    retriever.retrieve(
+        db_session=None,
+        review_session=review_session,
+        intent=intent,
+        user_question="回放：看风险",
+        enforced_owner_id="owner_enforced",
+    )
+    assert captured["scope_type"] == "owner"
+    assert captured["scope_id"] == "owner_enforced"
+
+
+def test_retrieve_owner_gap_ranking_respects_enforced_owner_id(monkeypatch):
+    retriever = ReviewDataRetriever()
+    review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
+    intent = ReviewIntent(
+        intent_type="data_query",
+        query_plan={"route": "kpi_aggregation", "template_id": "owner_gap_ranking"},
+    )
+    captured = {}
+
+    def _mock_owner_gap(*args, **kwargs):
+        captured["owner_id"] = kwargs.get("owner_id")
+        return []
+
+    monkeypatch.setattr(retriever, "_query_owner_gap_ranking", _mock_owner_gap)
+    monkeypatch.setattr(retriever, "_query_snapshot_aggregations", lambda *a, **k: [])
+    monkeypatch.setattr(retriever, "_collect_opportunity_snapshot_rows", lambda *a, **k: [])
+    monkeypatch.setattr(retriever, "_query_risk_progress", lambda *a, **k: [])
+
+    retriever.retrieve(
+        db_session=None,
+        review_session=review_session,
+        intent=intent,
+        user_question="团队谁差得多",
+        enforced_owner_id="owner_enforced",
+    )
+    assert captured["owner_id"] == "owner_enforced"
+
+
 def test_retrieve_non_template_owner_scope_named_owner_not_found_returns_clarify_note(monkeypatch):
     retriever = ReviewDataRetriever()
     review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
