@@ -46,6 +46,8 @@ class MenuItem(BaseModel):
     target: MenuTarget | None = None
     audience: MenuAudience | None = None
     unenabled_page: str | None = None
+    has_studio: bool = False
+    icon: str = ""
 
     @model_validator(mode="after")
     def validate_item(self):
@@ -57,11 +59,8 @@ class MenuItem(BaseModel):
         if self.parent_key is not None and not self.parent_key.strip():
             raise ValueError("menus[].parent_key must be a non-empty string when provided")
 
-        if self.enabled and self.target is None:
-            raise ValueError("menus[].target is required when enabled=true")
-
-        if self.unenabled_page is not None and not self.unenabled_page.strip():
-            raise ValueError("menus[].unenabled_page must be a non-empty string")
+        if self.icon is None:
+            raise ValueError("menus[].icon must be a string")
 
         return self
 
@@ -88,20 +87,6 @@ class MenuConfig(BaseModel):
                 raise ValueError(
                     f"menus[].parent_key '{menu.parent_key}' in item '{menu.key}' "
                     f"references a non-existent key"
-                )
-
-        parent_keys = {m.parent_key for m in self.menus if m.parent_key}
-        for menu in self.menus:
-            is_group_header = menu.key in parent_keys
-            if (
-                menu.visible
-                and not menu.enabled
-                and not is_group_header
-                and menu.unenabled_page is None
-            ):
-                raise ValueError(
-                    f"menus[].unenabled_page is required for item '{menu.key}' "
-                    f"because it is visible but not enabled and is not a group header"
                 )
 
         return self

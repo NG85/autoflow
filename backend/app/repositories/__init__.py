@@ -12,6 +12,7 @@ from .embedding_model import embedding_model_repo
 from .file_permission import file_permission_repo
 from .department_mirror import department_mirror_repo
 from .crm_data_authority import crm_data_authority_repo
+from .crm_account_opportunity_assessment import crm_account_opportunity_assessment_repo
 from .user_department_relation import user_department_relation_repo
 from .visit_record import visit_record_repo
 from .user_profile import user_profile_repo

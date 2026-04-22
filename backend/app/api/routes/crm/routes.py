@@ -61,6 +61,7 @@ from app.api.routes.crm.models import (
     ReviewSessionProgressCategoryGroupBasicOut,
     ReviewSessionInsightDetailOut,
     ReviewSessionInsightRiskOpportunityOut,
+    DailyCustomerFollowupQueryRequest,
 )
 from app.crm.save_engine import (
     save_visit_record_to_crm_table, 
@@ -72,6 +73,7 @@ from app.services.customer_document_service import CustomerDocumentService
 from app.services.document_processing_service import document_processing_service
 from app.repositories.user_profile import UserProfileRepo
 from app.repositories.visit_record import visit_record_repo
+from app.repositories.crm_account_opportunity_assessment import crm_account_opportunity_assessment_repo
 from app.repositories.document_content import DocumentContentRepo
 from sqlmodel import select, or_, distinct, func, and_
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
@@ -395,16 +397,12 @@ def query_review_snapshot_filter_enums(
     # 去重并保持顺序
     forecast_types = list(dict.fromkeys(forecast_types))
 
-    # TODO: support multiple handbook_ids (or configurable handbook set) for sales_stage options.
-    target_handbook_id = "pb_EXEC-RPT-SALES-PLAYBOOK-20250219-001-001"
     stage_rows = db_session.exec(
         text(
             "select handbook_id, sales_stage "
             "from diagnostic_playbook "
-            "where handbook_id = :handbook_id "
-            "and sales_stage is not null and sales_stage <> ''"
+            "where sales_stage is not null and sales_stage <> ''"
         )
-        .bindparams(handbook_id=target_handbook_id)
     ).all()
     stage_by_handbook: dict[str, list[str]] = {}
     for r in stage_rows:
@@ -893,16 +891,16 @@ def build_review_session_index(
     review_data_types: Optional[List[CrmDataType]] = Query(
         default=None,
         description=(
-            "可选：仅构建指定 review 数据类型。"
+            "可选：仅构建指定 review 数据类型（默认构建全部三种）。"
             "可多选：crm_review_session, crm_review_snapshot, crm_review_risk_progress"
         ),
     ),
 ):
     """手动触发某个 review session 的向量 + 知识图谱索引构建。
 
-    默认会构建该 session 下的商机快照与风险/进展数据，
+    默认会构建该 session 下三种 review 数据：
+    ``crm_review_session``、``crm_review_snapshot``、``crm_review_risk_progress``，
     生成 Document 并异步执行向量 embedding 和 CRM 知识图谱构建。
-    session 摘要索引默认不构建（可通过 ``review_data_types`` 显式开启）。
 
     支持部分构建：通过 ``review_data_types`` 仅构建指定类型，
     例如只构建 ``crm_review_risk_progress``。
@@ -2037,6 +2035,34 @@ def query_visit_records(
                 "page_size": result.size,
                 "pages": result.pages
             }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(e)
+        raise InternalServerError()
+
+
+@router.post("/crm/daily_customer_followups/query")
+def query_daily_customer_followups(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    request: DailyCustomerFollowupQueryRequest,
+):
+    """
+    查询每日客户跟进（红黄绿灯评估明细）
+    基于 crm_account_opportunity_assessment，按条件筛选并分页返回。
+    """
+    try:
+        _ = user
+        response = crm_account_opportunity_assessment_repo.query_daily_customer_followups(
+            session=db_session,
+            request=request,
+        )
+        return {
+            "code": 0,
+            "message": "success",
+            "data": response.model_dump(),
         }
     except HTTPException:
         raise

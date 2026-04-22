@@ -580,6 +580,47 @@ class VisitRecordQueryResponse(BaseModel):
     page_size: int
     pages: int
 
+
+class DailyCustomerFollowupQueryRequest(BaseModel):
+    page: int = 1
+    page_size: int = 20
+
+    customer_level: Optional[List[str]] = None
+    account_name: Optional[List[str]] = None
+    partner_name: Optional[List[str]] = None
+    opportunity_name: Optional[List[str]] = None
+    assessment_date_start: Optional[str] = None
+    assessment_date_end: Optional[str] = None
+    owner: Optional[List[str]] = None
+    department: Optional[List[str]] = None
+    assessment_flag: Optional[List[str]] = None
+    is_first_visit: Optional[bool] = None
+    is_call_high: Optional[bool] = None
+
+    sort_by: str = "assessment_date"
+    sort_direction: str = "desc"
+
+
+class DailyCustomerFollowupItemOut(BaseModel):
+    customer_level: Optional[str] = None
+    account_name: Optional[str] = None
+    partner_name: Optional[str] = None
+    opportunity_name: Optional[str] = None
+    is_first_visit: Optional[bool] = None
+    is_call_high: Optional[bool] = None
+    assessment_date: Optional[str] = None
+    recorder: Optional[str] = None
+    department: Optional[str] = None
+    assessment_flag: Optional[str] = None
+
+
+class DailyCustomerFollowupQueryResponse(BaseModel):
+    items: List[DailyCustomerFollowupItemOut]
+    total: int
+    page: int
+    page_size: int
+    pages: int
+
 # 销售个人日报统计数据模型
 class BaseReportStatistics(BaseModel):
     """基础报告统计数据"""
