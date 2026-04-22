@@ -46,6 +46,8 @@ class MenuItem(BaseModel):
     target: MenuTarget | None = None
     audience: MenuAudience | None = None
     unenabled_page: str | None = None
+    has_studio: bool = False
+    icon: str = ""
 
     @model_validator(mode="after")
     def validate_item(self):
@@ -62,6 +64,8 @@ class MenuItem(BaseModel):
 
         if self.unenabled_page is not None and not self.unenabled_page.strip():
             raise ValueError("menus[].unenabled_page must be a non-empty string")
+        if self.icon is None:
+            raise ValueError("menus[].icon must be a string")
 
         return self
 
