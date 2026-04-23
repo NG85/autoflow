@@ -274,7 +274,7 @@ def query_review_opportunity_risk_progress_details(
     user: CurrentUserDep,
 ):
     """
-    单个商机的风险/进展/机会摘要/机会诉求洞察明细（条数 + 列表）。
+    单个商机详情：风险/进展/机会摘要/机会诉求洞察明细（条数 + 列表）+ snapshot 基础信息。
     record_type 包含：RISK、PROGRESS、OPP_SUMMARY、OPP_REQS_INSIGHT。
     仅当该商机在本次 review 对你可见时返回，否则 404。
     """
@@ -283,6 +283,26 @@ def query_review_opportunity_risk_progress_details(
         session_id=session_id,
         user_id=str(user.id),
         opportunity_id=opportunity_id,
+    )
+
+
+@router.get("/crm/opportunities/{opportunity_id}/detail")
+def query_review_opportunity_detail(
+    opportunity_id: str,
+    db_session: SessionDep,
+    _user: CurrentUserDep,
+    session_id: Optional[str] = Query(default=None, description="可选：指定 review session_id"),
+):
+    """
+    查询指定商机详情（风险/进展/机会摘要/机会诉求洞察 + snapshot 基础信息）。
+    - 传 ``session_id``：按指定 review session 查询。
+    - 不传 ``session_id``：自动使用该商机关联的最新 review session。
+    不校验当前用户是否是该最新 session 的参会人。
+    """
+    return crm_review_service.get_opportunity_risk_progress_details_by_latest_session(
+        db_session,
+        opportunity_id=opportunity_id,
+        session_id=session_id,
     )
 
 
