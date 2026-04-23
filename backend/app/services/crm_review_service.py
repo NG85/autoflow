@@ -1087,7 +1087,6 @@ class CRMReviewService:
             .where(
                 CRMReviewOppBranchSnapshot.opportunity_id == opportunity_id,
                 CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
-                CRMReviewOppBranchSnapshot.session_id == str(session_id),
             )
             .order_by(
                 CRMReviewOppBranchSnapshot.updated_at.desc(),
