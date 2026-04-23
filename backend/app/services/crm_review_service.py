@@ -1089,7 +1089,7 @@ class CRMReviewService:
                 CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
             )
             .order_by(
-                CRMReviewOppBranchSnapshot.updated_at.desc(),
+                CRMReviewOppBranchSnapshot.update_time.desc(),
                 CRMReviewOppBranchSnapshot.create_time.desc(),
             )
             .limit(1)
