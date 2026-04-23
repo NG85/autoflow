@@ -259,7 +259,7 @@ class CRMReviewService:
                 CRMReviewOppRiskProgress.session_id == session_id,
                 CRMReviewOppRiskProgress.snapshot_period == snapshot_period,
                 CRMReviewOppRiskProgress.opportunity_id.in_(normalized_opp_ids),
-                CRMReviewOppRiskProgress.record_type.in_(("RISK", "PROGRESS", "OPP_SUMMARY")),
+                CRMReviewOppRiskProgress.record_type.in_(("RISK", "PROGRESS", "OPP_SUMMARY", "OPP_REQS_INSIGHT")),
             )
             .order_by(CRMReviewOppRiskProgress.detected_at.desc())
         ).all()
@@ -270,11 +270,11 @@ class CRMReviewService:
             if not opp_id:
                 continue
             rtype = str(getattr(row, "record_type") or "").strip().upper()
-            if rtype not in ("RISK", "PROGRESS", "OPP_SUMMARY"):
+            if rtype not in ("RISK", "PROGRESS", "OPP_SUMMARY", "OPP_REQS_INSIGHT"):
                 continue
             bucket = by_opp.setdefault(
                 opp_id,
-                {"RISK": [], "PROGRESS": [], "OPP_SUMMARY": []},
+                {"RISK": [], "PROGRESS": [], "OPP_SUMMARY": [], "OPP_REQS_INSIGHT": []},
             )
             bucket[rtype].append(self._model_to_dict(row))
         return by_opp
@@ -308,11 +308,12 @@ class CRMReviewService:
             opp_id = str(getattr(item, "opportunity_id") or "").strip()
             opp_bucket = by_opp.get(
                 opp_id,
-                {"RISK": [], "PROGRESS": [], "OPP_SUMMARY": []},
+                {"RISK": [], "PROGRESS": [], "OPP_SUMMARY": [], "OPP_REQS_INSIGHT": []},
             )
             row["risk_count"] = len(opp_bucket["RISK"])
             row["progress_count"] = len(opp_bucket["PROGRESS"])
             row["opp_summary_count"] = len(opp_bucket["OPP_SUMMARY"])
+            row["opp_reqs_insight_count"] = len(opp_bucket["OPP_REQS_INSIGHT"])
             enriched.append(row)
         return enriched
 
@@ -331,6 +332,7 @@ class CRMReviewService:
                 item["risk_count"] = int(row.get("risk_count") or 0)
                 item["progress_count"] = int(row.get("progress_count") or 0)
                 item["opp_summary_count"] = int(row.get("opp_summary_count") or 0)
+                item["opp_reqs_insight_count"] = int(row.get("opp_reqs_insight_count") or 0)
                 projected_full.append(item)
             return projected_full
 
@@ -341,6 +343,7 @@ class CRMReviewService:
             item["risk_count"] = int(row.get("risk_count") or 0)
             item["progress_count"] = int(row.get("progress_count") or 0)
             item["opp_summary_count"] = int(row.get("opp_summary_count") or 0)
+            item["opp_reqs_insight_count"] = int(row.get("opp_reqs_insight_count") or 0)
             projected.append(item)
         return projected
 
@@ -1071,7 +1074,7 @@ class CRMReviewService:
         )
         opp_bucket = by_opp.get(
             opportunity_id,
-            {"RISK": [], "PROGRESS": [], "OPP_SUMMARY": []},
+            {"RISK": [], "PROGRESS": [], "OPP_SUMMARY": [], "OPP_REQS_INSIGHT": []},
         )
         return {
             "session_id": str(scope["session"].unique_id),
@@ -1080,9 +1083,11 @@ class CRMReviewService:
             "risk_count": len(opp_bucket["RISK"]),
             "progress_count": len(opp_bucket["PROGRESS"]),
             "opp_summary_count": len(opp_bucket["OPP_SUMMARY"]),
+            "opp_reqs_insight_count": len(opp_bucket["OPP_REQS_INSIGHT"]),
             "risk_details": opp_bucket["RISK"],
             "progress_details": opp_bucket["PROGRESS"],
             "opp_summary_details": opp_bucket["OPP_SUMMARY"],
+            "opp_reqs_insight_details": opp_bucket["OPP_REQS_INSIGHT"],
         }
 
     def submit_my_snapshot_changes(

@@ -274,7 +274,9 @@ def query_review_opportunity_risk_progress_details(
     user: CurrentUserDep,
 ):
     """
-    单个商机的风险与进展明细（条数 + 列表）。仅当该商机在本次 review 对你可见时返回，否则 404。
+    单个商机的风险/进展/机会摘要/机会诉求洞察明细（条数 + 列表）。
+    record_type 包含：RISK、PROGRESS、OPP_SUMMARY、OPP_REQS_INSIGHT。
+    仅当该商机在本次 review 对你可见时返回，否则 404。
     """
     return crm_review_service.get_opportunity_risk_progress_details(
         db_session,
