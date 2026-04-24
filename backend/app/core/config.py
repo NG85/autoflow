@@ -316,6 +316,8 @@ class Settings(BaseSettings):
     ARK_API_KEY: str = "b1529268-82ea-407a-bd79-d01514a2ed60"
     ARK_MODEL: str = "ep-20260108150839-t2z4c"
     ARK_API_URL: str = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
+    ARK_HTTP_CONNECT_TIMEOUT: float = 10.0
+    ARK_HTTP_READ_TIMEOUT: float = 180.0
     
     COMPLIED_INTENT_ANALYSIS_PROGRAM_PATH: str | None = None
     COMPLIED_PREREQUISITE_ANALYSIS_PROGRAM_PATH: str | None = None
