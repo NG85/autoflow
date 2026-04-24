@@ -931,7 +931,7 @@ class CRMReviewOppRiskProgress(SQLModel, table=True):
     )
     record_type: str = Field(
         sa_column=Column(String(32), nullable=False),
-        description="RISK, PROGRESS, or OPP_SUMMARY",
+        description="RISK, PROGRESS, OPP_SUMMARY, or OPP_REQS_INSIGHT",
     )
     type_code: str = Field(
         sa_column=Column(String(64), nullable=False),

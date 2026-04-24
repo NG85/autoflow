@@ -331,6 +331,8 @@ def format_risk_progress_info(
         if record_type == "PROGRESS"
         else "商机总结"
         if record_type == "OPP_SUMMARY"
+        else "需求洞察"
+        if record_type == "OPP_REQS_INSIGHT"
         else record_type
     )
 

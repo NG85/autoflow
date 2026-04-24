@@ -458,7 +458,7 @@ def format_opportunity_info(opportunity, related_data) -> List[str]:
         },
         "owner": {
             "title": "## 负责人信息",
-            "fields": ["presales_owner", "owner", "owner_main_department"]
+            "fields": ["presales_owner", "owner", "owner_department_name"]
         },
         "system": {
             "title": "## 系统信息",
@@ -491,7 +491,7 @@ def format_opportunity_info(opportunity, related_data) -> List[str]:
     currency_fields = {"estimated_tcv", "estimated_acv", "current_year_service_forecast"}
     
     # 需要特殊处理的JSON样式文本字段
-    json_fields = {"owner", "owner_main_department", "presales_owner", "last_modifier"}
+    json_fields = {"owner", "owner_department_name", "presales_owner", "last_modifier"}
   
     # 辅助函数：处理字段值的格式化
     def format_field_value(field_name, value):

@@ -235,7 +235,7 @@ class CRMKnowledgeGraphBuilder:
         record_type = data.get("record_type", "")
         scope_type = data.get("scope_type", "")
         period = data.get("snapshot_period", "")
-        label = "风险" if record_type == "RISK" else "进展" if record_type == "PROGRESS" else record_type
+        label = "风险" if record_type == "RISK" else "进展" if record_type == "PROGRESS" else "商机总结" if record_type == "OPP_SUMMARY" else "需求洞察" if record_type == "OPP_REQS_INSIGHT" else record_type
         metadata = {
             "record_type": record_type,
             "type_code": data.get("type_code", ""),

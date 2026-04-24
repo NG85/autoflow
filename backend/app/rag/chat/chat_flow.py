@@ -291,6 +291,50 @@ class ChatFlow:
         if chunk_text.startswith(response_text):
             return chunk_text[len(response_text):]
         return chunk_text
+
+    @staticmethod
+    def _is_owner_scoped_metadata(meta: Dict[str, Any], enforced_owner_id: str) -> bool:
+        owner_id = str(meta.get("owner_id", "") or "").strip()
+        if owner_id:
+            return owner_id == enforced_owner_id
+
+        scope_type = str(meta.get("scope_type", "") or "").strip().lower()
+        scope_id = str(meta.get("scope_id", "") or "").strip()
+        if scope_type == "owner" and scope_id:
+            return scope_id == enforced_owner_id
+
+        return False
+
+    @classmethod
+    def _allow_review_owner_scoped_record(
+        cls,
+        meta: Dict[str, Any],
+        *,
+        session_id: str,
+        period: str,
+        enforced_owner_id: str = "",
+    ) -> bool:
+        record_type = str(meta.get("crm_data_type", "") or "").strip()
+        if record_type and record_type not in {
+            CrmDataType.REVIEW_SESSION.value,
+            CrmDataType.REVIEW_SNAPSHOT.value,
+            CrmDataType.REVIEW_RISK_PROGRESS.value,
+        }:
+            return False
+
+        record_period = str(meta.get("snapshot_period", "") or "").strip()
+        if record_period and record_period != period:
+            return False
+
+        record_session = str(meta.get("session_id", "") or "").strip()
+        if record_session and record_session != session_id:
+            return False
+
+        if enforced_owner_id:
+            # Under enforced owner scope, only keep records explicitly tied to this owner.
+            return cls._is_owner_scoped_metadata(meta, enforced_owner_id)
+
+        return True
     
     def chat(self) -> Generator[ChatEvent | str, None, None]:
         try:
@@ -1779,23 +1823,15 @@ class ChatFlow:
                     user_question=self.user_question,
                     annotation_silent=True,
                 )
-                review_type_values = {
-                    CrmDataType.REVIEW_SESSION.value,
-                    CrmDataType.REVIEW_SNAPSHOT.value,
-                    CrmDataType.REVIEW_RISK_PROGRESS.value,
-                }
                 filtered_relationships = []
                 for rel in knowledge_graph_result.relationships:
                     rel_meta = rel.meta or {}
-                    rel_type = str(rel_meta.get("crm_data_type", ""))
-                    if rel_type and rel_type not in review_type_values:
-                        continue
-                    rel_period = str(rel_meta.get("snapshot_period", "") or "")
-                    rel_session = str(rel_meta.get("session_id", "") or "")
-                    if rel_period and rel_period != session_ctx.period:
-                        continue
-                    # When session_id exists in metadata, enforce same-session scope.
-                    if rel_session and rel_session != session_ctx.session_id:
+                    if not self._allow_review_owner_scoped_record(
+                        rel_meta,
+                        session_id=session_ctx.session_id,
+                        period=session_ctx.period,
+                        enforced_owner_id=enforced_owner_id,
+                    ):
                         continue
                     filtered_relationships.append(rel)
                 if filtered_relationships:
@@ -1821,15 +1857,12 @@ class ChatFlow:
                 filtered_chunks = []
                 for chunk in relevant_chunks:
                     meta = chunk.node.metadata or {}
-                    chunk_type = str(meta.get("crm_data_type", ""))
-                    if chunk_type and chunk_type not in review_type_values:
-                        continue
-                    chunk_period = str(meta.get("snapshot_period", "") or "")
-                    chunk_session = str(meta.get("session_id", "") or "")
-                    if chunk_period and chunk_period != session_ctx.period:
-                        continue
-                    # When session_id exists in metadata, enforce same-session scope.
-                    if chunk_session and chunk_session != session_ctx.session_id:
+                    if not self._allow_review_owner_scoped_record(
+                        meta,
+                        session_id=session_ctx.session_id,
+                        period=session_ctx.period,
+                        enforced_owner_id=enforced_owner_id,
+                    ):
                         continue
                     filtered_chunks.append(chunk)
                 relevant_chunks = filtered_chunks
@@ -1856,23 +1889,15 @@ class ChatFlow:
                     user_question=self.user_question,
                     annotation_silent=True,
                 )
-                review_type_values = {
-                    CrmDataType.REVIEW_SESSION.value,
-                    CrmDataType.REVIEW_SNAPSHOT.value,
-                    CrmDataType.REVIEW_RISK_PROGRESS.value,
-                }
                 filtered_relationships = []
                 for rel in knowledge_graph_result.relationships:
                     rel_meta = rel.meta or {}
-                    rel_type = str(rel_meta.get("crm_data_type", ""))
-                    if rel_type and rel_type not in review_type_values:
-                        continue
-                    rel_period = str(rel_meta.get("snapshot_period", "") or "")
-                    rel_session = str(rel_meta.get("session_id", "") or "")
-                    if rel_period and rel_period != session_ctx.period:
-                        continue
-                    # When session_id exists in metadata, enforce same-session scope.
-                    if rel_session and rel_session != session_ctx.session_id:
+                    if not self._allow_review_owner_scoped_record(
+                        rel_meta,
+                        session_id=session_ctx.session_id,
+                        period=session_ctx.period,
+                        enforced_owner_id=enforced_owner_id,
+                    ):
                         continue
                     filtered_relationships.append(rel)
                 if filtered_relationships:
@@ -1898,15 +1923,12 @@ class ChatFlow:
                 filtered_chunks = []
                 for chunk in relevant_chunks:
                     meta = chunk.node.metadata or {}
-                    chunk_type = str(meta.get("crm_data_type", ""))
-                    if chunk_type and chunk_type not in review_type_values:
-                        continue
-                    chunk_period = str(meta.get("snapshot_period", "") or "")
-                    chunk_session = str(meta.get("session_id", "") or "")
-                    if chunk_period and chunk_period != session_ctx.period:
-                        continue
-                    # When session_id exists in metadata, enforce same-session scope.
-                    if chunk_session and chunk_session != session_ctx.session_id:
+                    if not self._allow_review_owner_scoped_record(
+                        meta,
+                        session_id=session_ctx.session_id,
+                        period=session_ctx.period,
+                        enforced_owner_id=enforced_owner_id,
+                    ):
                         continue
                     filtered_chunks.append(chunk)
                 max_chunk_count = 2 if should_data_query_light_enhancement else 3

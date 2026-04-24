@@ -20,6 +20,7 @@ from app.models.crm_review import (
     CRMReviewOppBranchSnapshot,
     CRMReviewOppBranchSnapshotBasicOut,
     CRMReviewOppRiskProgress,
+    CRMReviewSession,
     REVIEW_BRANCH_SNAPSHOT_EDITABLE_FIELDS,
 )
 from app.models.crm_system_configurations import CRMSystemConfiguration
@@ -259,7 +260,7 @@ class CRMReviewService:
                 CRMReviewOppRiskProgress.session_id == session_id,
                 CRMReviewOppRiskProgress.snapshot_period == snapshot_period,
                 CRMReviewOppRiskProgress.opportunity_id.in_(normalized_opp_ids),
-                CRMReviewOppRiskProgress.record_type.in_(("RISK", "PROGRESS", "OPP_SUMMARY")),
+                CRMReviewOppRiskProgress.record_type.in_(("RISK", "PROGRESS", "OPP_SUMMARY", "OPP_REQS_INSIGHT")),
             )
             .order_by(CRMReviewOppRiskProgress.detected_at.desc())
         ).all()
@@ -270,11 +271,11 @@ class CRMReviewService:
             if not opp_id:
                 continue
             rtype = str(getattr(row, "record_type") or "").strip().upper()
-            if rtype not in ("RISK", "PROGRESS", "OPP_SUMMARY"):
+            if rtype not in ("RISK", "PROGRESS", "OPP_SUMMARY", "OPP_REQS_INSIGHT"):
                 continue
             bucket = by_opp.setdefault(
                 opp_id,
-                {"RISK": [], "PROGRESS": [], "OPP_SUMMARY": []},
+                {"RISK": [], "PROGRESS": [], "OPP_SUMMARY": [], "OPP_REQS_INSIGHT": []},
             )
             bucket[rtype].append(self._model_to_dict(row))
         return by_opp
@@ -308,11 +309,12 @@ class CRMReviewService:
             opp_id = str(getattr(item, "opportunity_id") or "").strip()
             opp_bucket = by_opp.get(
                 opp_id,
-                {"RISK": [], "PROGRESS": [], "OPP_SUMMARY": []},
+                {"RISK": [], "PROGRESS": [], "OPP_SUMMARY": [], "OPP_REQS_INSIGHT": []},
             )
             row["risk_count"] = len(opp_bucket["RISK"])
             row["progress_count"] = len(opp_bucket["PROGRESS"])
             row["opp_summary_count"] = len(opp_bucket["OPP_SUMMARY"])
+            row["opp_reqs_insight_count"] = len(opp_bucket["OPP_REQS_INSIGHT"])
             enriched.append(row)
         return enriched
 
@@ -331,6 +333,7 @@ class CRMReviewService:
                 item["risk_count"] = int(row.get("risk_count") or 0)
                 item["progress_count"] = int(row.get("progress_count") or 0)
                 item["opp_summary_count"] = int(row.get("opp_summary_count") or 0)
+                item["opp_reqs_insight_count"] = int(row.get("opp_reqs_insight_count") or 0)
                 projected_full.append(item)
             return projected_full
 
@@ -341,6 +344,7 @@ class CRMReviewService:
             item["risk_count"] = int(row.get("risk_count") or 0)
             item["progress_count"] = int(row.get("progress_count") or 0)
             item["opp_summary_count"] = int(row.get("opp_summary_count") or 0)
+            item["opp_reqs_insight_count"] = int(row.get("opp_reqs_insight_count") or 0)
             projected.append(item)
         return projected
 
@@ -1063,6 +1067,34 @@ class CRMReviewService:
         if not visible:
             raise HTTPException(status_code=404, detail="opportunity not found in current review scope")
 
+        return self._build_opportunity_risk_progress_details(
+            db_session,
+            session_id=session_id,
+            snapshot_period=snapshot_period,
+            opportunity_id=opportunity_id,
+        )
+
+    def _build_opportunity_risk_progress_details(
+        self,
+        db_session: Session,
+        *,
+        session_id: str,
+        snapshot_period: str,
+        opportunity_id: str,
+    ) -> dict:
+        snapshot = db_session.exec(
+            select(CRMReviewOppBranchSnapshot)
+            .where(
+                CRMReviewOppBranchSnapshot.opportunity_id == opportunity_id,
+                CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
+            )
+            .order_by(
+                CRMReviewOppBranchSnapshot.update_time.desc(),
+                CRMReviewOppBranchSnapshot.create_time.desc(),
+            )
+            .limit(1)
+        ).first()
+
         by_opp = self._query_risk_progress_by_opportunity_ids(
             db_session,
             session_id=session_id,
@@ -1071,19 +1103,89 @@ class CRMReviewService:
         )
         opp_bucket = by_opp.get(
             opportunity_id,
-            {"RISK": [], "PROGRESS": [], "OPP_SUMMARY": []},
+            {"RISK": [], "PROGRESS": [], "OPP_SUMMARY": [], "OPP_REQS_INSIGHT": []},
         )
         return {
-            "session_id": str(scope["session"].unique_id),
+            "session_id": str(session_id),
             "opportunity_id": opportunity_id,
             "snapshot_period": snapshot_period,
+            "snapshot_basic": {
+                "opportunity_name": getattr(snapshot, "opportunity_name", None),
+                "account_name": getattr(snapshot, "account_name", None),
+                "forecast_type": getattr(snapshot, "forecast_type", None),
+                "forecast_amount": getattr(snapshot, "forecast_amount", None),
+                "opportunity_stage": getattr(snapshot, "opportunity_stage", None),
+                "expected_closing_date": getattr(snapshot, "expected_closing_date", None),
+                "stage_stay": getattr(snapshot, "stage_stay", None),
+                "ai_commit": getattr(snapshot, "ai_commit", None),
+                "ai_stage": getattr(snapshot, "ai_stage", None),
+                "ai_expected_closing_date": getattr(snapshot, "ai_expected_closing_date", None),
+            },
             "risk_count": len(opp_bucket["RISK"]),
             "progress_count": len(opp_bucket["PROGRESS"]),
             "opp_summary_count": len(opp_bucket["OPP_SUMMARY"]),
+            "opp_reqs_insight_count": len(opp_bucket["OPP_REQS_INSIGHT"]),
             "risk_details": opp_bucket["RISK"],
             "progress_details": opp_bucket["PROGRESS"],
             "opp_summary_details": opp_bucket["OPP_SUMMARY"],
+            "opp_reqs_insight_details": opp_bucket["OPP_REQS_INSIGHT"],
         }
+
+    def get_opportunity_risk_progress_details_by_latest_session(
+        self,
+        db_session: Session,
+        *,
+        opportunity_id: str,
+        session_id: Optional[str] = None,
+    ) -> dict:
+        opportunity_id = str(opportunity_id or "").strip()
+        if not opportunity_id:
+            raise HTTPException(status_code=422, detail="opportunity_id is required")
+
+        specified_session_id = str(session_id or "").strip()
+        target_session: Optional[CRMReviewSession] = None
+        if specified_session_id:
+            target_session = crm_review_session_repo.get_by_unique_id(db_session, specified_session_id)
+            if not target_session:
+                raise HTTPException(status_code=404, detail="review session not found")
+
+            linked = db_session.exec(
+                select(CRMReviewOppRiskProgress.id)
+                .where(
+                    CRMReviewOppRiskProgress.session_id == specified_session_id,
+                    CRMReviewOppRiskProgress.opportunity_id == opportunity_id,
+                )
+                .limit(1)
+            ).first()
+            if not linked:
+                raise HTTPException(
+                    status_code=404,
+                    detail="opportunity not found in specified review session",
+                )
+        else:
+            target_session = db_session.exec(
+                select(CRMReviewSession)
+                .join(
+                    CRMReviewOppRiskProgress,
+                    CRMReviewOppRiskProgress.session_id == CRMReviewSession.unique_id,
+                )
+                .where(CRMReviewOppRiskProgress.opportunity_id == opportunity_id)
+                .order_by(CRMReviewSession.report_date.desc(), CRMReviewSession.create_time.desc())
+                .limit(1)
+            ).first()
+            if not target_session:
+                raise HTTPException(status_code=404, detail="opportunity latest review session not found")
+
+        snapshot_period = str(target_session.period or "").strip()
+        if not snapshot_period:
+            raise HTTPException(status_code=500, detail="review session period is empty")
+
+        return self._build_opportunity_risk_progress_details(
+            db_session,
+            session_id=str(target_session.unique_id),
+            snapshot_period=snapshot_period,
+            opportunity_id=opportunity_id,
+        )
 
     def submit_my_snapshot_changes(
         self,
