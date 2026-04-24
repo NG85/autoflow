@@ -2,13 +2,16 @@ import json
 import logging
 import re
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import load_only
 from sqlmodel import Session, select
 
+from app.core.config import settings
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
 from app.models.crm_opportunities import CRMOpportunity
 from app.models.crm_accounts import CRMAccount
@@ -60,9 +63,23 @@ class CRMWeeklyFollowupService:
 
     def _truncate(self, s: str, limit: int) -> str:
         s = (s or "").strip()
-        if len(s) <= limit:
+        if limit <= 0 or len(s) <= limit:
             return s
         return s[: max(0, limit - 3)] + "..."
+
+    def _visit_context_for_prompt(
+        self, record: CRMSalesVisitRecord, cache: dict[int, str]
+    ) -> str:
+        """拜访摘要文本：按 record.id 缓存，避免实体 LLM 与多部门 rollup 重复拼装。"""
+        limit = settings.CRM_WEEKLY_FOLLOWUP_VISIT_CONTEXT_MAX_CHARS
+        rid = record.id
+        if rid is not None and rid in cache:
+            return cache[rid]
+        raw = crm_writeback_service.generate_visit_summary_content(record) or ""
+        text = self._truncate(raw.strip(), limit)
+        if rid is not None:
+            cache[rid] = text
+        return text
 
     def _norm_id(self, v: Optional[str]) -> Optional[str]:
         s = (str(v).strip() if v is not None else "")
@@ -78,9 +95,16 @@ class CRMWeeklyFollowupService:
         dept = department_name or "未知团队"
         return f"团队[{dept}]周跟进总结-[{week_part}]"
 
-    def _build_entity_prompt(self, key: _EntityKey, records: List[Dict[str, Any]]) -> str:
+    def _build_entity_prompt(
+        self,
+        key: _EntityKey,
+        records: List[Dict[str, Any]],
+        *,
+        preamble: str = "",
+    ) -> str:
         """
         records: 已经被拼装处理后的结构化列表（按时间排序）
+        preamble: 可选说明（例如仅节选部分拜访时的口径提示）
         """
         # 同一组 records 对应同一个实体（商机/客户/伙伴），提取名称用于上下文理解
         def _pick_first_non_empty(field: str) -> str:
@@ -105,10 +129,11 @@ class CRMWeeklyFollowupService:
                 for r in records
             ]
         )
+        preamble_block = f"{preamble}\n" if preamble else ""
         return f"""
 你是销售管理周复盘助手。请基于“本周拜访记录摘要（较完整）”，输出该【{key.department_name}】团队下该实体的“本周进展与风险”结构化总结。
 
-实体信息（同一组拜访记录对应同一实体）：
+{preamble_block}实体信息（同一组拜访记录对应同一实体）：
 - 客户: {account_name or '--'}
 - 商机: {opportunity_name or '--'}
 - 伙伴: {partner_name or '--'}
@@ -154,11 +179,14 @@ class CRMWeeklyFollowupService:
         department_name: str,
         record_groups: List[Tuple[_EntityKey, List[CRMSalesVisitRecord]]],
         owner_name_by_key: Optional[dict[_EntityKey, Optional[str]]] = None,
+        visit_context_cache: Optional[dict[int, str]] = None,
     ) -> str:
         """
         生成“团队/公司”层面的周汇总 prompt（输出纯文本中文，不要 JSON）。
+        拜访量大时按实体节选最近若干条并复用 visit_context_cache，控制 prompt 体积。
         """
-        # 不做输入压缩：基于“原始拜访记录分组”（按实体聚合），保留全部实体与全部拜访摘要
+        cache = visit_context_cache if visit_context_cache is not None else {}
+        rollup_cap = settings.CRM_WEEKLY_FOLLOWUP_ROLLUP_MAX_VISITS_PER_ENTITY
         def _entity_title_from_record(last_record: CRMSalesVisitRecord) -> str:
             customer = (last_record.account_name or last_record.partner_name or "--").strip()
             opp = (last_record.opportunity_name or "").strip()
@@ -223,12 +251,17 @@ class CRMWeeklyFollowupService:
                 owner = (owner_name_by_key.get(key) or "").strip()
             owner_part = f"（负责人:{owner}）" if owner else ""
 
-            # 全量保留该实体本周的拜访摘要（不截断）
             new_part = "（本周首次拜访）" if _is_new_entity(record_pairs_sorted) else ""
             lines.append(f"- {t}{owner_part}{new_part}")
-            for r in record_pairs_sorted:
+            visits_slice = record_pairs_sorted
+            if rollup_cap > 0 and len(record_pairs_sorted) > rollup_cap:
+                visits_slice = record_pairs_sorted[-rollup_cap:]
+                lines.append(
+                    f"  - （该实体本周共 {len(record_pairs_sorted)} 条拜访，以下仅列时间最近的 {rollup_cap} 条摘要）"
+                )
+            for r in visits_slice:
                 day = (r.visit_communication_date.isoformat() if r.visit_communication_date else "--")
-                ctx = (crm_writeback_service.generate_visit_summary_content(r) or "").strip() or "--"
+                ctx = (self._visit_context_for_prompt(r, cache) or "").strip() or "--"
                 lines.append(f"  - [{day}] {ctx}")
 
         week_part = f"{week_start.isoformat()}至{week_end.isoformat()}"
@@ -444,9 +477,32 @@ class CRMWeeklyFollowupService:
         """
         logger.info(f"开始生成周跟进总结，日期范围：{week_start} ~ {week_end}（周日到周六）")
 
-        # 读取本周拜访记录（证据来源）
+        # 读取本周拜访记录（证据来源）；仅加载周跟进所需列，降低大字段 IO
+        visit_select_cols = (
+            CRMSalesVisitRecord.id,
+            CRMSalesVisitRecord.account_name,
+            CRMSalesVisitRecord.account_id,
+            CRMSalesVisitRecord.opportunity_name,
+            CRMSalesVisitRecord.opportunity_id,
+            CRMSalesVisitRecord.partner_name,
+            CRMSalesVisitRecord.partner_id,
+            CRMSalesVisitRecord.contacts,
+            CRMSalesVisitRecord.contact_position,
+            CRMSalesVisitRecord.contact_name,
+            CRMSalesVisitRecord.collaborative_participants,
+            CRMSalesVisitRecord.visit_communication_date,
+            CRMSalesVisitRecord.visit_communication_method,
+            CRMSalesVisitRecord.visit_purpose,
+            CRMSalesVisitRecord.last_modified_time,
+            CRMSalesVisitRecord.followup_record,
+            CRMSalesVisitRecord.next_steps,
+            CRMSalesVisitRecord.remarks,
+            CRMSalesVisitRecord.is_first_visit,
+            CRMSalesVisitRecord.recorder_id,
+        )
         stmt = (
             select(CRMSalesVisitRecord)
+            .options(load_only(*visit_select_cols))
             .where(
                 CRMSalesVisitRecord.visit_communication_date.isnot(None),
                 CRMSalesVisitRecord.visit_communication_date >= week_start,
@@ -470,6 +526,10 @@ class CRMWeeklyFollowupService:
                 "entity_count": 0,
                 "departments": len(active_departments),
             }
+
+        # 按拜访主键缓存摘要文本，供实体 LLM 与多部门/公司 rollup 复用
+        visit_context_cache: dict[int, str] = {}
+        llm_max_concurrency = max(1, settings.CRM_WEEKLY_FOLLOWUP_LLM_MAX_CONCURRENCY)
 
         # 批量准备：CRM 商机/客户，用于获取负责人（不是拜访记录填写人）
         opportunity_ids = {str(r.opportunity_id).strip() for r in records if r.opportunity_id}
@@ -651,11 +711,15 @@ class CRMWeeklyFollowupService:
         owner_user_ids = [uid for uid in owner_user_id_by_key.values() if uid]
         dept_by_user_id = user_department_relation_repo.get_primary_department_by_user_ids(session, owner_user_ids)
 
-        persisted_entities: List[CRMWeeklyFollowupEntitySummary] = []
-        owner_name_by_key: dict[_EntityKey, Optional[str]] = {}
+        # 预热缓存，减少并行阶段重复拼接上下文
+        for r in records:
+            self._visit_context_for_prompt(r, visit_context_cache)
 
+        entity_materialized: dict[
+            _EntityKey, tuple[List[CRMSalesVisitRecord], CRMSalesVisitRecord]
+        ] = {}
+        entity_prompts: dict[_EntityKey, str] = {}
         for key, record_pairs in grouped.items():
-            # 按日期 + 最后更新时间排序，取最后一条作为该实体的“最新状态参考”
             record_pairs_sorted = sorted(
                 record_pairs,  # type: ignore[arg-type]
                 key=lambda x: (
@@ -665,26 +729,40 @@ class CRMWeeklyFollowupService:
                 ),
             )
             last_record = record_pairs_sorted[-1]
+            entity_materialized[key] = (record_pairs_sorted, last_record)
 
-            # 压缩输入记录
+            entity_cap = settings.CRM_WEEKLY_FOLLOWUP_ENTITY_LLM_MAX_VISITS
+            record_pairs_for_llm = record_pairs_sorted
+            preamble = ""
+            if entity_cap > 0 and len(record_pairs_sorted) > entity_cap:
+                record_pairs_for_llm = record_pairs_sorted[-entity_cap:]
+                preamble = (
+                    f"【输入说明】该实体本周共 {len(record_pairs_sorted)} 条拜访记录；"
+                    f"以下为按时间最近的 {entity_cap} 条摘要，用于归纳本周进展与风险。"
+                    "证据字段仍关联本周全部拜访记录 ID；请勿编造未出现在摘要中的具体事实。\n"
+                )
+
             compressed: List[Dict[str, Any]] = []
-            for r in record_pairs_sorted:
-                # 复用回写内容拼装逻辑，提供更多上下文，提升 LLM 评估精度
-                context = crm_writeback_service.generate_visit_summary_content(r)
+            for r in record_pairs_for_llm:
                 compressed.append(
                     {
                         "id": r.id,
                         "opportunity_name": r.opportunity_name,
                         "account_name": r.account_name,
                         "partner_name": r.partner_name,
-                        "context": context,
+                        "context": self._visit_context_for_prompt(r, visit_context_cache),
                     }
                 )
+            entity_prompts[key] = self._build_entity_prompt(
+                key, list(reversed(compressed)), preamble=preamble
+            )  # 由早到晚
 
-            # LLM 生成
+        llm_entity_result_by_key: dict[_EntityKey, tuple[str, str]] = {}
+
+        def _run_entity_llm(item: tuple[_EntityKey, str]) -> tuple[_EntityKey, str, str]:
+            key, prompt = item
             progress = ""
             risks = ""
-            prompt = self._build_entity_prompt(key, list(reversed(compressed)))  # 由早到晚
             try:
                 raw = call_ark_llm(
                     prompt,
@@ -697,8 +775,20 @@ class CRMWeeklyFollowupService:
                     risks = str(parsed.get("risks") or "").strip()
             except Exception as e:
                 logger.warning(f"LLM 生成失败，key={key}: {e}")
+            return key, progress, risks
 
-            # 组装实体行
+        with ThreadPoolExecutor(max_workers=llm_max_concurrency) as executor:
+            futures = [executor.submit(_run_entity_llm, item) for item in entity_prompts.items()]
+            for fut in as_completed(futures):
+                key, progress, risks = fut.result()
+                llm_entity_result_by_key[key] = (progress, risks)
+
+        persisted_entities: List[CRMWeeklyFollowupEntitySummary] = []
+        owner_name_by_key: dict[_EntityKey, Optional[str]] = {}
+
+        for key, (record_pairs_sorted, last_record) in entity_materialized.items():
+            progress, risks = llm_entity_result_by_key.get(key, ("", ""))
+
             owner_user_id = owner_user_id_by_key.get(key)
             owner_name = owner_name_by_user_id.get(owner_user_id) if owner_user_id else None
             if not owner_name:
@@ -752,7 +842,10 @@ class CRMWeeklyFollowupService:
                 owner_name=owner_name,
                 progress=progress,
                 risks=risks,
-                evidence_record_ids=json.dumps([c["id"] for c in compressed if c.get("id") is not None], ensure_ascii=False),
+                evidence_record_ids=json.dumps(
+                    [r.id for r in record_pairs_sorted if r.id is not None],
+                    ensure_ascii=False,
+                ),
             )
             persisted = self._upsert_entity_summary(session, entity_obj)
             persisted_entities.append(persisted)
@@ -786,37 +879,70 @@ class CRMWeeklyFollowupService:
         )
         names_covered_by_id = set(dept_name_by_id.values())
 
-        def _llm_rollup_text(
-            scope: str,
-            dept: str,
-            record_groups: List[Tuple[_EntityKey, List[CRMSalesVisitRecord]]],
-        ) -> Optional[str]:
+        unknown_department_record_groups: List[Tuple[_EntityKey, List[CRMSalesVisitRecord]]] = []
+        seen_keys_unknown: set[_EntityKey] = set()
+        rollup_requests: List[tuple[str, str, List[Tuple[_EntityKey, List[CRMSalesVisitRecord]]]]] = []
+        for dept_id, record_groups in by_dept_id_full.items():
+            department_name = dept_name_by_id.get(dept_id, "未知部门")
+            if department_name == "未知部门":
+                for k, rs in record_groups:
+                    if k not in seen_keys_unknown:
+                        seen_keys_unknown.add(k)
+                        unknown_department_record_groups.append((k, rs))
+                continue
+            rollup_requests.append(("department", department_name, record_groups))
+
+        if unknown_department_record_groups:
+            rollup_requests.append(("department", "未知部门", unknown_department_record_groups))
+
+        for dept_name, record_groups in by_dept_name_fallback.items():
+            if not dept_name or dept_name in names_covered_by_id:
+                continue
+            rollup_requests.append(("department", dept_name, record_groups))
+
+        all_record_groups = list(grouped.items())
+        rollup_requests.append(("company", "公司", all_record_groups))
+
+        # 关键：rollup prompt 在主线程构建，避免 commit 后 ORM 对象在子线程触发懒加载
+        # 导致同一 DB 连接跨线程访问（例如 PyMySQL packet sequence 错误）。
+        rollup_prompt_by_scope_dept: dict[tuple[str, str], str] = {}
+        for scope, dept, record_groups in rollup_requests:
+            rollup_prompt_by_scope_dept[(scope, dept)] = self._build_rollup_prompt(
+                week_start=week_start,
+                week_end=week_end,
+                scope=scope,
+                department_name=dept,
+                record_groups=record_groups,
+                owner_name_by_key=owner_name_by_key,
+                visit_context_cache=visit_context_cache,
+            )
+
+        rollup_text_by_scope_dept: dict[tuple[str, str], Optional[str]] = {}
+
+        def _run_rollup_llm(item: tuple[tuple[str, str], str]) -> tuple[str, str, Optional[str]]:
+            (scope, dept), prompt = item
             try:
-                prompt = self._build_rollup_prompt(
-                    week_start=week_start,
-                    week_end=week_end,
-                    scope=scope,
-                    department_name=dept,
-                    record_groups=record_groups,
-                    owner_name_by_key=owner_name_by_key,
-                )
                 raw = call_ark_llm(prompt, temperature=0.4)
                 txt = (raw or "").strip()
-                # 轻度清洗：去掉可能的 ``` 包裹
                 txt = txt.strip().strip("`").strip()
-                # 去除连续的空行，确保段落之间只有一个换行符
                 txt = re.sub(r'\n\s*\n+', '\n', txt)
-                return txt if txt else None
+                return scope, dept, (txt if txt else None)
             except Exception as e:
                 logger.warning(f"LLM 汇总生成失败 scope={scope} dept={dept}: {e}")
-                return ""
+                return scope, dept, ""
+
+        with ThreadPoolExecutor(max_workers=llm_max_concurrency) as executor:
+            futures = [
+                executor.submit(_run_rollup_llm, item)
+                for item in rollup_prompt_by_scope_dept.items()
+            ]
+            for fut in as_completed(futures):
+                scope, dept, txt = fut.result()
+                rollup_text_by_scope_dept[(scope, dept)] = txt
 
         # upsert department summaries（按部门 ID 的层级 + 无 dept_id 的 fallback）
         # 表唯一约束为 (week_start, week_end, summary_type, department_name)，多个未在 mirror 的
         # dept_id 都会得到 department_name="未知部门"，需合并为一条汇总再 upsert，避免冲突
-        unknown_department_record_groups: List[Tuple[_EntityKey, List[CRMSalesVisitRecord]]] = []
-        seen_keys_unknown: set = set()
-
         for dept_id, record_groups in by_dept_id_full.items():
             department_name = dept_name_by_id.get(dept_id, "未知部门")
             if department_name != "未知部门":
@@ -832,14 +958,9 @@ class CRMWeeklyFollowupService:
                         summary_type="department",
                         department_name=department_name,
                     ),
-                    summary_content=_llm_rollup_text("department", department_name, record_groups),
+                    summary_content=rollup_text_by_scope_dept.get(("department", department_name)),
                 )
                 self._upsert_summary(session, summary_obj)
-            else:
-                for k, rs in record_groups:
-                    if k not in seen_keys_unknown:
-                        seen_keys_unknown.add(k)
-                        unknown_department_record_groups.append((k, rs))
 
         if unknown_department_record_groups:
             summary_obj = CRMWeeklyFollowupSummary(
@@ -854,9 +975,7 @@ class CRMWeeklyFollowupService:
                     summary_type="department",
                     department_name="未知部门",
                 ),
-                summary_content=_llm_rollup_text(
-                    "department", "未知部门", unknown_department_record_groups
-                ),
+                summary_content=rollup_text_by_scope_dept.get(("department", "未知部门")),
             )
             self._upsert_summary(session, summary_obj)
 
@@ -875,13 +994,12 @@ class CRMWeeklyFollowupService:
                     summary_type="department",
                     department_name=dept_name,
                 ),
-                summary_content=_llm_rollup_text("department", dept_name, record_groups),
+                summary_content=rollup_text_by_scope_dept.get(("department", dept_name)),
             )
             self._upsert_summary(session, summary_obj)
 
         # company summary
-        all_record_groups = list(grouped.items())
-        company_text = _llm_rollup_text("company", "公司", all_record_groups)
+        company_text = rollup_text_by_scope_dept.get(("company", "公司"))
         company_obj = CRMWeeklyFollowupSummary(
             week_start=week_start,
             week_end=week_end,
