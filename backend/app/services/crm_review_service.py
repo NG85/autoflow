@@ -1142,47 +1142,47 @@ class CRMReviewService:
         if not opportunity_id:
             raise HTTPException(status_code=422, detail="opportunity_id is required")
 
-        specified_session_id = str(session_id or "").strip()
-        target_session: Optional[CRMReviewSession] = None
-        if specified_session_id:
-            target_session = crm_review_session_repo.get_by_unique_id(db_session, specified_session_id)
-            if not target_session:
-                raise HTTPException(status_code=404, detail="review session not found")
-
-            linked = db_session.exec(
-                select(CRMReviewOppRiskProgress.id)
-                .where(
-                    CRMReviewOppRiskProgress.session_id == specified_session_id,
-                    CRMReviewOppRiskProgress.opportunity_id == opportunity_id,
-                )
-                .limit(1)
-            ).first()
-            if not linked:
-                raise HTTPException(
-                    status_code=404,
-                    detail="opportunity not found in specified review session",
-                )
+        sid = str(session_id or "").strip()
+        # Snapshot lists all opps for a period; risk rows exist only for some. Resolve session via period join.
+        if sid:
+            resolved = crm_review_session_repo.get_by_unique_id(db_session, sid)
         else:
-            target_session = db_session.exec(
+            resolved = db_session.exec(
                 select(CRMReviewSession)
                 .join(
-                    CRMReviewOppRiskProgress,
-                    CRMReviewOppRiskProgress.session_id == CRMReviewSession.unique_id,
+                    CRMReviewOppBranchSnapshot,
+                    (CRMReviewOppBranchSnapshot.snapshot_period == CRMReviewSession.period)
+                    & (CRMReviewOppBranchSnapshot.opportunity_id == opportunity_id),
                 )
-                .where(CRMReviewOppRiskProgress.opportunity_id == opportunity_id)
                 .order_by(CRMReviewSession.report_date.desc(), CRMReviewSession.create_time.desc())
                 .limit(1)
             ).first()
-            if not target_session:
-                raise HTTPException(status_code=404, detail="opportunity latest review session not found")
+        if not resolved:
+            raise HTTPException(
+                status_code=404,
+                detail="review session not found" if sid else "opportunity latest review session not found",
+            )
 
-        snapshot_period = str(target_session.period or "").strip()
+        snapshot_period = str(resolved.period or "").strip()
         if not snapshot_period:
             raise HTTPException(status_code=500, detail="review session period is empty")
 
+        if sid and not db_session.exec(
+            select(CRMReviewOppBranchSnapshot.unique_id)
+            .where(
+                CRMReviewOppBranchSnapshot.opportunity_id == opportunity_id,
+                CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
+            )
+            .limit(1)
+        ).first():
+            raise HTTPException(
+                status_code=404,
+                detail="opportunity not found in specified review session",
+            )
+
         return self._build_opportunity_risk_progress_details(
             db_session,
-            session_id=str(target_session.unique_id),
+            session_id=str(resolved.unique_id),
             snapshot_period=snapshot_period,
             opportunity_id=opportunity_id,
         )
