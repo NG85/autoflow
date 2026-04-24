@@ -1114,6 +1114,8 @@ class CRMReviewService:
                 "account_id": getattr(snapshot, "account_id", None),
                 "opportunity_name": getattr(snapshot, "opportunity_name", None),
                 "account_name": getattr(snapshot, "account_name", None),
+                "owner_id": getattr(snapshot, "owner_id", None),
+                "owner_name": getattr(snapshot, "owner_name", None),
                 "forecast_type": getattr(snapshot, "forecast_type", None),
                 "forecast_amount": getattr(snapshot, "forecast_amount", None),
                 "opportunity_stage": getattr(snapshot, "opportunity_stage", None),
