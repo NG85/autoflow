@@ -1110,6 +1110,8 @@ class CRMReviewService:
             "opportunity_id": opportunity_id,
             "snapshot_period": snapshot_period,
             "snapshot_basic": {
+                "opportunity_id": (getattr(snapshot, "opportunity_id", None) or opportunity_id),
+                "account_id": getattr(snapshot, "account_id", None),
                 "opportunity_name": getattr(snapshot, "opportunity_name", None),
                 "account_name": getattr(snapshot, "account_name", None),
                 "forecast_type": getattr(snapshot, "forecast_type", None),
