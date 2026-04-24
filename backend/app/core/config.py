@@ -298,6 +298,7 @@ class Settings(BaseSettings):
     # Feishu send message configuration
     REVIEW_REPORT_HOST: str = "https://aptsell.pingcap.net"
     REVIEW_SESSION_PAGE_URL: str = "/v2/business/weekly-insight"
+    CRM_REVIEW_SESSION_NOTIFICATION_ENABLED: bool = False
 
     # Ops backdoor: CC cards (Feishu or DingTalk per OPS_CC_PROVIDER)
     # "off" | "feishu" | "dingtalk"

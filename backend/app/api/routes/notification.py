@@ -205,7 +205,28 @@ async def push_notification_api(
             # 文案：按阶段区分（内部用 session_id 统一拼跳转链接）
             message_text = _build_review_session_message(stage, session_id)
 
-            send_fn = platform_notification_service.send_review_session_notification
+            if settings.CRM_REVIEW_SESSION_NOTIFICATION_ENABLED:
+                send_fn = platform_notification_service.send_review_session_notification
+            else:
+                # 暂不做真实推送：仅记录本次任务信息，后续按配置开启发送。
+                logger.info(
+                    "Review notification recorded only: stage=%s session_id=%s recipients=%s message=%s",
+                    stage,
+                    session_id,
+                    recipient_ids,
+                    message_text,
+                )
+                return {
+                    "code": 200,
+                    "message": "ok",
+                    "result": {
+                        "success": True,
+                        "recorded_only": True,
+                        "recipients_count": len(recipient_ids),
+                        "success_count": 0,
+                        "failed_recipients": [],
+                    },
+                }
 
         else:
             recipient_ids = _normalize_recipient_user_ids(payload.recipient_user_ids)
