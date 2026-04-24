@@ -175,6 +175,7 @@ def query_review_opportunity_detail(
     查询指定商机详情（风险/进展/机会摘要/机会诉求洞察 + snapshot 基础信息）。
     - 传 ``session_id``：按指定 review session 查询。
     - 不传 ``session_id``：自动使用该商机关联的最新 review session。
+    - ``snapshot_basic`` 含 ``opportunity_id``、``account_id``（客户）等字段。
     不校验当前用户是否是该最新 session 的参会人。
     """
     return crm_review_service.get_opportunity_risk_progress_details_by_latest_session(

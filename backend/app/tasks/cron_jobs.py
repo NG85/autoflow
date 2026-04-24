@@ -781,7 +781,12 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
         self.retry(exc=e, countdown=300)  # 5分钟后重试
 
 
-@app.task(bind=True, max_retries=3)
+@app.task(
+    bind=True,
+    max_retries=3,
+    soft_time_limit=settings.CELERY_HEAVY_TASK_SOFT_TIME_LIMIT,
+    time_limit=settings.CELERY_HEAVY_TASK_TIME_LIMIT,
+)
 def generate_crm_weekly_followup_summary(self, start_date_str=None, end_date_str=None):
     """
     生成“周跟进总结”（公司/团队整体描述 + 明细列表），用于后台页面展示与人工评论。
