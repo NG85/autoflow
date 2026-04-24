@@ -4,7 +4,7 @@ from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime, UTC, date, timedelta
 from collections import defaultdict
 
-from sqlmodel import select, Session, or_, func, case, desc, col
+from sqlmodel import select, Session, func, case, desc, col
 from fastapi_pagination import Params, Page
 from fastapi_pagination.ext.sqlmodel import paginate
 
@@ -40,9 +40,8 @@ class ChatRepo(BaseRepo):
                     can_view_all_client_visit_guide = False
 
             if not user.is_superuser and not can_view_all_client_visit_guide:
-                query = query.where(
-                    or_(Chat.user_id == user.id, Chat.browser_id == browser_id)
-                )
+                # Logged-in users: list only chats owned by this account (no browser_id fallback).
+                query = query.where(Chat.user_id == user.id)
         else:
             query = query.where(Chat.browser_id == browser_id, Chat.user_id == None)
 
