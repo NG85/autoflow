@@ -1,5 +1,6 @@
 from celery.utils.log import get_task_logger
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
+from sqlalchemy.orm import load_only
 from sqlmodel import Session
 
 from app.celery import app as celery_app
@@ -85,13 +86,19 @@ def import_documents_from_kb_datasource(kb_id: int, data_source_id: int):
             # Build an in-memory key index for CRM docs to support upsert by business key.
             # Key: (crm_data_type, unique_id)
             existing_crm_docs = {}
-            existing_docs = session.exec(
-                select(Document).where(Document.knowledge_base_id == kb_id)
+            existing_docs = session.scalars(
+                select(Document)
+                .options(load_only(Document.id, Document.file_id, Document.meta))
+                .where(
+                    Document.knowledge_base_id == kb_id,
+                    func.json_unquote(
+                        func.json_extract(Document.meta, "$.category")
+                    )
+                    == DocumentCategory.CRM.value,
+                )
             ).all()
             for db_doc in existing_docs:
-                meta = db_doc.meta or {}
-                if meta.get("category") != DocumentCategory.CRM:
-                    continue
+                meta = db_doc.meta if isinstance(db_doc.meta, dict) else {}
                 crm_data_type = _normalize_crm_data_type(meta.get("crm_data_type"))
                 unique_id = meta.get("unique_id")
                 if crm_data_type and unique_id:

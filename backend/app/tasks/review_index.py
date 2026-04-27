@@ -10,6 +10,8 @@ from typing import List, Optional
 
 from celery import chain
 from celery.utils.log import get_task_logger
+from sqlalchemy import func
+from sqlalchemy.orm import load_only
 from sqlmodel import Session, select
 
 from app.celery import app as celery_app
@@ -101,13 +103,19 @@ def index_review_session_data(
                 chunk_model,
             )
             existing_crm_docs = {}
-            existing_docs = db_session.exec(
-                select(DBDocument).where(DBDocument.knowledge_base_id == kb.id)
+            existing_docs = db_session.scalars(
+                select(DBDocument)
+                .options(load_only(DBDocument.id, DBDocument.file_id, DBDocument.meta))
+                .where(
+                    DBDocument.knowledge_base_id == kb.id,
+                    func.json_unquote(
+                        func.json_extract(DBDocument.meta, "$.category")
+                    )
+                    == DocumentCategory.CRM.value,
+                )
             ).all()
             for db_doc in existing_docs:
-                meta = db_doc.meta or {}
-                if meta.get("category") != DocumentCategory.CRM:
-                    continue
+                meta = db_doc.meta if isinstance(db_doc.meta, dict) else {}
                 crm_data_type = _normalize_crm_data_type(meta.get("crm_data_type"))
                 unique_id = meta.get("unique_id")
                 if crm_data_type and unique_id:
