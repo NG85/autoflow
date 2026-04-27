@@ -23,6 +23,7 @@ from app.models.crm_review import (
     CRMReviewSession,
     REVIEW_BRANCH_SNAPSHOT_EDITABLE_FIELDS,
 )
+from app.models.crm_opportunities import CRMOpportunity
 from app.models.crm_system_configurations import CRMSystemConfiguration
 from app.repositories.crm_review_attendee import crm_review_attendee_repo
 from app.repositories.crm_review_audit import crm_review_opp_audit_log_repo
@@ -1162,10 +1163,51 @@ class CRMReviewService:
                 .limit(1)
             ).first()
         if not resolved:
-            raise HTTPException(
-                status_code=404,
-                detail="review session not found" if sid else "opportunity latest review session not found",
-            )
+            # TODO：暂时查询商机表，后续改为查询表4最新报告
+            opp = db_session.exec(
+                select(CRMOpportunity)
+                .where(CRMOpportunity.unique_id == opportunity_id)
+                .limit(1)
+            ).first()
+            if not opp:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        "指定review session中未找到目标商机，且商机表中亦未找到目标商机，请检查商机ID是否正确"
+                        if sid
+                        else "未找到目标商机，请检查商机ID是否正确"
+                    ),
+                )
+
+            return {
+                "session_id": sid,
+                "opportunity_id": opportunity_id,
+                "snapshot_period": "",
+                "snapshot_basic": {
+                    "opportunity_id": (getattr(opp, "unique_id", None) or opportunity_id),
+                    "account_id": getattr(opp, "customer_id", None),
+                    "opportunity_name": getattr(opp, "opportunity_name", None),
+                    "account_name": getattr(opp, "customer_name", None),
+                    "owner_id": getattr(opp, "owner_id", None),
+                    "owner_name": getattr(opp, "owner", None),
+                    "forecast_type": getattr(opp, "forecast_type", None),
+                    "forecast_amount": None,
+                    "opportunity_stage": getattr(opp, "opportunity_stage", None),
+                    "expected_closing_date": getattr(opp, "expected_closing_date", None),
+                    "stage_stay": None,
+                    "ai_commit": None,
+                    "ai_stage": None,
+                    "ai_expected_closing_date": None,
+                },
+                "risk_count": 0,
+                "progress_count": 0,
+                "opp_summary_count": 0,
+                "opp_reqs_insight_count": 0,
+                "risk_details": [],
+                "progress_details": [],
+                "opp_summary_details": [],
+                "opp_reqs_insight_details": [],
+            }
 
         snapshot_period = str(resolved.period or "").strip()
         if not snapshot_period:
