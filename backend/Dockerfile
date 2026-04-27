@@ -1,5 +1,5 @@
 # Use the base image built by Dockerfile_base
-FROM registry.cn-beijing.aliyuncs.com/aptsell/aptsell.autoflow-base
+FROM registry.cn-beijing.aliyuncs.com/aptsell/aptsell.autoflow-base:586b1d28c496bc947f87cc58ca3289412dc2af2f
 
 WORKDIR /app/
 
