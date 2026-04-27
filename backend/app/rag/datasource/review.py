@@ -439,10 +439,10 @@ class ReviewDataSource:
                     scope_name = (
                         attendee_owner_name_map.get(scope_id)
                         or owner_name_map.get(scope_id)
-                        or scope_id
+                        or "未知销售"
                     )
                 elif r.scope_type == "department" and scope_id:
-                    scope_name = dept_name_map.get(scope_id, scope_id)
+                    scope_name = dept_name_map.get(scope_id) or "未知部门"
             out.append(
                 {
                     "scope_type": r.scope_type,

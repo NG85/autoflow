@@ -372,7 +372,12 @@ class ReviewDataContext(BaseModel):
             for m in self.kpi_metrics:
                 mname = m.get("metric_name", "")
                 cn = METRIC_DISPLAY_NAMES.get(mname, mname)
-                scope = m.get("scope_name") or m.get("scope_id") or m.get("scope_type", "")
+                scope = (
+                    m.get("scope_display_name")
+                    or m.get("scope_name")
+                    or m.get("scope_type")
+                    or "未知范围"
+                )
                 cur = _fmt_value(mname, m.get("metric_value"))
                 prev = _fmt_value(mname, m.get("metric_value_prev")) if m.get("metric_value_prev") is not None else "-"
                 delta = _fmt_value(mname, m.get("metric_delta")) if m.get("metric_delta") is not None else "-"
@@ -522,12 +527,60 @@ class ReviewDataRetriever:
             return ""
         lines = [f"### 销售差额清单（Top {min(max_items, len(rows))}）"]
         for idx, row in enumerate(rows[:max_items], 1):
-            owner = row.get("scope_name") or row.get("scope_id") or "未知销售"
+            owner = row.get("scope_display_name") or row.get("scope_name") or "未知销售"
             gap_value = _safe_float(row.get("metric_value")) or 0.0
             lines.append(f"- {idx}. {owner}｜差额:{gap_value:,.0f}")
         if len(rows) > max_items:
             lines.append(f"- 其余 {len(rows) - max_items} 位销售请在人员分组查看。")
         return "\n".join(lines)
+
+    def _resolve_scope_display_name(
+        self,
+        db_session: Session,
+        session_id: str,
+        scope_type: Optional[str],
+        scope_id: Optional[str],
+        scope_name: Optional[str],
+    ) -> Optional[str]:
+        _ = session_id
+        resolved_name = str(scope_name or "").strip()
+        if resolved_name:
+            return resolved_name
+        normalized_scope_type = str(scope_type or "").strip().lower()
+        normalized_scope_id = str(scope_id or "").strip()
+        S = CRMReviewOppBranchSnapshot
+
+        if normalized_scope_type == "owner" and normalized_scope_id:
+            stmt = (
+                select(S.owner_name)
+                .where(
+                    S.owner_id == normalized_scope_id,
+                    S.owner_name.is_not(None),
+                    S.owner_name != "",
+                )
+                .limit(1)
+            )
+            owner_name = db_session.exec(stmt).first()
+            if owner_name:
+                return str(owner_name).strip()
+
+        if normalized_scope_type == "department" and normalized_scope_id:
+            stmt = (
+                select(S.owner_department_name)
+                .where(
+                    S.owner_department_id == normalized_scope_id,
+                    S.owner_department_name.is_not(None),
+                    S.owner_department_name != "",
+                )
+                .limit(1)
+            )
+            dept_name = db_session.exec(stmt).first()
+            if dept_name:
+                return str(dept_name).strip()
+
+        if normalized_scope_type in ("company", "department_or_company"):
+            return "公司整体" if not normalized_scope_id else "公司/部门"
+        return None
 
     @staticmethod
     def _normalize_execution_scope_and_time(
@@ -965,13 +1018,13 @@ class ReviewDataRetriever:
                 )
                 if ctx.kpi_metrics:
                     top_seller = (
-                        ctx.kpi_metrics[0].get("scope_name")
-                        or ctx.kpi_metrics[0].get("scope_id")
+                        ctx.kpi_metrics[0].get("scope_display_name")
+                        or ctx.kpi_metrics[0].get("scope_name")
                         or "未知销售"
                     )
                     top_gap = _safe_float(ctx.kpi_metrics[0].get("metric_value")) or 0.0
                     other_sellers = [
-                        m.get("scope_name") or m.get("scope_id") or "未知销售"
+                        m.get("scope_display_name") or m.get("scope_name") or "未知销售"
                         for m in ctx.kpi_metrics[1:4]
                     ]
                     other_hint = (
@@ -1223,23 +1276,32 @@ class ReviewDataRetriever:
         )
 
         rows = db_session.exec(stmt).all()
-        return [
-            {
-                "scope_type": r.scope_type,
-                "scope_id": r.scope_id,
-                "scope_name": r.scope_name,
-                "metric_category": r.metric_category,
-                "metric_name": r.metric_name,
-                "metric_value": _safe_float(r.metric_value),
-                "metric_value_prev": _safe_float(r.metric_value_prev),
-                "metric_delta": _safe_float(r.metric_delta),
-                "metric_rate": _safe_float(r.metric_rate),
-                "metric_unit": r.metric_unit,
-                "metric_content": r.metric_content,
-                "calc_phase": r.calc_phase,
-            }
-            for r in rows
-        ]
+        metrics: List[Dict[str, Any]] = []
+        for r in rows:
+            metrics.append(
+                {
+                    "scope_type": r.scope_type,
+                    "scope_id": r.scope_id,
+                    "scope_name": r.scope_name,
+                    "scope_display_name": self._resolve_scope_display_name(
+                        db_session=db_session,
+                        session_id=session_id,
+                        scope_type=r.scope_type,
+                        scope_id=r.scope_id,
+                        scope_name=r.scope_name,
+                    ),
+                    "metric_category": r.metric_category,
+                    "metric_name": r.metric_name,
+                    "metric_value": _safe_float(r.metric_value),
+                    "metric_value_prev": _safe_float(r.metric_value_prev),
+                    "metric_delta": _safe_float(r.metric_delta),
+                    "metric_rate": _safe_float(r.metric_rate),
+                    "metric_unit": r.metric_unit,
+                    "metric_content": r.metric_content,
+                    "calc_phase": r.calc_phase,
+                }
+            )
+        return metrics
 
     def _query_owner_gap_ranking(
         self,
@@ -1258,23 +1320,32 @@ class ReviewDataRetriever:
         rows = list(db_session.exec(stmt).all())
         rows = [r for r in rows if r.metric_value is not None]
         rows.sort(key=lambda r: float(r.metric_value), reverse=True)
-        return [
-            {
-                "scope_type": r.scope_type,
-                "scope_id": r.scope_id,
-                "scope_name": r.scope_name,
-                "metric_category": r.metric_category,
-                "metric_name": r.metric_name,
-                "metric_value": _safe_float(r.metric_value),
-                "metric_value_prev": _safe_float(r.metric_value_prev),
-                "metric_delta": _safe_float(r.metric_delta),
-                "metric_rate": _safe_float(r.metric_rate),
-                "metric_unit": r.metric_unit,
-                "metric_content": r.metric_content,
-                "calc_phase": r.calc_phase,
-            }
-            for r in rows
-        ]
+        metrics: List[Dict[str, Any]] = []
+        for r in rows:
+            metrics.append(
+                {
+                    "scope_type": r.scope_type,
+                    "scope_id": r.scope_id,
+                    "scope_name": r.scope_name,
+                    "scope_display_name": self._resolve_scope_display_name(
+                        db_session=db_session,
+                        session_id=session_id,
+                        scope_type=r.scope_type,
+                        scope_id=r.scope_id,
+                        scope_name=r.scope_name,
+                    ),
+                    "metric_category": r.metric_category,
+                    "metric_name": r.metric_name,
+                    "metric_value": _safe_float(r.metric_value),
+                    "metric_value_prev": _safe_float(r.metric_value_prev),
+                    "metric_delta": _safe_float(r.metric_delta),
+                    "metric_rate": _safe_float(r.metric_rate),
+                    "metric_unit": r.metric_unit,
+                    "metric_content": r.metric_content,
+                    "calc_phase": r.calc_phase,
+                }
+            )
+        return metrics
 
     def _resolve_target_action_risk_type_codes(
         self,

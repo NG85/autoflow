@@ -115,7 +115,14 @@ def format_review_session_info(
             scope_matrix: Dict[str, Dict[str, Any]] = {}
             for m in rows:
                 scope_type = _scope_type_zh(_kv(m, "scope_type", "") or "")
-                scope_name = _kv(m, "scope_name", "") or _kv(m, "scope_id", "") or ""
+                scope_name = _kv(m, "scope_display_name", "") or _kv(m, "scope_name", "") or ""
+                if not scope_name:
+                    raw_scope_type = _kv(m, "scope_type", "") or ""
+                    scope_name = (
+                        "未知销售"
+                        if raw_scope_type == "owner"
+                        else ("未知部门" if raw_scope_type == "department" else "未知范围")
+                    )
                 scope_key = f"{scope_type}::{scope_name}"
                 metric_name = _kv(m, "metric_name", "") or ""
                 if scope_key not in scope_matrix:
