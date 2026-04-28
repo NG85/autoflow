@@ -838,7 +838,7 @@ def test_retrieve_owner_gap_ranking_uses_desc_gap_order(monkeypatch):
     assert "查看路径：点击商机评估Agent，选择“人员分组”" in (ctx.query_note or "")
 
 
-def test_retrieve_owner_gap_ranking_zero_gap_ambiguous_target_note(monkeypatch):
+def test_retrieve_owner_gap_ranking_negative_gap_with_zero_target_note(monkeypatch):
     retriever = ReviewDataRetriever()
     review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
     intent = ReviewIntent(
@@ -852,14 +852,16 @@ def test_retrieve_owner_gap_ranking_zero_gap_ambiguous_target_note(monkeypatch):
             {
                 "scope_name": "甲",
                 "metric_name": "gap",
-                "metric_value": 0.0,
+                "metric_value": -100000.0,
                 "target_value": 1_000_000.0,
+                "closed_value": 1_100_000.0,
             },
             {
                 "scope_name": "乙",
                 "metric_name": "gap",
-                "metric_value": 0.0,
+                "metric_value": -50000.0,
                 "target_value": 0.0,
+                "closed_value": 50_000.0,
             },
         ],
     )
@@ -873,8 +875,8 @@ def test_retrieve_owner_gap_ranking_zero_gap_ambiguous_target_note(monkeypatch):
         user_question="团队谁差额大？",
     )
     note = ctx.query_note or ""
-    assert "不能直接等同于" in note
-    assert "「本期目标」" in note
+    assert "不应解读为“超额完成目标”" in note
+    assert "「0 - 已成单」" in note
 
 
 def test_retrieve_owner_gap_ranking_zero_gap_all_positive_targets_note(monkeypatch):
