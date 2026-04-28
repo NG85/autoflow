@@ -379,6 +379,12 @@ class ReviewDataContext(BaseModel):
                     or "未知范围"
                 )
                 cur = _fmt_value(mname, m.get("metric_value"))
+                if mname == "gap" and "target_value" in m:
+                    tv = m.get("target_value")
+                    tgt_txt = (
+                        _fmt_value("target", tv) if tv is not None else "—"
+                    )
+                    cur = f"{cur}（本期目标={tgt_txt}）"
                 prev = _fmt_value(mname, m.get("metric_value_prev")) if m.get("metric_value_prev") is not None else "-"
                 delta = _fmt_value(mname, m.get("metric_delta")) if m.get("metric_delta") is not None else "-"
                 rate = _fmt_rate(m.get("metric_rate")) if m.get("metric_rate") is not None else "-"
@@ -529,7 +535,14 @@ class ReviewDataRetriever:
         for idx, row in enumerate(rows[:max_items], 1):
             owner = row.get("scope_display_name") or row.get("scope_name") or "未知销售"
             gap_value = _safe_float(row.get("metric_value")) or 0.0
-            lines.append(f"- {idx}. {owner}｜差额:{gap_value:,.0f}")
+            if "target_value" in row:
+                tv = row.get("target_value")
+                tgt_part = (
+                    f"｜目标:{tv:,.0f}" if tv is not None else "｜目标:—"
+                )
+            else:
+                tgt_part = ""
+            lines.append(f"- {idx}. {owner}｜差额:{gap_value:,.0f}{tgt_part}")
         if len(rows) > max_items:
             lines.append(f"- 其余 {len(rows) - max_items} 位销售请在人员分组查看。")
         return "\n".join(lines)
@@ -1032,10 +1045,49 @@ class ReviewDataRetriever:
                         if other_sellers
                         else "- 当前仅有 1 位销售数据，暂时没有可对比对象。"
                     )
+                    def _tv(m: Dict[str, Any]) -> Optional[float]:
+                        if "target_value" not in m:
+                            return None
+                        return _safe_float(m.get("target_value"))
+
+                    has_target_enrichment = any("target_value" in m for m in ctx.kpi_metrics)
+                    # Invariant: owner gap/target KPI rows are written together; treat
+                    # target None only as a defensive edge for serialization/joins.
+                    any_zero_or_unset_target = any(
+                        (_tv(m) is None) or (_tv(m) == 0) for m in ctx.kpi_metrics
+                    )
+                    all_positive_targets = all(
+                        _tv(m) is not None and _tv(m) > 0 for m in ctx.kpi_metrics
+                    )
+                    max_gap = max(
+                        (_safe_float(m.get("metric_value")) or 0.0)
+                        for m in ctx.kpi_metrics
+                    )
+                    if not has_target_enrichment:
+                        gap_caveat = ""
+                    elif max_gap <= 0 and all_positive_targets:
+                        gap_caveat = (
+                            "- 解读：在每位销售的本期目标均大于 0 的前提下，"
+                            "当前差额为 0 可理解为已达成或超额完成目标。\n"
+                        )
+                    elif max_gap <= 0 and any_zero_or_unset_target:
+                        gap_caveat = (
+                            "- 解读：部分销售本期目标为 0；此时差额为 0 只表示在目标口径下的"
+                            "数值结果，不能直接等同于“全员已达成个人目标”，"
+                            "请结合下方「本期目标」列核对后再下结论。\n"
+                        )
+                    elif any_zero_or_unset_target:
+                        gap_caveat = (
+                            "- 提示：部分销售本期目标为 0；排名仍按差额从高到低，"
+                            "判断是否达成个人目标请结合「本期目标」列。\n"
+                        )
+                    else:
+                        gap_caveat = ""
                     ctx.query_note = (
                         "### 销售达成差额排名\n"
                         f"- 当前共统计 {len(ctx.kpi_metrics)} 位销售，已按达成差额从高到低排序。\n"
                         f"- 目前差额最大的是 {top_seller}，差额约 {top_gap:,.0f}。\n"
+                        f"{gap_caveat}"
                         f"{other_hint}\n"
                         "- 查看路径：点击商机评估Agent，选择“人员分组”，查看每个销售下的具体商机列表。"
                     )
@@ -1309,19 +1361,35 @@ class ReviewDataRetriever:
         session_id: str,
         owner_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
+        """Owner gap ranking: sort by gap; join target (same owner rows are written together)."""
         K = CRMReviewKpiMetrics
         stmt = select(K).where(
             K.session_id == session_id,
             K.scope_type == "owner",
-            K.metric_name == "gap",
+            K.metric_name.in_(["gap", "target"]),
         )
         if owner_id:
             stmt = stmt.where(K.scope_id == owner_id)
-        rows = list(db_session.exec(stmt).all())
-        rows = [r for r in rows if r.metric_value is not None]
+        all_rows = list(db_session.exec(stmt).all())
+        rows = [
+            r
+            for r in all_rows
+            if r.metric_name == "gap" and r.metric_value is not None
+        ]
         rows.sort(key=lambda r: float(r.metric_value), reverse=True)
+
+        target_by_scope: Dict[str, Optional[float]] = {}
+        for r in all_rows:
+            if r.metric_name != "target":
+                continue
+            sid = str(r.scope_id or "").strip()
+            if not sid:
+                continue
+            target_by_scope[sid] = _safe_float(r.metric_value)
+
         metrics: List[Dict[str, Any]] = []
         for r in rows:
+            sid = str(r.scope_id or "").strip()
             metrics.append(
                 {
                     "scope_type": r.scope_type,
@@ -1343,6 +1411,7 @@ class ReviewDataRetriever:
                     "metric_unit": r.metric_unit,
                     "metric_content": r.metric_content,
                     "calc_phase": r.calc_phase,
+                    "target_value": target_by_scope.get(sid),
                 }
             )
         return metrics

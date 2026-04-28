@@ -838,6 +838,77 @@ def test_retrieve_owner_gap_ranking_uses_desc_gap_order(monkeypatch):
     assert "查看路径：点击商机评估Agent，选择“人员分组”" in (ctx.query_note or "")
 
 
+def test_retrieve_owner_gap_ranking_zero_gap_ambiguous_target_note(monkeypatch):
+    retriever = ReviewDataRetriever()
+    review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
+    intent = ReviewIntent(
+        intent_type="data_query",
+        query_plan={"route": "kpi_aggregation", "template_id": "owner_gap_ranking"},
+    )
+    monkeypatch.setattr(
+        retriever,
+        "_query_owner_gap_ranking",
+        lambda *a, **k: [
+            {
+                "scope_name": "甲",
+                "metric_name": "gap",
+                "metric_value": 0.0,
+                "target_value": 1_000_000.0,
+            },
+            {
+                "scope_name": "乙",
+                "metric_name": "gap",
+                "metric_value": 0.0,
+                "target_value": 0.0,
+            },
+        ],
+    )
+    monkeypatch.setattr(retriever, "_query_snapshot_aggregations", lambda *a, **k: [])
+    monkeypatch.setattr(retriever, "_collect_opportunity_snapshot_rows", lambda *a, **k: [])
+    monkeypatch.setattr(retriever, "_query_risk_progress", lambda *a, **k: [])
+    ctx = retriever.retrieve(
+        db_session=None,
+        review_session=review_session,
+        intent=intent,
+        user_question="团队谁差额大？",
+    )
+    note = ctx.query_note or ""
+    assert "不能直接等同于" in note
+    assert "「本期目标」" in note
+
+
+def test_retrieve_owner_gap_ranking_zero_gap_all_positive_targets_note(monkeypatch):
+    retriever = ReviewDataRetriever()
+    review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
+    intent = ReviewIntent(
+        intent_type="data_query",
+        query_plan={"route": "kpi_aggregation", "template_id": "owner_gap_ranking"},
+    )
+    monkeypatch.setattr(
+        retriever,
+        "_query_owner_gap_ranking",
+        lambda *a, **k: [
+            {
+                "scope_name": "甲",
+                "metric_name": "gap",
+                "metric_value": 0.0,
+                "target_value": 1_000_000.0,
+            },
+        ],
+    )
+    monkeypatch.setattr(retriever, "_query_snapshot_aggregations", lambda *a, **k: [])
+    monkeypatch.setattr(retriever, "_collect_opportunity_snapshot_rows", lambda *a, **k: [])
+    monkeypatch.setattr(retriever, "_query_risk_progress", lambda *a, **k: [])
+    ctx = retriever.retrieve(
+        db_session=None,
+        review_session=review_session,
+        intent=intent,
+        user_question="团队谁差额大？",
+    )
+    note = ctx.query_note or ""
+    assert "已达成或超额完成目标" in note
+
+
 def test_retrieve_focus_risky_opportunities_lists_risk_opps(monkeypatch):
     retriever = ReviewDataRetriever()
     review_session = SimpleNamespace(unique_id="s1", period="2026-W15", department_id="d1")
