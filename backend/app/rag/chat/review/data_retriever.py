@@ -384,7 +384,14 @@ class ReviewDataContext(BaseModel):
                     tgt_txt = (
                         _fmt_value("target", tv) if tv is not None else "—"
                     )
-                    cur = f"{cur}（本期目标={tgt_txt}）"
+                    extra = f"本期目标={tgt_txt}"
+                    if "closed_value" in m:
+                        cv = m.get("closed_value")
+                        clo_txt = (
+                            _fmt_value("closed", cv) if cv is not None else "—"
+                        )
+                        extra = f"{extra}；已成单={clo_txt}"
+                    cur = f"{cur}（{extra}）"
                 prev = _fmt_value(mname, m.get("metric_value_prev")) if m.get("metric_value_prev") is not None else "-"
                 delta = _fmt_value(mname, m.get("metric_delta")) if m.get("metric_delta") is not None else "-"
                 rate = _fmt_rate(m.get("metric_rate")) if m.get("metric_rate") is not None else "-"
@@ -542,7 +549,16 @@ class ReviewDataRetriever:
                 )
             else:
                 tgt_part = ""
-            lines.append(f"- {idx}. {owner}｜差额:{gap_value:,.0f}{tgt_part}")
+            if "closed_value" in row:
+                cv = row.get("closed_value")
+                clo_part = (
+                    f"｜已成单:{cv:,.0f}" if cv is not None else "｜已成单:—"
+                )
+            else:
+                clo_part = ""
+            lines.append(
+                f"- {idx}. {owner}｜差额:{gap_value:,.0f}{tgt_part}{clo_part}"
+            )
         if len(rows) > max_items:
             lines.append(f"- 其余 {len(rows) - max_items} 位销售请在人员分组查看。")
         return "\n".join(lines)
@@ -1050,11 +1066,19 @@ class ReviewDataRetriever:
                             return None
                         return _safe_float(m.get("target_value"))
 
+                    def _cv(m: Dict[str, Any]) -> Optional[float]:
+                        if "closed_value" not in m:
+                            return None
+                        return _safe_float(m.get("closed_value"))
+
                     has_target_enrichment = any("target_value" in m for m in ctx.kpi_metrics)
                     # Invariant: owner gap/target KPI rows are written together; treat
                     # target None only as a defensive edge for serialization/joins.
                     any_zero_or_unset_target = any(
                         (_tv(m) is None) or (_tv(m) == 0) for m in ctx.kpi_metrics
+                    )
+                    any_zero_target_with_closed = any(
+                        (_tv(m) == 0) and ((_cv(m) or 0.0) > 0.0) for m in ctx.kpi_metrics
                     )
                     all_positive_targets = all(
                         _tv(m) is not None and _tv(m) > 0 for m in ctx.kpi_metrics
@@ -1070,16 +1094,21 @@ class ReviewDataRetriever:
                             "- 解读：在每位销售的本期目标均大于 0 的前提下，"
                             "当前差额为 0 可理解为已达成或超额完成目标。\n"
                         )
+                    elif any_zero_target_with_closed:
+                        gap_caveat = (
+                            "- 解读：部分销售本期目标为 0 且已有成单；这类负差额由"
+                            "「0 - 已成单」产生，不应解读为“超额完成目标”。\n"
+                        )
                     elif max_gap <= 0 and any_zero_or_unset_target:
                         gap_caveat = (
-                            "- 解读：部分销售本期目标为 0；此时差额为 0 只表示在目标口径下的"
+                            "- 解读：部分销售本期目标为 0；此时差额<=0 只表示在目标口径下的"
                             "数值结果，不能直接等同于“全员已达成个人目标”，"
-                            "请结合下方「本期目标」列核对后再下结论。\n"
+                            "请结合下方「本期目标/已成单」列核对后再下结论。\n"
                         )
                     elif any_zero_or_unset_target:
                         gap_caveat = (
                             "- 提示：部分销售本期目标为 0；排名仍按差额从高到低，"
-                            "判断是否达成个人目标请结合「本期目标」列。\n"
+                            "判断是否达成个人目标请结合「本期目标/已成单」列。\n"
                         )
                     else:
                         gap_caveat = ""
@@ -1361,12 +1390,12 @@ class ReviewDataRetriever:
         session_id: str,
         owner_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """Owner gap ranking: sort by gap; join target (same owner rows are written together)."""
+        """Owner gap ranking: sort by gap; join target/closed for interpretation."""
         K = CRMReviewKpiMetrics
         stmt = select(K).where(
             K.session_id == session_id,
             K.scope_type == "owner",
-            K.metric_name.in_(["gap", "target"]),
+            K.metric_name.in_(["gap", "target", "closed"]),
         )
         if owner_id:
             stmt = stmt.where(K.scope_id == owner_id)
@@ -1379,13 +1408,15 @@ class ReviewDataRetriever:
         rows.sort(key=lambda r: float(r.metric_value), reverse=True)
 
         target_by_scope: Dict[str, Optional[float]] = {}
+        closed_by_scope: Dict[str, Optional[float]] = {}
         for r in all_rows:
-            if r.metric_name != "target":
-                continue
             sid = str(r.scope_id or "").strip()
             if not sid:
                 continue
-            target_by_scope[sid] = _safe_float(r.metric_value)
+            if r.metric_name == "target":
+                target_by_scope[sid] = _safe_float(r.metric_value)
+            elif r.metric_name == "closed":
+                closed_by_scope[sid] = _safe_float(r.metric_value)
 
         metrics: List[Dict[str, Any]] = []
         for r in rows:
@@ -1412,6 +1443,7 @@ class ReviewDataRetriever:
                     "metric_content": r.metric_content,
                     "calc_phase": r.calc_phase,
                     "target_value": target_by_scope.get(sid),
+                    "closed_value": closed_by_scope.get(sid),
                 }
             )
         return metrics
