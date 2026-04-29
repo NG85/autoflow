@@ -1326,13 +1326,13 @@ class CRMReviewService:
         owner_crm_user_id = attendee.crm_user_id
         is_leader = bool(getattr(attendee, "is_leader", False))
 
-        # If caller submits "no changes" (empty updates array),
-        # we still need to record the submit attempt for stats/audit.
+        # If caller saves "no changes" (empty updates array),
+        # we still record one save audit for traceability.
         updates = updates or []
         if len(updates) == 0:
             audit = CRMReviewOppAuditLog(
                 session_id=str(session.unique_id),
-                change_scope="submit_empty_updates",
+                change_scope="save_empty_updates",
                 updated_at=datetime.now(timezone.utc),
                 created_at=datetime.now(timezone.utc),
                 old_value=json.dumps(
@@ -1463,7 +1463,7 @@ class CRMReviewService:
                     setattr(row, f, patch.get(f))
             after_fields = {f: getattr(row, f) for f in EDITABLE_FIELDS}
 
-            # Always record submit operation for audit/statistics,
+            # Always record save operation for audit/statistics,
             # even when the submitted values equal existing values.
             before[snapshot_unique_id] = before_fields
             after[snapshot_unique_id] = after_fields
@@ -1502,17 +1502,17 @@ class CRMReviewService:
 
         db_session.commit()
 
-        # One audit log per submit
-        # Distinguish different submit intents for easier debugging.
+        # One audit log per save
+        # Distinguish different save intents for easier debugging.
         # - non-empty updates payload:
         #   - some opps actually changed => partial/all changed
         #   - no opp fields changed       => no_field_changes
         if changed_snapshot_unique_ids and unchanged_snapshot_unique_ids:
-            change_scope = "batch_submit_partial_changes"
+            change_scope = "batch_save_partial_changes"
         elif changed_snapshot_unique_ids:
-            change_scope = "batch_submit_all_changed"
+            change_scope = "batch_save_all_changed"
         else:
-            change_scope = "batch_submit_no_field_changes"
+            change_scope = "batch_save_no_field_changes"
         audit = CRMReviewOppAuditLog(
             session_id=str(session.unique_id),
             change_scope=change_scope,

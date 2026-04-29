@@ -346,7 +346,7 @@ def submit_my_review_branch_snapshot_changes(
     user: CurrentUserDep,
 ):
     """
-    提交本次 review 的商机快照修改（可一次提交多条）。仅在可编辑阶段成功；空数组也会记一次提交。
+    保存本次 review 的商机快照修改（可一次保存多条）。仅在可编辑阶段成功；空数组会记录一次保存审计（不更新参会人提交状态）。
     请求体里每条只传允许改的字段，具体以 ``ReviewBranchSnapshotUpdateIn`` 为准。
     """
     return crm_review_service.submit_my_snapshot_changes(
