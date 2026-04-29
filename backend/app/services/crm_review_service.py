@@ -1326,19 +1326,13 @@ class CRMReviewService:
         owner_crm_user_id = attendee.crm_user_id
         is_leader = bool(getattr(attendee, "is_leader", False))
 
-        # If caller submits "no changes" (empty updates array),
-        # we still need to record the submit attempt for stats/audit.
+        # If caller saves "no changes" (empty updates array),
+        # we still record one save audit for traceability.
         updates = updates or []
         if len(updates) == 0:
-            attendee.has_submitted = True
-            attendee.submitted_at = datetime.now(timezone.utc)
-            attendee.submission_count = (attendee.submission_count or 0) + 1
-            db_session.add(attendee)
-            db_session.commit()
-
             audit = CRMReviewOppAuditLog(
                 session_id=str(session.unique_id),
-                change_scope="submit_empty_updates",
+                change_scope="save_empty_updates",
                 updated_at=datetime.now(timezone.utc),
                 created_at=datetime.now(timezone.utc),
                 old_value=json.dumps(
@@ -1469,7 +1463,7 @@ class CRMReviewService:
                     setattr(row, f, patch.get(f))
             after_fields = {f: getattr(row, f) for f in EDITABLE_FIELDS}
 
-            # Always record submit operation for audit/statistics,
+            # Always record save operation for audit/statistics,
             # even when the submitted values equal existing values.
             before[snapshot_unique_id] = before_fields
             after[snapshot_unique_id] = after_fields
@@ -1503,31 +1497,22 @@ class CRMReviewService:
             )
 
         # Persist updates only when we actually changed any field.
-        # Still commit attendee submitted status + audit below even if updated_count == 0.
         if updated_count > 0:
             db_session.add_all(list(rows_by_snapshot_unique_id.values()))
 
-        # Mark only the *actual submitter* as submitted.
-        # Even when a leader edits multiple owners' snapshots, stats should count
-        # only the user who pressed "submit".
-        attendee.has_submitted = True
-        attendee.submitted_at = datetime.now(timezone.utc)
-        attendee.submission_count = (attendee.submission_count or 0) + 1
-        db_session.add(attendee)
-
         db_session.commit()
 
-        # One audit log per submit
-        # Distinguish different submit intents for easier debugging.
+        # One audit log per save
+        # Distinguish different save intents for easier debugging.
         # - non-empty updates payload:
         #   - some opps actually changed => partial/all changed
         #   - no opp fields changed       => no_field_changes
         if changed_snapshot_unique_ids and unchanged_snapshot_unique_ids:
-            change_scope = "batch_submit_partial_changes"
+            change_scope = "batch_save_partial_changes"
         elif changed_snapshot_unique_ids:
-            change_scope = "batch_submit_all_changed"
+            change_scope = "batch_save_all_changed"
         else:
-            change_scope = "batch_submit_no_field_changes"
+            change_scope = "batch_save_no_field_changes"
         audit = CRMReviewOppAuditLog(
             session_id=str(session.unique_id),
             change_scope=change_scope,
@@ -1785,6 +1770,77 @@ class CRMReviewService:
             "main_rows_updated": main_updated,
             "skipped_cache_rows_no_main": len(missing_keys),
         }
+
+    def audit_submit_button_click(
+        self,
+        db_session: Session,
+        *,
+        session_id: str,
+        user_id: str,
+    ) -> dict:
+        """Record one audit row per submit-button click."""
+        session = crm_review_session_repo.get_by_unique_id(db_session, session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="review session not found")
+        if str(session.stage) != "initial_edit":
+            raise HTTPException(
+                status_code=409,
+                detail="submit click audit can only be recorded when session.stage is initial_edit",
+            )
+
+        attendee = crm_review_attendee_repo.get_by_session_and_user_id(
+            db_session, session_id=session_id, user_id=user_id
+        )
+        if not attendee:
+            raise HTTPException(status_code=403, detail="user is not attendee of this review session")
+
+        now = datetime.now(timezone.utc)
+        # Keep submit_stats behavior unchanged: each click marks attendee as submitted
+        # and bumps submission_count on CRMReviewAttendee.
+        attendee.has_submitted = True
+        attendee.submitted_at = now
+        attendee.submission_count = (attendee.submission_count or 0) + 1
+        db_session.add(attendee)
+        db_session.commit()
+
+        audit = CRMReviewOppAuditLog(
+            session_id=str(session.unique_id),
+            change_scope="submit_button_click",
+            updated_at=now,
+            created_at=now,
+            old_value=json.dumps(
+                {
+                    "event": "submit_button_click",
+                    "period": str(session.period or ""),
+                },
+                ensure_ascii=False,
+            ),
+            new_value=json.dumps(
+                {
+                    "event": "submit_button_click",
+                    "period": str(session.period or ""),
+                    "clicked_at": now.isoformat(),
+                },
+                ensure_ascii=False,
+            ),
+            change_type="UPDATE",
+            edit_phase=str(session.stage),
+            updated_by=str(attendee.user_name or "unknown"),
+            updated_by_id=str(user_id),
+        )
+        try:
+            crm_review_opp_audit_log_repo.create_audit(db_session, audit)
+        except Exception as e:  # noqa: BLE001
+            db_session.rollback()
+            logger.warning(
+                "submit_button_click audit write failed (ignored): session_id=%s user_id=%s err=%s",
+                session_id,
+                user_id,
+                e,
+                exc_info=True,
+            )
+
+        return {"session_id": str(session.unique_id), "recorded": True}
 
     def recalculate_forecast_aggregates(
         self,

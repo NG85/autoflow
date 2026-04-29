@@ -34,6 +34,7 @@ from app.api.routes.crm.models import (
     ReviewSessionProgressCategoryGroupBasicOut,
     ReviewSessionProgressCategoryGroupOut,
     ReviewSessionRiskInsightItemBasicOut,
+    ReviewSubmitButtonClickAuditOut,
     ReviewSnapshotFilterEnumsOut,
     ReviewSnapshotGroupDataQueryIn,
     ReviewSnapshotGroupsOut,
@@ -345,7 +346,7 @@ def submit_my_review_branch_snapshot_changes(
     user: CurrentUserDep,
 ):
     """
-    提交本次 review 的商机快照修改（可一次提交多条）。仅在可编辑阶段成功；空数组也会记一次提交。
+    保存本次 review 的商机快照修改（可一次保存多条）。仅在可编辑阶段成功；空数组会记录一次保存审计（不更新参会人提交状态）。
     请求体里每条只传允许改的字段，具体以 ``ReviewBranchSnapshotUpdateIn`` 为准。
     """
     return crm_review_service.submit_my_snapshot_changes(
@@ -354,6 +355,26 @@ def submit_my_review_branch_snapshot_changes(
         user_id=str(user.id),
         updates=[u.model_dump(exclude_unset=True) for u in (payload.updates or [])],
     )
+
+
+@router.post(
+    "/crm/review/sessions/{session_id}/submit-click-audit",
+    response_model=ReviewSubmitButtonClickAuditOut,
+)
+def audit_review_submit_button_click(
+    session_id: str,
+    db_session: SessionDep,
+    user: CurrentUserDep,
+):
+    """
+    记录“提交”按钮点击审计。每次调用都会新增一条审计日志，用于追踪是谁触发了提交动作。
+    """
+    data = crm_review_service.audit_submit_button_click(
+        db_session,
+        session_id=session_id,
+        user_id=str(user.id),
+    )
+    return ReviewSubmitButtonClickAuditOut.model_validate(data)
 
 
 @router.post(

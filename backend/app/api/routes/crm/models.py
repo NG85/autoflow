@@ -968,6 +968,11 @@ class ReviewBranchSnapshotMergeFromCacheOut(BaseModel):
     )
 
 
+class ReviewSubmitButtonClickAuditOut(BaseModel):
+    session_id: str
+    recorded: bool = True
+
+
 class ReviewBranchSnapshotSubmitIn(BaseModel):
     updates: List[ReviewBranchSnapshotUpdateIn] = Field(default_factory=list)
 
