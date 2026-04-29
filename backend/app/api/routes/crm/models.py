@@ -955,6 +955,19 @@ class ReviewBranchSnapshotSubmitOut(BaseModel):
     submit_stats: ReviewSessionSubmitStatsOut
 
 
+class ReviewBranchSnapshotMergeFromCacheOut(BaseModel):
+    """Leader merge: editable + submit-metadata from cache → main (main row must already exist)."""
+
+    session_id: str
+    snapshot_period: str
+    cache_rows_scanned: int
+    main_rows_updated: int
+    skipped_cache_rows_no_main: int = Field(
+        default=0,
+        description="Cache rows skipped because no matching main row (logged at error).",
+    )
+
+
 class ReviewBranchSnapshotSubmitIn(BaseModel):
     updates: List[ReviewBranchSnapshotUpdateIn] = Field(default_factory=list)
 

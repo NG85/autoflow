@@ -66,46 +66,191 @@ website:
     default:
       version: 1
       menus:
-        - key: scenario
+        - audience: null
+          enabled: true
+          has_studio: false
+          icon: "SalesAnalysisIcon"
+          key: business
+          order: 10
+          parent_key: null
+          target: null
           title: 业务场景
-          order: 110
+          unenabled_page: null
           visible: true
-          enabled: false
-          has_studio: false
-          icon: ""
 
-        - key: scenario.sales_progress
-          parent_key: scenario
-          title: 销售业绩进展分析
-          order: 111
-          visible: true
-          enabled: false
-          has_studio: false
-          icon: ""
-
-        - key: scenario.sales_progress.weekly_decision
-          parent_key: scenario.sales_progress
-          title: 周度经营决策
-          order: 112
-          visible: true
+        - audience: null
           enabled: true
           has_studio: true
           icon: ""
+          key: business.weekly_insight
+          order: 11
+          parent_key: business
           target:
             type: route
-            value: "/v2/weekly-insight"
-
-        - key: scenario.sales_progress.report_history
-          parent_key: scenario.sales_progress
-          title: 历史报告
-          order: 113
+            value: "/v2/business/weekly-insight"
+          title: 周度经营决策
+          unenabled_page: null
           visible: true
+
+        - audience: null
           enabled: true
           has_studio: false
           icon: ""
+          key: business.history
+          order: 12
+          parent_key: business
           target:
             type: route
-            value: "/v2/history"
+            value: "/v2/business/history"
+          title: 历史报告
+          unenabled_page: null
+          visible: true
+
+        - audience: null
+          enabled: true
+          has_studio: false
+          icon: "ChartBarSidebarIcon"
+          key: account
+          order: 20
+          parent_key: null
+          target: null
+          title: 客户
+          unenabled_page: null
+          visible: true
+
+        - audience: null
+          enabled: true
+          has_studio: false
+          icon: ""
+          key: account.list
+          order: 21
+          parent_key: account
+          target:
+            type: route
+            value: "/v2/account"
+          title: 客户
+          unenabled_page: null
+          visible: true
+
+        - audience: null
+          enabled: true
+          has_studio: true
+          icon: "ChartArcsSidebarIcon"
+          key: opportunity
+          order: 30
+          parent_key: null
+          target: null
+          title: 商机
+          unenabled_page: null
+          visible: true
+
+        - audience: null
+          enabled: true
+          has_studio: false
+          icon: ""
+          key: opportunity.list
+          order: 31
+          parent_key: opportunity
+          target:
+            type: route
+            value: "/v2/opportunity"
+          title: 商机
+          unenabled_page: null
+          visible: true
+
+        - audience: null
+          enabled: true
+          has_studio: false
+          icon: "ChartBarSidebarIcon"
+          key: task
+          order: 40
+          parent_key: null
+          target: null
+          title: 任务
+          unenabled_page: null
+          visible: true
+
+        - audience: null
+          enabled: true
+          has_studio: false
+          icon: ""
+          key: task.query
+          order: 41
+          parent_key: task
+          target:
+            type: route
+            value: "/v2/task"
+          title: 任务
+          unenabled_page: null
+          visible: true
+
+        - audience: null
+          enabled: true
+          has_studio: false
+          icon: "ChartArcsSidebarIcon"
+          key: behavior
+          order: 50
+          parent_key: null
+          target: null
+          title: 行为
+          unenabled_page: null
+          visible: true
+
+        - audience: null
+          enabled: true
+          has_studio: false
+          icon: ""
+          key: behavior.query
+          order: 51
+          parent_key: behavior
+          target:
+            type: route
+            value: "/v2/behavior"
+          title: 行为查询
+          unenabled_page: null
+          visible: true
+
+        - audience: null
+          enabled: true
+          has_studio: false
+          icon: ""
+          key: behavior-entry
+          order: 53
+          parent_key: behavior
+          target:
+            type: route
+            value: "/v2/behavior-entry"
+          title: 行为录入
+          unenabled_page: null
+          visible: true
+
+        - audience: null
+          enabled: true
+          has_studio: true
+          icon: ""
+          key: playbook
+          order: 60
+          parent_key: null
+          target:
+            type: route
+            value: "/v2/playbook"
+          title: 销售打法
+          unenabled_page: null
+          visible: true
+
+        - audience: null
+          enabled: false
+          has_studio: false
+          icon: "MessageNavIcon"
+          key: ask
+          order: 70
+          parent_key: null
+          target:
+            type: route
+            value: "/v2/ask"
+          title: 智能问答
+          unenabled_page: null
+          visible: false
     data_type: dict
     description: "Frontend menu configuration. Includes menu visibility, enablement, audience filtering rules, and optional custom unenabled page."
     client: true

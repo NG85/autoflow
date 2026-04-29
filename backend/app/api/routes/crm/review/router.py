@@ -15,6 +15,7 @@ from sqlmodel import distinct, func, select
 from app.api.deps import CurrentUserDep, OptionalUserDep, SessionDep
 from app.api.routes.crm.models import (
     MyLatestReviewSessionOut,
+    ReviewBranchSnapshotMergeFromCacheOut,
     ReviewBranchSnapshotSubmitIn,
     ReviewBranchSnapshotSubmitOut,
     ReviewOppBranchSnapshotsQueryIn,
@@ -353,6 +354,34 @@ def submit_my_review_branch_snapshot_changes(
         user_id=str(user.id),
         updates=[u.model_dump(exclude_unset=True) for u in (payload.updates or [])],
     )
+
+
+@router.post(
+    "/crm/review/sessions/{session_id}/branch-snapshots/merge-from-cache",
+    response_model=ReviewBranchSnapshotMergeFromCacheOut,
+)
+def merge_branch_snapshots_from_cache_to_main(
+    session_id: str,
+    db_session: SessionDep,
+    user: CurrentUserDep,
+):
+    """
+    **合并草稿快照到正式数据**（仅本次 review 的负责人可调用）。
+
+    成员在编辑阶段通过「提交」保存的商机预测、金额、阶段、预计成交日等，以及对应的修改记录
+    （最后修改人、修改时间、版本计数等），由本接口写入**正式快照**，便于后续同步到 CRM 等系统。
+
+    - **权限**：非负责人返回 403。
+    - **返回**：见响应体——已扫描草稿行数、实际合并行数、因缺少正式快照行而跳过的行数等。
+    - **异常数据**：某条草稿在正式数据中无对应行时，该条会被跳过，服务端会记错误日志；不影响其余行。
+    - **审计**：每次调用会记录一条操作审计，便于排查与对账。
+    """
+    data = crm_review_service.merge_branch_snapshots_from_cache_to_main(
+        db_session,
+        session_id=session_id,
+        user_id=str(user.id),
+    )
+    return ReviewBranchSnapshotMergeFromCacheOut.model_validate(data)
 
 
 @router.post("/crm/review/sessions/{session_id}/review-phase")

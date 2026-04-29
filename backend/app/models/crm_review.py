@@ -739,6 +739,286 @@ class CRMReviewOppBranchSnapshot(CRMReviewOppBranchSnapshotBasicOut, table=True)
         ),
     )
 
+
+class CRMReviewOppBranchSnapshotCache(SQLModel, table=True):
+    """Same schema as CRMReviewOppBranchSnapshot; cached table."""
+
+    model_config = {"from_attributes": True}
+
+    __tablename__ = "crm_review_opp_branch_snapshot_cache"
+
+    unique_id: str = Field(
+        sa_column=Column(String(255), nullable=False),
+        description="Unique record ID",
+    )
+    opportunity_id: str = Field(
+        sa_column=Column(String(255), nullable=False),
+    )
+    opportunity_name: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+    account_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+    account_name: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+    owner_id: str = Field(
+        sa_column=Column(String(255), nullable=False),
+        description="Owner crm_user_id",
+    )
+    owner_name: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+    owner_department_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+    owner_department_name: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+
+    snapshot_period: str = Field(
+        sa_column=Column(String(32), nullable=False),
+        description="Period (e.g., 2026-W10)",
+    )
+
+    forecast_type: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+    forecast_amount: Optional[float] = Field(
+        default=None,
+        sa_column=Column(Numeric(18, 2)),
+    )
+    opportunity_stage: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+    expected_closing_date: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+
+    stage_stay: int = Field(
+        default=0,
+        sa_column=Column(Integer),
+    )
+
+    ai_commit: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(32)),
+    )
+    ai_stage: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+    ai_expected_closing_date: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+
+    modification_count: Optional[int] = Field(
+        default=0,
+        sa_column=Column(Integer, default=0),
+    )
+
+    id: Optional[int] = Field(
+        default=None,
+        primary_key=True,
+        description="主键ID（自增序列）",
+    )
+    snapshot_date: date = Field(
+        sa_column=Column(Date, nullable=False),
+    )
+
+    forecast_amount_source: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(64)),
+    )
+
+    # Baseline (frozen at T2)
+    baseline_forecast_type: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+    baseline_forecast_amount: Optional[float] = Field(
+        default=None,
+        sa_column=Column(Numeric(18, 2)),
+    )
+    baseline_forecast_amount_source: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(64)),
+    )
+    baseline_opportunity_stage: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+    baseline_expected_closing_date: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+    baseline_frozen_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime),
+    )
+
+    # CRM originals (at T1)
+    crm_forecast_type: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+    crm_forecast_amount: Optional[float] = Field(
+        default=None,
+        sa_column=Column(Numeric(18, 2)),
+    )
+    crm_forecast_amount_source: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(64)),
+    )
+    crm_opportunity_stage: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+    crm_expected_closing_date: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+
+    # AI Evaluation
+    ai_evaluated_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime),
+    )
+    ai_eval_source: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(10)),
+    )
+    ai_commit_1st: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(32)),
+    )
+    ai_stage_1st: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+    ai_expected_closing_date_1st: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+    ai_evaluated_1st_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime),
+    )
+    ai_commit_2nd: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(32)),
+    )
+    ai_stage_2nd: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+    ai_expected_closing_date_2nd: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+    ai_evaluated_2nd_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime),
+    )
+
+    # Context
+    expected_closing_quarter: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(50)),
+    )
+    close_date: Optional[date] = Field(
+        default=None,
+        sa_column=Column(Date),
+    )
+    is_closed: Optional[bool] = Field(
+        default=False,
+        sa_column=Column(Boolean, default=False),
+    )
+    customer_type: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+
+    # Change tracking
+    was_changed_to_commit: Optional[bool] = Field(
+        default=False,
+        sa_column=Column(Boolean, default=False),
+    )
+    was_modified: Optional[bool] = Field(
+        default=False,
+        sa_column=Column(Boolean, default=False),
+    )
+
+    # Modification tracking
+    last_modified_by: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+    last_modified_by_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+    initial_edit_modification_count: Optional[int] = Field(
+        default=0,
+        sa_column=Column(Integer, default=0),
+    )
+    meeting_edit_modification_count: Optional[int] = Field(
+        default=0,
+        sa_column=Column(Integer, default=0),
+    )
+
+    create_time: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(
+            DateTime, nullable=False, server_default=func.now()
+        ),
+        description="创建时间",
+    )
+    update_time: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(
+            DateTime,
+            nullable=False,
+            server_default=func.now(),
+            onupdate=func.now(),
+        ),
+        description="更新时间",
+    )
+
+    __table_args__ = (
+        Index(
+            "idx_review_opp_branch_snapshot_opp_period",
+            "opportunity_id",
+            "snapshot_period",
+            unique=True,
+        ),
+        Index(
+            "idx_review_opp_branch_snapshot_owner_period",
+            "owner_id",
+            "snapshot_period",
+        ),
+        Index(
+            "idx_review_opp_branch_snapshot_period",
+            "snapshot_period",
+        ),
+        Index(
+            "idx_review_opp_branch_snapshot_was_changed",
+            "was_changed_to_commit",
+        ),
+    )
+
+
 class CRMReviewKpiMetrics(SQLModel, table=True):
     """Structured KPI metrics per scope per review session with delta/rate"""
 

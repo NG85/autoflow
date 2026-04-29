@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 from sqlalchemy import case
+from sqlalchemy.orm import load_only
 from sqlmodel import Session, select, func
 
 from app.models.crm_review import (
@@ -19,6 +20,7 @@ from app.models.crm_review import (
     CRMReviewOppAuditLog,
     CRMReviewOppBranchSnapshot,
     CRMReviewOppBranchSnapshotBasicOut,
+    CRMReviewOppBranchSnapshotCache,
     CRMReviewOppRiskProgress,
     CRMReviewSession,
     REVIEW_BRANCH_SNAPSHOT_EDITABLE_FIELDS,
@@ -27,11 +29,14 @@ from app.models.crm_opportunities import CRMOpportunity
 from app.models.crm_system_configurations import CRMSystemConfiguration
 from app.repositories.crm_review_attendee import crm_review_attendee_repo
 from app.repositories.crm_review_audit import crm_review_opp_audit_log_repo
-from app.repositories.crm_review_branch_snapshot import crm_review_opp_branch_snapshot_repo
+from app.repositories.crm_review_branch_snapshot import crm_review_opp_branch_snapshot_cache_repo
 from app.repositories.crm_review_session import crm_review_session_repo
 from app.services.aldebaran_service import aldebaran_client
 
 logger = logging.getLogger(__name__)
+
+# Leader merge: keyset pagination on cache PK ``id`` (only orders rows within the cache table
+MERGE_CACHE_BATCH_SIZE = 500
 
 
 def _audit_json_default(obj: Any) -> str:
@@ -50,6 +55,47 @@ def _audit_json_default(obj: Any) -> str:
 
 
 EDITABLE_FIELDS = REVIEW_BRANCH_SNAPSHOT_EDITABLE_FIELDS
+
+# submit 写入 cache 的元数据；leader merge 回主表时可能与主表不一致，需一并按 cache 覆盖。
+_MERGE_SUBMIT_SYNC_FIELD_NAMES: tuple[str, ...] = tuple(
+    f
+    for f in (
+        "update_time",
+        "last_modified_by_id",
+        "last_modified_by",
+        "was_modified",
+        "modification_count",
+        "initial_edit_modification_count",
+        "meeting_edit_modification_count",
+    )
+    if f in CRMReviewOppBranchSnapshot.model_fields
+    and f in CRMReviewOppBranchSnapshotCache.model_fields
+)
+
+# merge_branch_snapshots_from_cache_to_main: SELECT 列裁剪（宽表时减少 IO / ORM 物化成本）
+_MERGE_CACHE_LOAD_COLUMNS: tuple[Any, ...] = (
+    CRMReviewOppBranchSnapshotCache.id,
+    CRMReviewOppBranchSnapshotCache.unique_id,
+    CRMReviewOppBranchSnapshotCache.opportunity_id,
+    CRMReviewOppBranchSnapshotCache.snapshot_period,
+    *(
+        getattr(CRMReviewOppBranchSnapshotCache, name)
+        for name in REVIEW_BRANCH_SNAPSHOT_EDITABLE_FIELDS
+    ),
+    *(getattr(CRMReviewOppBranchSnapshotCache, name) for name in _MERGE_SUBMIT_SYNC_FIELD_NAMES),
+)
+_MERGE_MAIN_LOAD_COLUMNS: tuple[Any, ...] = (
+    CRMReviewOppBranchSnapshot.id,
+    CRMReviewOppBranchSnapshot.unique_id,
+    CRMReviewOppBranchSnapshot.opportunity_id,
+    CRMReviewOppBranchSnapshot.snapshot_period,
+    CRMReviewOppBranchSnapshot.was_changed_to_commit,
+    *(
+        getattr(CRMReviewOppBranchSnapshot, name)
+        for name in REVIEW_BRANCH_SNAPSHOT_EDITABLE_FIELDS
+    ),
+    *(getattr(CRMReviewOppBranchSnapshot, name) for name in _MERGE_SUBMIT_SYNC_FIELD_NAMES),
+)
 
 _FORECAST_TYPE_RANK_BY_CONFIG_KEY: Dict[str, int] = {
     "commit": 0,
@@ -287,7 +333,7 @@ class CRMReviewService:
         *,
         session_id: str,
         snapshot_period: str,
-        items: List[CRMReviewOppBranchSnapshot],
+        items: List[Any],
     ) -> List[Dict[str, Any]]:
         if not items:
             return []
@@ -350,14 +396,17 @@ class CRMReviewService:
         return projected
 
     @staticmethod
-    def _build_forecast_type_rank_case(db_session: Session):
+    def _build_forecast_type_rank_case(
+        db_session: Session,
+        snapshot_cls: Any = CRMReviewOppBranchSnapshot,
+    ):
         """
         Sort key for forecast_type: commit (0) > upside (1) > closed_won (2).
         Aliases come from crm_system_configurations ForecastTypeMapping (config_value JSON arrays).
         snapshot.forecast_type matches one of those strings (e.g. 确定成单 -> commit).
         """
         a0, a1, a2 = _get_forecast_type_rank_alias_tuples_cached(db_session)
-        ft_col = CRMReviewOppBranchSnapshot.forecast_type
+        ft_col = snapshot_cls.forecast_type
         whens: List[Any] = []
         if a0:
             whens.append((ft_col.in_(a0), 0))
@@ -424,24 +473,25 @@ class CRMReviewService:
         *,
         session_id: str,
         snapshot_period: str,
+        snapshot_cls: Any = CRMReviewOppBranchSnapshot,
     ) -> Optional[Any]:
         k = str(key or "").strip()
         if not k:
             return None
         if k == "forecast_type":
-            return self._build_forecast_rank_case_for_col(db_session, CRMReviewOppBranchSnapshot.forecast_type)
+            return self._build_forecast_rank_case_for_col(db_session, snapshot_cls.forecast_type)
         if k == "ai_commit":
-            return self._build_forecast_rank_case_for_col(db_session, CRMReviewOppBranchSnapshot.ai_commit)
+            return self._build_forecast_rank_case_for_col(db_session, snapshot_cls.ai_commit)
         if k == "opportunity_stage":
-            return func.lower(func.coalesce(CRMReviewOppBranchSnapshot.opportunity_stage, ""))
+            return func.lower(func.coalesce(snapshot_cls.opportunity_stage, ""))
         if k == "ai_stage":
-            return func.lower(func.coalesce(CRMReviewOppBranchSnapshot.ai_stage, ""))
+            return func.lower(func.coalesce(snapshot_cls.ai_stage, ""))
         if k == "forecast_amount":
-            return func.coalesce(CRMReviewOppBranchSnapshot.forecast_amount, 0)
+            return func.coalesce(snapshot_cls.forecast_amount, 0)
         if k == "expected_closing_date":
-            return self._date_parse_expr(CRMReviewOppBranchSnapshot.expected_closing_date)
+            return self._date_parse_expr(snapshot_cls.expected_closing_date)
         if k == "ai_expected_closing_date":
-            return self._date_parse_expr(CRMReviewOppBranchSnapshot.ai_expected_closing_date)
+            return self._date_parse_expr(snapshot_cls.ai_expected_closing_date)
         if k in {"risk_count", "progress_count", "opp_summary_count"}:
             record_type = (
                 "RISK"
@@ -454,19 +504,23 @@ class CRMReviewService:
                     CRMReviewOppRiskProgress.session_id == session_id,
                     CRMReviewOppRiskProgress.snapshot_period == snapshot_period,
                     CRMReviewOppRiskProgress.record_type == record_type,
-                    CRMReviewOppRiskProgress.opportunity_id == CRMReviewOppBranchSnapshot.opportunity_id,
+                    CRMReviewOppRiskProgress.opportunity_id == snapshot_cls.opportunity_id,
                 )
-                .correlate(CRMReviewOppBranchSnapshot)
+                .correlate(snapshot_cls)
                 .scalar_subquery()
             )
         return None
 
-    def _default_snapshot_sort_order(self, db_session: Session) -> List[Any]:
-        ft_rank = self._build_forecast_type_rank_case(db_session)
+    def _default_snapshot_sort_order(
+        self,
+        db_session: Session,
+        snapshot_cls: Any = CRMReviewOppBranchSnapshot,
+    ) -> List[Any]:
+        ft_rank = self._build_forecast_type_rank_case(db_session, snapshot_cls=snapshot_cls)
         return [
-            func.coalesce(CRMReviewOppBranchSnapshot.owner_name, ""),
+            func.coalesce(snapshot_cls.owner_name, ""),
             ft_rank,
-            CRMReviewOppBranchSnapshot.forecast_amount.desc(),
+            snapshot_cls.forecast_amount.desc(),
         ]
 
     def _build_snapshot_sort_order(
@@ -476,9 +530,10 @@ class CRMReviewService:
         sorts: List[Tuple[str, str]],
         session_id: str,
         snapshot_period: str,
+        snapshot_cls: Any = CRMReviewOppBranchSnapshot,
     ) -> List[Any]:
         if not sorts:
-            return self._default_snapshot_sort_order(db_session)
+            return self._default_snapshot_sort_order(db_session, snapshot_cls=snapshot_cls)
 
         out: List[Any] = []
         for field, direction in sorts:
@@ -488,27 +543,32 @@ class CRMReviewService:
                 field,
                 session_id=session_id,
                 snapshot_period=snapshot_period,
+                snapshot_cls=snapshot_cls,
             )
             if expr is None:
                 continue
             out.append(expr.desc() if direction_desc else expr.asc())
 
         if not out:
-            return self._default_snapshot_sort_order(db_session)
+            return self._default_snapshot_sort_order(db_session, snapshot_cls=snapshot_cls)
 
-        out.append(func.coalesce(CRMReviewOppBranchSnapshot.owner_name, "").asc())
-        out.append(CRMReviewOppBranchSnapshot.id.desc())
+        out.append(func.coalesce(snapshot_cls.owner_name, "").asc())
+        out.append(snapshot_cls.id.desc())
         return out
 
     @staticmethod
-    def _group_field_and_label(group_by: str):
+    def _group_field_and_label(
+        group_by: str,
+        snapshot_cls: Any = CRMReviewOppBranchSnapshot,
+    ):
         gb = str(group_by or "owner").strip()
+        S = snapshot_cls
         if gb == "owner":
-            return gb, CRMReviewOppBranchSnapshot.owner_id, CRMReviewOppBranchSnapshot.owner_name
+            return gb, S.owner_id, S.owner_name
         if gb == "forecast_type":
-            return gb, CRMReviewOppBranchSnapshot.forecast_type, CRMReviewOppBranchSnapshot.forecast_type
+            return gb, S.forecast_type, S.forecast_type
         if gb == "opportunity_stage":
-            return gb, CRMReviewOppBranchSnapshot.opportunity_stage, CRMReviewOppBranchSnapshot.opportunity_stage
+            return gb, S.opportunity_stage, S.opportunity_stage
         raise HTTPException(status_code=422, detail="group_by must be one of: owner, forecast_type, opportunity_stage")
 
     def _resolve_session_scope(
@@ -557,12 +617,6 @@ class CRMReviewService:
             "submit_stats": submit_stats,
             "editable": editable,
         }
-
-    def _base_snapshot_stmt(self, *, owner_ids: List[str], snapshot_period: str):
-        return select(CRMReviewOppBranchSnapshot).where(
-            CRMReviewOppBranchSnapshot.owner_id.in_(owner_ids),
-            CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
-        )
 
     @staticmethod
     def _normalize_snapshot_filters(snapshot_filters: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -687,40 +741,42 @@ class CRMReviewService:
         *,
         session_id: str,
         snapshot_period: str,
+        snapshot_cls: Any = CRMReviewOppBranchSnapshot,
     ) -> None:
         """
         Apply normalized filters onto snapshot query conditions.
         """
+        S = snapshot_cls
         opportunity_ids = normalized_filters.get("opportunity_ids") or []
         if opportunity_ids:
-            base_where.append(CRMReviewOppBranchSnapshot.opportunity_id.in_(opportunity_ids))
+            base_where.append(S.opportunity_id.in_(opportunity_ids))
         opportunity_names = normalized_filters.get("opportunity_names") or []
         if opportunity_names:
-            base_where.append(CRMReviewOppBranchSnapshot.opportunity_name.in_(opportunity_names))
+            base_where.append(S.opportunity_name.in_(opportunity_names))
         owner_ids = normalized_filters.get("owner_ids") or []
         if owner_ids:
-            base_where.append(CRMReviewOppBranchSnapshot.owner_id.in_(owner_ids))
+            base_where.append(S.owner_id.in_(owner_ids))
         owner_names = normalized_filters.get("owner_names") or []
         if owner_names:
-            base_where.append(CRMReviewOppBranchSnapshot.owner_name.in_(owner_names))
+            base_where.append(S.owner_name.in_(owner_names))
         forecast_types = normalized_filters.get("forecast_types") or []
         if forecast_types:
-            base_where.append(CRMReviewOppBranchSnapshot.forecast_type.in_(forecast_types))
+            base_where.append(S.forecast_type.in_(forecast_types))
         opportunity_stages = normalized_filters.get("opportunity_stages") or []
         if opportunity_stages:
-            base_where.append(CRMReviewOppBranchSnapshot.opportunity_stage.in_(opportunity_stages))
+            base_where.append(S.opportunity_stage.in_(opportunity_stages))
         ai_commits = normalized_filters.get("ai_commits") or []
         if ai_commits:
-            base_where.append(CRMReviewOppBranchSnapshot.ai_commit.in_(ai_commits))
+            base_where.append(S.ai_commit.in_(ai_commits))
         ai_stages = normalized_filters.get("ai_stages") or []
         if ai_stages:
-            base_where.append(CRMReviewOppBranchSnapshot.ai_stage.in_(ai_stages))
+            base_where.append(S.ai_stage.in_(ai_stages))
         expected_closing_date_start = normalized_filters.get("expected_closing_date_start")
         if expected_closing_date_start:
             base_where.append(
                 func.coalesce(
-                    func.str_to_date(CRMReviewOppBranchSnapshot.expected_closing_date, "%Y-%m-%d %H:%i:%s"),
-                    func.str_to_date(CRMReviewOppBranchSnapshot.expected_closing_date, "%Y-%m-%d"),
+                    func.str_to_date(S.expected_closing_date, "%Y-%m-%d %H:%i:%s"),
+                    func.str_to_date(S.expected_closing_date, "%Y-%m-%d"),
                 )
                 >= func.coalesce(
                     func.str_to_date(expected_closing_date_start, "%Y-%m-%d %H:%i:%s"),
@@ -731,8 +787,8 @@ class CRMReviewService:
         if expected_closing_date_end:
             base_where.append(
                 func.coalesce(
-                    func.str_to_date(CRMReviewOppBranchSnapshot.expected_closing_date, "%Y-%m-%d %H:%i:%s"),
-                    func.str_to_date(CRMReviewOppBranchSnapshot.expected_closing_date, "%Y-%m-%d"),
+                    func.str_to_date(S.expected_closing_date, "%Y-%m-%d %H:%i:%s"),
+                    func.str_to_date(S.expected_closing_date, "%Y-%m-%d"),
                 )
                 <= func.coalesce(
                     func.str_to_date(expected_closing_date_end, "%Y-%m-%d %H:%i:%s"),
@@ -743,8 +799,8 @@ class CRMReviewService:
         if ai_expected_closing_date_start:
             base_where.append(
                 func.coalesce(
-                    func.str_to_date(CRMReviewOppBranchSnapshot.ai_expected_closing_date, "%Y-%m-%d %H:%i:%s"),
-                    func.str_to_date(CRMReviewOppBranchSnapshot.ai_expected_closing_date, "%Y-%m-%d"),
+                    func.str_to_date(S.ai_expected_closing_date, "%Y-%m-%d %H:%i:%s"),
+                    func.str_to_date(S.ai_expected_closing_date, "%Y-%m-%d"),
                 )
                 >= func.coalesce(
                     func.str_to_date(ai_expected_closing_date_start, "%Y-%m-%d %H:%i:%s"),
@@ -755,8 +811,8 @@ class CRMReviewService:
         if ai_expected_closing_date_end:
             base_where.append(
                 func.coalesce(
-                    func.str_to_date(CRMReviewOppBranchSnapshot.ai_expected_closing_date, "%Y-%m-%d %H:%i:%s"),
-                    func.str_to_date(CRMReviewOppBranchSnapshot.ai_expected_closing_date, "%Y-%m-%d"),
+                    func.str_to_date(S.ai_expected_closing_date, "%Y-%m-%d %H:%i:%s"),
+                    func.str_to_date(S.ai_expected_closing_date, "%Y-%m-%d"),
                 )
                 <= func.coalesce(
                     func.str_to_date(ai_expected_closing_date_end, "%Y-%m-%d %H:%i:%s"),
@@ -765,10 +821,10 @@ class CRMReviewService:
             )
         forecast_amount_min = normalized_filters.get("forecast_amount_min")
         if forecast_amount_min is not None:
-            base_where.append(CRMReviewOppBranchSnapshot.forecast_amount >= forecast_amount_min)
+            base_where.append(S.forecast_amount >= forecast_amount_min)
         forecast_amount_max = normalized_filters.get("forecast_amount_max")
         if forecast_amount_max is not None:
-            base_where.append(CRMReviewOppBranchSnapshot.forecast_amount <= forecast_amount_max)
+            base_where.append(S.forecast_amount <= forecast_amount_max)
         has_risk = normalized_filters.get("has_risk")
         if has_risk is not None:
             risk_opp_subq = (
@@ -781,9 +837,9 @@ class CRMReviewService:
                 .distinct()
             )
             if has_risk:
-                base_where.append(CRMReviewOppBranchSnapshot.opportunity_id.in_(risk_opp_subq))
+                base_where.append(S.opportunity_id.in_(risk_opp_subq))
             else:
-                base_where.append(CRMReviewOppBranchSnapshot.opportunity_id.not_in(risk_opp_subq))
+                base_where.append(S.opportunity_id.not_in(risk_opp_subq))
         has_progress = normalized_filters.get("has_progress")
         if has_progress is not None:
             progress_opp_subq = (
@@ -796,9 +852,9 @@ class CRMReviewService:
                 .distinct()
             )
             if has_progress:
-                base_where.append(CRMReviewOppBranchSnapshot.opportunity_id.in_(progress_opp_subq))
+                base_where.append(S.opportunity_id.in_(progress_opp_subq))
             else:
-                base_where.append(CRMReviewOppBranchSnapshot.opportunity_id.not_in(progress_opp_subq))
+                base_where.append(S.opportunity_id.not_in(progress_opp_subq))
 
     def get_my_edit_page_data(
         self,
@@ -825,20 +881,22 @@ class CRMReviewService:
             raise HTTPException(status_code=422, detail="no attendee crm_user_id in this review session")
         snapshot_period = scope["snapshot_period"]
         normalized_filters = self._normalize_snapshot_filters(snapshot_filters)
+        snap = CRMReviewOppBranchSnapshotCache
         base_where: List[Any] = [
-            CRMReviewOppBranchSnapshot.owner_id.in_(owner_ids),
-            CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
+            snap.owner_id.in_(owner_ids),
+            snap.snapshot_period == snapshot_period,
         ]
         self._append_snapshot_filters(
             base_where,
             normalized_filters,
             session_id=session_id,
             snapshot_period=snapshot_period,
+            snapshot_cls=snap,
         )
 
         total = int(
             db_session.exec(
-                select(func.count()).select_from(CRMReviewOppBranchSnapshot).where(*base_where)
+                select(func.count()).select_from(snap).where(*base_where)
             ).one()
         )
         norm_sorts = self._normalize_sorts_list(sorts)
@@ -847,9 +905,10 @@ class CRMReviewService:
             sorts=norm_sorts,
             session_id=session_id,
             snapshot_period=snapshot_period,
+            snapshot_cls=snap,
         )
         items = db_session.exec(
-            select(CRMReviewOppBranchSnapshot)
+            select(snap)
             .where(*base_where)
             .order_by(*order_by)
             .offset(offset)
@@ -891,15 +950,17 @@ class CRMReviewService:
         sort_by = first_sort[0] if first_sort else None
         direction_desc = first_sort[1] == "desc" if first_sort else False
 
+        snap = CRMReviewOppBranchSnapshotCache
         base_where: List[Any] = [
-            CRMReviewOppBranchSnapshot.owner_id.in_(scope["owner_ids"]),
-            CRMReviewOppBranchSnapshot.snapshot_period == scope["snapshot_period"],
+            snap.owner_id.in_(scope["owner_ids"]),
+            snap.snapshot_period == scope["snapshot_period"],
         ]
         self._append_snapshot_filters(
             base_where,
             normalized_filters,
             session_id=session_id,
             snapshot_period=scope["snapshot_period"],
+            snapshot_cls=snap,
         )
 
         def _group_order_by(cnt_expr: Any, key_expr: Any) -> List[Any]:
@@ -916,7 +977,7 @@ class CRMReviewService:
             primary = key_expr.desc() if direction_desc else key_expr.asc()
             return [primary, key_expr.asc()]
 
-        gb, field_col, label_col = self._group_field_and_label(group_by)
+        gb, field_col, label_col = self._group_field_and_label(group_by, snapshot_cls=snap)
         group_key_expr = func.coalesce(field_col, "")
         group_label_expr = func.coalesce(func.max(label_col), "")
         cnt_expr = func.count()
@@ -986,11 +1047,12 @@ class CRMReviewService:
         group_key = str(group_key or "")
         normalized_filters = self._normalize_snapshot_filters(snapshot_filters)
 
+        snap = CRMReviewOppBranchSnapshotCache
         base_where = [
-            CRMReviewOppBranchSnapshot.owner_id.in_(scope["owner_ids"]),
-            CRMReviewOppBranchSnapshot.snapshot_period == scope["snapshot_period"],
+            snap.owner_id.in_(scope["owner_ids"]),
+            snap.snapshot_period == scope["snapshot_period"],
         ]
-        gb, field_col, _ = self._group_field_and_label(group_by)
+        gb, field_col, _ = self._group_field_and_label(group_by, snapshot_cls=snap)
         if group_key == "__EMPTY__":
             base_where.append(func.coalesce(field_col, "") == "")
         else:
@@ -1000,11 +1062,12 @@ class CRMReviewService:
             normalized_filters,
             session_id=session_id,
             snapshot_period=scope["snapshot_period"],
+            snapshot_cls=snap,
         )
 
         total = int(
             db_session.exec(
-                select(func.count()).select_from(CRMReviewOppBranchSnapshot).where(*base_where)
+                select(func.count()).select_from(snap).where(*base_where)
             ).one()
         )
         norm_sorts = self._normalize_sorts_list(sorts)
@@ -1013,9 +1076,10 @@ class CRMReviewService:
             sorts=norm_sorts,
             session_id=session_id,
             snapshot_period=scope["snapshot_period"],
+            snapshot_cls=snap,
         )
         items = db_session.exec(
-            select(CRMReviewOppBranchSnapshot)
+            select(snap)
             .where(*base_where)
             .order_by(*order_by)
             .offset(offset)
@@ -1348,18 +1412,19 @@ class CRMReviewService:
         if not normalized:
             raise HTTPException(status_code=422, detail="no valid updates")
 
+        snap_repo = crm_review_opp_branch_snapshot_cache_repo
         if is_leader:
             owner_crm_user_ids = crm_review_attendee_repo.get_crm_user_ids_by_session(
                 db_session, session_id=session_id
             )
-            rows = crm_review_opp_branch_snapshot_repo.get_by_owner_ids_period_and_snapshot_unique_ids(
+            rows = snap_repo.get_by_owner_ids_period_and_snapshot_unique_ids(
                 db_session,
                 owner_crm_user_ids=owner_crm_user_ids,
                 snapshot_period=snapshot_period,
                 snapshot_unique_ids=snapshot_unique_ids,
             )
         else:
-            rows = crm_review_opp_branch_snapshot_repo.get_by_owner_period_and_snapshot_unique_ids(
+            rows = snap_repo.get_by_owner_period_and_snapshot_unique_ids(
                 db_session,
                 owner_crm_user_id=owner_crm_user_id,
                 snapshot_period=snapshot_period,
@@ -1508,6 +1573,218 @@ class CRMReviewService:
 
         submit_stats = crm_review_attendee_repo.get_submit_stats(db_session, session_id=session_id)
         return {"updated_count": updated_count, "submit_stats": submit_stats}
+
+    def merge_branch_snapshots_from_cache_to_main(
+        self,
+        db_session: Session,
+        *,
+        session_id: str,
+        user_id: str,
+    ) -> dict:
+        """
+        Session leader only: cache mirrors main; sales change submit-whitelisted fields
+        and submit metadata on cache. This merge copies those columns from cache → main
+        by (opportunity_id, snapshot_period). Each cache row should have a matching main
+        row; rows without a match are skipped and logged at error level (no HTTP error).
+
+        Cache rows are read in batches (keyset on cache PK ``id``) to avoid loading the full
+        result set at once when data volume is large.
+        """
+        session = crm_review_session_repo.get_by_unique_id(db_session, session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="review session not found")
+
+        attendee = crm_review_attendee_repo.get_by_session_and_user_id(
+            db_session, session_id=session_id, user_id=user_id
+        )
+        if not attendee:
+            raise HTTPException(status_code=403, detail="user is not attendee of this review session")
+        if not bool(getattr(attendee, "is_leader", False)):
+            raise HTTPException(status_code=403, detail="only session leader can merge cache into main snapshots")
+
+        snapshot_period = str(session.period or "").strip()
+        if not snapshot_period:
+            raise HTTPException(status_code=422, detail="review session period is empty")
+
+        owner_ids = [
+            str(x).strip()
+            for x in crm_review_attendee_repo.get_crm_user_ids_by_session(
+                db_session, session_id=session_id
+            )
+            if str(x or "").strip()
+        ]
+        if not owner_ids:
+            raise HTTPException(status_code=422, detail="no attendee crm_user_id in this review session")
+
+        Cache = CRMReviewOppBranchSnapshotCache
+        Main = CRMReviewOppBranchSnapshot
+
+        missing_keys: list[tuple[str, str]] = []
+        main_updated = 0
+        audit_ops: List[Dict[str, Any]] = []
+        now = datetime.now(timezone.utc)
+        cache_rows_scanned = 0
+        last_cache_id = 0
+
+        while True:
+            batch_where: List[Any] = [
+                Cache.snapshot_period == snapshot_period,
+                Cache.owner_id.in_(owner_ids),
+            ]
+            if last_cache_id:
+                batch_where.append(Cache.id > last_cache_id)
+            batch = list(
+                db_session.exec(
+                    select(Cache)
+                    .options(load_only(*_MERGE_CACHE_LOAD_COLUMNS))
+                    .where(*batch_where)
+                    .order_by(Cache.id.asc())
+                    .limit(MERGE_CACHE_BATCH_SIZE)
+                ).all()
+            )
+            if not batch:
+                break
+            cache_rows_scanned += len(batch)
+            batch_ids_int = [int(i) for i in (getattr(r, "id", None) for r in batch) if i is not None]
+            if not batch_ids_int:
+                logger.error(
+                    "merge cache→main: cache batch rows missing integer id, cannot keyset-paginate. "
+                    "session_id=%s snapshot_period=%s batch_size=%s",
+                    session_id,
+                    snapshot_period,
+                    len(batch),
+                )
+                break
+            last_cache_id = max(batch_ids_int)
+
+            opp_ids = sorted(
+                {
+                    str(getattr(c, "opportunity_id", "") or "").strip()
+                    for c in batch
+                    if str(getattr(c, "opportunity_id", "") or "").strip()
+                }
+            )
+            main_by_opp_period: dict[tuple[str, str], Any] = {}
+            if opp_ids:
+                main_rows = list(
+                    db_session.exec(
+                        select(Main)
+                        .options(load_only(*_MERGE_MAIN_LOAD_COLUMNS))
+                        .where(
+                            Main.snapshot_period == snapshot_period,
+                            Main.opportunity_id.in_(opp_ids),
+                        )
+                    ).all()
+                )
+                for m in main_rows:
+                    oid_m = str(getattr(m, "opportunity_id", "") or "").strip()
+                    per_m = str(getattr(m, "snapshot_period", "") or "").strip()
+                    if oid_m and per_m:
+                        main_by_opp_period[(oid_m, per_m)] = m
+
+            for c in batch:
+                oid = str(getattr(c, "opportunity_id", "") or "").strip()
+                per = str(getattr(c, "snapshot_period", "") or "").strip()
+                if not oid or not per:
+                    continue
+                key = (oid, per)
+                target = main_by_opp_period.get(key)
+                if target is None:
+                    missing_keys.append(key)
+                    continue
+                before_editable = {f: getattr(target, f) for f in REVIEW_BRANCH_SNAPSHOT_EDITABLE_FIELDS}
+                cache_editable = {f: getattr(c, f) for f in REVIEW_BRANCH_SNAPSHOT_EDITABLE_FIELDS}
+                before_submit_sync = {
+                    f: getattr(target, f) for f in _MERGE_SUBMIT_SYNC_FIELD_NAMES
+                }
+                cache_submit_sync = {f: getattr(c, f) for f in _MERGE_SUBMIT_SYNC_FIELD_NAMES}
+                if before_editable == cache_editable and before_submit_sync == cache_submit_sync:
+                    continue
+                for f in REVIEW_BRANCH_SNAPSHOT_EDITABLE_FIELDS:
+                    setattr(target, f, getattr(c, f))
+                for f in _MERGE_SUBMIT_SYNC_FIELD_NAMES:
+                    setattr(target, f, getattr(c, f))
+                target.was_changed_to_commit = True
+                db_session.add(target)
+                main_updated += 1
+                audit_ops.append(
+                    {
+                        "op": "update",
+                        "opportunity_id": oid,
+                        "main_unique_id": str(getattr(target, "unique_id", "") or ""),
+                        "cache_unique_id": str(getattr(c, "unique_id", "") or ""),
+                        "before_editable": before_editable,
+                        "after_editable": cache_editable,
+                        "before_submit_sync": before_submit_sync,
+                        "after_submit_sync": cache_submit_sync,
+                    }
+                )
+
+        if missing_keys:
+            uniq_opp = sorted({k[0] for k in missing_keys})
+            logger.error(
+                "merge cache→main: %s cache row(s) have no matching main snapshot (skipped). "
+                "session_id=%s snapshot_period=%s distinct_opportunity_id_count=%s "
+                "sample_opportunity_ids=%s sample_keys=%s",
+                len(missing_keys),
+                session_id,
+                snapshot_period,
+                len(uniq_opp),
+                uniq_opp[:30],
+                missing_keys[:15],
+            )
+
+        db_session.commit()
+
+        audit = CRMReviewOppAuditLog(
+            session_id=str(session.unique_id),
+            change_scope="leader_merge_cache_to_main",
+            updated_at=now,
+            created_at=now,
+            old_value=json.dumps(
+                {
+                    "snapshot_period": snapshot_period,
+                    "event": "leader_merge_cache_to_main",
+                },
+                ensure_ascii=False,
+            ),
+            new_value=json.dumps(
+                {
+                    "snapshot_period": snapshot_period,
+                    "summary": {
+                        "cache_rows_scanned": cache_rows_scanned,
+                        "main_rows_updated": main_updated,
+                        "skipped_cache_rows_no_main": len(missing_keys),
+                    },
+                    "ops": audit_ops,
+                },
+                ensure_ascii=False,
+                default=_audit_json_default,
+            ),
+            change_type="UPDATE",
+            edit_phase=str(session.stage),
+            updated_by=str(attendee.user_name or "unknown"),
+            updated_by_id=str(user_id),
+        )
+        try:
+            crm_review_opp_audit_log_repo.create_audit(db_session, audit)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "crm_review_opp_audit_log write failed after merge (ignored): session_id=%s user_id=%s err=%s",
+                session_id,
+                user_id,
+                e,
+                exc_info=True,
+            )
+            db_session.rollback()
+
+        return {
+            "session_id": str(session.unique_id),
+            "snapshot_period": snapshot_period,
+            "cache_rows_scanned": cache_rows_scanned,
+            "main_rows_updated": main_updated,
+            "skipped_cache_rows_no_main": len(missing_keys),
+        }
 
     def recalculate_forecast_aggregates(
         self,
