@@ -4,7 +4,7 @@ from typing import Any, Iterable, List
 
 from sqlmodel import Session, select, func
 
-from app.models.crm_review import CRMReviewOppBranchSnapshot
+from app.models.crm_review import CRMReviewOppBranchSnapshot, CRMReviewOppBranchSnapshotCache
 from app.repositories.base_repo import BaseRepo
 
 
@@ -16,12 +16,13 @@ class CRMReviewOppBranchSnapshotRepo(BaseRepo):
     ) -> int:
         if not owner_crm_user_id or not snapshot_period:
             return 0
+        M = self.model_cls
         # count(*) over the specific owner+period scope
         return int(
             db_session.exec(
                 select(func.count()).where(
-                    CRMReviewOppBranchSnapshot.owner_id == owner_crm_user_id,
-                    CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
+                    M.owner_id == owner_crm_user_id,
+                    M.snapshot_period == snapshot_period,
                 )
             ).one()
         )
@@ -34,16 +35,17 @@ class CRMReviewOppBranchSnapshotRepo(BaseRepo):
         snapshot_period: str,
         offset: int,
         limit: int,
-    ) -> List[CRMReviewOppBranchSnapshot]:
+    ) -> List[Any]:
         if not owner_crm_user_id or not snapshot_period:
             return []
         if limit <= 0:
             return []
         offset = max(offset, 0)
+        M = self.model_cls
         return db_session.exec(
-            select(CRMReviewOppBranchSnapshot).where(
-                CRMReviewOppBranchSnapshot.owner_id == owner_crm_user_id,
-                CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
+            select(M).where(
+                M.owner_id == owner_crm_user_id,
+                M.snapshot_period == snapshot_period,
             ).offset(offset).limit(limit)
         ).all()
 
@@ -57,11 +59,12 @@ class CRMReviewOppBranchSnapshotRepo(BaseRepo):
         ids = [str(x).strip() for x in (owner_crm_user_ids or []) if x and str(x).strip()]
         if not ids or not snapshot_period:
             return 0
+        M = self.model_cls
         return int(
             db_session.exec(
                 select(func.count()).where(
-                    CRMReviewOppBranchSnapshot.owner_id.in_(ids),
-                    CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
+                    M.owner_id.in_(ids),
+                    M.snapshot_period == snapshot_period,
                 )
             ).one()
         )
@@ -75,21 +78,22 @@ class CRMReviewOppBranchSnapshotRepo(BaseRepo):
         offset: int,
         limit: int,
         forecast_type_rank_case: Any,
-    ) -> List[CRMReviewOppBranchSnapshot]:
+    ) -> List[Any]:
         ids = [str(x).strip() for x in (owner_crm_user_ids or []) if x and str(x).strip()]
         if not ids or not snapshot_period or limit <= 0:
             return []
         offset = max(offset, 0)
+        M = self.model_cls
         return db_session.exec(
-            select(CRMReviewOppBranchSnapshot)
+            select(M)
             .where(
-                CRMReviewOppBranchSnapshot.owner_id.in_(ids),
-                CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
+                M.owner_id.in_(ids),
+                M.snapshot_period == snapshot_period,
             )
             .order_by(
-                func.coalesce(CRMReviewOppBranchSnapshot.owner_name, ""),
+                func.coalesce(M.owner_name, ""),
                 forecast_type_rank_case,
-                CRMReviewOppBranchSnapshot.forecast_amount.desc(),
+                M.forecast_amount.desc(),
             )
             .offset(offset)
             .limit(limit)
@@ -102,15 +106,16 @@ class CRMReviewOppBranchSnapshotRepo(BaseRepo):
         owner_crm_user_id: str,
         snapshot_period: str,
         snapshot_unique_ids: Iterable[str],
-    ) -> List[CRMReviewOppBranchSnapshot]:
+    ) -> List[Any]:
         ids = [str(x).strip() for x in (snapshot_unique_ids or []) if x and str(x).strip()]
         if not owner_crm_user_id or not snapshot_period or not ids:
             return []
+        M = self.model_cls
         return db_session.exec(
-            select(CRMReviewOppBranchSnapshot).where(
-                CRMReviewOppBranchSnapshot.owner_id == owner_crm_user_id,
-                CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
-                CRMReviewOppBranchSnapshot.unique_id.in_(ids),
+            select(M).where(
+                M.owner_id == owner_crm_user_id,
+                M.snapshot_period == snapshot_period,
+                M.unique_id.in_(ids),
             )
         ).all()
 
@@ -121,19 +126,27 @@ class CRMReviewOppBranchSnapshotRepo(BaseRepo):
         owner_crm_user_ids: Iterable[str],
         snapshot_period: str,
         snapshot_unique_ids: Iterable[str],
-    ) -> List[CRMReviewOppBranchSnapshot]:
+    ) -> List[Any]:
         ids = [str(x).strip() for x in (snapshot_unique_ids or []) if x and str(x).strip()]
         owner_ids = [str(x).strip() for x in (owner_crm_user_ids or []) if x and str(x).strip()]
         if not owner_ids or not snapshot_period or not ids:
             return []
+        M = self.model_cls
         return db_session.exec(
-            select(CRMReviewOppBranchSnapshot).where(
-                CRMReviewOppBranchSnapshot.owner_id.in_(owner_ids),
-                CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
-                CRMReviewOppBranchSnapshot.unique_id.in_(ids),
+            select(M).where(
+                M.owner_id.in_(owner_ids),
+                M.snapshot_period == snapshot_period,
+                M.unique_id.in_(ids),
             )
         ).all()
 
 
 crm_review_opp_branch_snapshot_repo = CRMReviewOppBranchSnapshotRepo()
+
+
+class CRMReviewOppBranchSnapshotCacheRepo(CRMReviewOppBranchSnapshotRepo):
+    model_cls = CRMReviewOppBranchSnapshotCache
+
+
+crm_review_opp_branch_snapshot_cache_repo = CRMReviewOppBranchSnapshotCacheRepo()
 

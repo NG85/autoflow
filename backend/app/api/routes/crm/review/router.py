@@ -15,6 +15,7 @@ from sqlmodel import distinct, func, select
 from app.api.deps import CurrentUserDep, OptionalUserDep, SessionDep
 from app.api.routes.crm.models import (
     MyLatestReviewSessionOut,
+    ReviewBranchSnapshotMergeFromCacheOut,
     ReviewBranchSnapshotSubmitIn,
     ReviewBranchSnapshotSubmitOut,
     ReviewOppBranchSnapshotsQueryIn,
@@ -353,6 +354,31 @@ def submit_my_review_branch_snapshot_changes(
         user_id=str(user.id),
         updates=[u.model_dump(exclude_unset=True) for u in (payload.updates or [])],
     )
+
+
+@router.post(
+    "/crm/review/sessions/{session_id}/branch-snapshots/merge-from-cache",
+    response_model=ReviewBranchSnapshotMergeFromCacheOut,
+)
+def merge_branch_snapshots_from_cache_to_main(
+    session_id: str,
+    db_session: SessionDep,
+    user: CurrentUserDep,
+):
+    """
+    仅 session 负责人：cache 最初为主表镜像，销售在 cache 上改动的业务字段与 submit 白名单一致
+    （预测类型、金额、商机阶段、预计成交日期），以及 submit 写入的修改元数据（如 ``update_time``、
+    ``last_modified_by*``、``was_modified``、``modification_count``、``*_edit_modification_count``）
+    按 ``opportunity_id`` + ``snapshot_period`` 写回主表；
+    主表须已存在对应行（cache 仅为镜像上的修改）。若有 cache 行无主表行则跳过合并并打错误日志。每次调用在 ``crm_review_opp_audit_log`` 写一条审计
+    （``change_scope``: ``leader_merge_cache_to_main``）。供主表再回写 CRM 等外部系统前调用。
+    """
+    data = crm_review_service.merge_branch_snapshots_from_cache_to_main(
+        db_session,
+        session_id=session_id,
+        user_id=str(user.id),
+    )
+    return ReviewBranchSnapshotMergeFromCacheOut.model_validate(data)
 
 
 @router.post("/crm/review/sessions/{session_id}/review-phase")
