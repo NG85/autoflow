@@ -366,12 +366,15 @@ def merge_branch_snapshots_from_cache_to_main(
     user: CurrentUserDep,
 ):
     """
-    仅 session 负责人：cache 最初为主表镜像，销售在 cache 上改动的业务字段与 submit 白名单一致
-    （预测类型、金额、商机阶段、预计成交日期），以及 submit 写入的修改元数据（如 ``update_time``、
-    ``last_modified_by*``、``was_modified``、``modification_count``、``*_edit_modification_count``）
-    按 ``opportunity_id`` + ``snapshot_period`` 写回主表；
-    主表须已存在对应行（cache 仅为镜像上的修改）。若有 cache 行无主表行则跳过合并并打错误日志。每次调用在 ``crm_review_opp_audit_log`` 写一条审计
-    （``change_scope``: ``leader_merge_cache_to_main``）。供主表再回写 CRM 等外部系统前调用。
+    **合并草稿快照到正式数据**（仅本次 review 的负责人可调用）。
+
+    成员在编辑阶段通过「提交」保存的商机预测、金额、阶段、预计成交日等，以及对应的修改记录
+    （最后修改人、修改时间、版本计数等），由本接口写入**正式快照**，便于后续同步到 CRM 等系统。
+
+    - **权限**：非负责人返回 403。
+    - **返回**：见响应体——已扫描草稿行数、实际合并行数、因缺少正式快照行而跳过的行数等。
+    - **异常数据**：某条草稿在正式数据中无对应行时，该条会被跳过，服务端会记错误日志；不影响其余行。
+    - **审计**：每次调用会记录一条操作审计，便于排查与对账。
     """
     data = crm_review_service.merge_branch_snapshots_from_cache_to_main(
         db_session,
