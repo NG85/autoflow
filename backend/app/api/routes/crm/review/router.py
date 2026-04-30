@@ -99,14 +99,12 @@ def _require_session_leader_or_viewer(
     user: CurrentUserDep,
     detail: str,
     viewer_role_cache: Optional[Dict[str, bool]] = None,
-) -> CRMReviewAttendee:
-    attendee = _get_session_attendee_or_403(
-        db_session,
-        session_id=session_id,
-        user=user,
-    )
+) -> Optional[CRMReviewAttendee]:
+    if _has_review_session_viewer_permission(user, viewer_role_cache):
+        return None
+    attendee = _get_session_attendee_or_403(db_session, session_id=session_id, user=user)
     is_leader = bool(getattr(attendee, "is_leader", False))
-    if not (is_leader or _has_review_session_viewer_permission(user, viewer_role_cache)):
+    if not is_leader:
         raise HTTPException(status_code=403, detail=detail)
     return attendee
 
