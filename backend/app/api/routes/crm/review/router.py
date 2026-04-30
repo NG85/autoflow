@@ -55,10 +55,60 @@ from app.repositories.crm_review_attendee import crm_review_attendee_repo
 from app.repositories.crm_review_kpi_metrics import crm_review_kpi_metrics_repo
 from app.repositories.crm_review_session import crm_review_session_repo
 from app.services.crm_review_service import crm_review_service
+from app.services.oauth_service import oauth_client
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["crm", "crm/review"])
+
+
+def _has_review_session_viewer_permission(user: Any, _cache: Optional[Dict[str, bool]] = None) -> bool:
+    """
+    Check viewer role with optional per-request cache.
+    """
+    cache_key = f"viewer_permission:{getattr(user, 'id', '')}"
+    if _cache is not None and cache_key in _cache:
+        return bool(_cache[cache_key])
+    result = oauth_client.check_user_has_permission(
+        user_id=user.id,
+        permission="review_session:all:view",
+    )
+    if _cache is not None:
+        _cache[cache_key] = bool(result)
+    return bool(result)
+
+
+def _get_session_attendee_or_403(
+    db_session: SessionDep,
+    *,
+    session_id: str,
+    user: CurrentUserDep,
+) -> CRMReviewAttendee:
+    attendee = crm_review_attendee_repo.get_by_session_and_user_id(
+        db_session, session_id=session_id, user_id=str(user.id)
+    )
+    if not attendee:
+        raise HTTPException(status_code=403, detail="user is not attendee of this review session")
+    return attendee
+
+
+def _require_session_leader_or_viewer(
+    db_session: SessionDep,
+    *,
+    session_id: str,
+    user: CurrentUserDep,
+    detail: str,
+    viewer_role_cache: Optional[Dict[str, bool]] = None,
+) -> CRMReviewAttendee:
+    attendee = _get_session_attendee_or_403(
+        db_session,
+        session_id=session_id,
+        user=user,
+    )
+    is_leader = bool(getattr(attendee, "is_leader", False))
+    if not (is_leader or _has_review_session_viewer_permission(user, viewer_role_cache)):
+        raise HTTPException(status_code=403, detail=detail)
+    return attendee
 
 
 @router.post("/crm/review/sessions/{session_id}/my-opp-branch-snapshots")
@@ -71,7 +121,7 @@ def query_my_review_opp_branch_snapshots(
     """
     商机快照分页列表（不分组）。
     - 返回结构与 ``snapshot-group-data`` 一致，只是没有 ``group_by`` / ``group_key``。
-    - 可见范围：普通成员只看本人；负责人看本次 review 的全部成员。支持筛选、排序、字段级别；``sorts`` 未传或空时默认：负责人 → 预测类型 → 金额（降序）。
+    - 可见范围：普通成员只看本人；负责人和有 ``review_session:all:view`` 权限的用户看本次 review 的全部成员。支持筛选、排序、字段级别；``sorts`` 未传或空时默认：负责人 → 预测类型 → 金额（降序）。
     - 排序：请求体 ``sorts`` 为按优先级排列的多字段排序。
     - 需要 session 信息、提交统计时请先调 ``snapshot-groups``。
     """
@@ -99,7 +149,7 @@ def query_review_snapshot_groups(
 ) -> ReviewSnapshotGroupsOut:
     """
     分组汇总：各分组的 key、名称、数量，以及本次 review 的信息、提交统计、是否可编辑等（不含明细行）。
-    - 可见范围：成员只看自己；负责人看本次 review 的全部成员。
+    - 可见范围：成员只看自己；负责人和有 ``review_session:all:view`` 权限的用户看本次 review 的全部成员。
     - ``group_by``：owner / forecast_type / opportunity_stage。
     - 可先筛选再分组；``sorts`` 仅第一项用于分组行顺序，未传或空则按分组键升序。
     """
@@ -125,7 +175,7 @@ def query_review_snapshot_group_data(
     user: CurrentUserDep,
 ):
     """
-    某一分组下的商机快照分页列表。可见范围同 ``snapshot-groups``。
+    某一分组下的商机快照分页列表。可见范围同 ``snapshot-groups``（成员只看自己；负责人和有 ``review_session:all:view`` 权限的用户看全部成员）。
     - ``group_key``：按负责人传 owner_id；按预测/阶段传字段值，空值用 ``__EMPTY__``。
     - 支持筛选、排序、字段级别；``sorts`` 未传或空时默认：负责人 → 预测类型 → 金额（降序）。
     """
@@ -194,16 +244,21 @@ def query_my_latest_review_session(
 ) -> MyLatestReviewSessionOut:
     """
     当前用户参与的、汇报日最新的一场 review 的 session id；没有则为 null。
+    若当前用户有 ``review_session:all:view`` 权限，则返回全量 review 中最新的一场。
     """
-    row = db_session.exec(
-        select(CRMReviewSession.unique_id)
-        .join(
-            CRMReviewAttendee,
-            CRMReviewAttendee.session_id == CRMReviewSession.unique_id,
+    role_cache: Dict[str, bool] = {}
+    is_viewer = _has_review_session_viewer_permission(user, role_cache)
+    stmt = select(CRMReviewSession.unique_id)
+    if not is_viewer:
+        stmt = (
+            stmt.join(
+                CRMReviewAttendee,
+                CRMReviewAttendee.session_id == CRMReviewSession.unique_id,
+            )
+            .where(CRMReviewAttendee.user_id == str(user.id))
         )
-        .where(CRMReviewAttendee.user_id == str(user.id))
-        .order_by(CRMReviewSession.report_date.desc(), CRMReviewSession.create_time.desc())
-        .limit(1)
+    row = db_session.exec(
+        stmt.order_by(CRMReviewSession.report_date.desc(), CRMReviewSession.create_time.desc()).limit(1)
     ).first()
     return MyLatestReviewSessionOut(review_session_id=str(row) if row else None)
 
@@ -217,35 +272,51 @@ def query_my_review_session_history(
 ) -> ReviewSessionHistoryListOut:
     """
     当前用户参与过的 review 列表（分页），从新到旧。``size`` 最大 200。
+    若当前用户有 ``review_session:all:view`` 权限，则返回全量 review 列表。
     """
     page = max(int(page or 1), 1)
     size = max(min(int(size or 20), 200), 1)
     offset = (page - 1) * size
+    role_cache: Dict[str, bool] = {}
+    is_viewer = _has_review_session_viewer_permission(user, role_cache)
 
-    total = int(
-        db_session.exec(
-            select(func.count(distinct(CRMReviewSession.unique_id)))
-            .select_from(CRMReviewSession)
+    if is_viewer:
+        total = int(
+            db_session.exec(
+                select(func.count()).select_from(CRMReviewSession)
+            ).one()
+            or 0
+        )
+        rows = db_session.exec(
+            select(CRMReviewSession)
+            .order_by(CRMReviewSession.report_date.desc(), CRMReviewSession.create_time.desc())
+            .offset(offset)
+            .limit(size)
+        ).all()
+    else:
+        total = int(
+            db_session.exec(
+                select(func.count(distinct(CRMReviewSession.unique_id)))
+                .select_from(CRMReviewSession)
+                .join(
+                    CRMReviewAttendee,
+                    CRMReviewAttendee.session_id == CRMReviewSession.unique_id,
+                )
+                .where(CRMReviewAttendee.user_id == str(user.id))
+            ).one()
+            or 0
+        )
+        rows = db_session.exec(
+            select(CRMReviewSession)
             .join(
                 CRMReviewAttendee,
                 CRMReviewAttendee.session_id == CRMReviewSession.unique_id,
             )
             .where(CRMReviewAttendee.user_id == str(user.id))
-        ).one()
-        or 0
-    )
-
-    rows = db_session.exec(
-        select(CRMReviewSession)
-        .join(
-            CRMReviewAttendee,
-            CRMReviewAttendee.session_id == CRMReviewSession.unique_id,
-        )
-        .where(CRMReviewAttendee.user_id == str(user.id))
-        .order_by(CRMReviewSession.report_date.desc(), CRMReviewSession.create_time.desc())
-        .offset(offset)
-        .limit(size)
-    ).all()
+            .order_by(CRMReviewSession.report_date.desc(), CRMReviewSession.create_time.desc())
+            .offset(offset)
+            .limit(size)
+        ).all()
 
     items: List[ReviewSessionHistoryItemOut] = [
         ReviewSessionHistoryItemOut(
@@ -420,11 +491,11 @@ def update_review_session_phase(
     if not session:
         raise HTTPException(status_code=404, detail="review session not found")
 
-    attendee = crm_review_attendee_repo.get_by_session_and_user_id(
-        db_session, session_id=session_id, user_id=str(user.id)
+    attendee = _get_session_attendee_or_403(
+        db_session,
+        session_id=session_id,
+        user=user,
     )
-    if not attendee:
-        raise HTTPException(status_code=403, detail="user is not attendee of this review session")
     if not bool(getattr(attendee, "is_leader", False)):
         raise HTTPException(status_code=403, detail="only session leader can update review_phase")
 
@@ -454,19 +525,20 @@ def query_review_session_kpi_metrics(
     calc_phase: Optional[str] = None,
 ) -> ReviewSessionKpiMetricsOut:
     """
-    本次 review 的 KPI 指标列表，仅负责人可调。可用 ``scope_type``、``calc_phase`` 筛选。
+    本次 review 的 KPI 指标列表，负责人或有 ``review_session:all:view`` 权限的用户可调。可用 ``scope_type``、``calc_phase`` 筛选。
     """
     session = crm_review_session_repo.get_by_unique_id(db_session, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="review session not found")
 
-    attendee = crm_review_attendee_repo.get_by_session_and_user_id(
-        db_session, session_id=session_id, user_id=str(user.id)
+    role_cache: Dict[str, bool] = {}
+    _require_session_leader_or_viewer(
+        db_session,
+        session_id=session_id,
+        user=user,
+        detail="only session leader or review_session:all:view permission can view kpi metrics",
+        viewer_role_cache=role_cache,
     )
-    if not attendee:
-        raise HTTPException(status_code=403, detail="user is not attendee of this review session")
-    if not bool(getattr(attendee, "is_leader", False)):
-        raise HTTPException(status_code=403, detail="only session leader can view kpi metrics")
 
     rows = crm_review_kpi_metrics_repo.list_by_session(
         db_session,
@@ -518,20 +590,21 @@ def query_review_session_insights(
     fields_level: Literal["basic", "full"] = "basic",
 ) -> Union[ReviewSessionInsightsBasicOut, ReviewSessionInsightsOut]:
     """
-    部门视角的风险与进展洞察，仅负责人可调。风险为列表，进展按类别分组。
+    部门视角的风险与进展洞察，负责人或有 ``review_session:all:view`` 权限的用户可调。风险为列表，进展按类别分组。
     查询参数 ``fields_level``：basic（默认）或 full，字段多少不同。
     """
     session = crm_review_session_repo.get_by_unique_id(db_session, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="review session not found")
 
-    attendee = crm_review_attendee_repo.get_by_session_and_user_id(
-        db_session, session_id=session_id, user_id=str(user.id)
+    role_cache: Dict[str, bool] = {}
+    _require_session_leader_or_viewer(
+        db_session,
+        session_id=session_id,
+        user=user,
+        detail="only session leader or review_session:all:view permission can view insights",
+        viewer_role_cache=role_cache,
     )
-    if not attendee:
-        raise HTTPException(status_code=403, detail="user is not attendee of this review session")
-    if not bool(getattr(attendee, "is_leader", False)):
-        raise HTTPException(status_code=403, detail="only session leader can view insights")
 
     rows = db_session.exec(
         select(CRMReviewOppRiskProgress)
@@ -648,19 +721,20 @@ def query_review_session_insight_risk_opportunities(
     user: CurrentUserDep,
 ) -> ReviewSessionInsightDetailOut:
     """
-    某条风险洞察关联的商机列表，仅负责人可调。``risk_id`` 与 insights 里风险项的 ``insight_unique_id`` 一致；响应含洞察摘要与关联商机。
+    某条风险洞察关联的商机列表，负责人或有 ``review_session:all:view`` 权限的用户可调。``risk_id`` 与 insights 里风险项的 ``insight_unique_id`` 一致；响应含洞察摘要与关联商机。
     """
     session = crm_review_session_repo.get_by_unique_id(db_session, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="review session not found")
 
-    attendee = crm_review_attendee_repo.get_by_session_and_user_id(
-        db_session, session_id=session_id, user_id=str(user.id)
+    role_cache: Dict[str, bool] = {}
+    _require_session_leader_or_viewer(
+        db_session,
+        session_id=session_id,
+        user=user,
+        detail="only session leader or review_session:all:view permission can view insights",
+        viewer_role_cache=role_cache,
     )
-    if not attendee:
-        raise HTTPException(status_code=403, detail="user is not attendee of this review session")
-    if not bool(getattr(attendee, "is_leader", False)):
-        raise HTTPException(status_code=403, detail="only session leader can view insights")
     risk_id = str(risk_id or "").strip()
     if not risk_id:
         raise HTTPException(status_code=422, detail="risk_id is required")
