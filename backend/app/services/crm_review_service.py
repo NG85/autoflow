@@ -586,10 +586,6 @@ class CRMReviewService:
         attendee = crm_review_attendee_repo.get_by_session_and_user_id(
             db_session, session_id=session_id, user_id=user_id
         )
-        if not attendee:
-            raise HTTPException(status_code=403, detail="user is not attendee of this review session")
-
-        is_leader = bool(getattr(attendee, "is_leader", False))
         is_viewer = False
         try:
             is_viewer = oauth_client.check_user_has_permission(
@@ -599,6 +595,10 @@ class CRMReviewService:
         except (ValueError, TypeError, AttributeError):
             # Fallback to non-viewer when user_id cannot be parsed as UUID.
             is_viewer = False
+        if not attendee and not is_viewer:
+            raise HTTPException(status_code=403, detail="user is not attendee of this review session")
+
+        is_leader = bool(getattr(attendee, "is_leader", False)) if attendee else False
         if is_leader or is_viewer:
             owner_ids = crm_review_attendee_repo.get_crm_user_ids_by_session(
                 db_session, session_id=session_id
