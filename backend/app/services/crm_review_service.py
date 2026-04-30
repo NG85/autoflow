@@ -32,6 +32,7 @@ from app.repositories.crm_review_audit import crm_review_opp_audit_log_repo
 from app.repositories.crm_review_branch_snapshot import crm_review_opp_branch_snapshot_cache_repo
 from app.repositories.crm_review_session import crm_review_session_repo
 from app.services.aldebaran_service import aldebaran_client
+from app.services.oauth_service import oauth_client
 
 logger = logging.getLogger(__name__)
 
@@ -589,7 +590,16 @@ class CRMReviewService:
             raise HTTPException(status_code=403, detail="user is not attendee of this review session")
 
         is_leader = bool(getattr(attendee, "is_leader", False))
-        if is_leader:
+        is_viewer = False
+        try:
+            is_viewer = oauth_client.check_user_has_permission(
+                user_id=uuid.UUID(str(user_id)),
+                permission="review_session:all:view",
+            )
+        except (ValueError, TypeError, AttributeError):
+            # Fallback to non-viewer when user_id cannot be parsed as UUID.
+            is_viewer = False
+        if is_leader or is_viewer:
             owner_ids = crm_review_attendee_repo.get_crm_user_ids_by_session(
                 db_session, session_id=session_id
             )
