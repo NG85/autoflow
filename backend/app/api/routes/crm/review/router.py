@@ -109,6 +109,16 @@ def _require_session_leader_or_viewer(
     return attendee
 
 
+def _use_main_baseline_when_opportunity_ids(snapshot_filters: Optional[Dict[str, Any]]) -> bool:
+    """Auto switch to main+baseline when request narrows by opportunity_ids."""
+    if not isinstance(snapshot_filters, dict):
+        return False
+    raw_ids = snapshot_filters.get("opportunity_ids")
+    if not isinstance(raw_ids, list):
+        return False
+    return any(str(x or "").strip() for x in raw_ids)
+
+
 @router.post("/crm/review/sessions/{session_id}/my-opp-branch-snapshots")
 def query_my_review_opp_branch_snapshots(
     session_id: str,
@@ -120,12 +130,25 @@ def query_my_review_opp_branch_snapshots(
     商机快照分页列表（不分组）。
     - 返回结构与 ``snapshot-group-data`` 一致，只是没有 ``group_by`` / ``group_key``。
     - 可见范围：普通成员只看本人；负责人和有 ``review_session:all:view`` 权限的用户看本次 review 的全部成员。支持筛选、排序、字段级别；``sorts`` 未传或空时默认：负责人 → 预测类型 → 金额（降序）。
+    - 当 ``snapshot_filters.opportunity_ids`` 非空时，自动切到主表 + T2 baseline 口径查询；否则保持原 cache 可编辑口径。
     - 排序：请求体 ``sorts`` 为按优先级排列的多字段排序。
     - 需要 session 信息、提交统计时请先调 ``snapshot-groups``。
     """
     sorts_arg = (
         [(s.field, s.direction) for s in request.sorts] if request.sorts is not None else None
     )
+    if _use_main_baseline_when_opportunity_ids(request.snapshot_filters):
+        return crm_review_service.query_session_main_baseline_branch_snapshots(
+            db_session,
+            session_id=session_id,
+            user_id=str(user.id),
+            page=request.page,
+            size=request.size,
+            fields_level=request.fields_level,
+            sorts=sorts_arg,
+            snapshot_filters=request.snapshot_filters,
+            snapshot_unique_ids=None,
+        )
     return crm_review_service.get_my_edit_page_data(
         db_session,
         session_id=session_id,
@@ -294,11 +317,26 @@ def query_review_snapshot_group_data(
     """
     某一分组下的商机快照分页列表。可见范围同 ``snapshot-groups``（成员只看自己；负责人和有 ``review_session:all:view`` 权限的用户看全部成员）。
     - ``group_key``：按负责人传 owner_id；按预测/阶段传字段值，空值用 ``__EMPTY__``。
+    - 当 ``snapshot_filters.opportunity_ids`` 非空时，自动切到主表 + T2 baseline 口径查询；否则保持原 cache 可编辑口径。
     - 支持筛选、排序、字段级别；``sorts`` 未传或空时默认：负责人 → 预测类型 → 金额（降序）。
     """
     sorts_arg = (
         [(s.field, s.direction) for s in request.sorts] if request.sorts is not None else None
     )
+    if _use_main_baseline_when_opportunity_ids(request.snapshot_filters):
+        return crm_review_service.query_session_main_baseline_snapshot_group_data(
+            db_session,
+            session_id=session_id,
+            user_id=str(user.id),
+            group_by=request.group_by,
+            group_key=request.group_key,
+            page=request.page,
+            size=request.size,
+            fields_level=request.fields_level,
+            sorts=sorts_arg,
+            snapshot_filters=request.snapshot_filters,
+            snapshot_unique_ids=None,
+        )
     return crm_review_service.query_snapshot_group_data(
         db_session,
         session_id=session_id,
