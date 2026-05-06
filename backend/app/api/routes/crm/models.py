@@ -1024,7 +1024,8 @@ class ReviewOppBranchSnapshotsQueryIn(BaseModel):
             "forecast_amount_min/max: number；"
             "ai_commits/ai_stages: string[]；"
             "ai_expected_closing_date_start/end: YYYY-MM-DD；"
-            "has_risk/has_progress: boolean"
+            "has_risk/has_progress: boolean。"
+            "主表 T2 baseline 列表见 ``POST .../baseline-opp-branch-snapshots``，常用 ``opportunity_ids`` 收窄集合。"
         ),
     )
 

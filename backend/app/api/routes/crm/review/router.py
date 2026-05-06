@@ -138,6 +138,125 @@ def query_my_review_opp_branch_snapshots(
     )
 
 
+@router.post("/crm/review/sessions/{session_id}/baseline-opp-branch-snapshots")
+def query_session_main_baseline_opp_branch_snapshots(
+    session_id: str,
+    request: ReviewOppBranchSnapshotsQueryIn,
+    db_session: SessionDep,
+    user: CurrentUserDep,
+):
+    """
+    主表 ``crm_review_opp_branch_snapshot`` + T2 baseline 口径的分页列表（只读）。
+    - 返回结构与 ``my-opp-branch-snapshots`` 一致，但业务槽位 ``forecast_type/forecast_amount/opportunity_stage/expected_closing_date`` 映射为 baseline 列。
+    - 可见范围同 ``my-opp-branch-snapshots``（成员仅本人；负责人/``review_session:all:view`` 可看全员）。
+    - 前端常用调用链：先调 risk/KPI 等关联接口拿 ``opportunity_id``，再传 ``snapshot_filters.opportunity_ids`` 到本接口取主表 baseline 字段。
+    - 示例筛选：``{"snapshot_filters": {"opportunity_ids": ["oppA", "oppB"]}}``。
+    """
+    sorts_arg = (
+        [(s.field, s.direction) for s in request.sorts] if request.sorts is not None else None
+    )
+    return crm_review_service.query_session_main_baseline_branch_snapshots(
+        db_session,
+        session_id=session_id,
+        user_id=str(user.id),
+        page=request.page,
+        size=request.size,
+        fields_level=request.fields_level,
+        sorts=sorts_arg,
+        snapshot_filters=request.snapshot_filters,
+        snapshot_unique_ids=None,
+    )
+
+
+@router.post("/crm/review/sessions/{session_id}/kpi-metrics/{kpi_metric_unique_id}/opp-branch-snapshots")
+def query_kpi_related_review_opp_branch_snapshots(
+    session_id: str,
+    kpi_metric_unique_id: str,
+    request: ReviewOppBranchSnapshotsQueryIn,
+    db_session: SessionDep,
+    user: CurrentUserDep,
+):
+    """
+    KPI 关联商机快照分页列表（不分组，主表 + baseline）。
+    - 返回结构与 ``baseline-opp-branch-snapshots`` 一致；实现上等价于在该接口的查询基础上追加 KPI 关联 ``snapshot_unique_id`` 约束。
+    - 可见范围同 ``my-opp-branch-snapshots``；数据范围限定为该 KPI 行关联到的快照集合。
+    - 前端若已拿到 ``kpi_metric_unique_id``，直接调用本接口；若仅有 ``opportunity_id`` 集合，调用 ``baseline-opp-branch-snapshots`` 更直接。
+    """
+    sorts_arg = (
+        [(s.field, s.direction) for s in request.sorts] if request.sorts is not None else None
+    )
+    return crm_review_service.get_kpi_related_edit_page_data(
+        db_session,
+        session_id=session_id,
+        kpi_metric_unique_id=kpi_metric_unique_id,
+        user_id=str(user.id),
+        page=request.page,
+        size=request.size,
+        fields_level=request.fields_level,
+        sorts=sorts_arg,
+        snapshot_filters=request.snapshot_filters,
+    )
+
+
+@router.post("/crm/review/sessions/{session_id}/kpi-metrics/{kpi_metric_unique_id}/snapshot-groups")
+def query_kpi_related_review_snapshot_groups(
+    session_id: str,
+    kpi_metric_unique_id: str,
+    request: ReviewSnapshotGroupsQueryIn,
+    db_session: SessionDep,
+    user: CurrentUserDep,
+) -> ReviewSnapshotGroupsOut:
+    """
+    KPI 关联商机分组汇总（不含分组明细行，主表 + baseline）。
+    - 返回结构与 ``snapshot-groups`` 一致；数据范围限定为该 KPI 在关联表中的快照集合。
+    - 与 ``baseline-opp-branch-snapshots`` 同源，差异仅在于自动附加 KPI 关联快照约束。
+    """
+    sorts_arg = (
+        [(s.field, s.direction) for s in request.sorts] if request.sorts is not None else None
+    )
+    data = crm_review_service.list_kpi_related_snapshot_groups(
+        db_session,
+        session_id=session_id,
+        kpi_metric_unique_id=kpi_metric_unique_id,
+        user_id=str(user.id),
+        group_by=request.group_by,
+        sorts=sorts_arg,
+        snapshot_filters=request.snapshot_filters,
+    )
+    return ReviewSnapshotGroupsOut.model_validate(data)
+
+
+@router.post("/crm/review/sessions/{session_id}/kpi-metrics/{kpi_metric_unique_id}/snapshot-group-data")
+def query_kpi_related_review_snapshot_group_data(
+    session_id: str,
+    kpi_metric_unique_id: str,
+    request: ReviewSnapshotGroupDataQueryIn,
+    db_session: SessionDep,
+    user: CurrentUserDep,
+):
+    """
+    KPI 关联商机某一分组下的快照分页列表（主表 + baseline）。
+    - 返回结构与 ``snapshot-group-data`` 一致；数据范围限定为该 KPI 在关联表中的快照集合。
+    - 与 ``baseline-opp-branch-snapshots`` 同源（主表 + baseline），可直接复用同一套筛选/排序参数。
+    """
+    sorts_arg = (
+        [(s.field, s.direction) for s in request.sorts] if request.sorts is not None else None
+    )
+    return crm_review_service.query_kpi_related_snapshot_group_data(
+        db_session,
+        session_id=session_id,
+        kpi_metric_unique_id=kpi_metric_unique_id,
+        user_id=str(user.id),
+        group_by=request.group_by,
+        group_key=request.group_key,
+        page=request.page,
+        size=request.size,
+        fields_level=request.fields_level,
+        sorts=sorts_arg,
+        snapshot_filters=request.snapshot_filters,
+    )
+
+
 @router.post("/crm/review/sessions/{session_id}/snapshot-groups")
 def query_review_snapshot_groups(
     session_id: str,
@@ -719,7 +838,11 @@ def query_review_session_insight_risk_opportunities(
     user: CurrentUserDep,
 ) -> ReviewSessionInsightDetailOut:
     """
-    某条风险洞察关联的商机列表，负责人或有 ``review_session:all:view`` 权限的用户可调。``risk_id`` 与 insights 里风险项的 ``insight_unique_id`` 一致；响应含洞察摘要与关联商机。
+    某条风险洞察关联的商机列表（返回关系信息，不直接展开主表 baseline 字段）。
+    - 负责人或有 ``review_session:all:view`` 权限的用户可调。
+    - ``risk_id`` 与 insights 风险项的 ``insight_unique_id`` 一致。
+    - 前端二段式调用：先从本接口拿 ``opportunity_id``，再调用 ``POST .../baseline-opp-branch-snapshots``，并传
+      ``{"snapshot_filters": {"opportunity_ids": [...]}}`` 获取主表 T2 baseline 字段。
     """
     session = crm_review_session_repo.get_by_unique_id(db_session, session_id)
     if not session:
