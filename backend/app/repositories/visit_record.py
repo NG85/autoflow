@@ -493,6 +493,11 @@ class VisitRecordRepo(BaseRepo):
                 )
             )
 
+        if request.assessment_flag:
+            query = query.where(
+                CRMSalesVisitRecord.assessment_flag.in_(request.assessment_flag)
+            )
+
         if request.visit_type:
             query = query.where(
                 CRMSalesVisitRecord.visit_type.in_(request.visit_type)

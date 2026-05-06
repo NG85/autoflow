@@ -467,6 +467,7 @@ class VisitRecordQueryRequest(BaseModel):
     visit_purpose: Optional[List[str]] = None  # 拜访目的（多选）
     followup_quality_level: Optional[List[str]] = None  # AI对跟进记录质量评估（多选）
     next_steps_quality_level: Optional[List[str]] = None  # AI对下一步计划质量评估（多选）
+    assessment_flag: Optional[List[str]] = None  # 评估标记（多选）
     visit_type: Optional[List[str]] = None  # 信息来源（多选）
     subject: Optional[List[str]] = None  # 拜访主题（多选）
     record_type: Optional[List[str]] = None  # 记录类型（多选）
@@ -516,6 +517,7 @@ class VisitRecordResponse(BaseModel):
     followup_content: Optional[str] = Field(default=None, description="跟进内容（简易版表单使用）")
     followup_quality_level_zh: Optional[str] = Field(default=None, description="跟进记录等级（中文版）")
     followup_quality_level_en: Optional[str] = Field(default=None, description="跟进记录等级（英文版）")
+    assessment_flag: Optional[str] = Field(default=None, description="评估标记")
     followup_quality_reason_zh: Optional[str] = Field(default=None, description="跟进记录评判依据")
     followup_quality_reason_en: Optional[str] = Field(default=None, description="跟进记录评判依据（英文版）")
     next_steps: Optional[str] = Field(default=None, description="下一步计划")
