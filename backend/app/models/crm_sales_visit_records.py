@@ -44,6 +44,7 @@ class CRMSalesVisitRecord(SQLModel, table=True):
     followup_quality_level_zh: Optional[str] = Field(nullable=True, max_length=100, description="跟进记录等级（中文版）")
     followup_quality_level_en: Optional[str] = Field(nullable=True, max_length=100, description="跟进记录等级（英文版）")
     assessment_flag: Optional[str] = Field(nullable=True, max_length=10, description="评估标记")
+    assessment_description: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="评估描述")
     followup_quality_reason_zh: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="跟进记录评判依据")
     followup_quality_reason_en: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="跟进记录评判依据（英文版）")
     next_steps: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="下一步计划")

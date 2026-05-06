@@ -22,7 +22,12 @@ def upgrade() -> None:
         "crm_sales_visit_records",
         sa.Column("assessment_flag", sa.String(length=10), nullable=True),
     )
+    op.add_column(
+        "crm_sales_visit_records",
+        sa.Column("assessment_description", sa.Text(), nullable=True),
+    )
 
 
 def downgrade() -> None:
+    op.drop_column("crm_sales_visit_records", "assessment_description")
     op.drop_column("crm_sales_visit_records", "assessment_flag")
