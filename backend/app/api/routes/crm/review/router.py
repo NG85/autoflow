@@ -538,7 +538,7 @@ def query_review_snapshot_filter_enums(
             "select handbook_id, field_value "
             "from crm_playbook_mapping "
             "where field_value is not null and field_value <> '' "
-            "and field_type = 'opportunity_type'"
+            "and field_name = 'opportunity_type'"
         )
     ).all()
     stage_by_handbook: dict[str, list[str]] = {}
