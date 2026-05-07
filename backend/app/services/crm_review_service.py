@@ -746,6 +746,7 @@ class CRMReviewService:
         - owner_names: List[str]
         - forecast_types: List[str]
         - opportunity_stages: List[str]
+        - opportunity_types: List[str]
         - expected_closing_date_start: str (YYYY-MM-DD)
         - expected_closing_date_end: str (YYYY-MM-DD)
         - forecast_amount_min: number
@@ -827,6 +828,7 @@ class CRMReviewService:
             "owner_names": _normalize_string_list(raw.get("owner_names")),
             "forecast_types": _normalize_string_list(raw.get("forecast_types")),
             "opportunity_stages": _normalize_string_list(raw.get("opportunity_stages")),
+            "opportunity_types": _normalize_string_list(raw.get("opportunity_types")),
             "ai_commits": _normalize_string_list(raw.get("ai_commits")),
             "ai_stages": _normalize_string_list(raw.get("ai_stages")),
             "expected_closing_date_start": _normalize_date_or_raise(
@@ -893,6 +895,9 @@ class CRMReviewService:
         opportunity_stages = normalized_filters.get("opportunity_stages") or []
         if opportunity_stages:
             base_where.append(stage_col.in_(opportunity_stages))
+        opportunity_types = normalized_filters.get("opportunity_types") or []
+        if opportunity_types:
+            base_where.append(S.crm_opportunity_type.in_(opportunity_types))
         ai_commits = normalized_filters.get("ai_commits") or []
         if ai_commits:
             base_where.append(S.ai_commit.in_(ai_commits))

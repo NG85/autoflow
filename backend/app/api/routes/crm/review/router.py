@@ -533,6 +533,14 @@ def query_review_snapshot_filter_enums(
             "where sales_stage is not null and sales_stage <> ''"
         )
     ).all()
+    opp_type_rows = db_session.exec(
+        text(
+            "select handbook_id, field_value "
+            "from crm_playbook_mapping "
+            "where field_value is not null and field_value <> '' "
+            "and field_type = 'opportunity_type'"
+        )
+    ).all()
     stage_by_handbook: dict[str, list[str]] = {}
     for r in stage_rows:
         hb = str(getattr(r, "handbook_id", "") or "").strip()
@@ -542,10 +550,40 @@ def query_review_snapshot_filter_enums(
         stage_by_handbook.setdefault(hb, [])
         if stage not in stage_by_handbook[hb]:
             stage_by_handbook[hb].append(stage)
-    opportunity_stages = [
-        {"handbook_id": hb, "sales_stages": stages}
-        for hb, stages in sorted(stage_by_handbook.items(), key=lambda x: x[0])
-    ]
+    opp_types_by_handbook: dict[str, list[str]] = {}
+    for r in opp_type_rows:
+        hb = str(getattr(r, "handbook_id", "") or "").strip()
+        opp_type = str(getattr(r, "field_value", "") or "").strip()
+        if not hb or not opp_type:
+            continue
+        opp_types_by_handbook.setdefault(hb, [])
+        if opp_type not in opp_types_by_handbook[hb]:
+            opp_types_by_handbook[hb].append(opp_type)
+    # 老环境可能没有 mapping 配置：按“只有一套 handbook”处理，避免前端误判为多套
+    if not opp_types_by_handbook:
+        merged_sales_stages: list[str] = []
+        for hb in sorted(stage_by_handbook.keys()):
+            for stage in stage_by_handbook.get(hb, []):
+                if stage not in merged_sales_stages:
+                    merged_sales_stages.append(stage)
+        default_handbook_id = sorted(stage_by_handbook.keys())[0] if stage_by_handbook else ""
+        opportunity_stages = [
+            {
+                "handbook_id": default_handbook_id,
+                "sales_stages": merged_sales_stages,
+                "opp_types": [],
+            }
+        ]
+    else:
+        all_handbook_ids = sorted(set(stage_by_handbook.keys()) | set(opp_types_by_handbook.keys()))
+        opportunity_stages = [
+            {
+                "handbook_id": hb,
+                "sales_stages": stage_by_handbook.get(hb, []),
+                "opp_types": opp_types_by_handbook.get(hb, []),
+            }
+            for hb in all_handbook_ids
+        ]
 
     return ReviewSnapshotFilterEnumsOut.model_validate(
         {
