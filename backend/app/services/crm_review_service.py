@@ -11,12 +11,14 @@ from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
-from sqlalchemy import case
+from sqlalchemy import case, false
 from sqlalchemy.orm import load_only
 from sqlmodel import Session, select, func
 
 from app.models.crm_review import (
     CRMReviewAttendee,
+    CRMReviewKpiMetricOppLink,
+    CRMReviewKpiMetrics,
     CRMReviewOppAuditLog,
     CRMReviewOppBranchSnapshot,
     CRMReviewOppBranchSnapshotBasicOut,
@@ -280,6 +282,63 @@ def _build_forecast_recalc_out_from_aldebaran(
 
 class CRMReviewService:
     @staticmethod
+    def _get_kpi_metric_or_404(
+        db_session: Session,
+        *,
+        session_id: str,
+        kpi_metric_unique_id: str,
+    ) -> CRMReviewKpiMetrics:
+        metric_id = str(kpi_metric_unique_id or "").strip()
+        if not metric_id:
+            raise HTTPException(status_code=422, detail="kpi_metric_unique_id is required")
+        metric = db_session.exec(
+            select(CRMReviewKpiMetrics).where(
+                CRMReviewKpiMetrics.unique_id == metric_id,
+                CRMReviewKpiMetrics.session_id == session_id,
+            )
+        ).first()
+        if not metric:
+            raise HTTPException(status_code=404, detail="kpi metric not found in this review session")
+        return metric
+
+    def _snapshot_unique_ids_for_kpi_metric(
+        self,
+        db_session: Session,
+        *,
+        session_id: str,
+        kpi_metric_unique_id: str,
+    ) -> List[str]:
+        L = CRMReviewKpiMetricOppLink
+        kpi_uid = str(kpi_metric_unique_id or "").strip()
+        stmt = select(L).where(
+            L.session_id == session_id,
+            L.kpi_metric_unique_id == kpi_uid,
+        )
+        links = db_session.exec(stmt).all()
+        out: List[str] = []
+        seen: set[str] = set()
+        for link in links:
+            sid = str(getattr(link, "snapshot_unique_id", "") or "").strip()
+            if sid and sid not in seen:
+                seen.add(sid)
+                out.append(sid)
+        return out
+
+    @staticmethod
+    def _append_snapshot_unique_id_filter(
+        base_where: List[Any],
+        snapshot_cls: Any,
+        snapshot_unique_ids: Optional[List[str]],
+    ) -> None:
+        if snapshot_unique_ids is None:
+            return
+        ids = [str(x).strip() for x in snapshot_unique_ids if str(x or "").strip()]
+        if not ids:
+            base_where.append(false())
+        else:
+            base_where.append(snapshot_cls.unique_id.in_(ids))
+
+    @staticmethod
     def _model_to_dict(model_obj: Any) -> Dict[str, Any]:
         if hasattr(model_obj, "model_dump"):
             return model_obj.model_dump()
@@ -366,17 +425,33 @@ class CRMReviewService:
             enriched.append(row)
         return enriched
 
+    @staticmethod
+    def _overlay_baseline_business_fields(row: Dict[str, Any]) -> None:
+        """Map T2 baseline columns onto the snapshot basic business slots for API output."""
+        row["forecast_type"] = row.get("baseline_forecast_type")
+        row["forecast_amount"] = row.get("baseline_forecast_amount")
+        row["opportunity_stage"] = row.get("baseline_opportunity_stage")
+        row["expected_closing_date"] = row.get("baseline_expected_closing_date")
+
     def _project_snapshot_items(
         self,
         *,
         items: List[Dict[str, Any]],
         fields_level: str,
+        use_baseline_business_fields: bool = False,
     ) -> List[Dict[str, Any]]:
         level = str(fields_level or "basic").strip().lower()
+        work_items: List[Dict[str, Any]] = items
+        if use_baseline_business_fields:
+            work_items = []
+            for row in items:
+                r = dict(row)
+                self._overlay_baseline_business_fields(r)
+                work_items.append(r)
         full_fields = tuple(CRMReviewOppBranchSnapshot.model_fields.keys())
         if level == "full":
             projected_full: List[Dict[str, Any]] = []
-            for row in items:
+            for row in work_items:
                 item = {k: row.get(k) for k in full_fields}
                 item["risk_count"] = int(row.get("risk_count") or 0)
                 item["progress_count"] = int(row.get("progress_count") or 0)
@@ -387,7 +462,7 @@ class CRMReviewService:
 
         basic_fields = tuple(CRMReviewOppBranchSnapshotBasicOut.model_fields.keys())
         projected: List[Dict[str, Any]] = []
-        for row in items:
+        for row in work_items:
             item = {k: row.get(k) for k in basic_fields}
             item["risk_count"] = int(row.get("risk_count") or 0)
             item["progress_count"] = int(row.get("progress_count") or 0)
@@ -400,6 +475,7 @@ class CRMReviewService:
     def _build_forecast_type_rank_case(
         db_session: Session,
         snapshot_cls: Any = CRMReviewOppBranchSnapshot,
+        forecast_type_column: Any = None,
     ):
         """
         Sort key for forecast_type: commit (0) > upside (1) > closed_won (2).
@@ -407,7 +483,7 @@ class CRMReviewService:
         snapshot.forecast_type matches one of those strings (e.g. 确定成单 -> commit).
         """
         a0, a1, a2 = _get_forecast_type_rank_alias_tuples_cached(db_session)
-        ft_col = snapshot_cls.forecast_type
+        ft_col = forecast_type_column if forecast_type_column is not None else snapshot_cls.forecast_type
         whens: List[Any] = []
         if a0:
             whens.append((ft_col.in_(a0), 0))
@@ -475,22 +551,35 @@ class CRMReviewService:
         session_id: str,
         snapshot_period: str,
         snapshot_cls: Any = CRMReviewOppBranchSnapshot,
+        use_baseline_business_fields: bool = False,
     ) -> Optional[Any]:
         k = str(key or "").strip()
         if not k:
             return None
+        ft_col = snapshot_cls.baseline_forecast_type if use_baseline_business_fields else snapshot_cls.forecast_type
+        stage_col = (
+            snapshot_cls.baseline_opportunity_stage if use_baseline_business_fields else snapshot_cls.opportunity_stage
+        )
+        famount_col = (
+            snapshot_cls.baseline_forecast_amount if use_baseline_business_fields else snapshot_cls.forecast_amount
+        )
+        ecd_col = (
+            snapshot_cls.baseline_expected_closing_date
+            if use_baseline_business_fields
+            else snapshot_cls.expected_closing_date
+        )
         if k == "forecast_type":
-            return self._build_forecast_rank_case_for_col(db_session, snapshot_cls.forecast_type)
+            return self._build_forecast_rank_case_for_col(db_session, ft_col)
         if k == "ai_commit":
             return self._build_forecast_rank_case_for_col(db_session, snapshot_cls.ai_commit)
         if k == "opportunity_stage":
-            return func.lower(func.coalesce(snapshot_cls.opportunity_stage, ""))
+            return func.lower(func.coalesce(stage_col, ""))
         if k == "ai_stage":
             return func.lower(func.coalesce(snapshot_cls.ai_stage, ""))
         if k == "forecast_amount":
-            return func.coalesce(snapshot_cls.forecast_amount, 0)
+            return func.coalesce(famount_col, 0)
         if k == "expected_closing_date":
-            return self._date_parse_expr(snapshot_cls.expected_closing_date)
+            return self._date_parse_expr(ecd_col)
         if k == "ai_expected_closing_date":
             return self._date_parse_expr(snapshot_cls.ai_expected_closing_date)
         if k in {"risk_count", "progress_count", "opp_summary_count"}:
@@ -516,12 +605,17 @@ class CRMReviewService:
         self,
         db_session: Session,
         snapshot_cls: Any = CRMReviewOppBranchSnapshot,
+        use_baseline_business_fields: bool = False,
     ) -> List[Any]:
-        ft_rank = self._build_forecast_type_rank_case(db_session, snapshot_cls=snapshot_cls)
+        ft_src = snapshot_cls.baseline_forecast_type if use_baseline_business_fields else snapshot_cls.forecast_type
+        ft_rank = self._build_forecast_type_rank_case(
+            db_session, snapshot_cls=snapshot_cls, forecast_type_column=ft_src
+        )
+        fa_col = snapshot_cls.baseline_forecast_amount if use_baseline_business_fields else snapshot_cls.forecast_amount
         return [
             func.coalesce(snapshot_cls.owner_name, ""),
             ft_rank,
-            snapshot_cls.forecast_amount.desc(),
+            fa_col.desc(),
         ]
 
     def _build_snapshot_sort_order(
@@ -532,9 +626,14 @@ class CRMReviewService:
         session_id: str,
         snapshot_period: str,
         snapshot_cls: Any = CRMReviewOppBranchSnapshot,
+        use_baseline_business_fields: bool = False,
     ) -> List[Any]:
         if not sorts:
-            return self._default_snapshot_sort_order(db_session, snapshot_cls=snapshot_cls)
+            return self._default_snapshot_sort_order(
+                db_session,
+                snapshot_cls=snapshot_cls,
+                use_baseline_business_fields=use_baseline_business_fields,
+            )
 
         out: List[Any] = []
         for field, direction in sorts:
@@ -545,13 +644,18 @@ class CRMReviewService:
                 session_id=session_id,
                 snapshot_period=snapshot_period,
                 snapshot_cls=snapshot_cls,
+                use_baseline_business_fields=use_baseline_business_fields,
             )
             if expr is None:
                 continue
             out.append(expr.desc() if direction_desc else expr.asc())
 
         if not out:
-            return self._default_snapshot_sort_order(db_session, snapshot_cls=snapshot_cls)
+            return self._default_snapshot_sort_order(
+                db_session,
+                snapshot_cls=snapshot_cls,
+                use_baseline_business_fields=use_baseline_business_fields,
+            )
 
         out.append(func.coalesce(snapshot_cls.owner_name, "").asc())
         out.append(snapshot_cls.id.desc())
@@ -561,15 +665,18 @@ class CRMReviewService:
     def _group_field_and_label(
         group_by: str,
         snapshot_cls: Any = CRMReviewOppBranchSnapshot,
+        use_baseline_business_fields: bool = False,
     ):
         gb = str(group_by or "owner").strip()
         S = snapshot_cls
         if gb == "owner":
             return gb, S.owner_id, S.owner_name
         if gb == "forecast_type":
-            return gb, S.forecast_type, S.forecast_type
+            c = S.baseline_forecast_type if use_baseline_business_fields else S.forecast_type
+            return gb, c, c
         if gb == "opportunity_stage":
-            return gb, S.opportunity_stage, S.opportunity_stage
+            c = S.baseline_opportunity_stage if use_baseline_business_fields else S.opportunity_stage
+            return gb, c, c
         raise HTTPException(status_code=422, detail="group_by must be one of: owner, forecast_type, opportunity_stage")
 
     def _resolve_session_scope(
@@ -752,11 +859,22 @@ class CRMReviewService:
         session_id: str,
         snapshot_period: str,
         snapshot_cls: Any = CRMReviewOppBranchSnapshot,
+        use_baseline_business_fields: bool = False,
     ) -> None:
         """
         Apply normalized filters onto snapshot query conditions.
         """
         S = snapshot_cls
+        ft_col = S.baseline_forecast_type if use_baseline_business_fields else S.forecast_type
+        stage_col = (
+            S.baseline_opportunity_stage if use_baseline_business_fields else S.opportunity_stage
+        )
+        ecd_col = (
+            S.baseline_expected_closing_date
+            if use_baseline_business_fields
+            else S.expected_closing_date
+        )
+        famount_col = S.baseline_forecast_amount if use_baseline_business_fields else S.forecast_amount
         opportunity_ids = normalized_filters.get("opportunity_ids") or []
         if opportunity_ids:
             base_where.append(S.opportunity_id.in_(opportunity_ids))
@@ -771,10 +889,10 @@ class CRMReviewService:
             base_where.append(S.owner_name.in_(owner_names))
         forecast_types = normalized_filters.get("forecast_types") or []
         if forecast_types:
-            base_where.append(S.forecast_type.in_(forecast_types))
+            base_where.append(ft_col.in_(forecast_types))
         opportunity_stages = normalized_filters.get("opportunity_stages") or []
         if opportunity_stages:
-            base_where.append(S.opportunity_stage.in_(opportunity_stages))
+            base_where.append(stage_col.in_(opportunity_stages))
         ai_commits = normalized_filters.get("ai_commits") or []
         if ai_commits:
             base_where.append(S.ai_commit.in_(ai_commits))
@@ -785,8 +903,8 @@ class CRMReviewService:
         if expected_closing_date_start:
             base_where.append(
                 func.coalesce(
-                    func.str_to_date(S.expected_closing_date, "%Y-%m-%d %H:%i:%s"),
-                    func.str_to_date(S.expected_closing_date, "%Y-%m-%d"),
+                    func.str_to_date(ecd_col, "%Y-%m-%d %H:%i:%s"),
+                    func.str_to_date(ecd_col, "%Y-%m-%d"),
                 )
                 >= func.coalesce(
                     func.str_to_date(expected_closing_date_start, "%Y-%m-%d %H:%i:%s"),
@@ -797,8 +915,8 @@ class CRMReviewService:
         if expected_closing_date_end:
             base_where.append(
                 func.coalesce(
-                    func.str_to_date(S.expected_closing_date, "%Y-%m-%d %H:%i:%s"),
-                    func.str_to_date(S.expected_closing_date, "%Y-%m-%d"),
+                    func.str_to_date(ecd_col, "%Y-%m-%d %H:%i:%s"),
+                    func.str_to_date(ecd_col, "%Y-%m-%d"),
                 )
                 <= func.coalesce(
                     func.str_to_date(expected_closing_date_end, "%Y-%m-%d %H:%i:%s"),
@@ -831,10 +949,10 @@ class CRMReviewService:
             )
         forecast_amount_min = normalized_filters.get("forecast_amount_min")
         if forecast_amount_min is not None:
-            base_where.append(S.forecast_amount >= forecast_amount_min)
+            base_where.append(famount_col >= forecast_amount_min)
         forecast_amount_max = normalized_filters.get("forecast_amount_max")
         if forecast_amount_max is not None:
-            base_where.append(S.forecast_amount <= forecast_amount_max)
+            base_where.append(famount_col <= forecast_amount_max)
         has_risk = normalized_filters.get("has_risk")
         if has_risk is not None:
             risk_opp_subq = (
@@ -877,6 +995,9 @@ class CRMReviewService:
         fields_level: str = "basic",
         sorts: Optional[List[Tuple[str, str]]] = None,
         snapshot_filters: Optional[Dict[str, Any]] = None,
+        snapshot_unique_ids: Optional[List[str]] = None,
+        snapshot_cls: Any = CRMReviewOppBranchSnapshotCache,
+        use_baseline_business_fields: bool = False,
     ) -> dict:
         page = int(page or 1)
         size = int(size or 20)
@@ -891,17 +1012,19 @@ class CRMReviewService:
             raise HTTPException(status_code=422, detail="no attendee crm_user_id in this review session")
         snapshot_period = scope["snapshot_period"]
         normalized_filters = self._normalize_snapshot_filters(snapshot_filters)
-        snap = CRMReviewOppBranchSnapshotCache
+        snap = snapshot_cls
         base_where: List[Any] = [
             snap.owner_id.in_(owner_ids),
             snap.snapshot_period == snapshot_period,
         ]
+        self._append_snapshot_unique_id_filter(base_where, snap, snapshot_unique_ids)
         self._append_snapshot_filters(
             base_where,
             normalized_filters,
             session_id=session_id,
             snapshot_period=snapshot_period,
             snapshot_cls=snap,
+            use_baseline_business_fields=use_baseline_business_fields,
         )
 
         total = int(
@@ -916,6 +1039,7 @@ class CRMReviewService:
             session_id=session_id,
             snapshot_period=snapshot_period,
             snapshot_cls=snap,
+            use_baseline_business_fields=use_baseline_business_fields,
         )
         items = db_session.exec(
             select(snap)
@@ -933,6 +1057,7 @@ class CRMReviewService:
         output_items = self._project_snapshot_items(
             items=enriched_items,
             fields_level=fields_level,
+            use_baseline_business_fields=use_baseline_business_fields,
         )
 
         return {
@@ -943,6 +1068,193 @@ class CRMReviewService:
             "items": output_items,
         }
 
+    def query_session_main_baseline_branch_snapshots(
+        self,
+        db_session: Session,
+        *,
+        session_id: str,
+        user_id: str,
+        page: int = 1,
+        size: int = 20,
+        fields_level: str = "basic",
+        sorts: Optional[List[Tuple[str, str]]] = None,
+        snapshot_filters: Optional[Dict[str, Any]] = None,
+        snapshot_unique_ids: Optional[List[str]] = None,
+    ) -> dict:
+        """主表快照 + T2 baseline 投影；KPI 下钻在传入 ``snapshot_unique_ids`` 时与此共用。"""
+        return self.get_my_edit_page_data(
+            db_session,
+            session_id=session_id,
+            user_id=user_id,
+            page=page,
+            size=size,
+            fields_level=fields_level,
+            sorts=sorts,
+            snapshot_filters=snapshot_filters,
+            snapshot_unique_ids=snapshot_unique_ids,
+            snapshot_cls=CRMReviewOppBranchSnapshot,
+            use_baseline_business_fields=True,
+        )
+
+    def list_session_main_baseline_snapshot_groups(
+        self,
+        db_session: Session,
+        *,
+        session_id: str,
+        user_id: str,
+        group_by: str = "owner",
+        sorts: Optional[List[Tuple[str, str]]] = None,
+        snapshot_filters: Optional[Dict[str, Any]] = None,
+        snapshot_unique_ids: Optional[List[str]] = None,
+    ) -> dict:
+        return self.list_snapshot_groups(
+            db_session,
+            session_id=session_id,
+            user_id=user_id,
+            group_by=group_by,
+            sorts=sorts,
+            snapshot_filters=snapshot_filters,
+            snapshot_unique_ids=snapshot_unique_ids,
+            snapshot_cls=CRMReviewOppBranchSnapshot,
+            use_baseline_business_fields=True,
+        )
+
+    def query_session_main_baseline_snapshot_group_data(
+        self,
+        db_session: Session,
+        *,
+        session_id: str,
+        user_id: str,
+        group_by: str,
+        group_key: str,
+        page: int = 1,
+        size: int = 20,
+        fields_level: str = "basic",
+        sorts: Optional[List[Tuple[str, str]]] = None,
+        snapshot_filters: Optional[Dict[str, Any]] = None,
+        snapshot_unique_ids: Optional[List[str]] = None,
+    ) -> dict:
+        return self.query_snapshot_group_data(
+            db_session,
+            session_id=session_id,
+            user_id=user_id,
+            group_by=group_by,
+            group_key=group_key,
+            page=page,
+            size=size,
+            fields_level=fields_level,
+            sorts=sorts,
+            snapshot_filters=snapshot_filters,
+            snapshot_unique_ids=snapshot_unique_ids,
+            snapshot_cls=CRMReviewOppBranchSnapshot,
+            use_baseline_business_fields=True,
+        )
+
+    def get_kpi_related_edit_page_data(
+        self,
+        db_session: Session,
+        *,
+        session_id: str,
+        kpi_metric_unique_id: str,
+        user_id: str,
+        page: int = 1,
+        size: int = 20,
+        fields_level: str = "basic",
+        sorts: Optional[List[Tuple[str, str]]] = None,
+        snapshot_filters: Optional[Dict[str, Any]] = None,
+    ) -> dict:
+        self._get_kpi_metric_or_404(
+            db_session,
+            session_id=session_id,
+            kpi_metric_unique_id=kpi_metric_unique_id,
+        )
+        link_ids = self._snapshot_unique_ids_for_kpi_metric(
+            db_session,
+            session_id=session_id,
+            kpi_metric_unique_id=kpi_metric_unique_id,
+        )
+        return self.query_session_main_baseline_branch_snapshots(
+            db_session,
+            session_id=session_id,
+            user_id=user_id,
+            page=page,
+            size=size,
+            fields_level=fields_level,
+            sorts=sorts,
+            snapshot_filters=snapshot_filters,
+            snapshot_unique_ids=link_ids,
+        )
+
+    def list_kpi_related_snapshot_groups(
+        self,
+        db_session: Session,
+        *,
+        session_id: str,
+        kpi_metric_unique_id: str,
+        user_id: str,
+        group_by: str = "owner",
+        sorts: Optional[List[Tuple[str, str]]] = None,
+        snapshot_filters: Optional[Dict[str, Any]] = None,
+    ) -> dict:
+        self._get_kpi_metric_or_404(
+            db_session,
+            session_id=session_id,
+            kpi_metric_unique_id=kpi_metric_unique_id,
+        )
+        link_ids = self._snapshot_unique_ids_for_kpi_metric(
+            db_session,
+            session_id=session_id,
+            kpi_metric_unique_id=kpi_metric_unique_id,
+        )
+        return self.list_session_main_baseline_snapshot_groups(
+            db_session,
+            session_id=session_id,
+            user_id=user_id,
+            group_by=group_by,
+            sorts=sorts,
+            snapshot_filters=snapshot_filters,
+            snapshot_unique_ids=link_ids,
+        )
+
+    def query_kpi_related_snapshot_group_data(
+        self,
+        db_session: Session,
+        *,
+        session_id: str,
+        kpi_metric_unique_id: str,
+        user_id: str,
+        group_by: str,
+        group_key: str,
+        page: int = 1,
+        size: int = 20,
+        fields_level: str = "basic",
+        sorts: Optional[List[Tuple[str, str]]] = None,
+        snapshot_filters: Optional[Dict[str, Any]] = None,
+    ) -> dict:
+        self._get_kpi_metric_or_404(
+            db_session,
+            session_id=session_id,
+            kpi_metric_unique_id=kpi_metric_unique_id,
+        )
+        link_ids = self._snapshot_unique_ids_for_kpi_metric(
+            db_session,
+            session_id=session_id,
+            kpi_metric_unique_id=kpi_metric_unique_id,
+        )
+        return self.query_session_main_baseline_snapshot_group_data(
+            db_session,
+            session_id=session_id,
+            user_id=user_id,
+            group_by=group_by,
+            group_key=group_key,
+            page=page,
+            size=size,
+            fields_level=fields_level,
+            sorts=sorts,
+            snapshot_filters=snapshot_filters,
+            snapshot_unique_ids=link_ids,
+        )
+
     def list_snapshot_groups(
         self,
         db_session: Session,
@@ -952,6 +1264,9 @@ class CRMReviewService:
         group_by: str = "owner",
         sorts: Optional[List[Tuple[str, str]]] = None,
         snapshot_filters: Optional[Dict[str, Any]] = None,
+        snapshot_unique_ids: Optional[List[str]] = None,
+        snapshot_cls: Any = CRMReviewOppBranchSnapshotCache,
+        use_baseline_business_fields: bool = False,
     ) -> dict:
         scope = self._resolve_session_scope(db_session, session_id=session_id, user_id=user_id)
         normalized_filters = self._normalize_snapshot_filters(snapshot_filters)
@@ -960,17 +1275,19 @@ class CRMReviewService:
         sort_by = first_sort[0] if first_sort else None
         direction_desc = first_sort[1] == "desc" if first_sort else False
 
-        snap = CRMReviewOppBranchSnapshotCache
+        snap = snapshot_cls
         base_where: List[Any] = [
             snap.owner_id.in_(scope["owner_ids"]),
             snap.snapshot_period == scope["snapshot_period"],
         ]
+        self._append_snapshot_unique_id_filter(base_where, snap, snapshot_unique_ids)
         self._append_snapshot_filters(
             base_where,
             normalized_filters,
             session_id=session_id,
             snapshot_period=scope["snapshot_period"],
             snapshot_cls=snap,
+            use_baseline_business_fields=use_baseline_business_fields,
         )
 
         def _group_order_by(cnt_expr: Any, key_expr: Any) -> List[Any]:
@@ -987,7 +1304,9 @@ class CRMReviewService:
             primary = key_expr.desc() if direction_desc else key_expr.asc()
             return [primary, key_expr.asc()]
 
-        gb, field_col, label_col = self._group_field_and_label(group_by, snapshot_cls=snap)
+        gb, field_col, label_col = self._group_field_and_label(
+            group_by, snapshot_cls=snap, use_baseline_business_fields=use_baseline_business_fields
+        )
         group_key_expr = func.coalesce(field_col, "")
         group_label_expr = func.coalesce(func.max(label_col), "")
         cnt_expr = func.count()
@@ -1044,6 +1363,9 @@ class CRMReviewService:
         fields_level: str = "basic",
         sorts: Optional[List[Tuple[str, str]]] = None,
         snapshot_filters: Optional[Dict[str, Any]] = None,
+        snapshot_unique_ids: Optional[List[str]] = None,
+        snapshot_cls: Any = CRMReviewOppBranchSnapshotCache,
+        use_baseline_business_fields: bool = False,
     ) -> dict:
         page = int(page or 1)
         size = int(size or 20)
@@ -1057,12 +1379,15 @@ class CRMReviewService:
         group_key = str(group_key or "")
         normalized_filters = self._normalize_snapshot_filters(snapshot_filters)
 
-        snap = CRMReviewOppBranchSnapshotCache
+        snap = snapshot_cls
         base_where = [
             snap.owner_id.in_(scope["owner_ids"]),
             snap.snapshot_period == scope["snapshot_period"],
         ]
-        gb, field_col, _ = self._group_field_and_label(group_by, snapshot_cls=snap)
+        self._append_snapshot_unique_id_filter(base_where, snap, snapshot_unique_ids)
+        gb, field_col, _ = self._group_field_and_label(
+            group_by, snapshot_cls=snap, use_baseline_business_fields=use_baseline_business_fields
+        )
         if group_key == "__EMPTY__":
             base_where.append(func.coalesce(field_col, "") == "")
         else:
@@ -1073,6 +1398,7 @@ class CRMReviewService:
             session_id=session_id,
             snapshot_period=scope["snapshot_period"],
             snapshot_cls=snap,
+            use_baseline_business_fields=use_baseline_business_fields,
         )
 
         total = int(
@@ -1087,6 +1413,7 @@ class CRMReviewService:
             session_id=session_id,
             snapshot_period=scope["snapshot_period"],
             snapshot_cls=snap,
+            use_baseline_business_fields=use_baseline_business_fields,
         )
         items = db_session.exec(
             select(snap)
@@ -1104,6 +1431,7 @@ class CRMReviewService:
         output_items = self._project_snapshot_items(
             items=enriched_items,
             fields_level=fields_level,
+            use_baseline_business_fields=use_baseline_business_fields,
         )
 
         return {

@@ -433,7 +433,7 @@ def export_visit_records_to_xlsx(
                 "Visit Purpose", "Attachment Location", "Attachment Latitude", "Attachment Longitude", "Attachment Taken At", "Follow-up Record", 
                 "AI Follow-up Record Quality Evaluation", "AI Follow-up Record Quality Evaluation Details", 
                 "Next Steps", "AI Next Steps Quality Evaluation", "AI Next Steps Quality Evaluation Details",
-                "Record Type", "Information Source", "Remarks", "Created Time"
+                "Assessment Flag", "Record Type", "Information Source", "Remarks", "Created Time"
             ]
         else:
             # 中文版表头（默认）- 只包含中文字段
@@ -444,7 +444,7 @@ def export_visit_records_to_xlsx(
                 "拜访目的", "附件地点", "附件纬度", "附件经度", "附件拍摄时间", "跟进记录", 
                 "AI对跟进记录质量评估", "AI对跟进记录质量评估详情",
                 "下一步计划", "AI对下一步计划质量评估", "AI对下一步计划质量评估详情",
-                "记录类型", "信息来源", "备注", "创建时间"
+                "评估标记", "记录类型", "信息来源", "备注", "创建时间"
             ]
         
         ws.append(headers)
@@ -506,6 +506,15 @@ def export_visit_records_to_xlsx(
             
             next_steps_quality_level = item.next_steps_quality_level_en if is_en else item.next_steps_quality_level_zh or ""
             next_steps_quality_reason = item.next_steps_quality_reason_en if is_en else item.next_steps_quality_reason_zh or ""
+
+            # 评估标记统一导出为表情符号
+            raw_assessment_flag = str(item.assessment_flag or "").strip()
+            assessment_flag_map = {
+                "red": "🔴",
+                "yellow": "🟡",
+                "green": "🟢"
+            }
+            assessment_flag = assessment_flag_map.get(raw_assessment_flag.lower(), raw_assessment_flag)
             
             # 处理记录类型字段的多语言显示
             record_type = ""
@@ -573,6 +582,7 @@ def export_visit_records_to_xlsx(
                 next_steps,
                 next_steps_quality_level,
                 next_steps_quality_reason,
+                assessment_flag,
                 record_type,
                 item.visit_type or "",
                 item.remarks or "",

@@ -1160,6 +1160,84 @@ class CRMReviewKpiMetrics(SQLModel, table=True):
     )
 
 
+class CRMReviewKpiMetricOppLink(SQLModel, table=True):
+    """KPI metric row to opportunity snapshot links."""
+
+    model_config = {"from_attributes": True}
+
+    __tablename__ = "crm_review_kpi_metric_opp_link"
+
+    id: Optional[int] = Field(
+        default=None,
+        primary_key=True,
+        description="主键ID（自增序列）",
+    )
+    kpi_metric_unique_id: str = Field(
+        sa_column=Column(String(255), nullable=False),
+        description="Logical FK → crm_review_kpi_metrics.unique_id",
+    )
+    snapshot_unique_id: str = Field(
+        sa_column=Column(String(255), nullable=False),
+        description="Logical FK → crm_review_opp_branch_snapshot.unique_id",
+    )
+    session_id: str = Field(
+        sa_column=Column(String(255), nullable=False),
+        description="Redundant for filter",
+    )
+    opportunity_id: str = Field(
+        sa_column=Column(String(255), nullable=False),
+        description="Redundant for filter",
+    )
+    snapshot_period: str = Field(
+        sa_column=Column(String(32), nullable=False),
+        description="Redundant for filter (e.g., 2026-W15)",
+    )
+    scope_type: str = Field(
+        sa_column=Column(String(32), nullable=False),
+        description="owner | department | company",
+    )
+    scope_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+    metric_name: str = Field(
+        sa_column=Column(String(255), nullable=False),
+        description="closed | commit_sales | commit_ai | upside_sales",
+    )
+    calc_phase: str = Field(
+        sa_column=Column(String(32), nullable=False),
+        description="first | second",
+    )
+    create_time: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(
+            DateTime, nullable=False, server_default=func.now()
+        ),
+        description="创建时间",
+    )
+    update_time: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(
+            DateTime,
+            nullable=False,
+            server_default=func.now(),
+            onupdate=func.now(),
+        ),
+        description="更新时间",
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "kpi_metric_unique_id",
+            "snapshot_unique_id",
+            name="uniq_kpi_snapshot",
+        ),
+        Index("idx_kpi_metric_unique_id", "kpi_metric_unique_id"),
+        Index("idx_opportunity_period", "opportunity_id", "snapshot_period"),
+        Index("idx_session_metric", "session_id", "metric_name"),
+    )
+
+
 class CRMReviewOppRiskProgress(SQLModel, table=True):
     """Risk and progress tracking with scope_type pattern."""
 
