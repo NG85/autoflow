@@ -530,14 +530,14 @@ def query_review_snapshot_filter_enums(
         text(
             "select handbook_id, sales_stage "
             "from diagnostic_playbook "
-            "where sales_stage is not null and sales_stage <> ''"
+            "where status = 'active' and sales_stage is not null and sales_stage <> ''"
         )
     ).all()
     opp_type_rows = db_session.exec(
         text(
             "select handbook_id, field_value "
             "from crm_playbook_mapping "
-            "where field_value is not null and field_value <> '' "
+            "where is_active = 1 and field_value <> '' "
             "and field_name = 'opportunity_type'"
         )
     ).all()
