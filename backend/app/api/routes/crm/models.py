@@ -1022,7 +1022,7 @@ class ReviewOppBranchSnapshotsQueryIn(BaseModel):
         default=None,
         description=(
             "可选筛选器，支持 opportunity_ids/opportunity_names/owner_ids/owner_names/"
-            "forecast_types/opportunity_stages: string[]；"
+            "forecast_types/opportunity_stages/opportunity_types: string[]；"
             "expected_closing_date_start/end: YYYY-MM-DD；"
             "forecast_amount_min/max: number；"
             "ai_commits/ai_stages: string[]；"
@@ -1047,7 +1047,7 @@ class ReviewSnapshotGroupsQueryIn(BaseModel):
         default=None,
         description=(
             "可选筛选器，支持 opportunity_ids/opportunity_names/owner_ids/owner_names/"
-            "forecast_types/opportunity_stages: string[]；"
+            "forecast_types/opportunity_stages/opportunity_types: string[]；"
             "expected_closing_date_start/end: YYYY-MM-DD；"
             "forecast_amount_min/max: number；"
             "ai_commits/ai_stages: string[]；"
@@ -1107,7 +1107,7 @@ class ReviewSnapshotGroupDataQueryIn(BaseModel):
         default=None,
         description=(
             "可选筛选器，支持 opportunity_ids/opportunity_names/owner_ids/owner_names/"
-            "forecast_types/opportunity_stages: string[]；"
+            "forecast_types/opportunity_stages/opportunity_types: string[]；"
             "expected_closing_date_start/end: YYYY-MM-DD；"
             "forecast_amount_min/max: number；"
             "ai_commits/ai_stages: string[]；"
@@ -1275,6 +1275,7 @@ class ReviewSessionForecastRecalcOut(BaseModel):
 class ReviewOpportunityStageGroupOut(BaseModel):
     handbook_id: str
     sales_stages: List[str] = Field(default_factory=list)
+    opp_types: List[str] = Field(default_factory=list)
 
 
 class ReviewSnapshotGroupByOptionOut(BaseModel):

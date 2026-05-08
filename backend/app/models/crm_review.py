@@ -606,6 +606,10 @@ class CRMReviewOppBranchSnapshot(CRMReviewOppBranchSnapshotBasicOut, table=True)
         default=None,
         sa_column=Column(String(255)),
     )
+    crm_opportunity_type: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
     crm_expected_closing_date: Optional[str] = Field(
         default=None,
         sa_column=Column(String(255)),
@@ -882,6 +886,10 @@ class CRMReviewOppBranchSnapshotCache(SQLModel, table=True):
         sa_column=Column(String(64)),
     )
     crm_opportunity_stage: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+    crm_opportunity_type: Optional[str] = Field(
         default=None,
         sa_column=Column(String(255)),
     )
