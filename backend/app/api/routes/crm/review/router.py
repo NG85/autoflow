@@ -13,6 +13,7 @@ from sqlalchemy import text
 from sqlmodel import distinct, func, select
 
 from app.api.deps import CurrentUserDep, OptionalUserDep, SessionDep
+from app.core.config import settings
 from app.api.routes.crm.models import (
     MyLatestReviewSessionOut,
     ReviewBranchSnapshotMergeFromCacheOut,
@@ -55,11 +56,58 @@ from app.repositories.crm_review_attendee import crm_review_attendee_repo
 from app.repositories.crm_review_kpi_metrics import crm_review_kpi_metrics_repo
 from app.repositories.crm_review_session import crm_review_session_repo
 from app.services.crm_review_service import crm_review_service
+from app.services.feishu_billing_service import (
+    SIA_AI_INTERACTION_AI_MODULE_KEY,
+    feishu_billing_service,
+)
 from app.services.oauth_service import oauth_client
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["crm", "crm/review"])
+
+
+def _check_sia_quota_or_raise() -> None:
+    if not settings.CRM_BILLING_ENABLED:
+        return
+    try:
+        quota_ok, quota_msg, _ = feishu_billing_service.check_quota()
+    except Exception as exc:
+        logger.error("SIA quota check failed before review chat: %s", exc)
+        raise HTTPException(status_code=502, detail="计费服务异常，请稍后重试")
+    if not quota_ok:
+        raise HTTPException(status_code=400, detail=quota_msg)
+
+
+def _report_sia_usage(user: Any, review_detail: str) -> None:
+    if not settings.CRM_BILLING_ENABLED:
+        return
+    trace_id = feishu_billing_service.new_trace_id(prefix="review-sia-chat")
+    operator = feishu_billing_service.normalize_operator(getattr(user, "id", None))
+    ok, billing_code, billing_msg = feishu_billing_service.report_usage_with_retry(
+        trace_id=trace_id,
+        operator=operator,
+        review_detail=review_detail,
+        ai_module_key=SIA_AI_INTERACTION_AI_MODULE_KEY,
+    )
+    if not ok:
+        logger.error(
+            "Review SIA billing report failed after retries, trace_id=%s operator=%s code=%s msg=%s",
+            trace_id,
+            operator,
+            billing_code,
+            billing_msg,
+        )
+
+
+def _billing_after_stream_complete(stream, user: Any, review_detail: str):
+    try:
+        for chunk in stream:
+            yield chunk
+    except Exception:
+        raise
+    else:
+        _report_sia_usage(user, review_detail)
 
 
 def _has_review_session_viewer_permission(user: Any, _cache: Optional[Dict[str, bool]] = None) -> bool:
@@ -1099,12 +1147,17 @@ def review_session_chat(
         context=context,
     )
 
+    _check_sia_quota_or_raise()
+    review_detail = f"{origin or settings.REVIEW_REPORT_HOST}/crm/review/sessions/{session_id}/chat"
     if chat_request.stream:
+        wrapped_stream = _billing_after_stream_complete(chat_flow.chat(), user, review_detail)
         return StreamingResponse(
-            chat_flow.chat(),
+            wrapped_stream,
             media_type="text/event-stream",
         )
-    return get_final_chat_result(chat_flow.chat())
+    result = get_final_chat_result(chat_flow.chat())
+    _report_sia_usage(user, review_detail)
+    return result
 
 
 @router.post("/crm/review/sessions/{session_id}/build-index")

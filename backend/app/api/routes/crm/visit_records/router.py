@@ -22,6 +22,7 @@ from app.api.routes.crm.models import (
     VisitRecordCreate,
     VisitRecordQueryRequest,
 )
+from app.core.config import settings
 from app.crm.save_engine import (
     push_visit_record_message,
     save_visit_record_to_crm_table,
@@ -36,10 +37,43 @@ from app.repositories.document_content import DocumentContentRepo
 from app.repositories.user_profile import UserProfileRepo
 from app.repositories.visit_record import visit_record_repo
 from app.services.document_processing_service import document_processing_service
+from app.services.feishu_billing_service import feishu_billing_service
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["crm", "crm/visit-records"])
+
+
+def _build_visit_record_detail_url(record_id: Optional[str]) -> str:
+    base = (settings.VISIT_DETAIL_PAGE_URL or settings.REVIEW_REPORT_HOST or "").strip()
+    if not base:
+        return "about:blank"
+    if not record_id:
+        return base
+    sep = "&" if "?" in base else "?"
+    return f"{base}{sep}record_id={record_id}"
+
+
+def _report_visit_record_usage(user_id: UUID, record_id: Optional[str]) -> None:
+    if not settings.CRM_BILLING_ENABLED:
+        return
+    trace_id = feishu_billing_service.new_trace_id()
+    operator = feishu_billing_service.normalize_operator(user_id)
+    review_detail = _build_visit_record_detail_url(record_id)
+    ok, billing_code, billing_msg = feishu_billing_service.report_usage_with_retry(
+        trace_id=trace_id,
+        operator=operator,
+        review_detail=review_detail,
+    )
+    if not ok:
+        logger.error(
+            "Visit record billing report failed after retries, trace_id=%s record_id=%s operator=%s code=%s msg=%s",
+            trace_id,
+            record_id,
+            operator,
+            billing_code,
+            billing_msg,
+        )
 
 
 @router.post("/crm/visit_record")
@@ -55,6 +89,17 @@ def create_visit_record(
     支持简易版和完整版表单
     """
     try:
+        # 执行前检查租户余额（仅在启用计费时生效）。
+        if settings.CRM_BILLING_ENABLED:
+            try:
+                quota_ok, quota_message, quota_value = feishu_billing_service.check_quota()
+            except Exception as exc:
+                logger.error("Failed to query billing quota before visit record: %s", exc)
+                return {"code": 502, "message": "计费服务异常，请稍后重试", "data": {}}
+            if not quota_ok:
+                logger.warning("Visit record blocked by quota check: quota=%s msg=%s", quota_value, quota_message)
+                return {"code": 400, "message": quota_message, "data": {}}
+
         if not record.visit_type:
             record.visit_type = "form"
         
@@ -125,6 +170,12 @@ def create_visit_record(
                 
                 # 提交事务
                 db_session.commit()
+                result_payload = (result_data.get("data") or {}) if isinstance(result_data, dict) else {}
+                result_record_id = result_payload.get("record_id")
+                if bool(result_payload.get("card_push_success")):
+                    _report_visit_record_usage(user.id, result_record_id)
+                else:
+                    logger.info("Skip visit billing because card push failed, record_id=%s", result_record_id)
                 return result_data
             except Exception as e:
                 # 如果保存失败，回滚事务
@@ -140,7 +191,7 @@ def create_visit_record(
                 db_session.commit()
                 # 推送飞书消息（attachment 由下游统一做瘦身与解析）
                 record_data = record.model_dump()
-                push_visit_record_message(
+                push_ok = push_visit_record_message(
                     record_id=record_id,
                     visit_type=record.visit_type,
                     sales_visit_record=record_data,
@@ -149,6 +200,10 @@ def create_visit_record(
                     risk_info=None,
                     saved_time=saved_time
                 )
+                if push_ok:
+                    _report_visit_record_usage(user.id, record_id)
+                else:
+                    logger.info("Skip visit billing because card push failed, record_id=%s", record_id)
                 return {"code": 0, "message": "success", "data": {}}
             except Exception as e:
                 db_session.rollback()
@@ -156,7 +211,6 @@ def create_visit_record(
                 return {"code": 400, "message": "保存拜访记录失败，请重试", "data": {}}
         
         # 根据表单类型处理数据
-        from app.core.config import settings
         form_type = record.form_type or settings.CRM_VISIT_RECORD_FORM_TYPE.value
 
         # 使用可靠的处理函数，分组处理任务
@@ -221,7 +275,7 @@ def create_visit_record(
             db_session.commit()
             # 推送飞书消息（attachment 由下游统一做瘦身与解析）
             record_data = record.model_dump()
-            push_visit_record_message(
+            push_ok = push_visit_record_message(
                 record_id=record_id,
                 visit_type=record.visit_type,
                 sales_visit_record=record_data,
@@ -230,6 +284,10 @@ def create_visit_record(
                 risk_info=None,
                 saved_time=saved_time
             )
+            if push_ok:
+                _report_visit_record_usage(user.id, record_id)
+            else:
+                logger.info("Skip visit billing because card push failed, record_id=%s", record_id)
             return {"code": 0, "message": "success", "data": data}
         except Exception as e:
             db_session.rollback()

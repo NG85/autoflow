@@ -14,8 +14,42 @@ from app.services.platform_notification_service import platform_notification_ser
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
 from app.models.user_profile import UserProfile
 from app.services.oauth_service import oauth_client
+from app.core.config import settings
+from app.services.feishu_billing_service import (
+    SALES_PERSONAL_DAILY_REPORT_AI_MODULE_KEY,
+    SALES_TEAM_DAILY_REPORT_AI_MODULE_KEY,
+    feishu_billing_service,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _report_generated_report_usage(
+    *,
+    ai_module_key: str,
+    trace_key: str,
+    review_detail: str,
+) -> None:
+    if not settings.CRM_BILLING_ENABLED:
+        return
+    trace_id = feishu_billing_service.deterministic_trace_id(
+        prefix=ai_module_key,
+        unique_key=trace_key,
+    )
+    ok, billing_code, billing_msg = feishu_billing_service.report_usage_with_retry(
+        trace_id=trace_id,
+        operator="system",
+        review_detail=review_detail,
+        ai_module_key=ai_module_key,
+    )
+    if not ok:
+        logger.error(
+            "Report billing failed after retries, module=%s trace_id=%s code=%s msg=%s",
+            ai_module_key,
+            trace_id,
+            billing_code,
+            billing_msg,
+        )
 
 
 class CRMStatisticsService:
@@ -686,6 +720,13 @@ class CRMStatisticsService:
                         f"成功为销售 {report['recorder']} 发送个人日报飞书通知，"
                         f"推送给本人 {result['success_count']}/{result['recipients_count']} 次"
                     )
+                    report_date_value = report_data.get("report_date") or ""
+                    recorder_id = report_data.get("recorder_id") or ""
+                    _report_generated_report_usage(
+                        ai_module_key=SALES_PERSONAL_DAILY_REPORT_AI_MODULE_KEY,
+                        trace_key=f"sales-daily:{report_date_value}:{recorder_id}",
+                        review_detail=report_data.get("visit_detail_page") or settings.REVIEW_REPORT_HOST,
+                    )
                 else:
                     logger.warning(
                         f"销售 {report['recorder']} 的日报飞书通知发送失败: {result['message']}"
@@ -805,6 +846,18 @@ class CRMStatisticsService:
                         f"成功为部门 {department_report['department_name']} ({data_status}) 发送日报飞书通知，"
                         f"推送给部门负责人 {result['success_count']}/{result['recipients_count']} 次"
                     )
+                    if has_data:
+                        _report_generated_report_usage(
+                            ai_module_key=SALES_TEAM_DAILY_REPORT_AI_MODULE_KEY,
+                            trace_key=f"department-daily:{target_date.isoformat()}:{department_name}",
+                            review_detail=f"{settings.REVIEW_REPORT_HOST}/reports/daily-reports/department?report_date={target_date.isoformat()}&department_name={department_name}",
+                        )
+                    else:
+                        logger.info(
+                            "Skip billing for empty department daily report: department=%s date=%s",
+                            department_name,
+                            target_date.isoformat(),
+                        )
                 else:
                     logger.warning(
                         f"部门 {department_report['department_name']} 的日报飞书通知发送失败: {result['message']}"
@@ -901,6 +954,11 @@ class CRMStatisticsService:
                 logger.info(
                     f"成功发送公司日报飞书通知，"
                     f"推送成功 {result['success_count']}/{result['recipients_count']} 次"
+                )
+                _report_generated_report_usage(
+                    ai_module_key=SALES_TEAM_DAILY_REPORT_AI_MODULE_KEY,
+                    trace_key=f"company-daily:{target_date.isoformat()}",
+                    review_detail=f"{settings.REVIEW_REPORT_HOST}/reports/daily-reports/company?report_date={target_date.isoformat()}",
                 )
             else:
                 logger.warning(f"公司日报飞书通知发送失败: {result['message']}")

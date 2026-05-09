@@ -1,4 +1,5 @@
 import json
+import hashlib
 import logging
 import re
 from collections import defaultdict
@@ -525,6 +526,9 @@ class CRMWeeklyFollowupService:
                 "week_end": week_end.isoformat(),
                 "entity_count": 0,
                 "departments": len(active_departments),
+                "billable_departments": 0,
+                "billable_department_keys": [],
+                "billable_company": False,
             }
 
         # 按拜访主键缓存摘要文本，供实体 LLM 与多部门/公司 rollup 复用
@@ -903,6 +907,23 @@ class CRMWeeklyFollowupService:
         all_record_groups = list(grouped.items())
         rollup_requests.append(("company", "公司", all_record_groups))
 
+        # 计费口径：仅统计“有真实拜访数据生成的总结”。
+        # 部门：rollup_requests 中 scope=department 的条目数
+        # 公司：只要存在实体分组（grouped 非空）即为有效公司总结
+        billable_department_names = sorted(
+            {
+                str(dept).strip()
+                for scope, dept, _ in rollup_requests
+                if scope == "department" and str(dept).strip()
+            }
+        )
+        billable_department_count = len(billable_department_names)
+        billable_department_keys = [
+            f"D{hashlib.sha256(name.encode('utf-8')).hexdigest()[:16]}"
+            for name in billable_department_names
+        ]
+        billable_company = bool(grouped)
+
         # 关键：rollup prompt 在主线程构建，避免 commit 后 ORM 对象在子线程触发懒加载
         # 导致同一 DB 连接跨线程访问（例如 PyMySQL packet sequence 错误）。
         rollup_prompt_by_scope_dept: dict[tuple[str, str], str] = {}
@@ -1047,6 +1068,9 @@ class CRMWeeklyFollowupService:
             "week_end": week_end.isoformat(),
             "entity_count": len(persisted_entities),
             "departments": dept_count,
+            "billable_departments": billable_department_count,
+            "billable_department_keys": billable_department_keys,
+            "billable_company": billable_company,
         }
 
 

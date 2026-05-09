@@ -162,7 +162,7 @@ class Settings(BaseSettings):
     CELERY_RESULT_EXPIRES: int = 3600            # seconds
 
     # TODO: move below config to `option` table, it should be configurable by staff in console
-    TIDB_AI_CHAT_ENDPOINT: str = "https://af.aptsell.ai/api/v1/chats"
+    TIDB_AI_CHAT_ENDPOINT: str = "https://test.zhizhenzhihe.com/api/v1/chats"
     TIDB_AI_API_KEY: SecretStr | None = None
  
     # Storage configuration
@@ -194,6 +194,12 @@ class Settings(BaseSettings):
     
     # OAuth base URL
     OAUTH_BASE_URL: str = "http://auth:8018"
+
+    # Feishu paid API configuration
+    FEISHU_PAID_API_BASE_URL: str = "http://feishu-paid-api:8000"
+    FEISHU_PAID_API_TIMEOUT_SECONDS: float = 5.0
+    FEISHU_PAID_API_RETRY_ATTEMPTS: int = 3
+    FEISHU_PAID_API_RETRY_BASE_SECONDS: float = 0.5
     
     # Client Visit Guide Generation API
     ALDEBARAN_BASE_URL: str = "http://aldebaran:8000"
@@ -205,6 +211,7 @@ class Settings(BaseSettings):
     EMBEDDING_THRESHOLD: float = 0.92
 
     CRM_ENABLED: bool = False
+    CRM_BILLING_ENABLED: bool = False
     # CRM daily task configuration
     CRM_DAILY_TASK_ENABLED: bool = False
     CRM_DAILY_KB_ID: int = 2
@@ -296,7 +303,7 @@ class Settings(BaseSettings):
     CUSTOM_FONT_SIZE_TOKEN: str | None = None
     
     # Feishu send message configuration
-    REVIEW_REPORT_HOST: str = "https://aptsell.pingcap.net"
+    REVIEW_REPORT_HOST: str = "https://test.zhizhenzhihe.com"
     REVIEW_SESSION_PAGE_URL: str = "/v2/business/weekly-insight"
     CRM_REVIEW_SESSION_NOTIFICATION_ENABLED: bool = False
 
@@ -313,10 +320,10 @@ class Settings(BaseSettings):
     OPS_CC_DINGTALK_CHAT_IDS: Annotated[list[str] | str | None, BeforeValidator(parse_str_list)] = None
     
     # Visit detail page URL configuration
-    VISIT_DETAIL_PAGE_URL: str = "https://aptsell.pingcap.net/registerVisitRecord/list"
+    VISIT_DETAIL_PAGE_URL: str = "https://test.zhizhenzhihe.com/registerVisitRecord/list"
     
     # Account list page URL configuration
-    ACCOUNT_LIST_PAGE_URL: str = "https://aptsell.pingcap.net/review/list/account"
+    ACCOUNT_LIST_PAGE_URL: str = "https://test.zhizhenzhihe.com/review/list/account"
     
     # Ark LLM API
     ARK_API_KEY: str = "b1529268-82ea-407a-bd79-d01514a2ed60"
