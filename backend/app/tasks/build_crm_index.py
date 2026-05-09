@@ -158,7 +158,7 @@ def build_crm_graph_index_for_document(
                     "account_id": opportunity_data.get("customer_id"),
                     "account_name": customer_name,
                     "internal_owner": owner,
-                    "internal_department": opportunity_data.get("owner_main_department"),
+                    "internal_department": opportunity_data.get("owner_department_name") or opportunity_data.get("owner_main_department"),
                     "document_id": document_id,
                     "chunk_id": chunk_id,
                 }
