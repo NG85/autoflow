@@ -1,16 +1,85 @@
 import logging
 import hashlib
 import time
-from typing import Any
+from typing import Any, Optional
 from uuid import uuid4
 
 import requests
+from sqlmodel import Session, select
 
 from app.core.config import settings
+from app.core.db import engine
 
 logger = logging.getLogger(__name__)
 
+_PERSIST_MSG_MAX = 16000
+_PERSIST_REVIEW_DETAIL_MAX = 32000
+
 # 拜访记录计费功能：行为数据采集与质检
+def _truncate_text(value: Optional[str], max_len: int) -> Optional[str]:
+    if value is None:
+        return None
+    if len(value) <= max_len:
+        return value
+    return value[: max_len - 3] + "..."
+
+
+def _persist_usage_report_outcome(
+    *,
+    trace_id: str,
+    ai_module_key: str,
+    operator: str,
+    review_detail: str,
+    status: str,
+    last_api_code: Optional[int],
+    last_message: Optional[str],
+    attempts: int,
+    last_exception_type: Optional[str],
+) -> None:
+    """将 pending_insert 最终结果写入 feishu_billing_usage_report；失败不影响主流程。"""
+    from app.models.feishu_billing_usage_report import FeishuBillingUsageReport
+
+    try:
+        with Session(engine, expire_on_commit=False) as session:
+            row = session.exec(
+                select(FeishuBillingUsageReport).where(FeishuBillingUsageReport.trace_id == trace_id)
+            ).first()
+            rd = _truncate_text(review_detail, _PERSIST_REVIEW_DETAIL_MAX)
+            msg = _truncate_text(last_message, _PERSIST_MSG_MAX)
+            if row:
+                row.ai_module_key = ai_module_key
+                row.operator = operator
+                row.review_detail = rd
+                row.status = status
+                row.last_api_code = last_api_code
+                row.last_message = msg
+                row.attempts = attempts
+                row.last_exception_type = last_exception_type
+            else:
+                session.add(
+                    FeishuBillingUsageReport(
+                        trace_id=trace_id,
+                        ai_module_key=ai_module_key,
+                        operator=operator,
+                        review_detail=rd,
+                        status=status,
+                        last_api_code=last_api_code,
+                        last_message=msg,
+                        attempts=attempts,
+                        last_exception_type=last_exception_type,
+                    )
+                )
+            session.commit()
+    except Exception as exc:
+        logger.error(
+            "Failed to persist billing usage report outcome trace_id=%s status=%s: %s",
+            trace_id,
+            status,
+            exc,
+            exc_info=True,
+        )
+
+
 VISIT_RECORD_AI_MODULE_KEY = "behavior_data_collection_qa"
 SALES_PERSONAL_DAILY_REPORT_AI_MODULE_KEY = "sales_personal_daily_report"
 SALES_TEAM_DAILY_REPORT_AI_MODULE_KEY = "sales_team_daily_report"
@@ -99,18 +168,34 @@ class FeishuBillingService:
         }
         last_code = -1
         last_msg = "unknown"
+        last_exc_type: Optional[str] = None
+        attempts_used = 0
         for attempt in range(self._retry_attempts):
+            attempts_used = attempt + 1
             try:
                 data = self._post("/v1/usage_records/pending_insert", payload)
+                last_exc_type = None
                 code = int(data.get("code") or 0)
                 msg = str(data.get("msg") or "")
                 if code in (200, 409):
+                    _persist_usage_report_outcome(
+                        trace_id=trace_id,
+                        ai_module_key=ai_module_key,
+                        operator=operator,
+                        review_detail=review_detail,
+                        status="success",
+                        last_api_code=code,
+                        last_message=msg,
+                        attempts=attempts_used,
+                        last_exception_type=None,
+                    )
                     return True, code, msg
                 last_code = code
                 last_msg = msg
             except Exception as exc:
                 last_code = -1
                 last_msg = str(exc)
+                last_exc_type = type(exc).__name__
                 logger.warning(
                     "Billing usage report attempt failed, trace_id=%s attempt=%s/%s error=%s",
                     trace_id,
@@ -120,6 +205,18 @@ class FeishuBillingService:
                 )
             if attempt < self._retry_attempts - 1:
                 time.sleep(self._retry_base_seconds * (2 ** attempt))
+        persist_code: Optional[int] = None if last_code < 0 else last_code
+        _persist_usage_report_outcome(
+            trace_id=trace_id,
+            ai_module_key=ai_module_key,
+            operator=operator,
+            review_detail=review_detail,
+            status="failed",
+            last_api_code=persist_code,
+            last_message=last_msg,
+            attempts=attempts_used,
+            last_exception_type=last_exc_type,
+        )
         return False, last_code, last_msg
 
 
