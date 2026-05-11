@@ -884,23 +884,56 @@ def generate_crm_weekly_followup_summary(self, start_date_str=None, end_date_str
             )
             entity_count = int(result.get("entity_count") or 0) if isinstance(result, dict) else 0
             if entity_count > 0:
-                billable_department_keys = (
-                    [str(x) for x in (result.get("billable_department_keys") or [])]
+                billing_rows = (
+                    result.get("billable_department_billing")
                     if isinstance(result, dict)
-                    else []
+                    else None
                 )
-                for dept_key in billable_department_keys:
-                    _report_task_usage_once(
-                        BillingScenario.CRM_WEEKLY_FOLLOWUP_SUMMARY,
-                        f"weekly-followup-department:{start_date.isoformat()}:{end_date.isoformat()}:{dept_key}",
-                        f"{settings.REVIEW_REPORT_HOST}/review/opportunitySummary?week_start={start_date.isoformat()}&week_end={end_date.isoformat()}",
+                if isinstance(billing_rows, list) and billing_rows:
+                    for row in billing_rows:
+                        if not isinstance(row, dict):
+                            continue
+                        dept_key = str(row.get("billing_key") or "").strip()
+                        if not dept_key:
+                            continue
+                        # review_detail：与周报卡片 weekly_followup_page 一致，便于对账定位页面产出；幂等见 trace_key
+                        ws, we = start_date.isoformat(), end_date.isoformat()
+                        host = settings.REVIEW_REPORT_HOST.rstrip("/")
+                        dept_nm = str(row.get("department_name") or "").strip()
+                        if dept_nm:
+                            review_url = (
+                                f"{host}/review/opportunitySummary"
+                                f"?department_name={quote_plus(dept_nm)}&week_start={ws}&week_end={we}"
+                            )
+                        else:
+                            review_url = f"{host}/review/opportunitySummary?week_start={ws}&week_end={we}"
+                        _report_task_usage_once(
+                            BillingScenario.CRM_WEEKLY_FOLLOWUP_SUMMARY,
+                            f"weekly-followup-department:{start_date.isoformat()}:{end_date.isoformat()}:{dept_key}",
+                            review_url,
+                        )
+                else:
+                    billable_department_keys = (
+                        [str(x) for x in (result.get("billable_department_keys") or [])]
+                        if isinstance(result, dict)
+                        else []
                     )
+                    ws, we = start_date.isoformat(), end_date.isoformat()
+                    host = settings.REVIEW_REPORT_HOST.rstrip("/")
+                    for dept_key in billable_department_keys:
+                        review_url = f"{host}/review/opportunitySummary?week_start={ws}&week_end={we}"
+                        _report_task_usage_once(
+                            BillingScenario.CRM_WEEKLY_FOLLOWUP_SUMMARY,
+                            f"weekly-followup-department:{start_date.isoformat()}:{end_date.isoformat()}:{dept_key}",
+                            review_url,
+                        )
                 billable_company = bool(result.get("billable_company")) if isinstance(result, dict) else False
                 if billable_company:
+                    host = settings.REVIEW_REPORT_HOST.rstrip("/")
                     _report_task_usage_once(
                         BillingScenario.CRM_WEEKLY_FOLLOWUP_SUMMARY,
                         f"weekly-followup-company:{start_date.isoformat()}:{end_date.isoformat()}",
-                        f"{settings.REVIEW_REPORT_HOST}/review/opportunitySummary?week_start={start_date.isoformat()}&week_end={end_date.isoformat()}",
+                        f"{host}/review/opportunitySummary?week_start={start_date.isoformat()}&week_end={end_date.isoformat()}",
                     )
             else:
                 logger.info(

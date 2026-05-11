@@ -528,6 +528,7 @@ class CRMWeeklyFollowupService:
                 "departments": len(active_departments),
                 "billable_departments": 0,
                 "billable_department_keys": [],
+                "billable_department_billing": [],
                 "billable_company": False,
             }
 
@@ -885,7 +886,9 @@ class CRMWeeklyFollowupService:
 
         unknown_department_record_groups: List[Tuple[_EntityKey, List[CRMSalesVisitRecord]]] = []
         seen_keys_unknown: set[_EntityKey] = set()
-        rollup_requests: List[tuple[str, str, List[Tuple[_EntityKey, List[CRMSalesVisitRecord]]]]] = []
+        rollup_requests: List[
+            tuple[str, str, List[Tuple[_EntityKey, List[CRMSalesVisitRecord]]], Optional[str]]
+        ] = []
         for dept_id, record_groups in by_dept_id_full.items():
             department_name = dept_name_by_id.get(dept_id, "未知部门")
             if department_name == "未知部门":
@@ -894,41 +897,60 @@ class CRMWeeklyFollowupService:
                         seen_keys_unknown.add(k)
                         unknown_department_record_groups.append((k, rs))
                 continue
-            rollup_requests.append(("department", department_name, record_groups))
+            billing_dept_id = str(dept_id).strip() or None
+            rollup_requests.append(("department", department_name, record_groups, billing_dept_id))
 
         if unknown_department_record_groups:
-            rollup_requests.append(("department", "未知部门", unknown_department_record_groups))
+            rollup_requests.append(("department", "未知部门", unknown_department_record_groups, None))
 
         for dept_name, record_groups in by_dept_name_fallback.items():
             if not dept_name or dept_name in names_covered_by_id:
                 continue
-            rollup_requests.append(("department", dept_name, record_groups))
+            rollup_requests.append(("department", dept_name, record_groups, None))
 
         all_record_groups = list(grouped.items())
-        rollup_requests.append(("company", "公司", all_record_groups))
+        rollup_requests.append(("company", "公司", all_record_groups, None))
 
-        # 计费口径：仅统计“有真实拜访数据生成的总结”。
-        # 部门：rollup_requests 中 scope=department 的条目数
-        # 公司：只要存在实体分组（grouped 非空）即为有效公司总结
-        billable_department_names = sorted(
-            {
-                str(dept).strip()
-                for scope, dept, _ in rollup_requests
-                if scope == "department" and str(dept).strip()
-            }
-        )
-        billable_department_count = len(billable_department_names)
-        billable_department_keys = [
-            f"D{hashlib.sha256(name.encode('utf-8')).hexdigest()[:16]}"
-            for name in billable_department_names
-        ]
+        def _billing_subkey(billing_dept_id: Optional[str]) -> str:
+            return str(billing_dept_id).strip() if billing_dept_id else ""
+
+        # 计费：有 mirror 部门 id 时用 id 生成稳定 billing_key，避免多级组织下重名部门碰撞；无 id 时回退为名称哈希。
+        billable_department_items: list[dict[str, str]] = []
+        for scope, dept_name, _groups, billing_dept_id in rollup_requests:
+            if scope != "department":
+                continue
+            dn = str(dept_name).strip()
+            if not dn:
+                continue
+            did_raw = str(billing_dept_id).strip() if billing_dept_id else ""
+            if did_raw:
+                material = f"dept_id:{did_raw}"
+                billing_display_name = dn
+            elif dn == "未知部门":
+                # 无 department id：计费侧用 others 统称，避免中文名参与材料、且与其它部门名区分
+                material = "dept_name:others"
+                billing_display_name = "others"
+            else:
+                material = f"dept_name:{dn}"
+                billing_display_name = dn
+            bkey = f"D{hashlib.sha256(material.encode('utf-8')).hexdigest()[:16]}"
+            billable_department_items.append(
+                {
+                    "department_id": did_raw or "",
+                    "department_name": billing_display_name,
+                    "billing_key": bkey,
+                }
+            )
+        billable_department_count = len(billable_department_items)
+        billable_department_keys = [x["billing_key"] for x in billable_department_items]
         billable_company = bool(grouped)
 
         # 关键：rollup prompt 在主线程构建，避免 commit 后 ORM 对象在子线程触发懒加载
         # 导致同一 DB 连接跨线程访问（例如 PyMySQL packet sequence 错误）。
-        rollup_prompt_by_scope_dept: dict[tuple[str, str], str] = {}
-        for scope, dept, record_groups in rollup_requests:
-            rollup_prompt_by_scope_dept[(scope, dept)] = self._build_rollup_prompt(
+        rollup_prompt_by_scope_dept: dict[tuple[str, str, str], str] = {}
+        for scope, dept, record_groups, billing_dept_id in rollup_requests:
+            sub = _billing_subkey(billing_dept_id)
+            rollup_prompt_by_scope_dept[(scope, dept, sub)] = self._build_rollup_prompt(
                 week_start=week_start,
                 week_end=week_end,
                 scope=scope,
@@ -938,19 +960,19 @@ class CRMWeeklyFollowupService:
                 visit_context_cache=visit_context_cache,
             )
 
-        rollup_text_by_scope_dept: dict[tuple[str, str], Optional[str]] = {}
+        rollup_text_by_scope_dept: dict[tuple[str, str, str], Optional[str]] = {}
 
-        def _run_rollup_llm(item: tuple[tuple[str, str], str]) -> tuple[str, str, Optional[str]]:
-            (scope, dept), prompt = item
+        def _run_rollup_llm(item: tuple[tuple[str, str, str], str]) -> tuple[str, str, str, Optional[str]]:
+            (scope, dept, sub), prompt = item
             try:
                 raw = call_ark_llm(prompt, temperature=0.4)
                 txt = (raw or "").strip()
                 txt = txt.strip().strip("`").strip()
                 txt = re.sub(r'\n\s*\n+', '\n', txt)
-                return scope, dept, (txt if txt else None)
+                return scope, dept, sub, (txt if txt else None)
             except Exception as e:
-                logger.warning(f"LLM 汇总生成失败 scope={scope} dept={dept}: {e}")
-                return scope, dept, ""
+                logger.warning(f"LLM 汇总生成失败 scope={scope} dept={dept} sub={sub!r}: {e}")
+                return scope, dept, sub, ""
 
         with ThreadPoolExecutor(max_workers=llm_max_concurrency) as executor:
             futures = [
@@ -958,8 +980,8 @@ class CRMWeeklyFollowupService:
                 for item in rollup_prompt_by_scope_dept.items()
             ]
             for fut in as_completed(futures):
-                scope, dept, txt = fut.result()
-                rollup_text_by_scope_dept[(scope, dept)] = txt
+                scope, dept, sub, txt = fut.result()
+                rollup_text_by_scope_dept[(scope, dept, sub)] = txt
 
         # upsert department summaries（按部门 ID 的层级 + 无 dept_id 的 fallback）
         # 表唯一约束为 (week_start, week_end, summary_type, department_name)，多个未在 mirror 的
@@ -979,7 +1001,9 @@ class CRMWeeklyFollowupService:
                         summary_type="department",
                         department_name=department_name,
                     ),
-                    summary_content=rollup_text_by_scope_dept.get(("department", department_name)),
+                    summary_content=rollup_text_by_scope_dept.get(
+                        ("department", department_name, str(dept_id).strip())
+                    ),
                 )
                 self._upsert_summary(session, summary_obj)
 
@@ -996,7 +1020,7 @@ class CRMWeeklyFollowupService:
                     summary_type="department",
                     department_name="未知部门",
                 ),
-                summary_content=rollup_text_by_scope_dept.get(("department", "未知部门")),
+                summary_content=rollup_text_by_scope_dept.get(("department", "未知部门", "")),
             )
             self._upsert_summary(session, summary_obj)
 
@@ -1015,12 +1039,12 @@ class CRMWeeklyFollowupService:
                     summary_type="department",
                     department_name=dept_name,
                 ),
-                summary_content=rollup_text_by_scope_dept.get(("department", dept_name)),
+                summary_content=rollup_text_by_scope_dept.get(("department", dept_name, "")),
             )
             self._upsert_summary(session, summary_obj)
 
         # company summary
-        company_text = rollup_text_by_scope_dept.get(("company", "公司"))
+        company_text = rollup_text_by_scope_dept.get(("company", "公司", ""))
         company_obj = CRMWeeklyFollowupSummary(
             week_start=week_start,
             week_end=week_end,
@@ -1070,6 +1094,7 @@ class CRMWeeklyFollowupService:
             "departments": dept_count,
             "billable_departments": billable_department_count,
             "billable_department_keys": billable_department_keys,
+            "billable_department_billing": billable_department_items,
             "billable_company": billable_company,
         }
 
