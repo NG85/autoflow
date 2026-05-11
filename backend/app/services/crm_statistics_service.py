@@ -14,6 +14,11 @@ from app.services.platform_notification_service import platform_notification_ser
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
 from app.models.user_profile import UserProfile
 from app.services.oauth_service import oauth_client
+from app.core.config import settings
+from app.services.feishu_billing_facade import (
+    BillingScenario,
+    report_billing_usage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -686,6 +691,14 @@ class CRMStatisticsService:
                         f"成功为销售 {report['recorder']} 发送个人日报飞书通知，"
                         f"推送给本人 {result['success_count']}/{result['recipients_count']} 次"
                     )
+                    report_date_value = report_data.get("report_date") or ""
+                    recorder_id = report_data.get("recorder_id") or ""
+                    report_billing_usage(
+                        BillingScenario.CRM_SALES_PERSONAL_DAILY,
+                        review_detail=report_data.get("visit_detail_page") or settings.REVIEW_REPORT_HOST,
+                        trace_key=f"sales-daily:{report_date_value}:{recorder_id}",
+                        log_context=f"sales-daily:{report_date_value}:{recorder_id}",
+                    )
                 else:
                     logger.warning(
                         f"销售 {report['recorder']} 的日报飞书通知发送失败: {result['message']}"
@@ -805,6 +818,19 @@ class CRMStatisticsService:
                         f"成功为部门 {department_report['department_name']} ({data_status}) 发送日报飞书通知，"
                         f"推送给部门负责人 {result['success_count']}/{result['recipients_count']} 次"
                     )
+                    if has_data:
+                        report_billing_usage(
+                            BillingScenario.CRM_SALES_TEAM_DEPARTMENT_DAILY,
+                            review_detail=f"{settings.REVIEW_REPORT_HOST}/reports/daily-reports/department?report_date={target_date.isoformat()}&department_name={department_name}",
+                            trace_key=f"department-daily:{target_date.isoformat()}:{department_name}",
+                            log_context=f"department={department_name} date={target_date.isoformat()}",
+                        )
+                    else:
+                        logger.info(
+                            "Skip billing for empty department daily report: department=%s date=%s",
+                            department_name,
+                            target_date.isoformat(),
+                        )
                 else:
                     logger.warning(
                         f"部门 {department_report['department_name']} 的日报飞书通知发送失败: {result['message']}"
@@ -901,6 +927,12 @@ class CRMStatisticsService:
                 logger.info(
                     f"成功发送公司日报飞书通知，"
                     f"推送成功 {result['success_count']}/{result['recipients_count']} 次"
+                )
+                report_billing_usage(
+                    BillingScenario.CRM_SALES_TEAM_COMPANY_DAILY,
+                    review_detail=f"{settings.REVIEW_REPORT_HOST}/reports/daily-reports/company?report_date={target_date.isoformat()}",
+                    trace_key=f"company-daily:{target_date.isoformat()}",
+                    log_context=f"company-daily:{target_date.isoformat()}",
                 )
             else:
                 logger.warning(f"公司日报飞书通知发送失败: {result['message']}")

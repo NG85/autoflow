@@ -21,10 +21,41 @@ from app.services.crm_sales_task_statistics_service import crm_sales_task_statis
 from app.services.crm_weekly_followup_service import crm_weekly_followup_service
 from app.services.crm_visit_metrics_service import crm_visit_metrics_service, default_rebuild_windows
 from app.services.crm_todo_metrics_service import crm_todo_metrics_service, default_todo_metrics_windows
+from app.services.feishu_billing_facade import (
+    BillingScenario,
+    check_billing_quota,
+    report_billing_usage,
+)
 from app.tasks.knowledge_base import import_documents_from_kb_datasource
 from app.utils.date_utils import beijing_today_date
 
 logger = logging.getLogger(__name__)
+
+
+def _check_billing_quota_for_task(task_name: str) -> tuple[bool, str]:
+    try:
+        quota_ok, quota_message, quota_value = check_billing_quota()
+    except Exception as exc:
+        logger.error("Billing quota check failed before task=%s: %s", task_name, exc)
+        return False, "计费服务异常，请稍后重试"
+    if not quota_ok:
+        logger.warning(
+            "Task blocked by quota check, task=%s quota=%s msg=%s",
+            task_name,
+            quota_value,
+            quota_message,
+        )
+        return False, quota_message
+    return True, "ok"
+
+
+def _report_task_usage_once(scenario: BillingScenario, trace_key: str, review_detail: str) -> None:
+    report_billing_usage(
+        scenario,
+        review_detail=review_detail,
+        trace_key=trace_key,
+        log_context=f"trace_key={trace_key}",
+    )
 
 
 class TodoDataSourceType(str, Enum):
@@ -123,6 +154,10 @@ def generate_crm_daily_statistics(self, target_date_str=None, report_type=None):
     
     """
     try:
+        quota_ok, quota_msg = _check_billing_quota_for_task("generate_crm_daily_statistics")
+        if not quota_ok:
+            return {"success": False, "message": quota_msg, "data": {}}
+
         # 解析目标日期
         if target_date_str:
             try:
@@ -211,6 +246,9 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
     4. 推送公司周报给管理团队
     """
     try:
+        quota_ok, quota_msg = _check_billing_quota_for_task("generate_crm_weekly_report")
+        if not quota_ok:
+            return {"success": False, "message": quota_msg, "data": {}}
         
         # 计算上周的日期范围
         if start_date_str and end_date_str:
@@ -553,9 +591,11 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                             "error": str(e),
                         })
                         dept_report = _build_empty_department_weekly_report(department_name)
+                        dept_report["_billing_billable"] = False
                     else:
                         # 接口返回有数据时，重组结构以适配模板
                         dept_report = _rebuild_weekly_report_for_template(dept_report, department_name)
+                        dept_report["_billing_billable"] = True
 
                     # 补齐卡片模板用的超链接变量（URL）
                     report_info_1 = crm_statistics_service._get_weekly_report_info(session, "review1s", end_date, department_name)
@@ -670,6 +710,18 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                                     f"成功发送 {department_report.get('department_name', '未知部门')} 周报通知，"
                                     f"推送成功 {result['success_count']}/{result['recipients_count']} 次"
                                 )
+                                if bool(department_report.get("_billing_billable")):
+                                    _report_task_usage_once(
+                                        BillingScenario.CRM_TEAM_WEEKLY_REPORT,
+                                        f"weekly-department:{end_date.isoformat()}:{dept_name}",
+                                        f"{settings.REVIEW_REPORT_HOST}/reports/weekly-reports/department?end_date={end_date.isoformat()}&department_name={quote_plus(str(dept_name or ''))}",
+                                    )
+                                else:
+                                    logger.info(
+                                        "Skip weekly department billing for empty report: department=%s end_date=%s",
+                                        dept_name,
+                                        end_date.isoformat(),
+                                    )
                             else:
                                 msg = str(result.get("message", ""))
                                 # 运维告警规则会排除 "No recipients found for"（属于可预期的无收件人场景，避免误报）
@@ -705,6 +757,11 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                                 logger.info(
                                     f"成功发送公司周报通知，"
                                     f"推送成功 {company_result['success_count']}/{company_result['recipients_count']} 次"
+                                )
+                                _report_task_usage_once(
+                                    BillingScenario.CRM_TEAM_WEEKLY_REPORT,
+                                    f"weekly-company:{end_date.isoformat()}",
+                                    f"{settings.REVIEW_REPORT_HOST}/reports/weekly-reports/company?end_date={end_date.isoformat()}",
                                 )
                             else:
                                 msg = str(company_result.get("message", ""))
@@ -746,7 +803,7 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                     logger.warning(summary_msg)
                 else:
                     logger.info(summary_msg)
-                
+
                 return {
                     "success": True,
                     "start_date": start_date.isoformat(),
@@ -797,6 +854,10 @@ def generate_crm_weekly_followup_summary(self, start_date_str=None, end_date_str
         end_date_str: 结束日期 YYYY-MM-DD，不传默认本周六
     """
     try:
+        quota_ok, quota_msg = _check_billing_quota_for_task("generate_crm_weekly_followup_summary")
+        if not quota_ok:
+            return {"success": False, "message": quota_msg, "data": {}}
+
         # 计算日期范围
         if start_date_str and end_date_str:
             try:
@@ -821,6 +882,32 @@ def generate_crm_weekly_followup_summary(self, start_date_str=None, end_date_str
                 week_start=start_date,
                 week_end=end_date,
             )
+            entity_count = int(result.get("entity_count") or 0) if isinstance(result, dict) else 0
+            if entity_count > 0:
+                billable_department_keys = (
+                    [str(x) for x in (result.get("billable_department_keys") or [])]
+                    if isinstance(result, dict)
+                    else []
+                )
+                for dept_key in billable_department_keys:
+                    _report_task_usage_once(
+                        BillingScenario.CRM_WEEKLY_FOLLOWUP_SUMMARY,
+                        f"weekly-followup-department:{start_date.isoformat()}:{end_date.isoformat()}:{dept_key}",
+                        f"{settings.REVIEW_REPORT_HOST}/review/opportunitySummary?week_start={start_date.isoformat()}&week_end={end_date.isoformat()}",
+                    )
+                billable_company = bool(result.get("billable_company")) if isinstance(result, dict) else False
+                if billable_company:
+                    _report_task_usage_once(
+                        BillingScenario.CRM_WEEKLY_FOLLOWUP_SUMMARY,
+                        f"weekly-followup-company:{start_date.isoformat()}:{end_date.isoformat()}",
+                        f"{settings.REVIEW_REPORT_HOST}/review/opportunitySummary?week_start={start_date.isoformat()}&week_end={end_date.isoformat()}",
+                    )
+            else:
+                logger.info(
+                    "Skip weekly followup billing due to no entity data: week_start=%s week_end=%s",
+                    start_date.isoformat(),
+                    end_date.isoformat(),
+                )
             return {"success": True, "message": "ok", "data": result}
 
     except Exception as e:

@@ -13,6 +13,7 @@ from sqlalchemy import text
 from sqlmodel import distinct, func, select
 
 from app.api.deps import CurrentUserDep, OptionalUserDep, SessionDep
+from app.core.config import settings
 from app.api.routes.crm.models import (
     MyLatestReviewSessionOut,
     ReviewBranchSnapshotMergeFromCacheOut,
@@ -55,11 +56,44 @@ from app.repositories.crm_review_attendee import crm_review_attendee_repo
 from app.repositories.crm_review_kpi_metrics import crm_review_kpi_metrics_repo
 from app.repositories.crm_review_session import crm_review_session_repo
 from app.services.crm_review_service import crm_review_service
+from app.services.feishu_billing_facade import (
+    BillingScenario,
+    check_billing_quota,
+    report_billing_usage,
+)
 from app.services.oauth_service import oauth_client
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["crm", "crm/review"])
+
+
+def _check_sia_quota_or_raise() -> None:
+    try:
+        quota_ok, quota_msg, _ = check_billing_quota()
+    except Exception as exc:
+        logger.error("SIA quota check failed before review chat: %s", exc)
+        raise HTTPException(status_code=502, detail="计费服务异常，请稍后重试")
+    if not quota_ok:
+        raise HTTPException(status_code=400, detail=quota_msg)
+
+
+def _report_sia_usage(user: Any, review_detail: str) -> None:
+    report_billing_usage(
+        BillingScenario.REVIEW_SIA_CHAT,
+        review_detail=review_detail,
+        operator_user_id=getattr(user, "id", None),
+    )
+
+
+def _billing_after_stream_complete(stream, user: Any, review_detail: str):
+    try:
+        for chunk in stream:
+            yield chunk
+    except Exception:
+        raise
+    else:
+        _report_sia_usage(user, review_detail)
 
 
 def _has_review_session_viewer_permission(user: Any, _cache: Optional[Dict[str, bool]] = None) -> bool:
@@ -1099,12 +1133,17 @@ def review_session_chat(
         context=context,
     )
 
+    _check_sia_quota_or_raise()
+    review_detail = f"{origin or settings.REVIEW_REPORT_HOST}/crm/review/sessions/{session_id}/chat"
     if chat_request.stream:
+        wrapped_stream = _billing_after_stream_complete(chat_flow.chat(), user, review_detail)
         return StreamingResponse(
-            chat_flow.chat(),
+            wrapped_stream,
             media_type="text/event-stream",
         )
-    return get_final_chat_result(chat_flow.chat())
+    result = get_final_chat_result(chat_flow.chat())
+    _report_sia_usage(user, review_detail)
+    return result
 
 
 @router.post("/crm/review/sessions/{session_id}/build-index")

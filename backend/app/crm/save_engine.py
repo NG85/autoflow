@@ -978,10 +978,11 @@ def save_visit_record_with_content(
         # 不影响主流程，继续执行
     
     # ========== 第五阶段：推送飞书消息（不影响事务） ==========
+    push_success = False
     try:
         record_data = record.model_dump()
         # 推送飞书消息（保留附件字段，附件中仅包含URL和少量结构化信息，避免大体积base64）
-        push_visit_record_message(
+        push_success = push_visit_record_message(
             record_id=record_id,
             sales_visit_record=record_data,
             visit_type=record.visit_type,
@@ -994,7 +995,14 @@ def save_visit_record_with_content(
         logger.error(f"推送飞书消息失败: {e}")
         # 不影响主流程，继续执行
     
-    return {"code": 0, "message": "success", "data": {}}
+    return {
+        "code": 0,
+        "message": "success",
+        "data": {
+            "record_id": record_id,
+            "card_push_success": push_success,
+        },
+    }
 
 
 def process_visit_record_content_reliable(followup_content: str = None, followup_record: str = None, next_steps: str = None) -> dict:
