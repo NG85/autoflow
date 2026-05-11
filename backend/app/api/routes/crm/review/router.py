@@ -56,9 +56,10 @@ from app.repositories.crm_review_attendee import crm_review_attendee_repo
 from app.repositories.crm_review_kpi_metrics import crm_review_kpi_metrics_repo
 from app.repositories.crm_review_session import crm_review_session_repo
 from app.services.crm_review_service import crm_review_service
-from app.services.feishu_billing_service import (
-    SIA_AI_INTERACTION_AI_MODULE_KEY,
-    feishu_billing_service,
+from app.services.feishu_billing_facade import (
+    BillingScenario,
+    check_billing_quota,
+    report_billing_usage,
 )
 from app.services.oauth_service import oauth_client
 
@@ -68,10 +69,8 @@ router = APIRouter(tags=["crm", "crm/review"])
 
 
 def _check_sia_quota_or_raise() -> None:
-    if not settings.CRM_BILLING_ENABLED:
-        return
     try:
-        quota_ok, quota_msg, _ = feishu_billing_service.check_quota()
+        quota_ok, quota_msg, _ = check_billing_quota()
     except Exception as exc:
         logger.error("SIA quota check failed before review chat: %s", exc)
         raise HTTPException(status_code=502, detail="计费服务异常，请稍后重试")
@@ -80,24 +79,11 @@ def _check_sia_quota_or_raise() -> None:
 
 
 def _report_sia_usage(user: Any, review_detail: str) -> None:
-    if not settings.CRM_BILLING_ENABLED:
-        return
-    trace_id = feishu_billing_service.new_trace_id(prefix="review-sia-chat")
-    operator = feishu_billing_service.normalize_operator(getattr(user, "id", None))
-    ok, billing_code, billing_msg = feishu_billing_service.report_usage_with_retry(
-        trace_id=trace_id,
-        operator=operator,
+    report_billing_usage(
+        BillingScenario.REVIEW_SIA_CHAT,
         review_detail=review_detail,
-        ai_module_key=SIA_AI_INTERACTION_AI_MODULE_KEY,
+        operator_user_id=getattr(user, "id", None),
     )
-    if not ok:
-        logger.error(
-            "Review SIA billing report failed after retries, trace_id=%s operator=%s code=%s msg=%s",
-            trace_id,
-            operator,
-            billing_code,
-            billing_msg,
-        )
 
 
 def _billing_after_stream_complete(stream, user: Any, review_detail: str):

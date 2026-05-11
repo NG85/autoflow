@@ -21,10 +21,10 @@ from app.services.crm_sales_task_statistics_service import crm_sales_task_statis
 from app.services.crm_weekly_followup_service import crm_weekly_followup_service
 from app.services.crm_visit_metrics_service import crm_visit_metrics_service, default_rebuild_windows
 from app.services.crm_todo_metrics_service import crm_todo_metrics_service, default_todo_metrics_windows
-from app.services.feishu_billing_service import (
-    TEAM_WEEKLY_REPORT_AI_MODULE_KEY,
-    WEEKLY_FOLLOWUP_SUMMARY_AI_MODULE_KEY,
-    feishu_billing_service,
+from app.services.feishu_billing_facade import (
+    BillingScenario,
+    check_billing_quota,
+    report_billing_usage,
 )
 from app.tasks.knowledge_base import import_documents_from_kb_datasource
 from app.utils.date_utils import beijing_today_date
@@ -33,10 +33,8 @@ logger = logging.getLogger(__name__)
 
 
 def _check_billing_quota_for_task(task_name: str) -> tuple[bool, str]:
-    if not settings.CRM_BILLING_ENABLED:
-        return True, "billing disabled"
     try:
-        quota_ok, quota_message, quota_value = feishu_billing_service.check_quota()
+        quota_ok, quota_message, quota_value = check_billing_quota()
     except Exception as exc:
         logger.error("Billing quota check failed before task=%s: %s", task_name, exc)
         return False, "计费服务异常，请稍后重试"
@@ -51,25 +49,13 @@ def _check_billing_quota_for_task(task_name: str) -> tuple[bool, str]:
     return True, "ok"
 
 
-def _report_task_usage_once(ai_module_key: str, trace_key: str, review_detail: str) -> None:
-    if not settings.CRM_BILLING_ENABLED:
-        return
-    trace_id = feishu_billing_service.deterministic_trace_id(ai_module_key, trace_key)
-    ok, billing_code, billing_msg = feishu_billing_service.report_usage_with_retry(
-        trace_id=trace_id,
-        operator="system",
+def _report_task_usage_once(scenario: BillingScenario, trace_key: str, review_detail: str) -> None:
+    report_billing_usage(
+        scenario,
         review_detail=review_detail,
-        ai_module_key=ai_module_key,
+        trace_key=trace_key,
+        log_context=f"trace_key={trace_key}",
     )
-    if not ok:
-        logger.error(
-            "Task billing report failed after retries, trace_key=%s trace_id=%s module=%s code=%s msg=%s",
-            trace_key,
-            trace_id,
-            ai_module_key,
-            billing_code,
-            billing_msg,
-        )
 
 
 class TodoDataSourceType(str, Enum):
@@ -726,7 +712,7 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                                 )
                                 if bool(department_report.get("_billing_billable")):
                                     _report_task_usage_once(
-                                        TEAM_WEEKLY_REPORT_AI_MODULE_KEY,
+                                        BillingScenario.CRM_TEAM_WEEKLY_REPORT,
                                         f"weekly-department:{end_date.isoformat()}:{dept_name}",
                                         f"{settings.REVIEW_REPORT_HOST}/reports/weekly-reports/department?end_date={end_date.isoformat()}&department_name={quote_plus(str(dept_name or ''))}",
                                     )
@@ -773,7 +759,7 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                                     f"推送成功 {company_result['success_count']}/{company_result['recipients_count']} 次"
                                 )
                                 _report_task_usage_once(
-                                    TEAM_WEEKLY_REPORT_AI_MODULE_KEY,
+                                    BillingScenario.CRM_TEAM_WEEKLY_REPORT,
                                     f"weekly-company:{end_date.isoformat()}",
                                     f"{settings.REVIEW_REPORT_HOST}/reports/weekly-reports/company?end_date={end_date.isoformat()}",
                                 )
@@ -905,14 +891,14 @@ def generate_crm_weekly_followup_summary(self, start_date_str=None, end_date_str
                 )
                 for dept_key in billable_department_keys:
                     _report_task_usage_once(
-                        WEEKLY_FOLLOWUP_SUMMARY_AI_MODULE_KEY,
+                        BillingScenario.CRM_WEEKLY_FOLLOWUP_SUMMARY,
                         f"weekly-followup-department:{start_date.isoformat()}:{end_date.isoformat()}:{dept_key}",
                         f"{settings.REVIEW_REPORT_HOST}/review/opportunitySummary?week_start={start_date.isoformat()}&week_end={end_date.isoformat()}",
                     )
                 billable_company = bool(result.get("billable_company")) if isinstance(result, dict) else False
                 if billable_company:
                     _report_task_usage_once(
-                        WEEKLY_FOLLOWUP_SUMMARY_AI_MODULE_KEY,
+                        BillingScenario.CRM_WEEKLY_FOLLOWUP_SUMMARY,
                         f"weekly-followup-company:{start_date.isoformat()}:{end_date.isoformat()}",
                         f"{settings.REVIEW_REPORT_HOST}/review/opportunitySummary?week_start={start_date.isoformat()}&week_end={end_date.isoformat()}",
                     )

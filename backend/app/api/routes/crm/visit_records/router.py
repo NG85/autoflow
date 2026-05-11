@@ -37,7 +37,11 @@ from app.repositories.document_content import DocumentContentRepo
 from app.repositories.user_profile import UserProfileRepo
 from app.repositories.visit_record import visit_record_repo
 from app.services.document_processing_service import document_processing_service
-from app.services.feishu_billing_service import feishu_billing_service
+from app.services.feishu_billing_facade import (
+    BillingScenario,
+    check_billing_quota,
+    report_billing_usage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,24 +59,25 @@ def _build_visit_record_detail_url(record_id: Optional[str]) -> str:
 
 
 def _report_visit_record_usage(user_id: UUID, record_id: Optional[str]) -> None:
-    if not settings.CRM_BILLING_ENABLED:
-        return
-    trace_id = feishu_billing_service.new_trace_id()
-    operator = feishu_billing_service.normalize_operator(user_id)
-    review_detail = _build_visit_record_detail_url(record_id)
-    ok, billing_code, billing_msg = feishu_billing_service.report_usage_with_retry(
-        trace_id=trace_id,
-        operator=operator,
-        review_detail=review_detail,
-    )
-    if not ok:
-        logger.error(
-            "Visit record billing report failed after retries, trace_id=%s record_id=%s operator=%s code=%s msg=%s",
-            trace_id,
-            record_id,
-            operator,
-            billing_code,
-            billing_msg,
+    rid = (str(record_id).strip() if record_id is not None else "") or ""
+    review_detail = _build_visit_record_detail_url(rid if rid else None)
+    if rid:
+        report_billing_usage(
+            BillingScenario.VISIT_RECORD,
+            review_detail=review_detail,
+            trace_key=f"visit-record:{rid}",
+            operator_user_id=user_id,
+            log_context=f"record_id={rid}",
+        )
+    else:
+        logger.info(
+            "Visit billing with empty record_id: deterministic trace skipped, using random trace_id"
+        )
+        report_billing_usage(
+            BillingScenario.VISIT_RECORD,
+            review_detail=review_detail,
+            operator_user_id=user_id,
+            log_context="record_id_empty_random_trace",
         )
 
 
@@ -89,16 +94,14 @@ def create_visit_record(
     支持简易版和完整版表单
     """
     try:
-        # 执行前检查租户余额（仅在启用计费时生效）。
-        if settings.CRM_BILLING_ENABLED:
-            try:
-                quota_ok, quota_message, quota_value = feishu_billing_service.check_quota()
-            except Exception as exc:
-                logger.error("Failed to query billing quota before visit record: %s", exc)
-                return {"code": 502, "message": "计费服务异常，请稍后重试", "data": {}}
-            if not quota_ok:
-                logger.warning("Visit record blocked by quota check: quota=%s msg=%s", quota_value, quota_message)
-                return {"code": 400, "message": quota_message, "data": {}}
+        try:
+            quota_ok, quota_message, quota_value = check_billing_quota()
+        except Exception as exc:
+            logger.error("Failed to query billing quota before visit record: %s", exc)
+            return {"code": 502, "message": "计费服务异常，请稍后重试", "data": {}}
+        if not quota_ok:
+            logger.warning("Visit record blocked by quota check: quota=%s msg=%s", quota_value, quota_message)
+            return {"code": 400, "message": quota_message, "data": {}}
 
         if not record.visit_type:
             record.visit_type = "form"

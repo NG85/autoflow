@@ -34,9 +34,10 @@ from app.exceptions import InternalServerError
 from app.models.chat import ChatType
 from app.api.routes.models import ChatMode
 from app.core.config import settings
-from app.services.feishu_billing_service import (
-    SIA_AI_INTERACTION_AI_MODULE_KEY,
-    feishu_billing_service,
+from app.services.feishu_billing_facade import (
+    BillingScenario,
+    check_billing_quota,
+    report_billing_usage,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,10 +52,8 @@ def _build_chat_review_detail(chat_id: Optional[Any]) -> str:
 
 
 def _check_sia_quota_or_raise() -> None:
-    if not settings.CRM_BILLING_ENABLED:
-        return
     try:
-        quota_ok, quota_msg, _ = feishu_billing_service.check_quota()
+        quota_ok, quota_msg, _ = check_billing_quota()
     except Exception as exc:
         logger.error("SIA quota check failed before /chats: %s", exc)
         raise HTTPException(status_code=502, detail="计费服务异常，请稍后重试")
@@ -63,24 +62,11 @@ def _check_sia_quota_or_raise() -> None:
 
 
 def _report_sia_usage(user: Optional[Any], review_detail: str) -> None:
-    if not settings.CRM_BILLING_ENABLED:
-        return
-    trace_id = feishu_billing_service.new_trace_id(prefix="sia-chat")
-    operator = feishu_billing_service.normalize_operator(getattr(user, "id", None) if user else None)
-    ok, billing_code, billing_msg = feishu_billing_service.report_usage_with_retry(
-        trace_id=trace_id,
-        operator=operator,
+    report_billing_usage(
+        BillingScenario.SIA_CHAT,
         review_detail=review_detail,
-        ai_module_key=SIA_AI_INTERACTION_AI_MODULE_KEY,
+        operator_user_id=getattr(user, "id", None) if user else None,
     )
-    if not ok:
-        logger.error(
-            "SIA billing report failed after retries, trace_id=%s operator=%s code=%s msg=%s",
-            trace_id,
-            operator,
-            billing_code,
-            billing_msg,
-        )
 
 
 def _extract_chat_id_from_chunk(chunk: Any) -> Optional[str]:
