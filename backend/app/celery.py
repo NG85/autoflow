@@ -186,8 +186,8 @@ if settings.CRM_WEEKLY_FOLLOWUP_ENGAGEMENT_ENABLED:
         "schedule": weekly_followup_engagement_schedule,
     }
 
-# CRM拜访记录回写任务
-if settings.CRM_WRITEBACK_ENABLED:
+# CRM拜访记录回写任务（仅当配置了默认拜访回写模式时注册 Beat）
+if settings.CRM_WRITEBACK_DEFAULT_MODE is not None:
     # 解析cron表达式
     cron_expr = settings.CRM_WRITEBACK_CRON
     cron_fields = cron_expr.strip().split()

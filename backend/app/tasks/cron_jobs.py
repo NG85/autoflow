@@ -1164,7 +1164,7 @@ def crm_visit_records_writeback(self, start_date_str=None, end_date_str=None, wr
     Args:
         start_date_str: 开始日期字符串，格式YYYY-MM-DD，不传则根据频率配置自动计算
         end_date_str: 结束日期字符串，格式YYYY-MM-DD，不传则根据频率配置自动计算
-        writeback_mode: 回写模式，不传则使用配置中的默认值
+        writeback_mode: 回写模式；不传则使用 ``CRM_WRITEBACK_DEFAULT_MODE``（未配置则任务跳过）
     
     工作流程：
     1. 根据配置的频率计算日期范围：
@@ -1176,13 +1176,24 @@ def crm_visit_records_writeback(self, start_date_str=None, end_date_str=None, wr
        - APAC模式：为每条拜访记录创建Salesforce的任务
        - OLM模式：为每条拜访记录创建销售易的拜访记录
        - CHAITIN模式：为每条拜访记录创建长亭的拜访记录
+       - 其它模式：若尚未接入拜访回写则跳过
     4. 调用相应的API进行回写或任务创建，并返回回写结果
+    
+    若 ``CRM_WRITEBACK_DEFAULT_MODE`` 未配置（为 ``None``），任务立即成功返回且不查询数据库。
     """
     try:
-        # 如果没有指定回写模式，使用配置中的默认值
+        # 未指定时使用配置的默认拜访回写模式；为 None 则整任务跳过
         if writeback_mode is None:
-            writeback_mode = settings.CRM_WRITEBACK_DEFAULT_MODE.value
-        
+            dm = settings.CRM_WRITEBACK_DEFAULT_MODE
+            writeback_mode = dm.value if dm is not None else None
+        if writeback_mode is None:
+            logger.info("CRM_WRITEBACK_DEFAULT_MODE 未配置，跳过 CRM 拜访记录回写任务")
+            return {
+                "success": True,
+                "message": "未配置 CRM_WRITEBACK_DEFAULT_MODE，跳过 CRM 拜访记录回写任务",
+                "data": {},
+            }
+
         # 验证回写模式
         valid_modes = [mode.value for mode in WritebackMode]
         if writeback_mode not in valid_modes:

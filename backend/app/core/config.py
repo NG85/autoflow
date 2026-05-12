@@ -1,5 +1,5 @@
 import enum
-from typing import Annotated, Any
+from typing import Annotated, Any, Optional
 from urllib.parse import quote
 
 from pydantic import (
@@ -64,10 +64,17 @@ class VisitRecordFormType(str, enum.Enum):
 
 
 class WritebackMode(str, enum.Enum):
-    CBG = "CBG"    # CBG模式：纷享销客内容回写模式
-    APAC = "APAC"  # APAC模式：Salesforce任务创建模式
-    OLM = "OLM"    # OLM模式：销售易拜访记录回写模式
-    CHAITIN = "CHAITIN"    # CHAITIN模式：长亭拜访记录回写模式
+    """CRM 回写网关变体枚举（**拜访记录**定时/管理端回写用）。
+
+    - **拜访记录回写**：``Settings.CRM_WRITEBACK_DEFAULT_MODE`` 为 ``None`` 表示关闭（不注册 Beat）；
+      非 ``None`` 时作为定时任务 / 管理端未显式传 ``writeback_mode`` 时的默认变体。
+    - **Review 商机回写**：由 ``Settings.CRM_WRITEBACK_REVIEW_ENABLED`` 控制；网关 URL/包体统一，不由本枚举区分。
+    """
+
+    CBG = "CBG"  # CBG 纷享销客
+    APAC = "APAC"  # APAC Salesforce
+    OLM = "OLM"  # OLM 销售易
+    CHAITIN = "CHAITIN"  # CHAITIN 长亭自研
 
 
 class WritebackFrequency(str, enum.Enum):
@@ -254,12 +261,16 @@ class Settings(BaseSettings):
     CRM_WEEKLY_FOLLOWUP_ENGAGEMENT_CRON: str = '0 9 * * 1'  # 每周一上午9:00执行（统计上一周）
     
     # CRM writeback task configuration
-    CRM_WRITEBACK_ENABLED: bool = False
     CRM_WRITEBACK_CRON: str = '0 14 * * 0'  # 每周日下午2点执行
-    CRM_WRITEBACK_API_URL: str = "http://auth:8018"  # CRM回写API地址
-    CRM_WRITEBACK_DEFAULT_MODE: WritebackMode = WritebackMode.CBG  # 默认回写模式
+    CRM_WRITEBACK_API_URL: str = "http://salesforce:8080"  # CRM回写API地址
+    # 拜访记录回写：None 表示关闭（不注册 Beat、执行层跳过）；非 None 为默认网关变体
+    CRM_WRITEBACK_DEFAULT_MODE: Optional[WritebackMode] = None
+    # Review 商机网关回写：为 True 时成员提交等路径会调用 CRM（与拜访回写独立；具体 CRM 由网关路由）
+    CRM_WRITEBACK_REVIEW_ENABLED: bool = False
     CRM_WRITEBACK_FREQUENCY: WritebackFrequency = WritebackFrequency.WEEKLY  # 回写频率：weekly（按周）或daily（按天）
     CRM_WRITEBACK_TIMEZONE: str = "Asia/Shanghai"  # 回写任务使用的时区
+    # Review 商机回写：POST ``{CRM_WRITEBACK_API_URL}{CRM_WRITEBACK_REVIEW_PATH}``
+    CRM_WRITEBACK_REVIEW_PATH: str = "/crm-custom/update-business-opportunity"
     
     # CRM sales task notification configuration
     CRM_SALES_TASK_ENABLED: bool = False

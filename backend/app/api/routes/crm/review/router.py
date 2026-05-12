@@ -654,7 +654,8 @@ def submit_my_review_branch_snapshot_changes(
 ):
     """
     保存本次 review 的商机快照修改（可一次保存多条）。仅在可编辑阶段成功；空数组会记录一次保存审计（不更新参会人提交状态）。
-    请求体里每条只传允许改的字段，具体以 ``ReviewBranchSnapshotUpdateIn`` 为准。
+    请求体字段以 ``ReviewBranchSnapshotUpdateIn`` 为准。
+    若 ``CRM_WRITEBACK_REVIEW_ENABLED`` 为 True 且有字段变更：先 ``flush``（事务连接，未提交）再调 CRM review 回写，失败则 ``rollback`` 并 502；否则 ``commit``。API 会话使用 ``engine_transactional``，与任务侧 ``autocommit`` 引擎分离。
     """
     return crm_review_service.submit_my_snapshot_changes(
         db_session,

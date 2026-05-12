@@ -1,9 +1,25 @@
+"""CRM 网关回写。
+
+职责边界（配置与实现一致）：
+- **拜访记录回写**：``CRM_WRITEBACK_DEFAULT_MODE``（``None``=关闭）+ ``CrmVisitWritebackClient`` +
+  ``CrmWritebackService`` 中以 ``writeback_visit_*`` / ``_execute_visit_writeback`` 为代表的路径。
+- **CRM review 商机回写**：``CRM_WRITEBACK_REVIEW_ENABLED`` + ``CrmReviewWritebackClient`` +
+  ``writeback_review_opportunity_updates_to_crm``（成员修改草稿并提交等）；不读写 ``CRM_WRITEBACK_DEFAULT_MODE``。
+"""
+
 import httpx
+import json
 import logging
+import re
+from decimal import Decimal
 from typing import List, Dict, Any, Optional
-from datetime import datetime, time, timezone, timedelta
+from datetime import date, datetime, time, timezone, timedelta
 from sqlmodel import Session, select, text
 from app.core.config import settings, WritebackMode
+from app.models.wb_review_requests import (
+    ReviewOpportunityWritebackBatchRequest,
+    ReviewOpportunityWritebackOp,
+)
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
 from app.models.task_requests import TaskCreateRequest, TaskBatchCreateRequest
 from app.models.wb_visit_requests import (
@@ -20,10 +36,109 @@ from app.api.routes.crm.models import VisitAttachment
 logger = logging.getLogger(__name__)
 
 
-class CrmWritebackClient:
-    """CRM数据回写客户端"""
+def _str_or_none(v: Any) -> Optional[str]:
+    if v is None:
+        return None
+    s = str(v).strip()
+    return s or None
+
+
+def _normalize_expected_sign_month(raw: Any) -> Optional[str]:
+    if raw is None:
+        return None
+    if isinstance(raw, datetime):
+        return raw.date().isoformat()
+    if isinstance(raw, date) and not isinstance(raw, datetime):
+        return raw.isoformat()
+    s = str(raw).strip()
+    if not s:
+        return None
+    if re.fullmatch(r"\d{4}-\d{2}", s):
+        return f"{s}-01"
+    if len(s) >= 10 and s[4] == "-" and s[7] == "-":
+        return s[:10]
+    return s
+
+
+def _coerce_money(raw: Any) -> float:
+    if raw is None:
+        return 0.0
+    if isinstance(raw, Decimal):
+        return float(raw)
+    return float(raw)
+
+
+def _money_compare_value(raw: Any) -> Optional[float]:
+    """用于判断金额是否变化；``None`` 表示空金额。"""
+    if raw is None:
+        return None
+    if isinstance(raw, Decimal):
+        return round(float(raw), 6)
+    return round(float(raw), 6)
+
+
+def review_op_to_gateway_update_json(op: ReviewOpportunityWritebackOp) -> Dict[str, Any]:
+    """仅包含相对变更前确有变化的可编辑字段 → 网关单条商机更新 JSON（camelCase，与 ``CrmBusinessOpportunityUpdateBody`` 对齐）。"""
+    before = op.before_editable or {}
+    after = op.after_editable or {}
+    oid = str(op.opportunity_id or "").strip()
+    payload: Dict[str, Any] = {"id": oid}
+
+    if _str_or_none(before.get("opportunity_stage")) != _str_or_none(after.get("opportunity_stage")):
+        payload["saleStageId"] = _str_or_none(after.get("opportunity_stage"))
+
+    if _str_or_none(before.get("forecast_type")) != _str_or_none(after.get("forecast_type")):
+        payload["predictionType"] = _str_or_none(after.get("forecast_type"))
+
+    nb = _normalize_expected_sign_month(before.get("expected_closing_date"))
+    na = _normalize_expected_sign_month(after.get("expected_closing_date"))
+    if nb != na:
+        payload["expectedSignMonth"] = na
+
+    if _money_compare_value(before.get("forecast_amount")) != _money_compare_value(after.get("forecast_amount")):
+        payload["money"] = _coerce_money(after.get("forecast_amount"))
+
+    return payload
+
+
+def _crm_writeback_gateway_json_message(data: dict) -> str:
+    """网关包体里的 ``message``（trim），无则空串。"""
+    raw = data.get("message")
+    if raw is None:
+        return ""
+    return str(raw).strip()
+
+
+def _crm_writeback_gateway_envelope_ok(data: dict) -> bool:
+    """网关统一 JSON：``success is False`` 或 ``code`` 非 200 视为业务失败；缺字段则兼容旧响应。"""
+    if data.get("success") is False:
+        return False
+    code = data.get("code")
+    if code is None:
+        return True
+    try:
+        return int(code) == 200
+    except (TypeError, ValueError):
+        return str(code).strip() == "200"
+
+
+def _crm_writeback_gateway_message_from_text(body: str) -> str:
+    """从 HTTP 错误响应文本中尽量解析 ``message``。"""
+    if not (body or "").strip():
+        return ""
+    try:
+        data = json.loads(body)
+    except Exception:  # noqa: BLE001
+        return ""
+    if isinstance(data, dict):
+        return _crm_writeback_gateway_json_message(data)
+    return ""
+
+
+class CrmVisitWritebackClient:
+    """拜访记录回写 HTTP 客户端（CBG / APAC / OLM / CHAITIN 等）。"""
     
-    def __init__(self, base_url: str = "http://auth:8018"):
+    def __init__(self, base_url: str = "http://salesforce:8080"):
         self.base_url = base_url
         self.headers = {
             "Content-Type": "application/json"
@@ -138,11 +253,112 @@ class CrmWritebackClient:
             logger.error(f"长亭批量创建拜访记录失败: {e}")
             return {"success": False, "message": f"长亭批量创建拜访记录失败: {e}"}
 
+
+class CrmReviewWritebackClient:
+    """CRM **review** 场景下的商机字段批量网关回写 HTTP 客户端。
+
+    供成员 **保存草稿 / 提交** 等路径调用；``POST`` 至
+    ``{CRM_WRITEBACK_API_URL}{CRM_WRITEBACK_REVIEW_PATH}``（与拜访回写路径分离，由网关路由具体 CRM）。
+    与拜访回写 ``CrmVisitWritebackClient`` 隔离。
+    """
+
+    def __init__(self, base_url: str = "http://salesforce:8080"):
+        self.base_url = base_url
+        self.headers = {"Content-Type": "application/json"}
+
+    def post_review_opportunity_updates(
+        self, batch_request: ReviewOpportunityWritebackBatchRequest
+    ) -> Dict[str, Any]:
+        """对 ``batch_request.ops`` 逐条 POST；每条仅含 ``id`` 及相对 ``before_editable`` 有变化的可编辑字段。"""
+        path = (getattr(settings, "CRM_WRITEBACK_REVIEW_PATH", None) or "").strip()
+        if not path.startswith("/"):
+            path = "/" + path
+        url = f"{self.base_url}{path}"
+        try:
+            timeout = httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0)
+            with httpx.Client(timeout=timeout) as client:
+                results: List[Any] = []
+                posted = 0
+                for op in batch_request.ops:
+                    payload = review_op_to_gateway_update_json(op)
+                    if not str(payload.get("id") or "").strip():
+                        return {
+                            "success": False,
+                            "message": "CRM review 回写缺少商机 id",
+                            "response_text": None,
+                        }
+                    if set(payload.keys()) == {"id"}:
+                        logger.info(
+                            "CRM review writeback skip POST (no editable delta) id=%s source=%s",
+                            payload.get("id"),
+                            batch_request.source,
+                        )
+                        continue
+                    response = client.post(
+                        url,
+                        headers=self.headers,
+                        json=payload,
+                    )
+                    logger.info(
+                        "CRM review writeback POST %s id=%s source=%s status=%s",
+                        url,
+                        payload.get("id"),
+                        batch_request.source,
+                        response.status_code,
+                    )
+                    response.raise_for_status()
+                    try:
+                        data = response.json()
+                    except Exception:  # noqa: BLE001
+                        results.append({"raw": response.text})
+                        posted += 1
+                        continue
+                    if isinstance(data, dict) and not _crm_writeback_gateway_envelope_ok(data):
+                        gw = _crm_writeback_gateway_json_message(data)
+                        msg = gw or f"CRM 网关返回失败（code={data.get('code')!s}）"
+                        return {
+                            "success": False,
+                            "message": msg,
+                            "response_text": None,
+                            "gateway_response": data,
+                        }
+                    results.append(data)
+                    posted += 1
+                return {
+                    "success": True,
+                    "data": {"results": results, "count": len(results), "posted_count": posted},
+                    "posted_count": posted,
+                }
+        except httpx.TimeoutException as e:
+            logger.error("CRM review writeback timeout: %s", e)
+            return {"success": False, "message": f"CRM review 回写超时: {e}"}
+        except httpx.HTTPStatusError as e:
+            body = e.response.text[:4000] if e.response is not None else ""
+            gw_msg = _crm_writeback_gateway_message_from_text(body)
+            msg = gw_msg or f"CRM review 回写 HTTP 失败: {e}"
+            logger.error(
+                "CRM review writeback HTTP error: %s body=%s",
+                e,
+                body,
+            )
+            return {
+                "success": False,
+                "message": msg,
+                "response_text": body or None,
+            }
+        except httpx.RequestError as e:
+            logger.error("CRM review writeback request failed: %s", e)
+            return {"success": False, "message": f"CRM review 回写请求失败: {e}"}
+
+
 class CrmWritebackService:
-    """CRM数据回写服务"""
-    
+    """CRM 回写服务：拜访与 review 两条链路分离，互不改对方配置与客户端。"""
+
     def __init__(self):
-        self.client = CrmWritebackClient(settings.CRM_WRITEBACK_API_URL)
+        base = settings.CRM_WRITEBACK_API_URL
+        # 拜访记录回写（原逻辑）：仅使用 ``CrmVisitWritebackClient``；``self.client`` 仍指向该客户端以保持兼容
+        self.client = CrmVisitWritebackClient(base)
+        self._review_writeback_client = CrmReviewWritebackClient(base)
     
     def _parse_time_to_timestamp(self, date_value: datetime.date, time_str: str, record_id: int, time_label: str) -> Optional[int]:
         """
@@ -613,23 +829,97 @@ class CrmWritebackService:
             
             visit_requests.followup_records.append(visit_request)
         return visit_requests
-    
-    def _execute_writeback_logic(self, session: Session, visit_records: List[CRMSalesVisitRecord], 
-                                writeback_mode: Optional[str] = None) -> Dict[str, Any]:
+
+    def writeback_review_opportunity_updates_to_crm(
+        self,
+        *,
+        session_id: str,
+        snapshot_period: str,
+        ops: List[Dict[str, Any]],
+        writeback_source: str = "review_editable_update",
+    ) -> Dict[str, Any]:
         """
-        执行回写逻辑的核心方法
-        
-        Args:
-            session: 数据库会话
-            visit_records: 拜访记录列表
-            writeback_mode: 回写模式，支持 "CBG"（纷享销客日常对象回写）或 "APAC"（Salesforce任务创建）或 "OLM"（销售易拜访记录回写）或 "CHAITIN"（长亭API回写），不传则使用配置中的默认值
-        
-        Returns:
-            回写结果
+        将 review 商机**已修改**的可编辑字段推送至 CRM（与拜访回写分离）。
+
+        仅当 ``CRM_WRITEBACK_REVIEW_ENABLED`` 为 True 时调用网关；**不**读取 ``CRM_WRITEBACK_DEFAULT_MODE``。
+        ``writeback_source`` 写入客户端日志；每条 HTTP 仅含 ``id`` 及相对 ``before_editable`` 有变化的字段（见
+        ``review_op_to_gateway_update_json``）。
         """
-        # 如果没有指定回写模式，使用配置中的默认值
+        if not settings.CRM_WRITEBACK_REVIEW_ENABLED:
+            return {
+                "success": True,
+                "skipped": True,
+                "message": "CRM_WRITEBACK_REVIEW_ENABLED 为关闭，跳过 CRM review 回写",
+                "writeback_count": 0,
+            }
+        if not ops:
+            return {
+                "success": True,
+                "skipped": True,
+                "message": "无回写行，跳过 CRM 回写",
+                "writeback_count": 0,
+            }
+
+        validated: List[ReviewOpportunityWritebackOp] = []
+        for raw in ops:
+            try:
+                validated.append(ReviewOpportunityWritebackOp.model_validate(raw))
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "review opportunity writeback: skip invalid op session_id=%s err=%s raw_keys=%s",
+                    session_id,
+                    e,
+                    list(raw.keys()) if isinstance(raw, dict) else type(raw),
+                )
+
+        if not validated:
+            return {
+                "success": False,
+                "message": "本批 ops 无法解析为 review 回写请求体，未调用网关",
+                "writeback_count": 0,
+            }
+
+        batch = ReviewOpportunityWritebackBatchRequest(
+            session_id=session_id,
+            snapshot_period=snapshot_period,
+            ops=validated,
+            partial_fail=True,
+            source=writeback_source,
+        )
+        result = self._review_writeback_client.post_review_opportunity_updates(batch)
+        posted = int(result.get("posted_count") or 0)
+        out: Dict[str, Any] = {
+            "success": bool(result.get("success")),
+            "writeback_count": posted,
+            "message": "CRM review 回写完成" if result.get("success") else result.get("message", "失败"),
+        }
+        if result.get("data") is not None:
+            out["data"] = result.get("data")
+        if result.get("response_text") is not None:
+            out["response_text"] = result.get("response_text")
+        return out
+
+    def _execute_visit_writeback(
+        self, session: Session, visit_records: List[CRMSalesVisitRecord], writeback_mode: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        拜访记录回写：按 ``writeback_mode`` 分发；未传时使用 ``CRM_WRITEBACK_DEFAULT_MODE``（若为 ``None`` 则跳过）。
+
+        与 ``writeback_review_opportunity_updates_to_crm`` 及 ``CRM_WRITEBACK_REVIEW_ENABLED`` 无关。
+        """
+        # 拜访路径：仅使用 CRM_WRITEBACK_DEFAULT_MODE（与 review 的 CRM_WRITEBACK_REVIEW_ENABLED 分离）
         if writeback_mode is None:
-            writeback_mode = settings.CRM_WRITEBACK_DEFAULT_MODE.value
+            dm = settings.CRM_WRITEBACK_DEFAULT_MODE
+            if dm is None:
+                logger.info("未配置 CRM_WRITEBACK_DEFAULT_MODE，跳过拜访记录回写")
+                return {
+                    "success": True,
+                    "skipped": True,
+                    "message": "未配置 CRM_WRITEBACK_DEFAULT_MODE，跳过拜访记录回写",
+                    "processed_count": len(visit_records),
+                    "writeback_count": 0,
+                }
+            writeback_mode = dm.value
         
         # 验证回写模式
         valid_modes = [mode.value for mode in WritebackMode]
@@ -652,7 +942,7 @@ class CrmWritebackService:
             }
         
         logger.info(f"开始回写 {len(visit_records)} 条拜访记录，回写模式: {writeback_mode}")
-        
+
         try:
             if writeback_mode == WritebackMode.APAC.value:
                 # 任务创建模式
@@ -813,6 +1103,22 @@ class CrmWritebackService:
                         "writeback_count": len(visit_requests.followup_records),
                         "results": return_data
                     }
+            else:
+                logger.warning(
+                    "拜访记录回写尚未实现: writeback_mode=%s visit_rows=%s",
+                    writeback_mode,
+                    len(visit_records),
+                )
+                return {
+                    "success": True,
+                    "message": (
+                        f"WritebackMode={writeback_mode} 在本服务未实现拜访记录回写；"
+                        "review 商机回写由 CRM_WRITEBACK_REVIEW_ENABLED 单独控制"
+                    ),
+                    "processed_count": len(visit_records),
+                    "writeback_count": 0,
+                    "writeback_skipped_reason": "visit_writeback_not_implemented_for_mode",
+                }
         except Exception as e:
             logger.exception(f"回写拜访记录失败: {e}")
             return {
@@ -830,7 +1136,7 @@ class CrmWritebackService:
         Args:
             session: 数据库会话
             visit_record_ids: 拜访记录ID列表
-            writeback_mode: 回写模式，支持 "CBG"（内容回写）或 "APAC"（任务创建）或 "OLM"（销售易回写），不传则使用配置中的默认值
+            writeback_mode: 网关变体字符串；不传则使用 ``CRM_WRITEBACK_DEFAULT_MODE``；二者均为空时跳过回写
         
         Returns:
             回写结果，包含找到的记录ID和缺失的记录ID
@@ -861,7 +1167,7 @@ class CrmWritebackService:
             logger.info(f"找到 {len(visit_records)} 条拜访记录，缺失 {len(missing_ids)} 条")
             
             # 执行回写
-            result = self._execute_writeback_logic(session, visit_records, writeback_mode)
+            result = self._execute_visit_writeback(session, visit_records, writeback_mode)
             
             # 添加ID信息到结果中
             result["requested_ids"] = visit_record_ids
@@ -891,7 +1197,7 @@ class CrmWritebackService:
             session: 数据库会话
             start_datetime: 开始时间（UTC时间）
             end_datetime: 结束时间（UTC时间）
-            writeback_mode: 回写模式，不传则使用配置中的默认值
+            writeback_mode: 网关变体字符串；不传则使用 ``CRM_WRITEBACK_DEFAULT_MODE``；二者均为空时跳过回写
         
         Returns:
             回写结果
@@ -917,7 +1223,7 @@ class CrmWritebackService:
             logger.info(f"找到 {len(visit_records)} 条拜访记录，开始进行回写")
             
             # 复用核心回写逻辑
-            return self._execute_writeback_logic(session, visit_records, writeback_mode)
+            return self._execute_visit_writeback(session, visit_records, writeback_mode)
             
         except Exception as e:
             logger.exception(f"回写拜访记录失败: {e}")
