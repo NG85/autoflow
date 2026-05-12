@@ -13,11 +13,29 @@ from app.core.config import settings
 
 # TiDB Serverless clusters have a limitation: if there are no active connections for 5 minutes,
 # they will shut down, which closes all connections, so we need to recycle the connections
+# (``pool_recycle``).
+#
+# **Two sync engines (same DSN):**
+# - ``engine``: ``autocommit=True`` — required by Celery tasks / admin scripts / ``Scoped_Session``
+#   and other legacy call sites that import ``engine`` directly.
+# - ``engine_transactional``: no driver autocommit — used only by ``get_db_session`` (FastAPI
+#   ``SessionDep``) so ``flush`` / ``rollback`` / ``commit`` are one real DB transaction; pool is
+#   smaller than ``engine`` (API concurrency vs. batch workers).
 engine = create_engine(
     str(settings.SQLALCHEMY_DATABASE_URI),
     connect_args={"autocommit": True},
     pool_size=20,
     max_overflow=40,
+    pool_recycle=300,
+    pool_pre_ping=True,
+)
+
+engine_transactional = create_engine(
+    str(settings.SQLALCHEMY_DATABASE_URI),
+    # ~O(100) concurrent humans: only in-flight API requests hold connections; 10+20 is a
+    # reasonable default; raise if TiDB wait_timeout / pool exhaustion appears under burst saves.
+    pool_size=10,
+    max_overflow=20,
     pool_recycle=300,
     pool_pre_ping=True,
 )
@@ -55,11 +73,12 @@ def prepare_db_connection(dbapi_connection, connection_record):
 
 
 event.listen(engine, "connect", prepare_db_connection)
+event.listen(engine_transactional, "connect", prepare_db_connection)
 event.listen(async_engine.sync_engine, "connect", prepare_db_connection)
 
 
 def get_db_session() -> Generator[Session, None, None]:
-    with Session(engine, expire_on_commit=False) as session:
+    with Session(engine_transactional, expire_on_commit=False) as session:
         yield session
 
 

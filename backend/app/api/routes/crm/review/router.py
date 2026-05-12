@@ -2,7 +2,7 @@
 
 import json
 import logging
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Iterable, Iterator, List, Literal, Optional, Union
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import text
 from sqlmodel import distinct, func, select
 
+from app.api.routes.chat import _build_chat_review_detail, _extract_chat_id_from_chunk
 from app.api.deps import CurrentUserDep, OptionalUserDep, SessionDep
 from app.core.config import settings
 from app.api.routes.crm.models import (
@@ -86,14 +87,22 @@ def _report_sia_usage(user: Any, review_detail: str) -> None:
     )
 
 
-def _billing_after_stream_complete(stream, user: Any, review_detail: str):
+def _billing_after_stream_complete(
+    stream: Iterable[Any],
+    user: Any,
+    initial_chat_id: Optional[Any],
+) -> Iterator[Any]:
+    final_chat_id = str(initial_chat_id) if initial_chat_id else None
     try:
         for chunk in stream:
+            parsed_chat_id = _extract_chat_id_from_chunk(chunk)
+            if parsed_chat_id:
+                final_chat_id = parsed_chat_id
             yield chunk
     except Exception:
         raise
     else:
-        _report_sia_usage(user, review_detail)
+        _report_sia_usage(user, _build_chat_review_detail(final_chat_id))
 
 
 def _has_review_session_viewer_permission(user: Any, _cache: Optional[Dict[str, bool]] = None) -> bool:
@@ -645,7 +654,8 @@ def submit_my_review_branch_snapshot_changes(
 ):
     """
     保存本次 review 的商机快照修改（可一次保存多条）。仅在可编辑阶段成功；空数组会记录一次保存审计（不更新参会人提交状态）。
-    请求体里每条只传允许改的字段，具体以 ``ReviewBranchSnapshotUpdateIn`` 为准。
+    请求体字段以 ``ReviewBranchSnapshotUpdateIn`` 为准。
+    若 ``CRM_WRITEBACK_REVIEW_ENABLED`` 为 True 且有字段变更：先 ``flush``（事务连接，未提交）再调 CRM review 回写，失败则 ``rollback`` 并 502；否则 ``commit``。API 会话使用 ``engine_transactional``，与任务侧 ``autocommit`` 引擎分离。
     """
     return crm_review_service.submit_my_snapshot_changes(
         db_session,
@@ -1090,7 +1100,8 @@ def review_session_chat(
     - root_cause: why a metric changed (why)
     - strategy: actionable recommendations (how)
 
-    Only session attendees can access.
+    Session attendees may access; users with ``review_session:all:view`` may access without being
+    an attendee (same visibility rule as other review session APIs).
     """
     session = crm_review_session_repo.get_by_unique_id(db_session, session_id)
     if not session:
@@ -1099,8 +1110,7 @@ def review_session_chat(
     attendee = crm_review_attendee_repo.get_by_session_and_user_id(
         db_session, session_id=session_id, user_id=str(user.id)
     )
-    # Superuser can bypass attendee restriction for emergency support/ops usage.
-    if not attendee and not bool(getattr(user, "is_superuser", False)):
+    if not attendee and not _has_review_session_viewer_permission(user):
         raise HTTPException(
             status_code=403,
             detail="User is not an attendee of this review session",
@@ -1134,15 +1144,18 @@ def review_session_chat(
     )
 
     _check_sia_quota_or_raise()
-    review_detail = f"{origin or settings.REVIEW_REPORT_HOST}/crm/review/sessions/{session_id}/chat"
     if chat_request.stream:
-        wrapped_stream = _billing_after_stream_complete(chat_flow.chat(), user, review_detail)
+        wrapped_stream = _billing_after_stream_complete(
+            chat_flow.chat(),
+            user,
+            chat_request.chat_id,
+        )
         return StreamingResponse(
             wrapped_stream,
             media_type="text/event-stream",
         )
     result = get_final_chat_result(chat_flow.chat())
-    _report_sia_usage(user, review_detail)
+    _report_sia_usage(user, _build_chat_review_detail(result.chat_id))
     return result
 
 

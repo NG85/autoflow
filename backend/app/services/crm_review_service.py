@@ -29,11 +29,13 @@ from app.models.crm_review import (
 )
 from app.models.crm_opportunities import CRMOpportunity
 from app.models.crm_system_configurations import CRMSystemConfiguration
+from app.core.config import settings
 from app.repositories.crm_review_attendee import crm_review_attendee_repo
 from app.repositories.crm_review_audit import crm_review_opp_audit_log_repo
 from app.repositories.crm_review_branch_snapshot import crm_review_opp_branch_snapshot_cache_repo
 from app.repositories.crm_review_session import crm_review_session_repo
 from app.services.aldebaran_service import aldebaran_client
+from app.services.crm_writeback_service import crm_writeback_service
 from app.services.oauth_service import oauth_client
 
 logger = logging.getLogger(__name__)
@@ -1787,6 +1789,9 @@ class CRMReviewService:
         changed_snapshot_unique_ids: set[str] = set()
         unchanged_snapshot_unique_ids: set[str] = set()
         conflict_snapshot_unique_ids: List[str] = []
+        pending_field_updates: List[
+            Tuple[Any, Dict[str, Any], int, int, Dict[str, Any], Dict[str, Any], str]
+        ] = []
 
         for patch in normalized:
             snapshot_unique_id = patch["unique_id"]
@@ -1801,32 +1806,20 @@ class CRMReviewService:
                 continue
 
             before_fields = {f: getattr(row, f) for f in EDITABLE_FIELDS}
+            after_fields = dict(before_fields)
             for f in EDITABLE_FIELDS:
                 if f in patch:
-                    setattr(row, f, patch.get(f))
-            after_fields = {f: getattr(row, f) for f in EDITABLE_FIELDS}
+                    after_fields[f] = patch.get(f)
 
-            # Always record save operation for audit/statistics,
-            # even when the submitted values equal existing values.
-            before[snapshot_unique_id] = before_fields
-            after[snapshot_unique_id] = after_fields
             if before_fields != after_fields:
+                changed_keys = [f for f in EDITABLE_FIELDS if before_fields.get(f) != after_fields.get(f)]
+                before[snapshot_unique_id] = {f: before_fields[f] for f in changed_keys}
+                after[snapshot_unique_id] = {f: after_fields[f] for f in changed_keys}
                 updated_count += 1
                 changed_snapshot_unique_ids.add(snapshot_unique_id)
-                now = datetime.now(timezone.utc)
-                row.update_time = now
-                row.last_modified_by_id = str(user_id)
-                row.last_modified_by = str(attendee.user_name or "unknown")
-                row.was_modified = True
-                row.modification_count = db_version + 1
-                if str(session.stage) == "initial_edit":
-                    row.initial_edit_modification_count = int(
-                        getattr(row, "initial_edit_modification_count", 0) or 0
-                    ) + 1
-                elif str(session.stage) == "lead_review":
-                    row.meeting_edit_modification_count = int(
-                        getattr(row, "meeting_edit_modification_count", 0) or 0
-                    ) + 1
+                pending_field_updates.append(
+                    (row, patch, client_version, db_version, before_fields, after_fields, snapshot_unique_id)
+                )
             else:
                 unchanged_snapshot_unique_ids.add(snapshot_unique_id)
 
@@ -1839,9 +1832,112 @@ class CRMReviewService:
                 },
             )
 
-        # Persist updates only when we actually changed any field.
+        crm_ops_to_send: Optional[List[Dict[str, Any]]] = None
+        if updated_count > 0 and settings.CRM_WRITEBACK_REVIEW_ENABLED:
+            opp_ids = sorted(
+                {
+                    str(getattr(r, "opportunity_id", "") or "").strip()
+                    for r, _, _, _, _, _, _ in pending_field_updates
+                    if str(getattr(r, "opportunity_id", "") or "").strip()
+                }
+            )
+            main_by_key: dict[tuple[str, str], CRMReviewOppBranchSnapshot] = {}
+            if opp_ids:
+                for m in db_session.exec(
+                    select(CRMReviewOppBranchSnapshot).where(
+                        CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
+                        CRMReviewOppBranchSnapshot.opportunity_id.in_(opp_ids),
+                    )
+                ).all():
+                    oi = str(getattr(m, "opportunity_id", "") or "").strip()
+                    pi = str(getattr(m, "snapshot_period", "") or "").strip()
+                    if oi and pi:
+                        main_by_key[(oi, pi)] = m
+
+            crm_ops: List[Dict[str, Any]] = []
+            now_wb = datetime.now(timezone.utc)
+            for row, patch, client_version, db_version, before_fields, after_fields, sid in pending_field_updates:
+                oid = str(getattr(row, "opportunity_id", "") or "").strip()
+                per = str(getattr(row, "snapshot_period", "") or "").strip()
+                main_row = main_by_key.get((oid, per)) if oid and per else None
+                before_submit = {f: getattr(row, f) for f in _MERGE_SUBMIT_SYNC_FIELD_NAMES}
+                after_submit = dict(before_submit)
+                after_submit["update_time"] = now_wb
+                after_submit["last_modified_by_id"] = str(user_id)
+                after_submit["last_modified_by"] = str(attendee.user_name or "unknown")
+                after_submit["was_modified"] = True
+                after_submit["modification_count"] = db_version + 1
+                if str(session.stage) == "initial_edit":
+                    after_submit["initial_edit_modification_count"] = int(
+                        getattr(row, "initial_edit_modification_count", 0) or 0
+                    ) + 1
+                elif str(session.stage) == "lead_review":
+                    after_submit["meeting_edit_modification_count"] = int(
+                        getattr(row, "meeting_edit_modification_count", 0) or 0
+                    ) + 1
+
+                crm_ops.append(
+                    {
+                        "op": "update",
+                        "opportunity_id": oid,
+                        "main_unique_id": str(getattr(main_row, "unique_id", "") or "") if main_row else "",
+                        "cache_unique_id": str(getattr(row, "unique_id", "") or ""),
+                        "before_editable": before_fields,
+                        "after_editable": after_fields,
+                        "before_submit_sync": before_submit,
+                        "after_submit_sync": after_submit,
+                    }
+                )
+            crm_ops_to_send = crm_ops
+
+        for row, patch, _cv, db_version, _bf, _af, _sid in pending_field_updates:
+            for f in EDITABLE_FIELDS:
+                if f in patch:
+                    setattr(row, f, patch.get(f))
+            now = datetime.now(timezone.utc)
+            row.update_time = now
+            row.last_modified_by_id = str(user_id)
+            row.last_modified_by = str(attendee.user_name or "unknown")
+            row.was_modified = True
+            row.modification_count = db_version + 1
+            if str(session.stage) == "initial_edit":
+                row.initial_edit_modification_count = int(
+                    getattr(row, "initial_edit_modification_count", 0) or 0
+                ) + 1
+            elif str(session.stage) == "lead_review":
+                row.meeting_edit_modification_count = int(
+                    getattr(row, "meeting_edit_modification_count", 0) or 0
+                ) + 1
+
         if updated_count > 0:
             db_session.add_all(list(rows_by_snapshot_unique_id.values()))
+            db_session.flush()
+            # ``SessionDep`` 使用 ``engine_transactional``：``flush`` 仍在同一未提交事务内，CRM 失败可 ``rollback``。
+            if crm_ops_to_send:
+                try:
+                    wb_result = crm_writeback_service.writeback_review_opportunity_updates_to_crm(
+                        session_id=session_id,
+                        snapshot_period=str(snapshot_period or ""),
+                        ops=crm_ops_to_send,
+                        writeback_source="review_cache_submit",
+                    )
+                except Exception as e:  # noqa: BLE001
+                    db_session.rollback()
+                    logger.exception(
+                        "CRM review writeback raised after cache flush: session_id=%s err=%s",
+                        session_id,
+                        e,
+                    )
+                    raise HTTPException(
+                        status_code=502,
+                        detail=str(e),
+                    ) from e
+                if not wb_result.get("success"):
+                    db_session.rollback()
+                    raise HTTPException(
+                        status_code=502,
+                        detail=wb_result.get("message") or "CRM review writeback failed",
+                    )
 
         db_session.commit()
 

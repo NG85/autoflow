@@ -265,7 +265,10 @@ def trigger_crm_writeback_task(
     user: CurrentSuperuserDep,
     start_date: Optional[str] = Body(None, description="开始日期，格式YYYY-MM-DD，不传则默认为上周日"),
     end_date: Optional[str] = Body(None, description="结束日期，格式YYYY-MM-DD，不传则默认为本周六"),
-    writeback_mode: Optional[str] = Body(None, description="回写模式，不传则使用配置中的默认值")
+    writeback_mode: Optional[str] = Body(
+        None,
+        description="拜访回写模式：CBG / APAC / OLM / CHAITIN 等；不传则用 CRM_WRITEBACK_DEFAULT_MODE。二者均为空时无法触发；未实现该模式的拜访回写时任务成功结束且 writeback_count=0。",
+    )
 ):
     """
     手动触发CRM拜访记录回写任务
@@ -279,6 +282,7 @@ def trigger_crm_writeback_task(
        - APAC模式：为每条拜访记录创建Salesforce的任务
        - OLM模式：为每条拜访记录创建销售易的拜访记录
        - CHAITIN模式：为每条拜访记录创建长亭的拜访记录
+       - 其它模式：若本服务尚未接入该模式的拜访回写，则跳过（writeback_count=0）
     3. 调用相应的API进行回写或任务创建
     """
     if not user.is_superuser:
@@ -318,8 +322,15 @@ def trigger_crm_writeback_task(
         
         # 如果没有指定回写模式，使用配置中的默认值
         if writeback_mode is None:
-            writeback_mode = settings.CRM_WRITEBACK_DEFAULT_MODE.value
-        
+            dm = settings.CRM_WRITEBACK_DEFAULT_MODE
+            writeback_mode = dm.value if dm is not None else None
+        if writeback_mode is None:
+            return {
+                "code": 400,
+                "message": "未配置 CRM_WRITEBACK_DEFAULT_MODE，请在环境变量中设置或在请求中传入 writeback_mode",
+                "data": {},
+            }
+
         # 验证回写模式参数
         valid_modes = [mode.value for mode in WritebackMode]
         if writeback_mode not in valid_modes:
@@ -364,7 +375,10 @@ def trigger_crm_writeback_task(
 def trigger_crm_writeback_by_ids(
     user: CurrentSuperuserDep,
     visit_record_ids: List[int] = Body(..., description="拜访记录ID列表"),
-    writeback_mode: Optional[str] = Body(None, description="回写模式，支持 'CBG'（内容回写）、'APAC'（任务创建）或 'OLM'（销售易回写），不传则使用配置中的默认值")
+    writeback_mode: Optional[str] = Body(
+        None,
+        description="拜访回写模式：CBG / APAC / OLM / CHAITIN 等；不传则用 CRM_WRITEBACK_DEFAULT_MODE。二者均为空时无法执行。",
+    )
 ):
     """
     根据指定拜访记录ID进行CRM回写
@@ -389,8 +403,15 @@ def trigger_crm_writeback_by_ids(
         
         # 如果没有指定回写模式，使用配置中的默认值
         if writeback_mode is None:
-            writeback_mode = settings.CRM_WRITEBACK_DEFAULT_MODE.value
-        
+            dm = settings.CRM_WRITEBACK_DEFAULT_MODE
+            writeback_mode = dm.value if dm is not None else None
+        if writeback_mode is None:
+            return {
+                "code": 400,
+                "message": "未配置 CRM_WRITEBACK_DEFAULT_MODE，请在环境变量中设置或在请求中传入 writeback_mode",
+                "data": {},
+            }
+
         # 验证回写模式参数
         valid_modes = [mode.value for mode in WritebackMode]
         if writeback_mode not in valid_modes:

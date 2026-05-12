@@ -884,23 +884,56 @@ def generate_crm_weekly_followup_summary(self, start_date_str=None, end_date_str
             )
             entity_count = int(result.get("entity_count") or 0) if isinstance(result, dict) else 0
             if entity_count > 0:
-                billable_department_keys = (
-                    [str(x) for x in (result.get("billable_department_keys") or [])]
+                billing_rows = (
+                    result.get("billable_department_billing")
                     if isinstance(result, dict)
-                    else []
+                    else None
                 )
-                for dept_key in billable_department_keys:
-                    _report_task_usage_once(
-                        BillingScenario.CRM_WEEKLY_FOLLOWUP_SUMMARY,
-                        f"weekly-followup-department:{start_date.isoformat()}:{end_date.isoformat()}:{dept_key}",
-                        f"{settings.REVIEW_REPORT_HOST}/review/opportunitySummary?week_start={start_date.isoformat()}&week_end={end_date.isoformat()}",
+                if isinstance(billing_rows, list) and billing_rows:
+                    for row in billing_rows:
+                        if not isinstance(row, dict):
+                            continue
+                        dept_key = str(row.get("billing_key") or "").strip()
+                        if not dept_key:
+                            continue
+                        # review_detail：与周报卡片 weekly_followup_page 一致，便于对账定位页面产出；幂等见 trace_key
+                        ws, we = start_date.isoformat(), end_date.isoformat()
+                        host = settings.REVIEW_REPORT_HOST.rstrip("/")
+                        dept_nm = str(row.get("department_name") or "").strip()
+                        if dept_nm:
+                            review_url = (
+                                f"{host}/review/opportunitySummary"
+                                f"?department_name={quote_plus(dept_nm)}&week_start={ws}&week_end={we}"
+                            )
+                        else:
+                            review_url = f"{host}/review/opportunitySummary?week_start={ws}&week_end={we}"
+                        _report_task_usage_once(
+                            BillingScenario.CRM_WEEKLY_FOLLOWUP_SUMMARY,
+                            f"weekly-followup-department:{start_date.isoformat()}:{end_date.isoformat()}:{dept_key}",
+                            review_url,
+                        )
+                else:
+                    billable_department_keys = (
+                        [str(x) for x in (result.get("billable_department_keys") or [])]
+                        if isinstance(result, dict)
+                        else []
                     )
+                    ws, we = start_date.isoformat(), end_date.isoformat()
+                    host = settings.REVIEW_REPORT_HOST.rstrip("/")
+                    for dept_key in billable_department_keys:
+                        review_url = f"{host}/review/opportunitySummary?week_start={ws}&week_end={we}"
+                        _report_task_usage_once(
+                            BillingScenario.CRM_WEEKLY_FOLLOWUP_SUMMARY,
+                            f"weekly-followup-department:{start_date.isoformat()}:{end_date.isoformat()}:{dept_key}",
+                            review_url,
+                        )
                 billable_company = bool(result.get("billable_company")) if isinstance(result, dict) else False
                 if billable_company:
+                    host = settings.REVIEW_REPORT_HOST.rstrip("/")
                     _report_task_usage_once(
                         BillingScenario.CRM_WEEKLY_FOLLOWUP_SUMMARY,
                         f"weekly-followup-company:{start_date.isoformat()}:{end_date.isoformat()}",
-                        f"{settings.REVIEW_REPORT_HOST}/review/opportunitySummary?week_start={start_date.isoformat()}&week_end={end_date.isoformat()}",
+                        f"{host}/review/opportunitySummary?week_start={start_date.isoformat()}&week_end={end_date.isoformat()}",
                     )
             else:
                 logger.info(
@@ -1131,7 +1164,7 @@ def crm_visit_records_writeback(self, start_date_str=None, end_date_str=None, wr
     Args:
         start_date_str: 开始日期字符串，格式YYYY-MM-DD，不传则根据频率配置自动计算
         end_date_str: 结束日期字符串，格式YYYY-MM-DD，不传则根据频率配置自动计算
-        writeback_mode: 回写模式，不传则使用配置中的默认值
+        writeback_mode: 回写模式；不传则使用 ``CRM_WRITEBACK_DEFAULT_MODE``（未配置则任务跳过）
     
     工作流程：
     1. 根据配置的频率计算日期范围：
@@ -1143,13 +1176,24 @@ def crm_visit_records_writeback(self, start_date_str=None, end_date_str=None, wr
        - APAC模式：为每条拜访记录创建Salesforce的任务
        - OLM模式：为每条拜访记录创建销售易的拜访记录
        - CHAITIN模式：为每条拜访记录创建长亭的拜访记录
+       - 其它模式：若尚未接入拜访回写则跳过
     4. 调用相应的API进行回写或任务创建，并返回回写结果
+    
+    若 ``CRM_WRITEBACK_DEFAULT_MODE`` 未配置（为 ``None``），任务立即成功返回且不查询数据库。
     """
     try:
-        # 如果没有指定回写模式，使用配置中的默认值
+        # 未指定时使用配置的默认拜访回写模式；为 None 则整任务跳过
         if writeback_mode is None:
-            writeback_mode = settings.CRM_WRITEBACK_DEFAULT_MODE.value
-        
+            dm = settings.CRM_WRITEBACK_DEFAULT_MODE
+            writeback_mode = dm.value if dm is not None else None
+        if writeback_mode is None:
+            logger.info("CRM_WRITEBACK_DEFAULT_MODE 未配置，跳过 CRM 拜访记录回写任务")
+            return {
+                "success": True,
+                "message": "未配置 CRM_WRITEBACK_DEFAULT_MODE，跳过 CRM 拜访记录回写任务",
+                "data": {},
+            }
+
         # 验证回写模式
         valid_modes = [mode.value for mode in WritebackMode]
         if writeback_mode not in valid_modes:
