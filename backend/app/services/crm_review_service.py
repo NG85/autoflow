@@ -1557,21 +1557,27 @@ class CRMReviewService:
             raise HTTPException(status_code=422, detail="opportunity_id is required")
 
         sid = str(session_id or "").strip()
-        # Snapshot lists all opps for a period; risk rows exist only for some. Resolve session via period join.
+        resolved_session: Optional[CRMReviewSession] = None
+        latest_risk: Optional[CRMReviewOppRiskProgress] = None
         if sid:
-            resolved = crm_review_session_repo.get_by_unique_id(db_session, sid)
+            resolved_session = crm_review_session_repo.get_by_unique_id(db_session, sid)
         else:
-            resolved = db_session.exec(
-                select(CRMReviewSession)
-                .join(
-                    CRMReviewOppBranchSnapshot,
-                    (CRMReviewOppBranchSnapshot.snapshot_period == CRMReviewSession.period)
-                    & (CRMReviewOppBranchSnapshot.opportunity_id == opportunity_id),
+            # Period-wide snapshot includes many opps; only sessions where the owner is a participant
+            # get opp-level risk rows. Resolve the latest session from crm_review_opp_risk_progress.
+            latest_risk = db_session.exec(
+                select(CRMReviewOppRiskProgress)
+                .where(
+                    CRMReviewOppRiskProgress.opportunity_id == opportunity_id,
+                    CRMReviewOppRiskProgress.record_type.in_(
+                        ("RISK", "PROGRESS", "OPP_SUMMARY", "OPP_REQS_INSIGHT"),
+                    ),
                 )
-                .order_by(CRMReviewSession.report_date.desc(), CRMReviewSession.create_time.desc())
+                .order_by(
+                    CRMReviewOppRiskProgress.created_at.desc(),
+                )
                 .limit(1)
             ).first()
-        if not resolved:
+        if (sid and not resolved_session) or (not sid and not latest_risk):
             # TODO：暂时查询商机表，后续改为查询表4最新报告
             opp = db_session.exec(
                 select(CRMOpportunity)
@@ -1618,9 +1624,17 @@ class CRMReviewService:
                 "opp_reqs_insight_details": [],
             }
 
-        snapshot_period = str(resolved.period or "").strip()
+        if resolved_session is not None:
+            snapshot_period = str(resolved_session.period or "").strip()
+            resolved_session_id = str(resolved_session.unique_id or "").strip()
+        else:
+            assert latest_risk is not None
+            snapshot_period = str(latest_risk.snapshot_period or "").strip()
+            resolved_session_id = str(latest_risk.session_id or "").strip()
         if not snapshot_period:
             raise HTTPException(status_code=500, detail="review session period is empty")
+        if not resolved_session_id:
+            raise HTTPException(status_code=500, detail="review session id is empty")
 
         if sid and not db_session.exec(
             select(CRMReviewOppBranchSnapshot.unique_id)
@@ -1637,7 +1651,7 @@ class CRMReviewService:
 
         return self._build_opportunity_risk_progress_details(
             db_session,
-            session_id=str(resolved.unique_id),
+            session_id=resolved_session_id,
             snapshot_period=snapshot_period,
             opportunity_id=opportunity_id,
         )
