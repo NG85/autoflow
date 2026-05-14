@@ -6,7 +6,7 @@ import threading
 import time
 import uuid
 from decimal import Decimal
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
@@ -531,6 +531,31 @@ class CRMReviewService:
         )
 
     @staticmethod
+    def _date_bound_expr(value: str):
+        return func.coalesce(
+            func.str_to_date(value, "%Y-%m-%d %H:%i:%s"),
+            func.str_to_date(value, "%Y-%m-%d"),
+        )
+
+    @staticmethod
+    def _append_date_start_filter(base_where: List[Any], col: Any, start_value: str) -> None:
+        base_where.append(
+            CRMReviewService._date_parse_expr(col) >= CRMReviewService._date_bound_expr(start_value)
+        )
+
+    @staticmethod
+    def _append_date_end_filter(
+        base_where: List[Any], col: Any, end_bound: Tuple[str, bool]
+    ) -> None:
+        value, exclusive = end_bound
+        parsed_col = CRMReviewService._date_parse_expr(col)
+        bound = CRMReviewService._date_bound_expr(value)
+        if exclusive:
+            base_where.append(parsed_col < bound)
+        else:
+            base_where.append(parsed_col <= bound)
+
+    @staticmethod
     def _normalize_sorts_list(sorts: Optional[List[Tuple[str, str]]]) -> List[Tuple[str, str]]:
         if not sorts:
             return []
@@ -750,13 +775,13 @@ class CRMReviewService:
         - opportunity_stages: List[str]
         - opportunity_types: List[str]
         - expected_closing_date_start: str (YYYY-MM-DD)
-        - expected_closing_date_end: str (YYYY-MM-DD)
+        - expected_closing_date_end: (bound, exclusive) — date-only end uses < next-day 00:00:00
         - forecast_amount_min: number
         - forecast_amount_max: number
         - ai_commits: List[str]
         - ai_stages: List[str]
         - ai_expected_closing_date_start: str (YYYY-MM-DD)
-        - ai_expected_closing_date_end: str (YYYY-MM-DD)
+        - ai_expected_closing_date_end: (bound, exclusive) — date-only end uses < next-day 00:00:00
         - has_risk: bool
         - has_progress: bool
         """
@@ -783,15 +808,44 @@ class CRMReviewService:
         has_risk_raw = raw.get("has_risk")
         has_progress_raw = raw.get("has_progress")
 
-        def _normalize_date_or_raise(value: str, field_name: str) -> Optional[str]:
+        def _normalize_start_date_or_raise(value: str, field_name: str) -> Optional[str]:
             if not value:
                 return None
-            # Accept both date and datetime inputs.
-            for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S"):
-                try:
-                    return datetime.strptime(value, fmt).strftime("%Y-%m-%d %H:%M:%S")
-                except ValueError:
-                    continue
+            try:
+                parsed = datetime.strptime(value, "%Y-%m-%d")
+                return f"{parsed.strftime('%Y-%m-%d')} 00:00:00"
+            except ValueError:
+                pass
+            try:
+                return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+            except ValueError:
+                pass
+            raise HTTPException(
+                status_code=422,
+                detail=f"invalid {field_name}, expected YYYY-MM-DD or YYYY-MM-DD HH:MM:SS",
+            )
+
+        def _normalize_end_date_or_raise(
+            value: str, field_name: str
+        ) -> Optional[Tuple[str, bool]]:
+            if not value:
+                return None
+            # Date-only: exclusive upper bound at next-day 00:00:00.
+            try:
+                parsed = datetime.strptime(value, "%Y-%m-%d")
+                next_day = parsed + timedelta(days=1)
+                return next_day.strftime("%Y-%m-%d %H:%M:%S"), True
+            except ValueError:
+                pass
+            try:
+                bound = datetime.strptime(value, "%Y-%m-%d %H:%M:%S").strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+                return bound, False
+            except ValueError:
+                pass
             raise HTTPException(
                 status_code=422,
                 detail=f"invalid {field_name}, expected YYYY-MM-DD or YYYY-MM-DD HH:MM:SS",
@@ -833,16 +887,16 @@ class CRMReviewService:
             "opportunity_types": _normalize_string_list(raw.get("opportunity_types")),
             "ai_commits": _normalize_string_list(raw.get("ai_commits")),
             "ai_stages": _normalize_string_list(raw.get("ai_stages")),
-            "expected_closing_date_start": _normalize_date_or_raise(
+            "expected_closing_date_start": _normalize_start_date_or_raise(
                 expected_closing_date_start, "expected_closing_date_start"
             ),
-            "expected_closing_date_end": _normalize_date_or_raise(
+            "expected_closing_date_end": _normalize_end_date_or_raise(
                 expected_closing_date_end, "expected_closing_date_end"
             ),
-            "ai_expected_closing_date_start": _normalize_date_or_raise(
+            "ai_expected_closing_date_start": _normalize_start_date_or_raise(
                 ai_expected_closing_date_start, "ai_expected_closing_date_start"
             ),
-            "ai_expected_closing_date_end": _normalize_date_or_raise(
+            "ai_expected_closing_date_end": _normalize_end_date_or_raise(
                 ai_expected_closing_date_end, "ai_expected_closing_date_end"
             ),
             "forecast_amount_min": _normalize_float_or_raise(
@@ -908,51 +962,23 @@ class CRMReviewService:
             base_where.append(S.ai_stage.in_(ai_stages))
         expected_closing_date_start = normalized_filters.get("expected_closing_date_start")
         if expected_closing_date_start:
-            base_where.append(
-                func.coalesce(
-                    func.str_to_date(ecd_col, "%Y-%m-%d %H:%i:%s"),
-                    func.str_to_date(ecd_col, "%Y-%m-%d"),
-                )
-                >= func.coalesce(
-                    func.str_to_date(expected_closing_date_start, "%Y-%m-%d %H:%i:%s"),
-                    func.str_to_date(expected_closing_date_start, "%Y-%m-%d"),
-                )
+            CRMReviewService._append_date_start_filter(
+                base_where, ecd_col, expected_closing_date_start
             )
         expected_closing_date_end = normalized_filters.get("expected_closing_date_end")
         if expected_closing_date_end:
-            base_where.append(
-                func.coalesce(
-                    func.str_to_date(ecd_col, "%Y-%m-%d %H:%i:%s"),
-                    func.str_to_date(ecd_col, "%Y-%m-%d"),
-                )
-                <= func.coalesce(
-                    func.str_to_date(expected_closing_date_end, "%Y-%m-%d %H:%i:%s"),
-                    func.str_to_date(expected_closing_date_end, "%Y-%m-%d"),
-                )
+            CRMReviewService._append_date_end_filter(
+                base_where, ecd_col, expected_closing_date_end
             )
         ai_expected_closing_date_start = normalized_filters.get("ai_expected_closing_date_start")
         if ai_expected_closing_date_start:
-            base_where.append(
-                func.coalesce(
-                    func.str_to_date(S.ai_expected_closing_date, "%Y-%m-%d %H:%i:%s"),
-                    func.str_to_date(S.ai_expected_closing_date, "%Y-%m-%d"),
-                )
-                >= func.coalesce(
-                    func.str_to_date(ai_expected_closing_date_start, "%Y-%m-%d %H:%i:%s"),
-                    func.str_to_date(ai_expected_closing_date_start, "%Y-%m-%d"),
-                )
+            CRMReviewService._append_date_start_filter(
+                base_where, S.ai_expected_closing_date, ai_expected_closing_date_start
             )
         ai_expected_closing_date_end = normalized_filters.get("ai_expected_closing_date_end")
         if ai_expected_closing_date_end:
-            base_where.append(
-                func.coalesce(
-                    func.str_to_date(S.ai_expected_closing_date, "%Y-%m-%d %H:%i:%s"),
-                    func.str_to_date(S.ai_expected_closing_date, "%Y-%m-%d"),
-                )
-                <= func.coalesce(
-                    func.str_to_date(ai_expected_closing_date_end, "%Y-%m-%d %H:%i:%s"),
-                    func.str_to_date(ai_expected_closing_date_end, "%Y-%m-%d"),
-                )
+            CRMReviewService._append_date_end_filter(
+                base_where, S.ai_expected_closing_date, ai_expected_closing_date_end
             )
         forecast_amount_min = normalized_filters.get("forecast_amount_min")
         if forecast_amount_min is not None:
