@@ -1056,7 +1056,8 @@ def recalculate_review_session_forecast_aggregates(
     user: CurrentUserDep,
 ) -> ReviewSessionForecastRecalcOut:
     """
-    触发本次 review 的预测/业绩聚合重算（结果来自外部服务）。参会人均可调用：负责人拉全场，普通成员只拉本人。
+    触发本次 review 的预测/业绩聚合重算（结果来自外部服务）。参会人均可调用：负责人及有
+    ``review_session:all:view`` 权限的用户拉全场，普通成员只拉本人。
     具体字段见响应模型。
     """
     data = crm_review_service.recalculate_forecast_aggregates(
