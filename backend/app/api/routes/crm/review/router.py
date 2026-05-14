@@ -1056,7 +1056,8 @@ def recalculate_review_session_forecast_aggregates(
     user: CurrentUserDep,
 ) -> ReviewSessionForecastRecalcOut:
     """
-    触发本次 review 的预测/业绩聚合重算（结果来自外部服务）。参会人均可调用：负责人拉全场，普通成员只拉本人。
+    触发本次 review 的预测/业绩聚合重算（结果来自外部服务）。参会人均可调用：负责人及有
+    ``review_session:all:view`` 权限的用户拉全场，普通成员只拉本人。
     具体字段见响应模型。
     """
     data = crm_review_service.recalculate_forecast_aggregates(
@@ -1105,7 +1106,8 @@ def review_session_chat(
     - strategy: actionable recommendations (how)
 
     Session attendees may access; users with ``review_session:all:view`` may access without being
-    an attendee (same visibility rule as other review session APIs).
+    an attendee (same visibility rule as other review session APIs). Leaders and viewers query the
+    full session scope; other attendees are limited to their own ``crm_user_id``.
     """
     session = crm_review_session_repo.get_by_unique_id(db_session, session_id)
     if not session:
@@ -1114,7 +1116,8 @@ def review_session_chat(
     attendee = crm_review_attendee_repo.get_by_session_and_user_id(
         db_session, session_id=session_id, user_id=str(user.id)
     )
-    if not attendee and not _has_review_session_viewer_permission(user):
+    is_viewer = _has_review_session_viewer_permission(user)
+    if not attendee and not is_viewer:
         raise HTTPException(
             status_code=403,
             detail="User is not an attendee of this review session",
@@ -1125,7 +1128,7 @@ def review_session_chat(
     browser_id = getattr(request.state, "browser_id", "")
 
     context: Dict[str, Any] = {"review_session_id": session_id}
-    if attendee and not is_attendee_leader:
+    if attendee and not is_attendee_leader and not is_viewer:
         owner_id = str(getattr(attendee, "crm_user_id", "") or "").strip()
         if not owner_id:
             raise HTTPException(status_code=422, detail="attendee has no crm_user_id")

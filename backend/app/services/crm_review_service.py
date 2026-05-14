@@ -2330,7 +2330,7 @@ class CRMReviewService:
     ) -> dict:
         """
         forecast 聚合仅以 Aldebaran ``POST .../review/performance/query`` 返回为准。
-        - Leader：请求仅 ``session_id``（全量）。
+        - 负责人或有 ``review_session:all:view`` 权限：请求仅 ``session_id``（全量）。
         - 普通参会人：``session_id`` + ``owner_id``（crm_user_id）。
         """
         session = crm_review_session_repo.get_by_unique_id(db_session, session_id)
@@ -2340,13 +2340,21 @@ class CRMReviewService:
         attendee = crm_review_attendee_repo.get_by_session_and_user_id(
             db_session, session_id=session_id, user_id=user_id
         )
-        if not attendee:
+        is_viewer = False
+        try:
+            is_viewer = oauth_client.check_user_has_permission(
+                user_id=uuid.UUID(str(user_id)),
+                permission="review_session:all:view",
+            )
+        except (ValueError, TypeError, AttributeError):
+            is_viewer = False
+        if not attendee and not is_viewer:
             raise HTTPException(status_code=403, detail="user is not attendee of this review session")
 
-        is_leader = bool(getattr(attendee, "is_leader", False))
+        is_leader = bool(getattr(attendee, "is_leader", False)) if attendee else False
         owner_id_arg: Optional[str] = None
 
-        if is_leader:
+        if is_leader or is_viewer:
             attendees = db_session.exec(
                 select(CRMReviewAttendee).where(CRMReviewAttendee.session_id == session_id)
             ).all()
