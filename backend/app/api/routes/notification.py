@@ -55,6 +55,9 @@ class PushNotificationRequest(BaseModel):
     - weekly_followup_comment: 周跟进总结评论提醒（文本消息）
     - visit_record_comment: 拜访记录评论提醒（文本消息）
     - sales_task_created: 外部服务创建销售任务后推送（文本消息）
+      必传 task_id、author_name（创建人）、created_at（创建时间）、content（任务详情，含截止时间）；
+      link_text 为客户/商机文案（可选）；超链接仅包在 content 上；
+      未传时兜底 CRM_SALES_TASK_PAGE_URL?id={task_id}
     - review_session: review 阶段推进触发的推送（需要调用方传 context.stage/context.session_id）
     """
 
@@ -73,6 +76,11 @@ class PushNotificationRequest(BaseModel):
 
     # 内容摘要（评论内容 / 任务标题等，允许为空）
     content: Optional[str] = None
+
+    # sales_task_created 专用
+    created_at: Optional[str] = None
+    task_count: Optional[int] = 1
+    task_id: Optional[str] = None
 
 
 def _resolve_review_recipients_by_stage(
@@ -125,6 +133,35 @@ def _append_query_params(url: str, **params: str) -> str:
     query = dict(parse_qsl(parts.query, keep_blank_values=True))
     query.update({k: v for k, v in params.items() if v is not None})
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
+def _build_sales_task_created_message(payload: PushNotificationRequest) -> str:
+    """
+    销售任务创建推送文案：
+    {创建人}在 {创建时间} 帮你创建了{N}个任务：
+    【{客户/商机}】   （link_text，可选）
+    [{任务详情}]({jump_url})
+    """
+    creator = (payload.author_name or "").strip() or "有人"
+    created_at = (payload.created_at or "").strip() or "--"
+    task_count = payload.task_count if payload.task_count and payload.task_count > 0 else 1
+
+    link_text = (payload.link_text or "").strip()
+    content = (payload.content or "").strip() or "--"
+
+    jump_url = (payload.jump_url or "").strip()
+    if not jump_url:
+        base_url = (settings.CRM_SALES_TASK_PAGE_URL or "").strip()
+        task_id = (payload.task_id or "").strip()
+        jump_url = _append_query_params(base_url, id=task_id) if base_url else ""
+
+    lines: List[str] = [f"{creator}在{created_at}帮你创建了{task_count}个任务："]
+    if link_text:
+        lines.append(f"【{link_text}】")
+    content_line = f"[{content}]({jump_url})" if jump_url else content
+    lines.append(content_line)
+
+    return "\n".join(lines) + "\n"
 
 
 def _build_review_session_message(stage: str, session_id: str) -> str:
@@ -233,37 +270,35 @@ async def push_notification_api(
             if not recipient_ids:
                 raise HTTPException(status_code=422, detail="recipient_user_ids is required")
 
-            # 统一消息格式：
-            # {author}{title}\n[{link_text}]({jump_url})\n{label}：{content}\n
-            author = (payload.author_name or "").strip() or "有人"
-            link_text = (payload.link_text or "").strip() or "查看详情"
-            jump_url = (payload.jump_url or "").strip()
-
-            # 特殊兜底：创建销售任务但未传 jump_url 时，跳转到任务列表页
-            if payload.type == "sales_task_created" and not jump_url:
-                jump_url = (settings.CRM_SALES_TASK_PAGE_URL or "").strip()
-
-            link_line = f"[{link_text}]({jump_url})" if jump_url else ((payload.link_text or "").strip() or "")
-            content_preview = (payload.content or "").strip()
-            if len(content_preview) > 200:
-                content_preview = content_preview[:197] + "..."
-            content_preview = content_preview or "--"
-
-            if payload.type == "weekly_followup_comment":
-                title, label = "评论了你的周跟进总结", "评论"
-                send_fn = platform_notification_service.send_weekly_followup_comment_notification
-            elif payload.type == "visit_record_comment":
-                title, label = "评论了你的拜访记录", "评论"
-                send_fn = platform_notification_service.send_visit_record_comment_notification
-            else:
-                # sales_task_created
-                title, label = "将你添加为任务的负责人", "任务"
+            if payload.type == "sales_task_created":
+                task_id = (payload.task_id or "").strip()
+                if not task_id:
+                    raise HTTPException(status_code=422, detail="sales_task_created requires task_id")
+                message_text = _build_sales_task_created_message(payload)
                 send_fn = platform_notification_service.send_sales_task_created_notification
+            else:
+                # 统一消息格式：
+                # {author}{title}\n[{link_text}]({jump_url})\n{label}：{content}\n
+                author = (payload.author_name or "").strip() or "有人"
+                link_text = (payload.link_text or "").strip() or "查看详情"
+                jump_url = (payload.jump_url or "").strip()
+                link_line = f"[{link_text}]({jump_url})" if jump_url else ((payload.link_text or "").strip() or "")
+                content_preview = (payload.content or "").strip()
+                if len(content_preview) > 200:
+                    content_preview = content_preview[:197] + "..."
+                content_preview = content_preview or "--"
 
-            message_text = f"{author}{title}\n"
-            if link_line:
-                message_text += f"{link_line}\n"
-            message_text += f"{label}：{content_preview}\n"
+                if payload.type == "weekly_followup_comment":
+                    title, label = "评论了你的周跟进总结", "评论"
+                    send_fn = platform_notification_service.send_weekly_followup_comment_notification
+                else:
+                    title, label = "评论了你的拜访记录", "评论"
+                    send_fn = platform_notification_service.send_visit_record_comment_notification
+
+                message_text = f"{author}{title}\n"
+                if link_line:
+                    message_text += f"{link_line}\n"
+                message_text += f"{label}：{content_preview}\n"
 
         # 批量发送并汇总结果
         success_count = 0
