@@ -1,6 +1,6 @@
 import logging
 from typing import Any, Dict, List, Literal, Optional
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -57,7 +57,7 @@ class PushNotificationRequest(BaseModel):
     - sales_task_created: 外部服务创建销售任务后推送（文本消息）
       必传 task_id、author_name（创建人）、created_at（创建时间）、content（任务详情，含截止时间）；
       link_text 为客户/商机文案（可选）；超链接仅包在 content 上；
-      未传时兜底 CRM_SALES_TASK_PAGE_URL?id={task_id}
+      未传 jump_url 时兜底 CRM_SALES_TASK_PAGE_URL/{task_id}（路径拼接）
     - review_session: review 阶段推进触发的推送（需要调用方传 context.stage/context.session_id）
     """
 
@@ -151,9 +151,9 @@ def _build_sales_task_created_message(payload: PushNotificationRequest) -> str:
 
     jump_url = (payload.jump_url or "").strip()
     if not jump_url:
-        base_url = (settings.CRM_SALES_TASK_PAGE_URL or "").strip()
+        base_url = (settings.CRM_SALES_TASK_PAGE_URL or "").strip().rstrip("/")
         task_id = (payload.task_id or "").strip()
-        jump_url = _append_query_params(base_url, id=task_id) if base_url else ""
+        jump_url = f"{base_url}/{quote(task_id, safe='')}" if base_url and task_id else (base_url or "")
 
     lines: List[str] = [f"{creator}在{created_at}帮你创建了{task_count}个任务："]
     if link_text:
