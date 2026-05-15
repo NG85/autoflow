@@ -644,7 +644,9 @@ class VisitRecordRepo(BaseRepo):
     ) -> Optional[VisitRecordResponse]:
         """
         更新指定拜访记录的 comments 字段（JSON数组）
-        安全保护：只能覆盖“自己写的评论”，不得覆盖/删除他人的评论
+        调用方仅传入本次新增的评论；在既有数据后追加落库。
+        安全保护：不得修改/删除他人评论。HTTP 接口应在入口处校验 payload 的 author_id；
+        此处仍忽略 author_id 非当前用户的条目，以防绕过 API 直接调用本方法。
         """
         # 更新评论只需要查询拜访记录主表即可
         query = select(CRMSalesVisitRecord).where(CRMSalesVisitRecord.record_id == record_id)
@@ -661,20 +663,23 @@ class VisitRecordRepo(BaseRepo):
         ):
             return None
 
-        # 安全保护：只能覆盖“自己写的评论”，不得覆盖/删除他人的评论
+        # 安全保护：不得改动他人评论；payload 只追加当前用户的新评论
         current_user_id_str = str(current_user_id or "")
         now_bj = datetime.now(ZoneInfo("Asia/Shanghai"))
 
         existing_raw = record.comments if isinstance(record.comments, list) else []
         kept_others: List[Dict[str, Any]] = []
+        existing_my: List[Dict[str, Any]] = []
         for item in existing_raw:
             if not isinstance(item, dict):
                 continue
             if str(item.get("author_id") or "") != current_user_id_str:
                 kept_others.append(item)
+            else:
+                existing_my.append(item)
 
-        # 仅采纳 payload 中 author_id=当前用户 的评论；created_at 为空则用北京时间补齐
-        my_comments: List[Dict[str, Any]] = []
+        # 仅采纳 payload 中 author_id=当前用户 的评论并追加；created_at 为空则用北京时间补齐
+        appended: List[Dict[str, Any]] = []
         for c in (comments or []):
             if not isinstance(c, dict):
                 continue
@@ -685,7 +690,7 @@ class VisitRecordRepo(BaseRepo):
                 created_at_str = created_at.isoformat()
             else:
                 created_at_str = str(created_at)
-            my_comments.append(
+            appended.append(
                 {
                     "author_id": current_user_id_str,
                     "author": c.get("author"),
@@ -695,7 +700,7 @@ class VisitRecordRepo(BaseRepo):
                 }
             )
 
-        merged: List[Dict[str, Any]] = kept_others + my_comments
+        merged: List[Dict[str, Any]] = kept_others + existing_my + appended
 
         def _sort_key(x: Dict[str, Any]) -> tuple[int, str]:
             v = str(x.get("created_at") or "")

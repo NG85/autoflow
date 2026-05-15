@@ -568,11 +568,11 @@ class CRMComment(BaseModel):
     created_at: Optional[datetime] = None
 
 class VisitRecordCommentsUpdate(BaseModel):
-    """更新拜访记录的评论（JSON数组）"""
+    """追加拜访记录的评论（JSON数组）；传本次新增条目即可"""
 
     comments: Optional[List[CRMComment]] = Field(
         default=None,
-        description="评论列表（人工可编辑，JSON数组）",
+        description="本次新增的评论条目（服务端在既有 comments 后追加）；每条 author_id 须为当前登录用户",
     )
 
 # 拜访记录查询响应

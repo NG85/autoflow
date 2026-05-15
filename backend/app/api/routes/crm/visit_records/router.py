@@ -920,10 +920,18 @@ def update_visit_record_comments(
     payload: VisitRecordCommentsUpdate,
 ):
     """
-    保存指定拜访记录的评论（comments，JSON数组）
+    追加保存指定拜访记录的评论（comments，JSON数组）；请求体只需传本次新增条目。
+    - 每条评论的 author_id 须与当前登录用户一致，否则返回 400
     - 复用拜访记录的权限控制逻辑：无权限/不存在返回 404
     """
     try:
+        current_user_id_str = str(user.id)
+        for c in payload.comments or []:
+            if str(c.author_id or "").strip() != current_user_id_str:
+                raise HTTPException(
+                    status_code=400,
+                    detail="存在 author_id 与当前登录用户不一致的评论，禁止代他人提交；请仅附加以本人身份发表的评论。",
+                )
         logger.info(
             "update_visit_record_comments start: record_id=%s, user_id=%s, payload_comments_count=%s",
             record_id,
