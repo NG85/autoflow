@@ -57,17 +57,19 @@ SAMPLES: List[Sample] = [
     Sample("F7", "followup", text_zh="详细介绍了方案优势，客户认可，后续继续推进。", expected="不合格"),
     Sample("F8", "followup", text_zh="上午与客户DBA和架构师复盘Q1性能瓶颈，确认高峰时段写入延迟集中在库存服务；现场演示参数调优与连接池隔离方案。客户明确反馈可接受两阶段切换，并提出需先验证审计合规。双方达成下周三前完成压测并在周会上评审上线窗口。", expected="优秀"),
     Sample("M1", "followup", text_en="Discussed migration scope with CTO; client requested rollback strategy and security checklist before pilot.", expected="qualified"),
-    # # ---------- next ----------
+    # ---------- next ----------
     Sample("N1", "next", text_zh="1. 待办事项（如：具体动作）2. 时间节点（如：完成时间）3. 预期成果", expected="不合格"),
     Sample("N2", "next", text_zh="TBD", expected="不合格"),
     Sample("N3", "next", text_zh="保持沟通，等待客户反馈。", expected="不合格"),
-    Sample("N4", "next", text_zh="发送方案并安排评审会议。", expected="不合格"),
-    Sample("N5", "next", text_zh="下周持续跟进客户。", expected="不合格"),
-    Sample("N6", "next", text_zh="本周四前提交PoC清单，周五与客户技术团队开30分钟评审会，确认测试范围。", expected="合格"),
-    Sample("N7", "next", text_zh="客户已明确今年无预算，商机关闭，后续仅保持季度触达。", expected="合格"),
-    Sample("N8", "next", text_zh="明天发送报价，周三电话沟通采购条款。", expected="合格"),
-    Sample("N9", "next", text_zh="今天下班前发送分阶段实施计划；周二与客户安全负责人评审权限模型；周四完成试点环境联调。目标是在本月底前推动客户内部立项并锁定一期范围。", expected="优秀"),
+    Sample("N4", "next", text_zh="发送方案并安排评审会议。", expected="不合格"),  # 无时间范围
+    Sample("N5", "next", text_zh="下周持续跟进客户。", expected="不合格"),  # 有「下周」但动作为空泛跟进
+    Sample("N6", "next", text_zh="下周发送PoC方案并安排技术评审，推动客户确认一期范围。", expected="合格"),  # 周级时间 + 具体动作 + 推进结果
+    Sample("N7", "next", text_zh="本周四前提交PoC清单，周五与客户技术团队开30分钟评审会，确认测试范围。", expected="合格"),
+    Sample("N8", "next", text_zh="客户已明确今年无预算，商机关闭，后续仅保持季度触达。", expected="合格"),
+    Sample("N9", "next", text_zh="明天发送报价，周三电话沟通采购条款。", expected="合格"),
+    Sample("N10", "next", text_zh="今天下班前发送分阶段实施计划；周二与客户安全负责人评审权限模型；周四完成试点环境联调。目标是在本月底前推动客户内部立项并锁定一期范围。", expected="优秀"),
     Sample("M2", "next", text_en="Opportunity closed - customer declined due to budget freeze, no next steps.", expected="qualified"),
+    Sample("M3", "next", text_en="Send implementation plan next week and schedule technical review to confirm phase-one scope.", expected="qualified"),
 ]
 
 
