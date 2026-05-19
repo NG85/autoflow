@@ -261,6 +261,10 @@ class Settings(BaseSettings):
     CRM_WEEKLY_FOLLOWUP_CRON: str = '30 7 * * 6'
     # 周日：公司总结（上一完整周，需早于 generate_crm_weekly_report）
     CRM_WEEKLY_FOLLOWUP_COMPANY_CRON: str = '30 9 * * 0'
+    # 周六：部门+实体（当前周，截止当日；周六午后拜访不进总结为预期）
+    CRM_WEEKLY_FOLLOWUP_CRON: str = '30 7 * * 6'
+    # 周日：公司总结（上一完整周，需早于 generate_crm_weekly_report）
+    CRM_WEEKLY_FOLLOWUP_COMPANY_CRON: str = '30 9 * * 0'
     CRM_WEEKLY_FOLLOWUP_LLM_MAX_CONCURRENCY: int = 4
     # 周跟进输入规模控制：<=0 表示不限制（默认保留完整上下文）
     CRM_WEEKLY_FOLLOWUP_ENTITY_LLM_MAX_VISITS: int = 0
@@ -344,6 +348,8 @@ class Settings(BaseSettings):
     
     # Visit detail page URL configuration
     VISIT_DETAIL_PAGE_URL: str = "https://test.zhizhenzhihe.com/registerVisitRecord/list"
+    # 当日无跟进提醒：「立即录入跟进」路径，与 REVIEW_REPORT_HOST 拼接为完整 URL
+    CRM_VISIT_FOLLOWUP_ENTRY_PAGE_URL: str = "/registerVisitRecord/register"
     # 当日无跟进提醒：「立即录入跟进」路径，与 REVIEW_REPORT_HOST 拼接为完整 URL
     CRM_VISIT_FOLLOWUP_ENTRY_PAGE_URL: str = "/registerVisitRecord/register"
     
