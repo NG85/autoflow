@@ -341,6 +341,8 @@ class Settings(BaseSettings):
     
     # Visit detail page URL configuration
     VISIT_DETAIL_PAGE_URL: str = "https://test.zhizhenzhihe.com/registerVisitRecord/list"
+    # 当日无跟进提醒：「立即录入跟进」路径，与 REVIEW_REPORT_HOST 拼接为完整 URL
+    CRM_VISIT_FOLLOWUP_ENTRY_PAGE_URL: str = "/registerVisitRecord/register"
     
     # Account list page URL configuration
     ACCOUNT_LIST_PAGE_URL: str = "https://test.zhizhenzhihe.com/review/list/account"

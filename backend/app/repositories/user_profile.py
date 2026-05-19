@@ -1,6 +1,7 @@
 from typing import Optional, List, Dict
 from uuid import UUID
 from sqlmodel import Session, select, distinct
+from sqlalchemy import func
 from sqlalchemy.orm import selectinload
 from app.models.user_profile import UserProfile
 from app.models.user_oauth_account import UserOAuthAccount
@@ -289,6 +290,22 @@ class UserProfileRepo(BaseRepo):
             result[department_name] = manager
         
         return result
+
+    def get_active_sales_users_with_oauth(self, db_session: Session) -> list[UserProfile]:
+        """获取 role 为 sales 的活跃销售用户（已绑定 OAuth open_id）。"""
+        return list(
+            db_session.exec(
+                select(UserProfile)
+                .options(selectinload(UserProfile.oauth_users))
+                .join(UserOAuthAccount, UserProfile.user_id == UserOAuthAccount.user_id)
+                .where(
+                    UserProfile.is_active == True,  # noqa: E712
+                    UserOAuthAccount.open_id.isnot(None),
+                    func.lower(UserProfile.role) == "sales",
+                )
+                .distinct()
+            ).all()
+        )
 
     def get_users_by_notification_permission(
         self, 

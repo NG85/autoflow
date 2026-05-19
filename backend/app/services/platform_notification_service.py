@@ -1926,6 +1926,23 @@ class PlatformNotificationService:
             recipient_user_id=recipient_user_id,
             message_text=message_text,
         )
+
+    def send_daily_no_followup_reminder_notification(
+        self,
+        db_session: Session,
+        *,
+        recipient_user_id: str,
+        message_text: str,
+    ) -> Dict[str, Any]:
+        """
+        当日无跟进提醒：给当日（visit_communication_date）尚无拜访记录的销售发一条「文本消息」。
+        复用 send_weekly_followup_comment_notification 的通用发送逻辑。
+        """
+        return self.send_weekly_followup_comment_notification(
+            db_session,
+            recipient_user_id=recipient_user_id,
+            message_text=message_text,
+        )
     
     def _convert_weekly_report_data_for_feishu(self, db_session: Session, report_data: Dict[str, Any]) -> Dict[str, Any]:
         """
