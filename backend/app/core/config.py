@@ -257,7 +257,10 @@ class Settings(BaseSettings):
 
     # CRM weekly followup summary (company/department + entity list) configuration
     CRM_WEEKLY_FOLLOWUP_ENABLED: bool = False
-    CRM_WEEKLY_FOLLOWUP_CRON: str = '30 9 * * 0'  # 每周日上午9:30执行（需早于周报；周日到周六口径）
+    # 周六：部门+实体（当前周，截止当日；周六午后拜访不进总结为预期）
+    CRM_WEEKLY_FOLLOWUP_CRON: str = '30 7 * * 6'
+    # 周日：公司总结（上一完整周，需早于 generate_crm_weekly_report）
+    CRM_WEEKLY_FOLLOWUP_COMPANY_CRON: str = '30 9 * * 0'
     CRM_WEEKLY_FOLLOWUP_LLM_MAX_CONCURRENCY: int = 4
     # 周跟进输入规模控制：<=0 表示不限制（默认保留完整上下文）
     CRM_WEEKLY_FOLLOWUP_ENTITY_LLM_MAX_VISITS: int = 0

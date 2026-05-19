@@ -141,27 +141,44 @@ if settings.CRM_WEEKLY_REPORT_ENABLED:
         'schedule': weekly_schedule,
     }
 
-# CRM周跟进总结任务（公司/部门 + 列表明细）
+# CRM周跟进总结：周六部门（当前周）/ 周日公司
 if settings.CRM_WEEKLY_FOLLOWUP_ENABLED:
-    cron_expr = settings.CRM_WEEKLY_FOLLOWUP_CRON
-    cron_fields = cron_expr.strip().split()
-    if len(cron_fields) == 5:
-        minute, hour, day_of_month, month_of_year, day_of_week = cron_fields
-        weekly_followup_schedule = crontab(
-            minute=minute,
-            hour=hour,
-            day_of_month=day_of_month,
-            month_of_year=month_of_year,
-            day_of_week=day_of_week,
-        )
-    else:
-        # 默认：每周日上午9:30（需早于 generate_crm_weekly_report）
-        weekly_followup_schedule = crontab(hour=9, minute=30, day_of_week=0)
-
     app.conf.beat_schedule = getattr(app.conf, 'beat_schedule', {})
-    app.conf.beat_schedule['generate_crm_weekly_followup_summary'] = {
+
+    def _weekly_followup_crontab(cron_expr: str, default: crontab) -> crontab:
+        cron_fields = cron_expr.strip().split()
+        if len(cron_fields) == 5:
+            minute, hour, day_of_month, month_of_year, day_of_week = cron_fields
+            return crontab(
+                minute=minute,
+                hour=hour,
+                day_of_month=day_of_month,
+                month_of_year=month_of_year,
+                day_of_week=day_of_week,
+            )
+        return default
+
+    app.conf.beat_schedule['generate_crm_weekly_followup_summary_department'] = {
         'task': 'app.tasks.cron_jobs.generate_crm_weekly_followup_summary',
-        'schedule': weekly_followup_schedule,
+        'schedule': _weekly_followup_crontab(
+            settings.CRM_WEEKLY_FOLLOWUP_CRON,
+            crontab(hour=7, minute=30, day_of_week=6),
+        ),
+        'kwargs': {
+            'scopes': 'department',
+            'week_range_mode': 'in_progress',
+        },
+    }
+    app.conf.beat_schedule['generate_crm_weekly_followup_summary_company'] = {
+        'task': 'app.tasks.cron_jobs.generate_crm_weekly_followup_summary',
+        'schedule': _weekly_followup_crontab(
+            settings.CRM_WEEKLY_FOLLOWUP_COMPANY_CRON,
+            crontab(hour=9, minute=30, day_of_week=0),
+        ),
+        'kwargs': {
+            'scopes': 'company',
+            'week_range_mode': 'completed',
+        },
     }
 
 # CRM周跟进总结 leader 已阅/评论统计（周一 9:00）

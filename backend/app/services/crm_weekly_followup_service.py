@@ -6,7 +6,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import load_only
@@ -28,15 +28,51 @@ from app.utils.ark_llm import call_ark_llm
 logger = logging.getLogger(__name__)
 
 
+WeeklyFollowupScope = Literal["department", "company"]
+WeeklyFollowupWeekRangeMode = Literal["completed", "in_progress"]
+
+
 def get_sunday_to_saturday_week_range(today: date) -> Tuple[date, date]:
+    """上一完整自然周（周日~周六），与现有周报默认口径一致。"""
+    return resolve_weekly_followup_week_range(today, week_range_mode="completed")
+
+
+def resolve_weekly_followup_week_range(
+    today: date,
+    *,
+    week_range_mode: WeeklyFollowupWeekRangeMode = "completed",
+) -> Tuple[date, date]:
     """
-    与现有周报一致：默认处理“上周日 - 本周六”
+    周跟进统计周区间（周日~周六）。
+
+    - completed：上一完整自然周（周日跑公司总结等）
+    - in_progress：当前自然周，week_end 不超过 today（周六早上跑部门用）
     """
-    # 0=周一,...,6=周日
+    if week_range_mode == "in_progress":
+        days_since_sunday = (today.weekday() + 1) % 7
+        if days_since_sunday == 0:
+            week_end = today - timedelta(days=1)
+            week_start = week_end - timedelta(days=6)
+        else:
+            week_start = today - timedelta(days=days_since_sunday)
+            week_end = min(today, week_start + timedelta(days=6))
+        return week_start, week_end
+
     days_since_sunday = (today.weekday() + 1) % 7
-    last_sunday = today - timedelta(days=days_since_sunday + 7)
-    this_saturday = last_sunday + timedelta(days=6)
-    return last_sunday, this_saturday
+    week_start = today - timedelta(days=days_since_sunday + 7)
+    week_end = week_start + timedelta(days=6)
+    return week_start, week_end
+
+
+def parse_weekly_followup_scopes(scopes: str | None) -> Set[WeeklyFollowupScope]:
+    raw = (scopes or "all").strip().lower()
+    if raw == "all":
+        return {"department", "company"}
+    if raw == "department":
+        return {"department"}
+    if raw == "company":
+        return {"company"}
+    raise ValueError(f"无效的 scopes: {scopes!r}，可选 all/department/company")
 
 
 @dataclass(frozen=True)
@@ -470,13 +506,26 @@ class CRMWeeklyFollowupService:
         session: Session,
         week_start: date,
         week_end: date,
+        *,
+        scopes: Set[WeeklyFollowupScope] | None = None,
     ) -> Dict[str, Any]:
         """
         生成并写入：
-        - crm_weekly_followup_entity_summary
-        - crm_weekly_followup_summary（department/company）
+        - crm_weekly_followup_entity_summary（仅 department scope）
+        - crm_weekly_followup_summary（department/company，按 scopes 控制）
         """
-        logger.info(f"开始生成周跟进总结，日期范围：{week_start} ~ {week_end}（周日到周六）")
+        active_scopes = scopes if scopes is not None else {"department", "company"}
+        include_department = "department" in active_scopes
+        include_company = "company" in active_scopes
+        if not include_department and not include_company:
+            raise ValueError("scopes 至少包含 department 或 company")
+
+        logger.info(
+            "开始生成周跟进总结，日期范围：%s ~ %s（周日到周六），scopes=%s",
+            week_start,
+            week_end,
+            sorted(active_scopes),
+        )
 
         # 读取本周拜访记录（证据来源）；仅加载周跟进所需列，降低大字段 IO
         visit_select_cols = (
@@ -513,23 +562,32 @@ class CRMWeeklyFollowupService:
         )
         records = session.exec(stmt).all()
         if not records:
-            logger.warning("该周没有任何拜访记录，仍为有 leader 的部门生成空总结")
-            active_departments = self._list_active_departments_for_empty_summary(session)
-            for dept_id, dept_name in active_departments:
-                self._upsert_empty_department_summary(
-                    session, week_start, week_end, dept_id, dept_name
-                )
-            self._upsert_empty_company_summary(session, week_start, week_end)
-            logger.info(f"周跟进总结生成完成（无拜访记录）：部门 {len(active_departments)} 个")
+            logger.warning("该周没有任何拜访记录，仍按 scopes 生成空总结")
+            empty_dept_count = 0
+            if include_department:
+                active_departments = self._list_active_departments_for_empty_summary(session)
+                for dept_id, dept_name in active_departments:
+                    self._upsert_empty_department_summary(
+                        session, week_start, week_end, dept_id, dept_name
+                    )
+                empty_dept_count = len(active_departments)
+            if include_company:
+                self._upsert_empty_company_summary(session, week_start, week_end)
+            logger.info(
+                "周跟进总结生成完成（无拜访记录）：部门空总结 %s 个，公司=%s",
+                empty_dept_count,
+                include_company,
+            )
             return {
                 "week_start": week_start.isoformat(),
                 "week_end": week_end.isoformat(),
                 "entity_count": 0,
-                "departments": len(active_departments),
+                "departments": empty_dept_count,
                 "billable_departments": 0,
                 "billable_department_keys": [],
                 "billable_department_billing": [],
                 "billable_company": False,
+                "scopes": sorted(active_scopes),
             }
 
         # 按拜访主键缓存摘要文本，供实体 LLM 与多部门/公司 rollup 复用
@@ -720,47 +778,51 @@ class CRMWeeklyFollowupService:
         for r in records:
             self._visit_context_for_prompt(r, visit_context_cache)
 
+        owner_name_by_key: dict[_EntityKey, Optional[str]] = {}
+        persisted_entities: List[CRMWeeklyFollowupEntitySummary] = []
+
         entity_materialized: dict[
             _EntityKey, tuple[List[CRMSalesVisitRecord], CRMSalesVisitRecord]
         ] = {}
         entity_prompts: dict[_EntityKey, str] = {}
-        for key, record_pairs in grouped.items():
-            record_pairs_sorted = sorted(
-                record_pairs,  # type: ignore[arg-type]
-                key=lambda x: (
-                    x.visit_communication_date or date.min,
-                    x.last_modified_time or datetime.min,
-                    x.id or 0,
-                ),
-            )
-            last_record = record_pairs_sorted[-1]
-            entity_materialized[key] = (record_pairs_sorted, last_record)
-
-            entity_cap = settings.CRM_WEEKLY_FOLLOWUP_ENTITY_LLM_MAX_VISITS
-            record_pairs_for_llm = record_pairs_sorted
-            preamble = ""
-            if entity_cap > 0 and len(record_pairs_sorted) > entity_cap:
-                record_pairs_for_llm = record_pairs_sorted[-entity_cap:]
-                preamble = (
-                    f"【输入说明】该实体本周共 {len(record_pairs_sorted)} 条拜访记录；"
-                    f"以下为按时间最近的 {entity_cap} 条摘要，用于归纳本周进展与风险。"
-                    "证据字段仍关联本周全部拜访记录 ID；请勿编造未出现在摘要中的具体事实。\n"
+        if include_department:
+            for key, record_pairs in grouped.items():
+                record_pairs_sorted = sorted(
+                    record_pairs,  # type: ignore[arg-type]
+                    key=lambda x: (
+                        x.visit_communication_date or date.min,
+                        x.last_modified_time or datetime.min,
+                        x.id or 0,
+                    ),
                 )
+                last_record = record_pairs_sorted[-1]
+                entity_materialized[key] = (record_pairs_sorted, last_record)
 
-            compressed: List[Dict[str, Any]] = []
-            for r in record_pairs_for_llm:
-                compressed.append(
-                    {
-                        "id": r.id,
-                        "opportunity_name": r.opportunity_name,
-                        "account_name": r.account_name,
-                        "partner_name": r.partner_name,
-                        "context": self._visit_context_for_prompt(r, visit_context_cache),
-                    }
-                )
-            entity_prompts[key] = self._build_entity_prompt(
-                key, list(reversed(compressed)), preamble=preamble
-            )  # 由早到晚
+                entity_cap = settings.CRM_WEEKLY_FOLLOWUP_ENTITY_LLM_MAX_VISITS
+                record_pairs_for_llm = record_pairs_sorted
+                preamble = ""
+                if entity_cap > 0 and len(record_pairs_sorted) > entity_cap:
+                    record_pairs_for_llm = record_pairs_sorted[-entity_cap:]
+                    preamble = (
+                        f"【输入说明】该实体本周共 {len(record_pairs_sorted)} 条拜访记录；"
+                        f"以下为按时间最近的 {entity_cap} 条摘要，用于归纳本周进展与风险。"
+                        "证据字段仍关联本周全部拜访记录 ID；请勿编造未出现在摘要中的具体事实。\n"
+                    )
+
+                compressed: List[Dict[str, Any]] = []
+                for r in record_pairs_for_llm:
+                    compressed.append(
+                        {
+                            "id": r.id,
+                            "opportunity_name": r.opportunity_name,
+                            "account_name": r.account_name,
+                            "partner_name": r.partner_name,
+                            "context": self._visit_context_for_prompt(r, visit_context_cache),
+                        }
+                    )
+                entity_prompts[key] = self._build_entity_prompt(
+                    key, list(reversed(compressed)), preamble=preamble
+                )  # 由早到晚
 
         llm_entity_result_by_key: dict[_EntityKey, tuple[str, str]] = {}
 
@@ -782,78 +844,84 @@ class CRMWeeklyFollowupService:
                 logger.warning(f"LLM 生成失败，key={key}: {e}")
             return key, progress, risks
 
-        with ThreadPoolExecutor(max_workers=llm_max_concurrency) as executor:
-            futures = [executor.submit(_run_entity_llm, item) for item in entity_prompts.items()]
-            for fut in as_completed(futures):
-                key, progress, risks = fut.result()
-                llm_entity_result_by_key[key] = (progress, risks)
+        if include_department:
+            with ThreadPoolExecutor(max_workers=llm_max_concurrency) as executor:
+                futures = [executor.submit(_run_entity_llm, item) for item in entity_prompts.items()]
+                for fut in as_completed(futures):
+                    key, progress, risks = fut.result()
+                    llm_entity_result_by_key[key] = (progress, risks)
 
-        persisted_entities: List[CRMWeeklyFollowupEntitySummary] = []
-        owner_name_by_key: dict[_EntityKey, Optional[str]] = {}
+        if include_department:
+            for key, (record_pairs_sorted, last_record) in entity_materialized.items():
+                progress, risks = llm_entity_result_by_key.get(key, ("", ""))
 
-        for key, (record_pairs_sorted, last_record) in entity_materialized.items():
-            progress, risks = llm_entity_result_by_key.get(key, ("", ""))
+                owner_user_id = owner_user_id_by_key.get(key)
+                owner_name = owner_name_by_user_id.get(owner_user_id) if owner_user_id else None
+                if not owner_name:
+                    crm_uid = owner_crm_user_id_by_key.get(key)
+                    if crm_uid:
+                        owner_name = crm_user_name_by_owner_id.get(crm_uid)
+                owner_name = (owner_name or "").strip() or None
+                owner_name_by_key[key] = owner_name
 
-            owner_user_id = owner_user_id_by_key.get(key)
-            owner_name = owner_name_by_user_id.get(owner_user_id) if owner_user_id else None
-            if not owner_name:
-                crm_uid = owner_crm_user_id_by_key.get(key)
-                if crm_uid:
-                    owner_name = crm_user_name_by_owner_id.get(crm_uid)
-            owner_name = (owner_name or "").strip() or None
-            owner_name_by_key[key] = owner_name
+                account_id = last_record.account_id
+                account_name = last_record.account_name
+                opportunity_id = last_record.opportunity_id
+                opportunity_name = last_record.opportunity_name
+                partner_id = last_record.partner_id
+                partner_name = last_record.partner_name
 
-            # 优先用 CRM 表里的名称（更权威/更新），兜底再用拜访记录字段
-            account_id = last_record.account_id
-            account_name = last_record.account_name
-            opportunity_id = last_record.opportunity_id
-            opportunity_name = last_record.opportunity_name
-            partner_id = last_record.partner_id
-            partner_name = last_record.partner_name
+                if key.entity_type == "opportunity":
+                    opp = opp_by_id.get(key.entity_id)
+                    if opp:
+                        opportunity_id = str((opp.get("unique_id") or "") or opportunity_id or "")
+                        opportunity_name = opp.get("opportunity_name") or opportunity_name
+                        account_id = opp.get("customer_id") or account_id
+                        account_name = opp.get("customer_name") or account_name
+                elif key.entity_type == "account":
+                    acc = acc_by_id.get(key.entity_id)
+                    if acc:
+                        account_id = str((acc.get("unique_id") or "") or account_id or "")
+                        account_name = acc.get("customer_name") or account_name
+                elif key.entity_type == "partner":
+                    partner = partner_by_id.get(key.entity_id)
+                    if partner:
+                        partner_id = str((partner.get("unique_id") or "") or partner_id or "")
+                        partner_name = partner.get("customer_name") or partner_name
 
-            if key.entity_type == "opportunity":
-                opp = opp_by_id.get(key.entity_id)
-                if opp:
-                    opportunity_id = str((opp.get("unique_id") or "") or opportunity_id or "")
-                    opportunity_name = opp.get("opportunity_name") or opportunity_name
-                    account_id = opp.get("customer_id") or account_id
-                    account_name = opp.get("customer_name") or account_name
-            elif key.entity_type == "account":
-                acc = acc_by_id.get(key.entity_id)
-                if acc:
-                    account_id = str((acc.get("unique_id") or "") or account_id or "")
-                    account_name = acc.get("customer_name") or account_name
-            elif key.entity_type == "partner":
-                partner = partner_by_id.get(key.entity_id)
-                if partner:
-                    # partner_id/partner_name 保持与字段语义一致；名称优先用客户表中的 customer_name
-                    partner_id = str((partner.get("unique_id") or "") or partner_id or "")
-                    partner_name = partner.get("customer_name") or partner_name
-
-            entity_obj = CRMWeeklyFollowupEntitySummary(
-                week_start=week_start,
-                week_end=week_end,
-                department_id=dept_by_user_id.get(owner_user_id) if owner_user_id else None,
-                department_name=dept_name_by_key.get(key, key.department_name),
-                entity_type=key.entity_type,
-                entity_id=key.entity_id,
-                account_id=account_id,
-                account_name=account_name,
-                opportunity_id=opportunity_id,
-                opportunity_name=opportunity_name,
-                partner_id=partner_id,
-                partner_name=partner_name,
-                owner_user_id=owner_user_id,
-                owner_name=owner_name,
-                progress=progress,
-                risks=risks,
-                evidence_record_ids=json.dumps(
-                    [r.id for r in record_pairs_sorted if r.id is not None],
-                    ensure_ascii=False,
-                ),
-            )
-            persisted = self._upsert_entity_summary(session, entity_obj)
-            persisted_entities.append(persisted)
+                entity_obj = CRMWeeklyFollowupEntitySummary(
+                    week_start=week_start,
+                    week_end=week_end,
+                    department_id=dept_by_user_id.get(owner_user_id) if owner_user_id else None,
+                    department_name=dept_name_by_key.get(key, key.department_name),
+                    entity_type=key.entity_type,
+                    entity_id=key.entity_id,
+                    account_id=account_id,
+                    account_name=account_name,
+                    opportunity_id=opportunity_id,
+                    opportunity_name=opportunity_name,
+                    partner_id=partner_id,
+                    partner_name=partner_name,
+                    owner_user_id=owner_user_id,
+                    owner_name=owner_name,
+                    progress=progress,
+                    risks=risks,
+                    evidence_record_ids=json.dumps(
+                        [r.id for r in record_pairs_sorted if r.id is not None],
+                        ensure_ascii=False,
+                    ),
+                )
+                persisted = self._upsert_entity_summary(session, entity_obj)
+                persisted_entities.append(persisted)
+        elif include_company:
+            for key in grouped:
+                owner_user_id = owner_user_id_by_key.get(key)
+                owner_name = owner_name_by_user_id.get(owner_user_id) if owner_user_id else None
+                if not owner_name:
+                    crm_uid = owner_crm_user_id_by_key.get(key)
+                    if crm_uid:
+                        owner_name = crm_user_name_by_owner_id.get(crm_uid)
+                owner_name_by_key[key] = (owner_name or "").strip() or None
 
         # 生成部门/公司汇总（仅 LLM）
         # 按部门组织架构：为负责人直接部门及所有上级部门生成汇总
@@ -889,27 +957,29 @@ class CRMWeeklyFollowupService:
         rollup_requests: List[
             tuple[str, str, List[Tuple[_EntityKey, List[CRMSalesVisitRecord]]], Optional[str]]
         ] = []
-        for dept_id, record_groups in by_dept_id_full.items():
-            department_name = dept_name_by_id.get(dept_id, "未知部门")
-            if department_name == "未知部门":
-                for k, rs in record_groups:
-                    if k not in seen_keys_unknown:
-                        seen_keys_unknown.add(k)
-                        unknown_department_record_groups.append((k, rs))
-                continue
-            billing_dept_id = str(dept_id).strip() or None
-            rollup_requests.append(("department", department_name, record_groups, billing_dept_id))
+        if include_department:
+            for dept_id, record_groups in by_dept_id_full.items():
+                department_name = dept_name_by_id.get(dept_id, "未知部门")
+                if department_name == "未知部门":
+                    for k, rs in record_groups:
+                        if k not in seen_keys_unknown:
+                            seen_keys_unknown.add(k)
+                            unknown_department_record_groups.append((k, rs))
+                    continue
+                billing_dept_id = str(dept_id).strip() or None
+                rollup_requests.append(("department", department_name, record_groups, billing_dept_id))
 
-        if unknown_department_record_groups:
-            rollup_requests.append(("department", "未知部门", unknown_department_record_groups, None))
+            if unknown_department_record_groups:
+                rollup_requests.append(("department", "未知部门", unknown_department_record_groups, None))
 
-        for dept_name, record_groups in by_dept_name_fallback.items():
-            if not dept_name or dept_name in names_covered_by_id:
-                continue
-            rollup_requests.append(("department", dept_name, record_groups, None))
+            for dept_name, record_groups in by_dept_name_fallback.items():
+                if not dept_name or dept_name in names_covered_by_id:
+                    continue
+                rollup_requests.append(("department", dept_name, record_groups, None))
 
-        all_record_groups = list(grouped.items())
-        rollup_requests.append(("company", "公司", all_record_groups, None))
+        if include_company:
+            all_record_groups = list(grouped.items())
+            rollup_requests.append(("company", "公司", all_record_groups, None))
 
         def _billing_subkey(billing_dept_id: Optional[str]) -> str:
             return str(billing_dept_id).strip() if billing_dept_id else ""
@@ -941,9 +1011,9 @@ class CRMWeeklyFollowupService:
                     "billing_key": bkey,
                 }
             )
-        billable_department_count = len(billable_department_items)
-        billable_department_keys = [x["billing_key"] for x in billable_department_items]
-        billable_company = bool(grouped)
+        billable_department_count = len(billable_department_items) if include_department else 0
+        billable_department_keys = [x["billing_key"] for x in billable_department_items] if include_department else []
+        billable_company = bool(grouped) if include_company else False
 
         # 关键：rollup prompt 在主线程构建，避免 commit 后 ORM 对象在子线程触发懒加载
         # 导致同一 DB 连接跨线程访问（例如 PyMySQL packet sequence 错误）。
@@ -984,94 +1054,91 @@ class CRMWeeklyFollowupService:
                 rollup_text_by_scope_dept[(scope, dept, sub)] = txt
 
         # upsert department summaries（按部门 ID 的层级 + 无 dept_id 的 fallback）
-        # 表唯一约束为 (week_start, week_end, summary_type, department_name)，多个未在 mirror 的
-        # dept_id 都会得到 department_name="未知部门"，需合并为一条汇总再 upsert，避免冲突
-        for dept_id, record_groups in by_dept_id_full.items():
-            department_name = dept_name_by_id.get(dept_id, "未知部门")
-            if department_name != "未知部门":
+        if include_department:
+            for dept_id, record_groups in by_dept_id_full.items():
+                department_name = dept_name_by_id.get(dept_id, "未知部门")
+                if department_name != "未知部门":
+                    summary_obj = CRMWeeklyFollowupSummary(
+                        week_start=week_start,
+                        week_end=week_end,
+                        summary_type="department",
+                        department_id=dept_id,
+                        department_name=department_name,
+                        title=self._build_summary_title(
+                            week_start=week_start,
+                            week_end=week_end,
+                            summary_type="department",
+                            department_name=department_name,
+                        ),
+                        summary_content=rollup_text_by_scope_dept.get(
+                            ("department", department_name, str(dept_id).strip())
+                        ),
+                    )
+                    self._upsert_summary(session, summary_obj)
+
+            if unknown_department_record_groups:
                 summary_obj = CRMWeeklyFollowupSummary(
                     week_start=week_start,
                     week_end=week_end,
                     summary_type="department",
-                    department_id=dept_id,
-                    department_name=department_name,
+                    department_id="",
+                    department_name="未知部门",
                     title=self._build_summary_title(
                         week_start=week_start,
                         week_end=week_end,
                         summary_type="department",
-                        department_name=department_name,
+                        department_name="未知部门",
                     ),
-                    summary_content=rollup_text_by_scope_dept.get(
-                        ("department", department_name, str(dept_id).strip())
-                    ),
+                    summary_content=rollup_text_by_scope_dept.get(("department", "未知部门", "")),
                 )
                 self._upsert_summary(session, summary_obj)
 
-        if unknown_department_record_groups:
-            summary_obj = CRMWeeklyFollowupSummary(
-                week_start=week_start,
-                week_end=week_end,
-                summary_type="department",
-                department_id="",
-                department_name="未知部门",
-                title=self._build_summary_title(
+            for dept_name, record_groups in by_dept_name_fallback.items():
+                if not dept_name or dept_name in names_covered_by_id:
+                    continue
+                summary_obj = CRMWeeklyFollowupSummary(
                     week_start=week_start,
                     week_end=week_end,
                     summary_type="department",
-                    department_name="未知部门",
-                ),
-                summary_content=rollup_text_by_scope_dept.get(("department", "未知部门", "")),
-            )
-            self._upsert_summary(session, summary_obj)
-
-        for dept_name, record_groups in by_dept_name_fallback.items():
-            if not dept_name or dept_name in names_covered_by_id:
-                continue
-            summary_obj = CRMWeeklyFollowupSummary(
-                week_start=week_start,
-                week_end=week_end,
-                summary_type="department",
-                department_id="",
-                department_name=dept_name,
-                title=self._build_summary_title(
-                    week_start=week_start,
-                    week_end=week_end,
-                    summary_type="department",
+                    department_id="",
                     department_name=dept_name,
-                ),
-                summary_content=rollup_text_by_scope_dept.get(("department", dept_name, "")),
-            )
-            self._upsert_summary(session, summary_obj)
+                    title=self._build_summary_title(
+                        week_start=week_start,
+                        week_end=week_end,
+                        summary_type="department",
+                        department_name=dept_name,
+                    ),
+                    summary_content=rollup_text_by_scope_dept.get(("department", dept_name, "")),
+                )
+                self._upsert_summary(session, summary_obj)
 
-        # company summary
-        company_text = rollup_text_by_scope_dept.get(("company", "公司", ""))
-        company_obj = CRMWeeklyFollowupSummary(
-            week_start=week_start,
-            week_end=week_end,
-            summary_type="company",
-            department_id="",
-            department_name="",
-            title=self._build_summary_title(
+        if include_company:
+            company_text = rollup_text_by_scope_dept.get(("company", "公司", ""))
+            company_obj = CRMWeeklyFollowupSummary(
                 week_start=week_start,
                 week_end=week_end,
                 summary_type="company",
+                department_id="",
                 department_name="",
-            ),
-            summary_content=company_text,
-        )
-        self._upsert_summary(session, company_obj)
+                title=self._build_summary_title(
+                    week_start=week_start,
+                    week_end=week_end,
+                    summary_type="company",
+                    department_name="",
+                ),
+                summary_content=company_text,
+            )
+            self._upsert_summary(session, company_obj)
 
-        # 补全无拜访记录的部门：仍生成 summary_content="本周没有跟进记录"（仅含在 relation 中有 leader 的部门）
-        # 注意：by_dept_id_full 已按祖先链展开（见上文 ancestor_chains），子部门有记录时其父部门也在
-        # by_dept_id_full 中并已写入 LLM 汇总，此处不会对父部门误写空总结
-        active_departments = self._list_active_departments_for_empty_summary(session)
         empty_dept_count = 0
-        for dept_id, dept_name in active_departments:
-            if dept_id not in by_dept_id_full:
-                self._upsert_empty_department_summary(
-                    session, week_start, week_end, dept_id, dept_name
-                )
-                empty_dept_count += 1
+        if include_department:
+            active_departments = self._list_active_departments_for_empty_summary(session)
+            for dept_id, dept_name in active_departments:
+                if dept_id not in by_dept_id_full:
+                    self._upsert_empty_department_summary(
+                        session, week_start, week_end, dept_id, dept_name
+                    )
+                    empty_dept_count += 1
 
         known_dept_count = sum(
             1 for did in by_dept_id_full if dept_name_by_id.get(did, "未知部门") != "未知部门"
@@ -1096,6 +1163,7 @@ class CRMWeeklyFollowupService:
             "billable_department_keys": billable_department_keys,
             "billable_department_billing": billable_department_items,
             "billable_company": billable_company,
+            "scopes": sorted(active_scopes),
         }
 
 
