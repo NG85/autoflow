@@ -214,6 +214,15 @@ class Settings(BaseSettings):
     ALDEBARAN_WEEKLY_REPORT_URL: str = "/api/v1/report/weekly"
     ALDEBARAN_TENANT_ID: str = "PINGCAP"
     ALDEBARAN_REVIEW_SESSION_RECALC_PATH: str = "/api/v1/review/performance/query"
+    # Aldebaran 消息队列：拜访保存事件入队（POST /api/v1/messages/incoming）
+    ALDEBARAN_MESSAGES_INCOMING_PATH: str = "/api/v1/messages/incoming"
+    ALDEBARAN_MESSAGE_WEBHOOK_SECRET: str = ""
+    ALDEBARAN_MESSAGE_SOURCE_SYSTEM: str = "crm"
+    ALDEBARAN_VISIT_RECORD_MESSAGE_TYPE: str = "crm.visit_record.saved"
+    ALDEBARAN_MESSAGE_RETRY_ATTEMPTS: int = 3
+    ALDEBARAN_MESSAGE_RETRY_BASE_SECONDS: float = 0.5
+    # 关闭时走本地空任务推卡降级（便于本地/联调）
+    ALDEBARAN_VISIT_RECORD_POST_PROCESS_ENABLED: bool = True
     
     EMBEDDING_THRESHOLD: float = 0.92
 
