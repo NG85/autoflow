@@ -622,11 +622,21 @@ def save_weekly_followup_comments(
     payload: SaveWeeklyFollowupCommentsIn,
 ) -> WeeklyFollowupEntityRowOut:
     """
-    3) 修改保存评论（整体覆盖保存）
+    追加保存周跟进实体评论（comments，JSON 数组）；请求体只需传本次新增条目。
+    - 每条评论的 author_id 须与当前登录用户一致，否则返回 400
+    - 保存成功后：若本次追加条目含 type=comment，则向负责人推送评论提醒（type=task 不推送）
     """
     # can_edit, is_company_admin, user_dept_id, user_dept_name = _can_edit_weekly_followup_comments(db_session, user)
     # if not can_edit:
     #     raise HTTPException(status_code=403, detail="权限不足：仅团队负责人或管理者可编辑评论")
+
+    current_user_id = str(getattr(user, "id", "") or "")
+    for c in payload.comments or []:
+        if str(c.author_id or "").strip() != current_user_id:
+            raise HTTPException(
+                status_code=400,
+                detail="存在 author_id 与当前登录用户不一致的评论，禁止代他人提交；请仅附加以本人身份发表的评论。",
+            )
 
     entity = db_session.exec(select(CRMWeeklyFollowupEntitySummary).where(CRMWeeklyFollowupEntitySummary.id == entity_id)).first()
     if entity is None:
@@ -638,36 +648,40 @@ def save_weekly_followup_comments(
     #     if not user_dept_id and user_dept_name and entity.department_name != user_dept_name:
     #         raise HTTPException(status_code=403, detail="权限不足：只能编辑本团队记录")
 
-    # 安全保护：只能覆盖“自己写的评论”，不得覆盖/删除他人的评论
-    current_user_id = str(getattr(user, "id", "") or "")
+    # 安全保护：不得改动他人评论；payload 只追加当前用户的新评论/任务
     now_bj = datetime.now(ZoneInfo("Asia/Shanghai"))
 
     existing_raw = entity.comments if isinstance(entity.comments, list) else []
     kept_others: list[dict] = []
+    existing_my: list[dict] = []
     for item in existing_raw:
         if not isinstance(item, dict):
             continue
         if str(item.get("author_id") or "") != current_user_id:
             kept_others.append(item)
+        else:
+            existing_my.append(item)
 
-    # 仅采纳 payload 中 author_id=当前用户 的评论；created_at 为空则用北京时间补齐
-    my_comments: list[dict] = []
+    appended: list[dict] = []
     for c in (payload.comments or []):
-        if (c.author_id or "") != current_user_id:
+        if str(c.author_id or "").strip() != current_user_id:
             continue
         created_at = c.created_at or now_bj
-        my_comments.append(
+        if isinstance(created_at, datetime):
+            created_at_str = created_at.isoformat()
+        else:
+            created_at_str = str(created_at)
+        appended.append(
             {
                 "author_id": current_user_id,
                 "author": c.author or "",
                 "content": c.content,
                 "type": c.type or "comment",
-                "created_at": created_at.isoformat(),
+                "created_at": created_at_str,
             }
         )
 
-    # 合并回写（保持大体时间顺序；时间解析失败则放末尾）
-    merged = kept_others + my_comments
+    merged = kept_others + existing_my + appended
 
     def _sort_key(x: dict) -> tuple[int, str]:
         v = str(x.get("created_at") or "")
@@ -682,9 +696,9 @@ def save_weekly_followup_comments(
     db_session.commit()
     db_session.refresh(entity)
 
-    # leader 参与度：若当前用户是团队负责人，且本次确实提交了评论，则记录 commented_at
+    # leader 参与度：若当前用户是团队负责人，且本次确实追加了条目，则记录 commented_at
     try:
-        if my_comments:
+        if appended:
             # leader 判定与 _can_view_weekly_followup 保持一致（不依赖 OAuth 权限调用，避免引入额外延迟）
             user_profile_repo = UserProfileRepo()
             profile = user_profile_repo.get_by_user_id(db_session, user.id)
@@ -720,18 +734,17 @@ def save_weekly_followup_comments(
     try:
         owner_user_id = str(getattr(entity, "owner_user_id", "") or "")
         if owner_user_id and owner_user_id != current_user_id:
-            # 如果最新一条评论是 task，则不做推送
-            latest_comment_type = ""
-            if my_comments:
-                latest_comment_type = str((my_comments[-1] or {}).get("type") or "").strip().lower()
-            if latest_comment_type != "task":
+            notify_comment = None
+            for item in payload.comments or []:
+                item_type = str(item.type or "comment").strip().lower()
+                if item_type == "comment":
+                    notify_comment = item
+
+            if notify_comment is not None:
                 from app.core.config import settings
                 from urllib.parse import quote_plus
 
-                # 选取本次写入的评论内容摘要（可能为空，允许）
-                comment_preview = ""
-                if my_comments:
-                    comment_preview = str((my_comments[-1] or {}).get("content") or "").strip()
+                comment_preview = str(notify_comment.content or "").strip()
                 if len(comment_preview) > 200:
                     comment_preview = comment_preview[:197] + "..."
 
@@ -743,8 +756,9 @@ def save_weekly_followup_comments(
                     f"&week_start={entity.week_start.isoformat()}&week_end={entity.week_end.isoformat()}"
                 )
 
-                author_name = my_comments[-1].get("author") if my_comments else ""
-                author_name = str(author_name or "").strip() or "有人"
+                author_name = str(notify_comment.author or "").strip()
+                author_name = author_name or str(getattr(user, "name", "") or "").strip()
+                author_name = author_name or "有人"
 
                 text = (
                     f"{author_name}评论了你的周跟进总结（{week_part}）\n"
