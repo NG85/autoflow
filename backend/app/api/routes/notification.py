@@ -323,8 +323,8 @@ def _build_daily_no_followup_reminder_jump_url() -> str:
 def _build_daily_no_followup_reminder_message(jump_url: str) -> str:
     link_line = f"[立即录入跟进]({jump_url})" if jump_url else "立即录入跟进"
     return (
-        "今天还没有记录客户跟进或任务进展\n"
-        "如果已完成客户沟通，建议及时补充跟进记录，系统会自动识别任务进展并更新状态\n"
+        "今天还没有客户跟进或任务进展\n"
+        "如果今日已完成客户沟通，建议及时补充跟进记录，系统会自动识别任务进展并更新状态\n"
         f"{link_line}\n"
     )
 

@@ -925,7 +925,12 @@ class WeeklyFollowupDepartmentOption(BaseModel):
 
 
 class SaveWeeklyFollowupCommentsIn(BaseModel):
-    comments: List[CRMComment] = []
+    """追加周跟进实体评论；传本次新增条目即可。"""
+
+    comments: List[CRMComment] = Field(
+        default_factory=list,
+        description="本次新增的评论/任务条目（服务端在既有 comments 后追加）；每条 author_id 须为当前登录用户",
+    )
 
 
 # ----------------- CRM Review Session (branch snapshot edit) -----------------
