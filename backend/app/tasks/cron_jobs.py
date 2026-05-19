@@ -844,52 +844,94 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
     soft_time_limit=settings.CELERY_HEAVY_TASK_SOFT_TIME_LIMIT,
     time_limit=settings.CELERY_HEAVY_TASK_TIME_LIMIT,
 )
-def generate_crm_weekly_followup_summary(self, start_date_str=None, end_date_str=None):
+def generate_crm_weekly_followup_summary(
+    self,
+    start_date_str=None,
+    end_date_str=None,
+    scopes: str = "all",
+    week_range_mode: str = "completed",
+):
     """
     生成“周跟进总结”（公司/团队整体描述 + 明细列表），用于后台页面展示与人工评论。
     周区间口径：周日到周六，与现有周报一致。
 
     Args:
-        start_date_str: 开始日期 YYYY-MM-DD，不传默认上周日
-        end_date_str: 结束日期 YYYY-MM-DD，不传默认本周六
+        start_date_str: 开始日期 YYYY-MM-DD，不传则按 week_range_mode 计算
+        end_date_str: 结束日期 YYYY-MM-DD，不传则按 week_range_mode 计算
+        scopes: all | department | company（默认定时：周六部门、周日公司）
+        week_range_mode: completed（上一完整周）| in_progress（当前周，week_end 不超过今天）
     """
+    from app.services.crm_weekly_followup_service import (
+        parse_weekly_followup_scopes,
+        resolve_weekly_followup_week_range,
+    )
+
     try:
         quota_ok, quota_msg = _check_billing_quota_for_task("generate_crm_weekly_followup_summary")
         if not quota_ok:
             return {"success": False, "message": quota_msg, "data": {}}
+
+        try:
+            active_scopes = parse_weekly_followup_scopes(scopes)
+        except ValueError as e:
+            logger.error(str(e))
+            return {"success": False, "message": str(e), "data": {}}
+
+        if week_range_mode not in ("completed", "in_progress"):
+            return {
+                "success": False,
+                "message": f"无效的 week_range_mode: {week_range_mode!r}",
+                "data": {},
+            }
 
         # 计算日期范围
         if start_date_str and end_date_str:
             try:
                 start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
                 end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
-                logger.info(f"开始执行CRM周跟进总结生成任务，日期范围: {start_date} 到 {end_date}")
+                logger.info(
+                    "开始执行CRM周跟进总结生成任务，日期范围: %s 到 %s，scopes=%s",
+                    start_date,
+                    end_date,
+                    sorted(active_scopes),
+                )
             except ValueError:
                 logger.error(f"无效的日期格式: start_date={start_date_str}, end_date={end_date_str}")
                 return {"success": False, "message": "无效的日期格式", "data": {}}
         else:
             today = beijing_today_date()
-            days_since_sunday = (today.weekday() + 1) % 7
-            last_sunday = today - timedelta(days=days_since_sunday + 7)
-            this_saturday = last_sunday + timedelta(days=6)
-            start_date = last_sunday
-            end_date = this_saturday
-            logger.info(f"开始执行CRM周跟进总结生成任务，默认处理上周日到本周六: {start_date} 到 {end_date}")
+            start_date, end_date = resolve_weekly_followup_week_range(
+                today, week_range_mode=week_range_mode  # type: ignore[arg-type]
+            )
+            logger.info(
+                "开始执行CRM周跟进总结生成任务，week_range_mode=%s，日期: %s 到 %s，scopes=%s",
+                week_range_mode,
+                start_date,
+                end_date,
+                sorted(active_scopes),
+            )
 
         with Session(engine) as session:
             result = crm_weekly_followup_service.generate_weekly_followup(
                 session=session,
                 week_start=start_date,
                 week_end=end_date,
+                scopes=active_scopes,
             )
             entity_count = int(result.get("entity_count") or 0) if isinstance(result, dict) else 0
-            if entity_count > 0:
+            bill_dept = "department" in active_scopes and entity_count > 0
+            bill_company = (
+                "company" in active_scopes
+                and isinstance(result, dict)
+                and bool(result.get("billable_company"))
+            )
+            if bill_dept or bill_company:
                 billing_rows = (
                     result.get("billable_department_billing")
                     if isinstance(result, dict)
                     else None
                 )
-                if isinstance(billing_rows, list) and billing_rows:
+                if bill_dept and isinstance(billing_rows, list) and billing_rows:
                     for row in billing_rows:
                         if not isinstance(row, dict):
                             continue
@@ -912,7 +954,7 @@ def generate_crm_weekly_followup_summary(self, start_date_str=None, end_date_str
                             f"weekly-followup-department:{start_date.isoformat()}:{end_date.isoformat()}:{dept_key}",
                             review_url,
                         )
-                else:
+                elif bill_dept:
                     billable_department_keys = (
                         [str(x) for x in (result.get("billable_department_keys") or [])]
                         if isinstance(result, dict)
@@ -927,8 +969,7 @@ def generate_crm_weekly_followup_summary(self, start_date_str=None, end_date_str
                             f"weekly-followup-department:{start_date.isoformat()}:{end_date.isoformat()}:{dept_key}",
                             review_url,
                         )
-                billable_company = bool(result.get("billable_company")) if isinstance(result, dict) else False
-                if billable_company:
+                if bill_company:
                     host = settings.REVIEW_REPORT_HOST.rstrip("/")
                     _report_task_usage_once(
                         BillingScenario.CRM_WEEKLY_FOLLOWUP_SUMMARY,
