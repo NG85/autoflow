@@ -326,13 +326,13 @@ notification:
   card_templates:
     default:
       sales_daily_report:
-        feishu: "AAqvGwEs503C4"
-        lark: "AAqvGwEs503C4"
-        dingtalk: "40452d31-c1fa-46b3-b0ea-28921bcf52ae.schema"
+        feishu: "AAqtDj0mrwabU"
+        lark: "AAqtDj0mrwabU"
+        dingtalk: "3ef4e8f9-5034-40f9-9d05-3a9d13ae447f.schema"
       department_daily_report:
-        feishu: "AAqvGxezuuhGD"
-        lark: "AAqvGxezuuhGD"
-        dingtalk: "caae8019-62c5-4f3d-9387-0616b365039b.schema"
+        feishu: "AAqtDDhydGUDU"
+        lark: "AAqtDDhydGUDU"
+        dingtalk: "8beadba0-4793-41bd-bd3f-99d9cff514a2.schema"
       company_daily_report:
         feishu: "AAqvGhJJNR59v"
         lark: "AAqvGhJJNR59v"

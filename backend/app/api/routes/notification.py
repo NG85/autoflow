@@ -1,14 +1,28 @@
 import logging
 from typing import Any, Dict, List, Literal, Optional
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
+from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlmodel import select
 
 from app.api.deps import SessionDep
 from app.core.config import settings
+from app.crm.save_engine import (
+    _crm_visit_record_row_to_push_dict,
+    push_visit_record_message,
+    report_visit_record_billing,
+)
 from app.models.crm_review import CRMReviewAttendee
+from app.models.crm_sales_visit_records import CRMSalesVisitRecord
+from app.repositories.document_content import DocumentContentRepo
+from app.services.visit_record_card_push_status import (
+    VisitRecordCardPushStatus,
+    get_visit_record_card_push_status,
+    update_visit_record_card_push_status,
+)
+from app.services.visit_task_eval import tasks_to_card_payload
 
 logger = logging.getLogger(__name__)
 
@@ -56,12 +70,23 @@ class PushNotificationRequest(BaseModel):
     - visit_record_comment: 拜访记录评论提醒（文本消息）
     - sales_task_created: 外部服务创建销售任务后推送（文本消息）
     - review_session: review 阶段推进触发的推送（需要调用方传 context.stage/context.session_id）
+    - visit_record_card: Aldebaran 拜访后处理完成后推送拜访卡片（仅传 record_id、visit_tasks；
+      拜访记录与 visit_type 由库表查询，link 类型再查 document_contents 的 meeting_notes/risk_info，task_count 由 visit_tasks 长度得出）
     """
 
-    type: Literal["weekly_followup_comment", "visit_record_comment", "sales_task_created", "review_session"]
+    type: Literal[
+        "weekly_followup_comment",
+        "visit_record_comment",
+        "sales_task_created",
+        "review_session",
+        "visit_record_card",
+    ]
     context: Optional[Dict[str, Any]] = None
 
-    # 接收人
+    # visit_record_card：拜访记录业务主键
+    record_id: Optional[str] = None
+
+    # 接收人（visit_record_card 由推送服务按记录人/上级等自动解析，可不传）
     recipient_user_ids: Optional[List[str]] = None
 
     # 消息作者（可选）
@@ -73,6 +98,20 @@ class PushNotificationRequest(BaseModel):
 
     # 内容摘要（评论内容 / 任务标题等，允许为空）
     content: Optional[str] = None
+
+    # sales_task_created 专用
+    created_at: Optional[str] = None
+    task_count: Optional[int] = 1
+    task_id: Optional[str] = None
+
+    # visit_record_card：状态变更任务列表（Aldebaran 回调）
+    visit_tasks: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description=(
+            "拜访卡片 tasks 变量，每项含 task_status、task_title、task_id；"
+            "id 由服务端按数组顺序生成；未传或空则 task_count=0"
+        ),
+    )
 
 
 def _resolve_review_recipients_by_stage(
@@ -127,6 +166,150 @@ def _append_query_params(url: str, **params: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
+def _build_sales_task_created_message(payload: PushNotificationRequest) -> str:
+    """
+    销售任务创建推送文案：
+    {创建人}在 {创建时间} 帮你创建了{N}个任务：
+    【{客户/商机}】   （link_text，可选）
+    [{任务详情}]({jump_url})
+    """
+    creator = (payload.author_name or "").strip() or "有人"
+    created_at = (payload.created_at or "").strip() or "--"
+    task_count = payload.task_count if payload.task_count and payload.task_count > 0 else 1
+
+    link_text = (payload.link_text or "").strip()
+    content = (payload.content or "").strip() or "--"
+
+    jump_url = (payload.jump_url or "").strip()
+    if not jump_url:
+        base_url = (settings.CRM_SALES_TASK_PAGE_URL or "").strip().rstrip("/")
+        task_id = (payload.task_id or "").strip()
+        jump_url = f"{base_url}/{quote(task_id, safe='')}" if base_url and task_id else (base_url or "")
+
+    lines: List[str] = [f"{creator}在{created_at}帮你创建了{task_count}个任务："]
+    if link_text:
+        lines.append(f"【{link_text}】")
+    content_line = f"[{content}]({jump_url})" if jump_url else content
+    lines.append(content_line)
+
+    return "\n".join(lines) + "\n"
+
+
+def _resolve_visit_record_card_tasks(
+    visit_tasks: Optional[List[Dict[str, Any]]],
+) -> tuple[List[Dict[str, Any]], int]:
+    """由 Aldebaran 传入的 visit_tasks 归一化任务列表，task_count 为列表长度。"""
+    eval_result = tasks_to_card_payload(visit_tasks or [])
+    return eval_result.tasks, eval_result.task_count
+
+
+def _load_document_content_for_visit_record_card(
+    db_session: SessionDep,
+    record_id: str,
+) -> tuple[Optional[str], Optional[str]]:
+    """从 document_contents 读取会议纪要总结与风险信息（link 类型拜访）。"""
+    try:
+        repo = DocumentContentRepo()
+        doc = repo.get_by_visit_record_id(db_session, record_id)
+        if not doc:
+            return None, None
+        meeting_notes = (doc.meeting_summary or "").strip() or None
+        risk_info = (doc.risk_info or "").strip() or None
+        return meeting_notes, risk_info
+    except Exception as exc:
+        logger.warning(
+            "Failed to load document_content for visit record card, record_id=%s: %s",
+            record_id,
+            exc,
+        )
+    return None, None
+
+
+def _handle_visit_record_card_push(
+    db_session: SessionDep,
+    payload: PushNotificationRequest,
+) -> Dict[str, Any]:
+    record_id = (payload.record_id or "").strip()
+    if not record_id:
+        raise HTTPException(status_code=422, detail="visit_record_card requires record_id")
+
+    row = db_session.exec(
+        select(CRMSalesVisitRecord).where(CRMSalesVisitRecord.record_id == record_id)
+    ).first()
+    if not row:
+        raise HTTPException(status_code=404, detail=f"visit record not found: {record_id}")
+
+    current_status = get_visit_record_card_push_status(db_session, record_id)
+    if current_status == VisitRecordCardPushStatus.PUSHED:
+        logger.info(
+            "Visit record card already pushed, skip duplicate callback, record_id=%s",
+            record_id,
+        )
+        return {
+            "success": True,
+            "record_id": record_id,
+            "skipped": True,
+            "task_count": 0,
+            "recipients_count": 0,
+            "success_count": 0,
+            "failed_recipients": [],
+        }
+
+    visit_type = (row.visit_type or "form").strip() or "form"
+    meeting_notes: Optional[str] = None
+    risk_info: Optional[str] = None
+    if visit_type == "link":
+        meeting_notes, risk_info = _load_document_content_for_visit_record_card(
+            db_session, record_id
+        )
+
+    tasks, task_count = _resolve_visit_record_card_tasks(payload.visit_tasks)
+    sales_visit_record = _crm_visit_record_row_to_push_dict(row)
+
+    push_ok = push_visit_record_message(
+        record_id=record_id,
+        sales_visit_record=sales_visit_record,
+        visit_type=visit_type,
+        db_session=db_session,
+        meeting_notes=meeting_notes,
+        risk_info=risk_info,
+        saved_time=row.last_modified_time,
+        tasks=tasks,
+        task_count=task_count,
+    )
+
+    push_status = (
+        VisitRecordCardPushStatus.PUSHED
+        if push_ok
+        else VisitRecordCardPushStatus.FAILED
+    )
+    update_visit_record_card_push_status(
+        db_session, record_id, push_status, commit=True
+    )
+
+    operator_user_id = str(row.recorder_id) if row.recorder_id else None
+    if push_ok and operator_user_id:
+        try:
+            report_visit_record_billing(UUID(str(operator_user_id)), record_id)
+        except Exception as exc:
+            logger.error(
+                "Visit record billing after card push failed, record_id=%s: %s",
+                record_id,
+                exc,
+                exc_info=True,
+            )
+
+    return {
+        "success": push_ok,
+        "record_id": record_id,
+        "card_push_status": push_status,
+        "task_count": task_count,
+        "recipients_count": 0,
+        "success_count": 1 if push_ok else 0,
+        "failed_recipients": [] if push_ok else [{"message": "visit record card push failed"}],
+    }
+
+
 def _build_review_session_message(stage: str, session_id: str) -> str:
     """按 stage 生成 review_session 消息模板。"""
     jump_url = _build_review_session_jump_url(session_id)
@@ -165,9 +348,14 @@ async def push_notification_api(
     2) 拜访记录保存 comments 后给跟进人推送（visit_record_comment）
     3) 外部服务创建销售任务后推送（sales_task_created）
     4) review session 阶段推进触发推送（review_session，调用方传 context.stage/context.session_id）
+    5) Aldebaran 拜访后处理完成后推送拜访卡片（visit_record_card，必传 record_id）
     """
     try:
         from app.services.platform_notification_service import platform_notification_service
+
+        if payload.type == "visit_record_card":
+            result = _handle_visit_record_card_push(db_session, payload)
+            return {"code": 200, "message": "ok", "result": result}
 
         # 先根据 type 准备好：recipient_ids / send_fn / message_text
 

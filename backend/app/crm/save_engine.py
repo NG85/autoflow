@@ -469,7 +469,288 @@ def generate_dynamic_fields_for_visit_record(sales_visit_record):
         return []
 
 
-def push_visit_record_message(record_id: str, sales_visit_record, visit_type, db_session=None, meeting_notes=None, risk_info=None, saved_time=None):
+def _build_visit_record_detail_url(record_id: Optional[str]) -> str:
+    base = (settings.VISIT_DETAIL_PAGE_URL or settings.REVIEW_REPORT_HOST or "").strip()
+    if not base:
+        return "about:blank"
+    if not record_id:
+        return base
+    sep = "&" if "?" in base else "?"
+    return f"{base}{sep}record_id={record_id}"
+
+
+def report_visit_record_billing(operator_user_id: UUID, record_id: Optional[str]) -> None:
+    """拜访卡片推送成功后的计费上报（供 /notification/push 等调用）。"""
+    from app.services.feishu_billing_facade import BillingScenario, report_billing_usage
+
+    rid = (str(record_id).strip() if record_id is not None else "") or ""
+    review_detail = _build_visit_record_detail_url(rid if rid else None)
+    if rid:
+        report_billing_usage(
+            BillingScenario.VISIT_RECORD,
+            review_detail=review_detail,
+            trace_key=f"visit-record:{rid}",
+            operator_user_id=operator_user_id,
+            log_context=f"record_id={rid}",
+        )
+    else:
+        logger.info(
+            "Visit billing with empty record_id: deterministic trace skipped, using random trace_id"
+        )
+        report_billing_usage(
+            BillingScenario.VISIT_RECORD,
+            review_detail=review_detail,
+            operator_user_id=operator_user_id,
+            log_context="record_id_empty_random_trace",
+        )
+
+
+def _load_visit_record_push_snapshot(
+    db_session: Any,
+    record_id: str,
+    visit_snapshot: Optional[dict],
+) -> tuple[Optional[dict], Optional[str], Optional[UUID], Optional[datetime]]:
+    """加载推送所需快照；visit_type / recorder_id / saved_time 从库表补全。"""
+    from sqlmodel import select
+    from app.models.crm_sales_visit_records import CRMSalesVisitRecord
+
+    row = db_session.exec(
+        select(CRMSalesVisitRecord).where(CRMSalesVisitRecord.record_id == record_id)
+    ).first()
+    if not row:
+        return None, None, None, None
+
+    snapshot = dict(visit_snapshot) if visit_snapshot else _crm_visit_record_row_to_push_dict(row)
+    visit_type = (row.visit_type or "form").strip() or "form"
+    recorder_id = row.recorder_id
+    saved_time = row.last_modified_time
+    return snapshot, visit_type, recorder_id, saved_time
+
+
+def fallback_push_visit_record_card(
+    record_id: str,
+    *,
+    db_session: Any,
+    visit_snapshot: Optional[dict] = None,
+    visit_type: Optional[str] = None,
+    meeting_notes: Optional[str] = None,
+    risk_info: Optional[str] = None,
+    saved_time: Optional[datetime] = None,
+    operator_user_id: Optional[UUID] = None,
+) -> bool:
+    """
+    Aldebaran 不可用或通知失败时，使用空任务列表本地推送拜访卡片。
+    """
+    from app.services.visit_record_card_push_status import (
+        VisitRecordCardPushStatus,
+        update_visit_record_card_push_status,
+    )
+
+    snapshot, vt, recorder_id, row_saved_time = _load_visit_record_push_snapshot(
+        db_session, record_id, visit_snapshot
+    )
+    if not snapshot:
+        logger.error("Fallback card push skipped, record not found: %s", record_id)
+        return False
+
+    visit_type = visit_type or vt or "form"
+    saved_time = saved_time or row_saved_time
+    billing_user_id = operator_user_id or recorder_id
+
+    if visit_type == "link" and (meeting_notes is None or risk_info is None):
+        try:
+            from app.repositories.document_content import DocumentContentRepo
+
+            doc = DocumentContentRepo().get_by_visit_record_id(db_session, record_id)
+            if doc:
+                if meeting_notes is None:
+                    meeting_notes = (doc.meeting_summary or "").strip() or None
+                if risk_info is None:
+                    risk_info = (doc.risk_info or "").strip() or None
+        except Exception as exc:
+            logger.warning(
+                "Failed to load document_content for fallback card push, record_id=%s: %s",
+                record_id,
+                exc,
+            )
+
+    push_ok = push_visit_record_message(
+        record_id=record_id,
+        sales_visit_record=snapshot,
+        visit_type=visit_type,
+        db_session=db_session,
+        meeting_notes=meeting_notes,
+        risk_info=risk_info,
+        saved_time=saved_time,
+        tasks=[],
+        task_count=0,
+    )
+    status = (
+        VisitRecordCardPushStatus.PUSHED
+        if push_ok
+        else VisitRecordCardPushStatus.FAILED
+    )
+    update_visit_record_card_push_status(
+        db_session, record_id, status, commit=True
+    )
+    if push_ok and billing_user_id:
+        try:
+            report_visit_record_billing(billing_user_id, record_id)
+        except Exception as exc:
+            logger.error(
+                "Visit billing after fallback card push failed, record_id=%s: %s",
+                record_id,
+                exc,
+                exc_info=True,
+            )
+    logger.info(
+        "Fallback visit card push record_id=%s success=%s",
+        record_id,
+        push_ok,
+    )
+    return push_ok
+
+
+def _notify_aldebaran_visit_record_saved_impl(
+    record_id: str,
+    visit_snapshot: Optional[dict],
+    db_session: Any,
+    *,
+    operator_user_id: Optional[UUID] = None,
+    visit_type: Optional[str] = None,
+    meeting_notes: Optional[str] = None,
+    risk_info: Optional[str] = None,
+    saved_time: Optional[datetime] = None,
+) -> bool:
+    from app.services.visit_record_card_push_status import (
+        VisitRecordCardPushStatus,
+        update_visit_record_card_push_status,
+    )
+
+    update_visit_record_card_push_status(
+        db_session,
+        record_id,
+        VisitRecordCardPushStatus.PENDING,
+        commit=True,
+    )
+
+    if not settings.ALDEBARAN_VISIT_RECORD_POST_PROCESS_ENABLED:
+        logger.info(
+            "Aldebaran post-process disabled, fallback local card push, record_id=%s",
+            record_id,
+        )
+        return fallback_push_visit_record_card(
+            record_id,
+            db_session=db_session,
+            visit_snapshot=visit_snapshot,
+            visit_type=visit_type,
+            meeting_notes=meeting_notes,
+            risk_info=risk_info,
+            saved_time=saved_time,
+            operator_user_id=operator_user_id,
+        )
+
+    try:
+        from app.services.aldebaran_service import aldebaran_client
+
+        aldebaran_client.trigger_visit_record_post_process(
+            record_id=record_id,
+            visit_snapshot=visit_snapshot,
+            event_time=saved_time,
+        )
+        update_visit_record_card_push_status(
+            db_session,
+            record_id,
+            VisitRecordCardPushStatus.AWAITING_CALLBACK,
+            commit=True,
+        )
+        logger.info("Triggered Aldebaran visit post-process, record_id=%s", record_id)
+        return True
+    except Exception as exc:
+        logger.error(
+            "Aldebaran post-process failed, fallback local card push, record_id=%s: %s",
+            record_id,
+            exc,
+            exc_info=True,
+        )
+
+    return fallback_push_visit_record_card(
+        record_id,
+        db_session=db_session,
+        visit_snapshot=visit_snapshot,
+        visit_type=visit_type,
+        meeting_notes=meeting_notes,
+        risk_info=risk_info,
+        saved_time=saved_time,
+        operator_user_id=operator_user_id,
+    )
+
+
+def notify_aldebaran_visit_record_saved(
+    record_id: str,
+    visit_snapshot: Optional[dict] = None,
+    *,
+    db_session: Any = None,
+    operator_user_id: Optional[UUID] = None,
+    visit_type: Optional[str] = None,
+    meeting_notes: Optional[str] = None,
+    risk_info: Optional[str] = None,
+    saved_time: Optional[datetime] = None,
+) -> bool:
+    """
+    拜访记录落库后通知 Aldebaran 做后处理；成功则等待回调推卡。
+    通知失败、未启用或接口未实现时，降级为空任务列表本地推卡。
+    """
+    if db_session is not None:
+        return _notify_aldebaran_visit_record_saved_impl(
+            record_id,
+            visit_snapshot,
+            db_session,
+            operator_user_id=operator_user_id,
+            visit_type=visit_type,
+            meeting_notes=meeting_notes,
+            risk_info=risk_info,
+            saved_time=saved_time,
+        )
+
+    from sqlmodel import Session
+    from app.core.db import engine_transactional
+
+    with Session(engine_transactional, expire_on_commit=False) as session:
+        return _notify_aldebaran_visit_record_saved_impl(
+            record_id,
+            visit_snapshot,
+            session,
+            operator_user_id=operator_user_id,
+            visit_type=visit_type,
+            meeting_notes=meeting_notes,
+            risk_info=risk_info,
+            saved_time=saved_time,
+        )
+
+
+def _crm_visit_record_row_to_push_dict(row: Any) -> dict:
+    """将 ORM 行转为 push_visit_record_message 可用的 dict。"""
+    data = row.model_dump()
+    for key, value in list(data.items()):
+        if isinstance(value, UUID):
+            data[key] = str(value)
+        elif isinstance(value, datetime):
+            data[key] = value.isoformat()
+    return data
+
+
+def push_visit_record_message(
+    record_id: str,
+    sales_visit_record,
+    visit_type,
+    db_session=None,
+    meeting_notes=None,
+    risk_info=None,
+    saved_time=None,
+    tasks=None,
+    task_count=None,
+):
     try:
         # 如果没有传入db_session，则创建一个新的
         should_close_session = False
@@ -539,7 +820,9 @@ def push_visit_record_message(record_id: str, sales_visit_record, visit_type, db
             visit_record=sales_visit_record,
             visit_type=visit_type,
             meeting_notes=meeting_notes,
-            risk_info=risk_info
+            risk_info=risk_info,
+            tasks=tasks,
+            task_count=task_count,
         )
         
         if result["success"]:
@@ -977,30 +1260,11 @@ def save_visit_record_with_content(
         logger.error(f"触发文档问答对抽取异步任务失败: {e}")
         # 不影响主流程，继续执行
     
-    # ========== 第五阶段：推送飞书消息（不影响事务） ==========
-    push_success = False
-    try:
-        record_data = record.model_dump()
-        # 推送飞书消息（保留附件字段，附件中仅包含URL和少量结构化信息，避免大体积base64）
-        push_success = push_visit_record_message(
-            record_id=record_id,
-            sales_visit_record=record_data,
-            visit_type=record.visit_type,
-            db_session=db_session,
-            meeting_notes=meeting_summary,
-            risk_info=risk_info,
-            saved_time=saved_time
-        )
-    except Exception as e:
-        logger.error(f"推送飞书消息失败: {e}")
-        # 不影响主流程，继续执行
-    
     return {
         "code": 0,
         "message": "success",
         "data": {
             "record_id": record_id,
-            "card_push_success": push_success,
         },
     }
 

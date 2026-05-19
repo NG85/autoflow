@@ -73,7 +73,13 @@ class CRMSalesVisitRecord(SQLModel, table=True):
     visit_end_time: Optional[str] = Field(nullable=True, max_length=19, description="拜访结束时间")
     latitude: Optional[float] = Field(sa_column=Column(DECIMAL(10, 7), nullable=True), description="纬度，范围 -90 到 90")
     longitude: Optional[float] = Field(sa_column=Column(DECIMAL(11, 7), nullable=True), description="经度，范围 -180 到 180")
-   
+    card_push_status: Optional[str] = Field(
+        default=None,
+        nullable=True,
+        max_length=32,
+        description="拜访卡片推送状态：pending/awaiting_callback/pushed/failed",
+    )
+
     __table_args__ = (
         Index("idx_account_name", "account_name"),
         Index("idx_recorder", "recorder"),
@@ -82,4 +88,5 @@ class CRMSalesVisitRecord(SQLModel, table=True):
         Index("idx_subject", "subject"),
         Index("idx_contact_id", "contact_id"),
         Index("idx_recorder_department_id", "recorder_department_id"),
+        Index("idx_card_push_status", "card_push_status"),
     )

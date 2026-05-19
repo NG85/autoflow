@@ -46,14 +46,14 @@ def _parse_ops_cc_provider() -> tuple[Optional[str], str]:
 # 站点未配置或缺失键时的默认卡片模板 ID（与 default_settings.yml 中 notification.card_templates 一致）
 _DEFAULT_CARD_TEMPLATES: Dict[str, Dict[str, str]] = {
     "sales_daily_report": {
-        PLATFORM_FEISHU: "AAqvGwEs503C4",
-        PLATFORM_LARK: "AAqvGwEs503C4",
-        PLATFORM_DINGTALK: "40452d31-c1fa-46b3-b0ea-28921bcf52ae.schema",
+        PLATFORM_FEISHU: "AAqtDj0mrwabU",
+        PLATFORM_LARK: "AAqtDj0mrwabU",
+        PLATFORM_DINGTALK: "3ef4e8f9-5034-40f9-9d05-3a9d13ae447f.schema",
     },
     "department_daily_report": {
-        PLATFORM_FEISHU: "AAqvGxezuuhGD",
-        PLATFORM_LARK: "AAqvGxezuuhGD",
-        PLATFORM_DINGTALK: "caae8019-62c5-4f3d-9387-0616b365039b.schema",
+        PLATFORM_FEISHU: "AAqtDDhydGUDU",
+        PLATFORM_LARK: "AAqtDDhydGUDU",
+        PLATFORM_DINGTALK: "8beadba0-4793-41bd-bd3f-99d9cff514a2.schema",
     },
     "company_daily_report": {
         PLATFORM_FEISHU: "AAqvGhJJNR59v",
@@ -1196,6 +1196,8 @@ class PlatformNotificationService:
         visit_record: Optional[Dict[str, Any]],
         meeting_notes: Optional[str],
         risk_info: Optional[str],
+        tasks: Optional[List[Dict[str, Any]]] = None,
+        task_count: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         准备拜访记录卡片/文案的公共模板变量；会原地格式化 visit_record 中的协同人、动态字段等。
@@ -1211,6 +1213,7 @@ class PlatformNotificationService:
             from app.crm.save_engine import generate_dynamic_fields_for_visit_record
             dynamic_fields = generate_dynamic_fields_for_visit_record(visit_record)
 
+        task_list = tasks if tasks is not None else []
         return {
             "visit_date": (visit_record or {}).get("last_modified_time", "--"),
             "recorder": recorder_name or "--",
@@ -1220,6 +1223,8 @@ class PlatformNotificationService:
             "risk_info": risk_info or "--",
             "dynamic_fields": dynamic_fields,
             "comment_page_url": f"{settings.REVIEW_REPORT_HOST}/registerVisitRecord/addComment?record_id={record_id}",
+            "tasks": task_list,
+            "task_count": task_count if task_count is not None else len(task_list),
         }
 
     def _get_visit_record_template_id(
@@ -1367,7 +1372,9 @@ class PlatformNotificationService:
         visit_record: Dict[str, Any] = None,
         visit_type: str = "form",
         meeting_notes: str = None,
-        risk_info: str = None
+        risk_info: str = None,
+        tasks: Optional[List[Dict[str, Any]]] = None,
+        task_count: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         发送拜访记录通知。
@@ -1379,7 +1386,13 @@ class PlatformNotificationService:
             )
         )
         base_template_vars = self._prepare_visit_record_template_vars(
-            record_id, recorder_name, visit_record, meeting_notes, risk_info
+            record_id,
+            recorder_name,
+            visit_record,
+            meeting_notes,
+            risk_info,
+            tasks=tasks,
+            task_count=task_count,
         )
 
         if not recipients_by_platform and not department_groups_review and not department_groups_brief:

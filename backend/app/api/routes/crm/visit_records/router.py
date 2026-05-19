@@ -24,7 +24,7 @@ from app.api.routes.crm.models import (
 )
 from app.core.config import settings
 from app.crm.save_engine import (
-    push_visit_record_message,
+    notify_aldebaran_visit_record_saved,
     save_visit_record_to_crm_table,
     save_visit_record_with_content,
 )
@@ -37,48 +37,11 @@ from app.repositories.document_content import DocumentContentRepo
 from app.repositories.user_profile import UserProfileRepo
 from app.repositories.visit_record import visit_record_repo
 from app.services.document_processing_service import document_processing_service
-from app.services.feishu_billing_facade import (
-    BillingScenario,
-    check_billing_quota,
-    report_billing_usage,
-)
+from app.services.feishu_billing_facade import check_billing_quota
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["crm", "crm/visit-records"])
-
-
-def _build_visit_record_detail_url(record_id: Optional[str]) -> str:
-    base = (settings.VISIT_DETAIL_PAGE_URL or settings.REVIEW_REPORT_HOST or "").strip()
-    if not base:
-        return "about:blank"
-    if not record_id:
-        return base
-    sep = "&" if "?" in base else "?"
-    return f"{base}{sep}record_id={record_id}"
-
-
-def _report_visit_record_usage(user_id: UUID, record_id: Optional[str]) -> None:
-    rid = (str(record_id).strip() if record_id is not None else "") or ""
-    review_detail = _build_visit_record_detail_url(rid if rid else None)
-    if rid:
-        report_billing_usage(
-            BillingScenario.VISIT_RECORD,
-            review_detail=review_detail,
-            trace_key=f"visit-record:{rid}",
-            operator_user_id=user_id,
-            log_context=f"record_id={rid}",
-        )
-    else:
-        logger.info(
-            "Visit billing with empty record_id: deterministic trace skipped, using random trace_id"
-        )
-        report_billing_usage(
-            BillingScenario.VISIT_RECORD,
-            review_detail=review_detail,
-            operator_user_id=user_id,
-            log_context="record_id_empty_random_trace",
-        )
 
 
 @router.post("/crm/visit_record")
@@ -171,14 +134,25 @@ def create_visit_record(
                     title=result.get("title")
                 )
                 
-                # 提交事务
                 db_session.commit()
                 result_payload = (result_data.get("data") or {}) if isinstance(result_data, dict) else {}
                 result_record_id = result_payload.get("record_id")
-                if bool(result_payload.get("card_push_success")):
-                    _report_visit_record_usage(user.id, result_record_id)
-                else:
-                    logger.info("Skip visit billing because card push failed, record_id=%s", result_record_id)
+                if result_record_id:
+                    try:
+                        notify_aldebaran_visit_record_saved(
+                            record_id=result_record_id,
+                            visit_snapshot=record.model_dump(),
+                            db_session=db_session,
+                            operator_user_id=user.id,
+                            visit_type=record.visit_type,
+                        )
+                    except Exception as exc:
+                        logger.error(
+                            "Notify Aldebaran after link visit save failed, record_id=%s: %s",
+                            result_record_id,
+                            exc,
+                            exc_info=True,
+                        )
                 return result_data
             except Exception as e:
                 # 如果保存失败，回滚事务
@@ -192,21 +166,14 @@ def create_visit_record(
             try:
                 record_id, saved_time = save_visit_record_to_crm_table(record, db_session)
                 db_session.commit()
-                # 推送飞书消息（attachment 由下游统一做瘦身与解析）
-                record_data = record.model_dump()
-                push_ok = push_visit_record_message(
+                notify_aldebaran_visit_record_saved(
                     record_id=record_id,
-                    visit_type=record.visit_type,
-                    sales_visit_record=record_data,
+                    visit_snapshot=record.model_dump(),
                     db_session=db_session,
-                    meeting_notes=None,
-                    risk_info=None,
-                    saved_time=saved_time
+                    operator_user_id=user.id,
+                    visit_type=record.visit_type,
+                    saved_time=saved_time,
                 )
-                if push_ok:
-                    _report_visit_record_usage(user.id, record_id)
-                else:
-                    logger.info("Skip visit billing because card push failed, record_id=%s", record_id)
                 return {"code": 0, "message": "success", "data": {}}
             except Exception as e:
                 db_session.rollback()
@@ -276,21 +243,14 @@ def create_visit_record(
         try:
             record_id, saved_time = save_visit_record_to_crm_table(record, db_session)
             db_session.commit()
-            # 推送飞书消息（attachment 由下游统一做瘦身与解析）
-            record_data = record.model_dump()
-            push_ok = push_visit_record_message(
+            notify_aldebaran_visit_record_saved(
                 record_id=record_id,
-                visit_type=record.visit_type,
-                sales_visit_record=record_data,
+                visit_snapshot=record.model_dump(),
                 db_session=db_session,
-                meeting_notes=None,
-                risk_info=None,
-                saved_time=saved_time
+                operator_user_id=user.id,
+                visit_type=record.visit_type,
+                saved_time=saved_time,
             )
-            if push_ok:
-                _report_visit_record_usage(user.id, record_id)
-            else:
-                logger.info("Skip visit billing because card push failed, record_id=%s", record_id)
             return {"code": 0, "message": "success", "data": data}
         except Exception as e:
             db_session.rollback()

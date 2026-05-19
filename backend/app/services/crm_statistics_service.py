@@ -5,6 +5,8 @@ CRM统计服务
 
 from typing import Any, Dict, List, Optional
 from datetime import date, datetime, timedelta
+
+from sqlalchemy import text
 from sqlmodel import Session, select
 from app.models.crm_account_opportunity_assessment import CRMAccountOpportunityAssessment
 from app.models.crm_department_daily_summary import CRMDepartmentDailySummary
@@ -227,21 +229,325 @@ class CRMStatisticsService:
         
         return statistics_results
 
-    
-    def get_sales_complete_daily_report(self, session: Session, target_date: date) -> List[Dict]:
+    _TODO_STATUS_COMPLETED = "COMPLETED"
+    _TODO_STATUS_CANCELLED = "CANCELLED"
+
+    @classmethod
+    def _format_crm_todo_for_daily_card(cls, row: Any) -> Dict[str, str]:
+        mapping = dict(row._mapping) if hasattr(row, "_mapping") else dict(row)
+        return {
+            "account_name": str(mapping.get("account_name") or ""),
+            "opportunity_name": str(mapping.get("opportunity_name") or ""),
+            "task_title": str(mapping.get("title") or ""),
+        }
+
+    def _query_crm_todos_due_on_date(
+        self,
+        session: Session,
+        *,
+        owner_id: str,
+        due_date: date,
+        completed_only: Optional[bool],
+    ) -> List[Dict[str, str]]:
+        """查询指定销售、预计完成日为 due_date 的 crm_todos（按 completed_only 过滤完成状态）。"""
+        from app.utils.date_utils import convert_beijing_date_to_utc_range
+
+        if not owner_id:
+            return []
+
+        utc_start = convert_beijing_date_to_utc_range(due_date.isoformat(), is_start=True)
+        utc_end = convert_beijing_date_to_utc_range(due_date.isoformat(), is_start=False)
+        if utc_start is None or utc_end is None:
+            return []
+
+        status_clause = ""
+        params: Dict[str, Any] = {
+            "owner_id": str(owner_id),
+            "range_start": utc_start,
+            "range_end": utc_end,
+        }
+        if completed_only is True:
+            status_clause = "AND ai_status = :completed_status"
+            params["completed_status"] = self._TODO_STATUS_COMPLETED
+        elif completed_only is False:
+            status_clause = (
+                "AND ai_status IS NOT NULL "
+                "AND ai_status <> :completed_status "
+                "AND ai_status <> :cancelled_status"
+            )
+            params["completed_status"] = self._TODO_STATUS_COMPLETED
+            params["cancelled_status"] = self._TODO_STATUS_CANCELLED
+
+        sql = text(
+            f"""
+            SELECT
+                account_name,
+                opportunity_name,
+                title
+            FROM crm_todos
+            WHERE (owner_name IS NOT NULL OR owner_id IS NOT NULL)
+                AND data_source IS NOT NULL
+                AND due_date IS NOT NULL
+                AND owner_id = :owner_id
+                AND due_date >= :range_start
+                AND due_date <= :range_end
+                {status_clause}
+            ORDER BY due_date ASC, title ASC
+            """
+        )
+        rows = session.exec(sql, params=params).all()
+        return [self._format_crm_todo_for_daily_card(r) for r in rows]
+
+    def get_sales_daily_todo_task_stats(
+        self,
+        session: Session,
+        *,
+        assignee_id: str,
+        stat_date: date,
+        incomplete_due_date: date,
+    ) -> Dict[str, Any]:
+        """
+        销售个人日报：统计日 crm_todos 任务分组。
+
+        - completed_*：预计完成日在 stat_date 且已完成
+        - overdued_*：预计完成日在 stat_date 且未完成（不含已取消）
+        - incomplete_*：预计完成日在 incomplete_due_date（通常为日报任务执行日）且未完成
+        """
+        completed_tasks = self._query_crm_todos_due_on_date(
+            session,
+            owner_id=assignee_id,
+            due_date=stat_date,
+            completed_only=True,
+        )
+        overdued_tasks = self._query_crm_todos_due_on_date(
+            session,
+            owner_id=assignee_id,
+            due_date=stat_date,
+            completed_only=False,
+        )
+        incomplete_tasks = self._query_crm_todos_due_on_date(
+            session,
+            owner_id=assignee_id,
+            due_date=incomplete_due_date,
+            completed_only=False,
+        )
+        return {
+            "completed_tasks": completed_tasks,
+            "completed_task_count": len(completed_tasks),
+            "overdued_tasks": overdued_tasks,
+            "overdued_task_count": len(overdued_tasks),
+            "incomplete_tasks": incomplete_tasks,
+            "incomplete_tasks_count": len(incomplete_tasks),
+        }
+
+    @classmethod
+    def _empty_department_todo_task_stats(cls) -> Dict[str, Any]:
+        return {
+            "completed_tasks_count": "0",
+            "overdued_tasks_count": "0",
+            "tasks_by_owner": [],
+        }
+
+    def _resolve_department_owner_name_map(
+        self,
+        session: Session,
+        department_name: str,
+    ) -> Dict[str, str]:
+        """部门名称 -> {crm owner_id: owner_name}（优先 user_department_relation）。"""
+        from app.models.user_department_relation import UserDepartmentRelation
+        from app.repositories.department_mirror import department_mirror_repo
+        from app.repositories.user_profile import UserProfileRepo
+
+        name = (department_name or "").strip()
+        owner_map: Dict[str, str] = {}
+        if not name:
+            return owner_map
+
+        dept_ids = department_mirror_repo.get_department_ids_by_name(session, name)
+        if dept_ids:
+            rows = session.exec(
+                select(UserDepartmentRelation.crm_user_id, UserDepartmentRelation.user_name).where(
+                    UserDepartmentRelation.department_id.in_(dept_ids),
+                    UserDepartmentRelation.is_active == True,  # noqa: E712
+                    UserDepartmentRelation.crm_user_id.is_not(None),
+                )
+            ).all()
+            for crm_user_id, user_name in rows:
+                uid = str(crm_user_id or "").strip()
+                if not uid or uid in owner_map:
+                    continue
+                display = str(user_name or "").strip() or uid
+                owner_map[uid] = display
+
+        if not owner_map:
+            for profile in UserProfileRepo().get_department_members(session, name):
+                uid = str(profile.crm_user_id or profile.user_id or "").strip()
+                if not uid or uid in owner_map:
+                    continue
+                display = str(profile.name or "").strip() or uid
+                owner_map[uid] = display
+
+        return owner_map
+
+    def _query_todo_counts_by_owners_on_date(
+        self,
+        session: Session,
+        owner_ids: List[str],
+        due_date: date,
+    ) -> Dict[str, Dict[str, int]]:
+        """按 owner_id 汇总指定日预计完成任务的已完成/逾期数量。"""
+        from app.utils.date_utils import convert_beijing_date_to_utc_range
+
+        if not owner_ids:
+            return {}
+
+        utc_start = convert_beijing_date_to_utc_range(due_date.isoformat(), is_start=True)
+        utc_end = convert_beijing_date_to_utc_range(due_date.isoformat(), is_start=False)
+        if utc_start is None or utc_end is None:
+            return {}
+
+        placeholders = ", ".join(f":owner_{i}" for i in range(len(owner_ids)))
+        params: Dict[str, Any] = {
+            "range_start": utc_start,
+            "range_end": utc_end,
+            "completed_status": self._TODO_STATUS_COMPLETED,
+            "cancelled_status": self._TODO_STATUS_CANCELLED,
+        }
+        for i, owner_id in enumerate(owner_ids):
+            params[f"owner_{i}"] = owner_id
+
+        sql = text(
+            f"""
+            SELECT
+                owner_id,
+                SUM(CASE WHEN ai_status = :completed_status THEN 1 ELSE 0 END) AS completed_cnt,
+                SUM(
+                    CASE
+                        WHEN ai_status IS NOT NULL
+                            AND ai_status <> :completed_status
+                            AND ai_status <> :cancelled_status
+                        THEN 1 ELSE 0
+                    END
+                ) AS overdued_cnt
+            FROM crm_todos
+            WHERE (owner_name IS NOT NULL OR owner_id IS NOT NULL)
+                AND data_source IS NOT NULL
+                AND due_date IS NOT NULL
+                AND owner_id IN ({placeholders})
+                AND due_date >= :range_start
+                AND due_date <= :range_end
+            GROUP BY owner_id
+            """
+        )
+        rows = session.exec(sql, params=params).all()
+        result: Dict[str, Dict[str, int]] = {}
+        for row in rows:
+            mapping = dict(row._mapping) if hasattr(row, "_mapping") else dict(row)
+            owner_id = str(mapping.get("owner_id") or "").strip()
+            if not owner_id:
+                continue
+            result[owner_id] = {
+                "completed": int(mapping.get("completed_cnt") or 0),
+                "overdued": int(mapping.get("overdued_cnt") or 0),
+            }
+        return result
+
+    def get_department_daily_todo_task_stats(
+        self,
+        session: Session,
+        *,
+        department_name: str,
+        stat_date: date,
+    ) -> Dict[str, Any]:
+        """
+        团队日报：统计日部门内 crm_todos 任务汇总。
+
+        - completed_tasks_count / overdued_tasks_count：团队合计（字符串，供卡片模板）
+        - tasks_by_owner：按成员拆解（owner_name、completed_tasks_count、overdued_tasks_count）
+        """
+        owner_map = self._resolve_department_owner_name_map(session, department_name)
+        if not owner_map:
+            return self._empty_department_todo_task_stats()
+
+        counts_by_owner = self._query_todo_counts_by_owners_on_date(
+            session,
+            list(owner_map.keys()),
+            stat_date,
+        )
+
+        tasks_by_owner: List[Dict[str, str]] = []
+        team_completed = 0
+        team_overdued = 0
+        for owner_id, owner_name in sorted(owner_map.items(), key=lambda item: item[1]):
+            counts = counts_by_owner.get(owner_id, {})
+            completed = int(counts.get("completed", 0))
+            overdued = int(counts.get("overdued", 0))
+            team_completed += completed
+            team_overdued += overdued
+            tasks_by_owner.append(
+                {
+                    "owner_name": owner_name,
+                    "completed_tasks_count": str(completed),
+                    "overdued_tasks_count": str(overdued),
+                }
+            )
+
+        return {
+            "completed_tasks_count": str(team_completed),
+            "overdued_tasks_count": str(team_overdued),
+            "tasks_by_owner": tasks_by_owner,
+        }
+
+    def _enrich_department_report_with_todo_stats(
+        self,
+        session: Session,
+        department_report: Dict[str, Any],
+        *,
+        stat_date: date,
+    ) -> Dict[str, Any]:
+        department_name = (department_report.get("department_name") or "").strip()
+        if not department_name:
+            department_report.update(self._empty_department_todo_task_stats())
+            return department_report
+        todo_stats = self.get_department_daily_todo_task_stats(
+            session,
+            department_name=department_name,
+            stat_date=stat_date,
+        )
+        department_report.update(todo_stats)
+        return department_report
+
+    def get_sales_complete_daily_report(
+        self,
+        session: Session,
+        target_date: date,
+        *,
+        incomplete_due_date: Optional[date] = None,
+    ) -> List[Dict]:
         """
         获取完整的销售个人日报数据，包括：
         1. 每个销售的拜访统计数据（来自 get_sales_daily_statistics）
         2. 基于去重商机列表和无商机客户列表，从客户商机评估表获取的评估详情
+        3. 统计日个人任务统计（crm_todos：已完成 / 逾期 / 待完成）
         
         Args:
             session: 数据库会话
-            target_date: 目标日期
+            target_date: 目标日期（拜访与已完成/逾期任务统计日）
+            incomplete_due_date: 待完成任务预计完成日，默认北京时间当日（日报定时任务执行日）
             
         Returns:
             List[Dict]: 完整的销售个人日报数据列表
         """
-        logger.info(f"开始获取 {target_date} 的完整销售个人日报数据")
+        from app.utils.date_utils import beijing_today_date
+
+        if incomplete_due_date is None:
+            incomplete_due_date = beijing_today_date()
+
+        logger.info(
+            "开始获取 %s 的完整销售个人日报数据（待完成任务预计完成日=%s）",
+            target_date,
+            incomplete_due_date,
+        )
         
         # 1. 获取指定日期的销售拜访统计数据
         statistics_records = self.get_sales_daily_statistics(session, target_date)
@@ -335,8 +641,16 @@ class CRMStatisticsService:
                 'partner_yellow_count': statistics.get('partner', {}).get('yellow', 0),
                 'partner_green_count': statistics.get('partner', {}).get('green', 0),
             }
+            todo_task_stats = self.get_sales_daily_todo_task_stats(
+                session,
+                assignee_id=str(stats.get("recorder_id") or ""),
+                stat_date=target_date,
+                incomplete_due_date=incomplete_due_date,
+            )
+
             complete_report = {
                 **stats_with_assessment,  # 包含所有统计数据（包括首次和多次拜访的红黄绿灯统计）
+                **todo_task_stats,
                 'first_assessment': sorted_first_assessments,
                 'multi_assessment': sorted_multi_assessments,
                 'visit_detail_page': (
@@ -351,7 +665,10 @@ class CRMStatisticsService:
                 f"销售 {stats['recorder']} 的完整日报数据已组装，"
                 f"所在团队 {stats['department']}，"
                 f"首次评估明细（含绿灯，客户和合作伙伴） {len(assessment_details['first'])} 个，"
-                f"多次评估明细（含绿灯，客户和合作伙伴） {len(assessment_details['multi'])} 个"
+                f"多次评估明细（含绿灯，客户和合作伙伴） {len(assessment_details['multi'])} 个，"
+                f"任务：已完成 {todo_task_stats['completed_task_count']}，"
+                f"逾期 {todo_task_stats['overdued_task_count']}，"
+                f"待完成 {todo_task_stats['incomplete_tasks_count']}"
             )
         
         return complete_reports
@@ -669,12 +986,18 @@ class CRMStatisticsService:
                 report_data = {
                     'recorder_id': report.get('recorder_id', ''),
                     'recorder': report.get('recorder', ''),
-                    'department_name': report.get('department_name', ''),
+                    'department_name': report.get('department_name') or report.get('department', ''),
                     'report_date': report['report_date'].isoformat() if hasattr(report.get('report_date'), 'isoformat') else str(report.get('report_date')),
                     'statistics': [statistics_data],  # 将统计数据组织成数组
                     'visit_detail_page': report.get('visit_detail_page', ''),
                     'first_assessment': report.get('first_assessment', []),
-                    'multi_assessment': report.get('multi_assessment', [])
+                    'multi_assessment': report.get('multi_assessment', []),
+                    'completed_tasks': report.get('completed_tasks', []),
+                    'completed_task_count': report.get('completed_task_count', 0),
+                    'overdued_tasks': report.get('overdued_tasks', []),
+                    'overdued_task_count': report.get('overdued_task_count', 0),
+                    'incomplete_tasks': report.get('incomplete_tasks', []),
+                    'incomplete_tasks_count': report.get('incomplete_tasks_count', 0),
                 }
                 
                 # 发送飞书通知
@@ -775,6 +1098,7 @@ class CRMStatisticsService:
             empty_report = self._aggregate_single_department(
                 department_name=department_name,
                 target_date=target_date,
+                session=session,
             )
             department_reports_no_data.append(empty_report)
             all_department_reports.append(empty_report)
@@ -884,6 +1208,7 @@ class CRMStatisticsService:
             report = self._aggregate_single_department(
                 department_name=department_name,
                 target_date=target_date,
+                session=session,
             )
         managers = None
         all_departments_with_managers = oauth_client.get_departments_with_leaders()
@@ -1027,13 +1352,23 @@ class CRMStatisticsService:
                 }],
             }
             
+            self._enrich_department_report_with_todo_stats(
+                session,
+                department_report,
+                stat_date=target_date,
+            )
             department_reports.append(department_report)
         
         logger.info(f"完成 {target_date} 的部门日报汇总（基于 crm_department_daily_summary），共 {len(department_reports)} 个部门")
         
         return department_reports
     
-    def _aggregate_single_department(self, department_name: str, target_date: date) -> Dict[str, Any]:
+    def _aggregate_single_department(
+        self,
+        department_name: str,
+        target_date: date,
+        session: Optional[Session] = None,
+    ) -> Dict[str, Any]:
         """
         为没有任何数据的部门生成空的部门日报结构（数值为0，文案为空）。
         该结构与 aggregate_department_reports 返回的元素保持一致，便于直接用于卡片推送。
@@ -1095,7 +1430,16 @@ class CRMStatisticsService:
                 }
             ],
         }
-        
+
+        if session is not None:
+            self._enrich_department_report_with_todo_stats(
+                session,
+                department_report,
+                stat_date=target_date,
+            )
+        else:
+            department_report.update(self._empty_department_todo_task_stats())
+
         return department_report
     
     def aggregate_company_report(self, session: Session, target_date: Optional[date] = None) -> Dict:
