@@ -1,14 +1,25 @@
 import logging
-from typing import Any, Dict, List, Literal, Optional
+from datetime import date, datetime
+from typing import Any, Callable, Dict, List, Optional, Set
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
 from sqlmodel import select
 
 from app.api.deps import SessionDep
+from app.api.routes.notification_schemas import (
+    DailyNoFollowupReminderPushRequest,
+    PushNotificationRequest,
+    ReviewSessionPushRequest,
+    SalesTaskCreatedPushRequest,
+    VisitRecordCardPushRequest,
+    VisitRecordCommentPushRequest,
+    WeeklyFollowupCommentPushRequest,
+)
 from app.core.config import settings
+from app.repositories.user_profile import user_profile_repo
+from app.utils.date_utils import beijing_today_date
 from app.crm.save_engine import (
     _crm_visit_record_row_to_push_dict,
     push_visit_record_message,
@@ -63,60 +74,6 @@ def _normalize_recipient_user_ids(user_ids: Optional[List[str]]) -> List[str]:
     return result
 
 
-class PushNotificationRequest(BaseModel):
-    """
-    统一推送接口请求体：
-    - weekly_followup_comment: 周跟进总结评论提醒（文本消息）
-    - visit_record_comment: 拜访记录评论提醒（文本消息）
-    - sales_task_created: 外部服务创建销售任务后推送（文本消息）
-      必传 task_id、author_name（创建人）、created_at（创建时间）、content（任务详情，含截止时间）；
-      link_text 为客户/商机文案（可选）；超链接仅包在 content 上；
-      未传 jump_url 时兜底 CRM_SALES_TASK_PAGE_URL/{task_id}（路径拼接）
-    - review_session: review 阶段推进触发的推送（需要调用方传 context.stage/context.session_id）
-    - visit_record_card: Aldebaran 拜访后处理完成后推送拜访卡片（仅传 record_id、visit_tasks；
-      拜访记录与 visit_type 由库表查询，link 类型再查 document_contents 的 meeting_notes/risk_info，task_count 由 visit_tasks 长度得出）
-    """
-
-    type: Literal[
-        "weekly_followup_comment",
-        "visit_record_comment",
-        "sales_task_created",
-        "review_session",
-        "visit_record_card",
-    ]
-    context: Optional[Dict[str, Any]] = None
-
-    # visit_record_card：拜访记录业务主键
-    record_id: Optional[str] = None
-
-    # 接收人（visit_record_card 由推送服务按记录人/上级等自动解析，可不传）
-    recipient_user_ids: Optional[List[str]] = None
-
-    # 消息作者（可选）
-    author_name: Optional[str] = None
-
-    # 跳转链接与展示文本（链接可选；展示文本可选）
-    jump_url: Optional[str] = None
-    link_text: Optional[str] = None
-
-    # 内容摘要（评论内容 / 任务标题等，允许为空）
-    content: Optional[str] = None
-
-    # sales_task_created 专用
-    created_at: Optional[str] = None
-    task_count: Optional[int] = 1
-    task_id: Optional[str] = None
-
-    # visit_record_card：状态变更任务列表（Aldebaran 回调）
-    visit_tasks: Optional[List[Dict[str, Any]]] = Field(
-        default=None,
-        description=(
-            "拜访卡片 tasks 变量，每项含 task_status、task_title、task_id；"
-            "id 由服务端按数组顺序生成；未传或空则 task_count=0"
-        ),
-    )
-
-
 def _resolve_review_recipients_by_stage(
     db_session: SessionDep,
     session_id: str,
@@ -169,7 +126,33 @@ def _append_query_params(url: str, **params: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
-def _build_sales_task_created_message(payload: PushNotificationRequest) -> str:
+def _build_comment_notification_message(
+    *,
+    author_name: Optional[str],
+    title: str,
+    label: str,
+    link_text: Optional[str],
+    jump_url: Optional[str],
+    content: Optional[str],
+) -> str:
+    """评论类文本消息：{author}{title}\\n[{link_text}]({jump_url})\\n{label}：{content}"""
+    author = (author_name or "").strip() or "有人"
+    link_display = (link_text or "").strip() or "查看详情"
+    url = (jump_url or "").strip()
+    link_line = f"[{link_display}]({url})" if url else ((link_text or "").strip() or "")
+    content_preview = (content or "").strip()
+    if len(content_preview) > 200:
+        content_preview = content_preview[:197] + "..."
+    content_preview = content_preview or "--"
+
+    message_text = f"{author}{title}\n"
+    if link_line:
+        message_text += f"{link_line}\n"
+    message_text += f"{label}：{content_preview}\n"
+    return message_text
+
+
+def _build_sales_task_created_message(payload: SalesTaskCreatedPushRequest) -> str:
     """
     销售任务创建推送文案：
     {创建人}在 {创建时间} 帮你创建了{N}个任务：
@@ -178,7 +161,7 @@ def _build_sales_task_created_message(payload: PushNotificationRequest) -> str:
     """
     creator = (payload.author_name or "").strip() or "有人"
     created_at = (payload.created_at or "").strip() or "--"
-    task_count = payload.task_count if payload.task_count and payload.task_count > 0 else 1
+    task_count = payload.task_count
 
     link_text = (payload.link_text or "").strip()
     content = (payload.content or "").strip() or "--"
@@ -186,7 +169,7 @@ def _build_sales_task_created_message(payload: PushNotificationRequest) -> str:
     jump_url = (payload.jump_url or "").strip()
     if not jump_url:
         base_url = (settings.CRM_SALES_TASK_PAGE_URL or "").strip().rstrip("/")
-        task_id = (payload.task_id or "").strip()
+        task_id = payload.task_id.strip()
         jump_url = f"{base_url}/{quote(task_id, safe='')}" if base_url and task_id else (base_url or "")
 
     lines: List[str] = [f"{creator}在{created_at}帮你创建了{task_count}个任务："]
@@ -230,9 +213,9 @@ def _load_document_content_for_visit_record_card(
 
 def _handle_visit_record_card_push(
     db_session: SessionDep,
-    payload: PushNotificationRequest,
+    payload: VisitRecordCardPushRequest,
 ) -> Dict[str, Any]:
-    record_id = (payload.record_id or "").strip()
+    record_id = payload.record_id.strip()
     if not record_id:
         raise HTTPException(status_code=422, detail="visit_record_card requires record_id")
 
@@ -313,6 +296,133 @@ def _handle_visit_record_card_push(
     }
 
 
+def _resolve_daily_no_followup_check_date(check_date: Optional[str]) -> date:
+    """解析检查日期，默认北京时间当天。"""
+    raw = (check_date or "").strip()
+    if not raw:
+        return beijing_today_date()
+    try:
+        return datetime.strptime(raw, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="daily_no_followup_reminder check_date must be YYYY-MM-DD",
+        ) from exc
+
+
+def _build_daily_no_followup_reminder_jump_url() -> str:
+    host = (settings.REVIEW_REPORT_HOST or "").strip().rstrip("/")
+    path = (settings.CRM_VISIT_FOLLOWUP_ENTRY_PAGE_URL or "").strip()
+    if not host or not path:
+        return ""
+    if not path.startswith("/"):
+        path = f"/{path}"
+    return f"{host}{path}"
+
+
+def _build_daily_no_followup_reminder_message(jump_url: str) -> str:
+    link_line = f"[立即录入跟进]({jump_url})" if jump_url else "立即录入跟进"
+    return (
+        "今天还没有记录客户跟进或任务进展\n"
+        "如果已完成客户沟通，建议及时补充跟进记录，系统会自动识别任务进展并更新状态\n"
+        f"{link_line}\n"
+    )
+
+
+def _resolve_daily_no_followup_reminder_recipients(
+    db_session: SessionDep,
+    recipient_user_ids: Optional[List[str]],
+) -> List[str]:
+    sales_profiles = user_profile_repo.get_active_sales_users_with_oauth(db_session)
+    sales_user_ids = {str(p.user_id) for p in sales_profiles if p.user_id}
+
+    explicit = _normalize_recipient_user_ids(recipient_user_ids)
+    if explicit:
+        return [uid for uid in explicit if uid in sales_user_ids]
+    return sorted(sales_user_ids)
+
+
+def _recorder_ids_with_visit_on_date(
+    db_session: SessionDep,
+    check_date: date,
+    candidate_user_ids: List[str],
+) -> Set[str]:
+    """返回在 check_date 当天已有拜访记录（visit_communication_date）的销售 user_id 集合。"""
+    if not candidate_user_ids:
+        return set()
+
+    recorder_uuids: List[UUID] = []
+    for uid in candidate_user_ids:
+        try:
+            recorder_uuids.append(UUID(str(uid)))
+        except Exception:
+            continue
+    if not recorder_uuids:
+        return set()
+
+    rows = db_session.exec(
+        select(CRMSalesVisitRecord.recorder_id).where(
+            CRMSalesVisitRecord.visit_communication_date == check_date,
+            CRMSalesVisitRecord.recorder_id.in_(recorder_uuids),
+        )
+    ).all()
+    return {str(rid) for rid in rows if rid}
+
+
+def _handle_daily_no_followup_reminder_push(
+    db_session: SessionDep,
+    payload: DailyNoFollowupReminderPushRequest,
+) -> Dict[str, Any]:
+    from app.services.platform_notification_service import platform_notification_service
+
+    check_date = _resolve_daily_no_followup_check_date(payload.check_date)
+    candidate_ids = _resolve_daily_no_followup_reminder_recipients(
+        db_session, payload.recipient_user_ids
+    )
+    if not candidate_ids:
+        raise HTTPException(
+            status_code=422,
+            detail="daily_no_followup_reminder requires recipient_user_ids or active sales users (role=sales)",
+        )
+
+    with_records = _recorder_ids_with_visit_on_date(db_session, check_date, candidate_ids)
+    recipient_ids = [uid for uid in candidate_ids if uid not in with_records]
+    skipped_with_records = [uid for uid in candidate_ids if uid in with_records]
+
+    if not recipient_ids:
+        return {
+            "success": True,
+            "check_date": check_date.isoformat(),
+            "recipients_count": 0,
+            "success_count": 0,
+            "skipped_with_records_count": len(skipped_with_records),
+            "failed_recipients": [],
+        }
+
+    message_text = _build_daily_no_followup_reminder_message(
+        _build_daily_no_followup_reminder_jump_url()
+    )
+    send_fn = platform_notification_service.send_daily_no_followup_reminder_notification
+
+    success_count = 0
+    failed: List[dict] = []
+    for rid in recipient_ids:
+        r = send_fn(db_session, recipient_user_id=rid, message_text=message_text)
+        if r.get("success"):
+            success_count += 1
+        else:
+            failed.append({"recipient_user_id": rid, "message": r.get("message")})
+
+    return {
+        "success": success_count > 0,
+        "check_date": check_date.isoformat(),
+        "recipients_count": len(recipient_ids),
+        "success_count": success_count,
+        "skipped_with_records_count": len(skipped_with_records),
+        "failed_recipients": failed,
+    }
+
+
 def _build_review_session_message(stage: str, session_id: str) -> str:
     """按 stage 生成 review_session 消息模板。"""
     jump_url = _build_review_session_jump_url(session_id)
@@ -340,136 +450,175 @@ def _build_review_session_message(stage: str, session_id: str) -> str:
     )
 
 
+def _dispatch_text_notification_batch(
+    db_session: SessionDep,
+    *,
+    recipient_ids: List[str],
+    message_text: str,
+    send_fn: Callable[..., Dict[str, Any]],
+) -> Dict[str, Any]:
+    success_count = 0
+    failed: List[dict] = []
+    for rid in recipient_ids:
+        r = send_fn(db_session, recipient_user_id=rid, message_text=message_text)
+        if r.get("success"):
+            success_count += 1
+        else:
+            failed.append({"recipient_user_id": rid, "message": r.get("message")})
+    return {
+        "success": success_count > 0,
+        "recipients_count": len(recipient_ids),
+        "success_count": success_count,
+        "failed_recipients": failed,
+    }
+
+
+def _handle_review_session_push(
+    db_session: SessionDep,
+    payload: ReviewSessionPushRequest,
+) -> Dict[str, Any]:
+    from app.services.platform_notification_service import platform_notification_service
+
+    stage = payload.context.stage.strip()
+    session_id = payload.context.session_id.strip()
+    if not stage:
+        raise HTTPException(status_code=422, detail="review_session requires context.stage")
+    if not session_id:
+        raise HTTPException(status_code=422, detail="review_session requires context.session_id")
+
+    if stage not in REVIEW_STAGE_CONFIG:
+        logger.info("Review job: stage=%s does not trigger notification", stage)
+        return {
+            "success": False,
+            "recipients_count": 0,
+            "success_count": 0,
+            "failed_recipients": [],
+        }
+
+    recipient_ids = _normalize_recipient_user_ids(
+        _resolve_review_recipients_by_stage(db_session, session_id, stage)
+    )
+    if not recipient_ids:
+        raise HTTPException(status_code=422, detail="no review session recipients resolved")
+
+    message_text = _build_review_session_message(stage, session_id)
+    if not settings.CRM_REVIEW_SESSION_NOTIFICATION_ENABLED:
+        logger.info(
+            "Review notification recorded only: stage=%s session_id=%s recipients=%s message=%s",
+            stage,
+            session_id,
+            recipient_ids,
+            message_text,
+        )
+        return {
+            "success": True,
+            "recorded_only": True,
+            "recipients_count": len(recipient_ids),
+            "success_count": 0,
+            "failed_recipients": [],
+        }
+
+    return _dispatch_text_notification_batch(
+        db_session,
+        recipient_ids=recipient_ids,
+        message_text=message_text,
+        send_fn=platform_notification_service.send_review_session_notification,
+    )
+
+
+def _handle_weekly_followup_comment_push(
+    db_session: SessionDep,
+    payload: WeeklyFollowupCommentPushRequest,
+) -> Dict[str, Any]:
+    from app.services.platform_notification_service import platform_notification_service
+
+    recipient_ids = _normalize_recipient_user_ids(payload.recipient_user_ids)
+    if not recipient_ids:
+        raise HTTPException(status_code=422, detail="recipient_user_ids is required")
+    message_text = _build_comment_notification_message(
+        author_name=payload.author_name,
+        title="评论了你的周跟进总结",
+        label="评论",
+        link_text=payload.link_text,
+        jump_url=payload.jump_url,
+        content=payload.content,
+    )
+    return _dispatch_text_notification_batch(
+        db_session,
+        recipient_ids=recipient_ids,
+        message_text=message_text,
+        send_fn=platform_notification_service.send_weekly_followup_comment_notification,
+    )
+
+
+def _handle_visit_record_comment_push(
+    db_session: SessionDep,
+    payload: VisitRecordCommentPushRequest,
+) -> Dict[str, Any]:
+    from app.services.platform_notification_service import platform_notification_service
+
+    recipient_ids = _normalize_recipient_user_ids(payload.recipient_user_ids)
+    if not recipient_ids:
+        raise HTTPException(status_code=422, detail="recipient_user_ids is required")
+    message_text = _build_comment_notification_message(
+        author_name=payload.author_name,
+        title="评论了你的拜访记录",
+        label="评论",
+        link_text=payload.link_text,
+        jump_url=payload.jump_url,
+        content=payload.content,
+    )
+    return _dispatch_text_notification_batch(
+        db_session,
+        recipient_ids=recipient_ids,
+        message_text=message_text,
+        send_fn=platform_notification_service.send_visit_record_comment_notification,
+    )
+
+
+def _handle_sales_task_created_push(
+    db_session: SessionDep,
+    payload: SalesTaskCreatedPushRequest,
+) -> Dict[str, Any]:
+    from app.services.platform_notification_service import platform_notification_service
+
+    recipient_ids = _normalize_recipient_user_ids(payload.recipient_user_ids)
+    if not recipient_ids:
+        raise HTTPException(status_code=422, detail="recipient_user_ids is required")
+    return _dispatch_text_notification_batch(
+        db_session,
+        recipient_ids=recipient_ids,
+        message_text=_build_sales_task_created_message(payload),
+        send_fn=platform_notification_service.send_sales_task_created_notification,
+    )
+
+
 @router.post("/push")
 async def push_notification_api(
     payload: PushNotificationRequest,
     db_session: SessionDep,
 ):
     """
-    统一消息推送入口：
-    1) 周总结保存 comments 后给负责人推送（weekly_followup_comment）
-    2) 拜访记录保存 comments 后给跟进人推送（visit_record_comment）
-    3) 外部服务创建销售任务后推送（sales_task_created）
-    4) review session 阶段推进触发推送（review_session，调用方传 context.stage/context.session_id）
-    5) Aldebaran 拜访后处理完成后推送拜访卡片（visit_record_card，必传 record_id）
+    统一消息推送入口（请求体按 type 判别，字段见 notification_schemas）：
+    weekly_followup_comment / visit_record_comment / sales_task_created /
+    review_session / visit_record_card / daily_no_followup_reminder
     """
     try:
-        from app.services.platform_notification_service import platform_notification_service
-
-        if payload.type == "visit_record_card":
+        if isinstance(payload, VisitRecordCardPushRequest):
             result = _handle_visit_record_card_push(db_session, payload)
-            return {"code": 200, "message": "ok", "result": result}
-
-        # 先根据 type 准备好：recipient_ids / send_fn / message_text
-
-        if payload.type == "review_session":
-            if not isinstance(payload.context, dict):
-                raise HTTPException(status_code=422, detail="review_session requires context object")
-
-            stage = (payload.context.get("stage") or "").strip()
-            if not stage:
-                raise HTTPException(status_code=422, detail="review_session requires context.stage (CRMReviewSession.stage)")
-            session_id = (payload.context.get("session_id") or "").strip()
-            if not session_id:
-                raise HTTPException(status_code=422, detail="review_session requires context.session_id")
-
-            # 仅这两个 stage 会发推送，其余 stage 静默跳过（不报错）
-            if stage not in REVIEW_STAGE_CONFIG:
-                logger.info("Review job: stage=%s does not trigger notification", stage)
-                return {
-                    "code": 200,
-                    "message": "ok",
-                    "result": {
-                        "success": False,
-                        "recipients_count": 0,
-                        "success_count": 0,
-                        "failed_recipients": [],
-                    },
-                }
-
-            recipient_ids = _normalize_recipient_user_ids(
-                _resolve_review_recipients_by_stage(db_session, session_id, stage)
-            )
-            if not recipient_ids:
-                raise HTTPException(status_code=422, detail="recipient_user_ids is required")
-
-            # 文案：按阶段区分（内部用 session_id 统一拼跳转链接）
-            message_text = _build_review_session_message(stage, session_id)
-
-            if settings.CRM_REVIEW_SESSION_NOTIFICATION_ENABLED:
-                send_fn = platform_notification_service.send_review_session_notification
-            else:
-                # 暂不做真实推送：仅记录本次任务信息，后续按配置开启发送。
-                logger.info(
-                    "Review notification recorded only: stage=%s session_id=%s recipients=%s message=%s",
-                    stage,
-                    session_id,
-                    recipient_ids,
-                    message_text,
-                )
-                return {
-                    "code": 200,
-                    "message": "ok",
-                    "result": {
-                        "success": True,
-                        "recorded_only": True,
-                        "recipients_count": len(recipient_ids),
-                        "success_count": 0,
-                        "failed_recipients": [],
-                    },
-                }
-
+        elif isinstance(payload, DailyNoFollowupReminderPushRequest):
+            result = _handle_daily_no_followup_reminder_push(db_session, payload)
+        elif isinstance(payload, ReviewSessionPushRequest):
+            result = _handle_review_session_push(db_session, payload)
+        elif isinstance(payload, WeeklyFollowupCommentPushRequest):
+            result = _handle_weekly_followup_comment_push(db_session, payload)
+        elif isinstance(payload, VisitRecordCommentPushRequest):
+            result = _handle_visit_record_comment_push(db_session, payload)
+        elif isinstance(payload, SalesTaskCreatedPushRequest):
+            result = _handle_sales_task_created_push(db_session, payload)
         else:
-            recipient_ids = _normalize_recipient_user_ids(payload.recipient_user_ids)
-            if not recipient_ids:
-                raise HTTPException(status_code=422, detail="recipient_user_ids is required")
+            raise HTTPException(status_code=422, detail="unsupported notification type")
 
-            if payload.type == "sales_task_created":
-                task_id = (payload.task_id or "").strip()
-                if not task_id:
-                    raise HTTPException(status_code=422, detail="sales_task_created requires task_id")
-                message_text = _build_sales_task_created_message(payload)
-                send_fn = platform_notification_service.send_sales_task_created_notification
-            else:
-                # 统一消息格式：
-                # {author}{title}\n[{link_text}]({jump_url})\n{label}：{content}\n
-                author = (payload.author_name or "").strip() or "有人"
-                link_text = (payload.link_text or "").strip() or "查看详情"
-                jump_url = (payload.jump_url or "").strip()
-                link_line = f"[{link_text}]({jump_url})" if jump_url else ((payload.link_text or "").strip() or "")
-                content_preview = (payload.content or "").strip()
-                if len(content_preview) > 200:
-                    content_preview = content_preview[:197] + "..."
-                content_preview = content_preview or "--"
-
-                if payload.type == "weekly_followup_comment":
-                    title, label = "评论了你的周跟进总结", "评论"
-                    send_fn = platform_notification_service.send_weekly_followup_comment_notification
-                else:
-                    title, label = "评论了你的拜访记录", "评论"
-                    send_fn = platform_notification_service.send_visit_record_comment_notification
-
-                message_text = f"{author}{title}\n"
-                if link_line:
-                    message_text += f"{link_line}\n"
-                message_text += f"{label}：{content_preview}\n"
-
-        # 批量发送并汇总结果
-        success_count = 0
-        failed: List[dict] = []
-        for rid in recipient_ids:
-            r = send_fn(db_session, recipient_user_id=rid, message_text=message_text)
-            if r.get("success"):
-                success_count += 1
-            else:
-                failed.append({"recipient_user_id": rid, "message": r.get("message")})
-
-        result = {
-            "success": success_count > 0,
-            "recipients_count": len(recipient_ids),
-            "success_count": success_count,
-            "failed_recipients": failed,
-        }
         return {"code": 200, "message": "ok", "result": result}
 
     except HTTPException:

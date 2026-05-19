@@ -883,6 +883,7 @@ def update_visit_record_comments(
     追加保存指定拜访记录的评论（comments，JSON数组）；请求体只需传本次新增条目。
     - 每条评论的 author_id 须与当前登录用户一致，否则返回 400
     - 复用拜访记录的权限控制逻辑：无权限/不存在返回 404
+    - 保存成功后：若本次追加条目含 type=comment，则向记录人推送评论提醒（type=task 不推送）
     """
     try:
         current_user_id_str = str(user.id)
@@ -922,52 +923,34 @@ def update_visit_record_comments(
             )
 
             if record and recipient_user_id and recipient_user_id != current_user_id:
-                # 以落库后的 comments 为准，避免 payload 最后一条与实际落库不一致
-                comments_saved = getattr(record, "comments", None)
-                comments_list = comments_saved if isinstance(comments_saved, list) else []
+                # 请求体为本次追加条目；存在 comment 类型即推送（task 类型不推送）
+                payload_comments = payload.comments or []
+                notify_comment = None
+                for item in payload_comments:
+                    item_type = str(item.type or "comment").strip().lower()
+                    if item_type == "comment":
+                        notify_comment = item
 
-                # 只取当前用户写入的最新一条评论，避免用他人评论或空列表误推送
-                latest_comment = None
-                for item in reversed(comments_list):
-                    if not isinstance(item, dict):
-                        continue
-                    if str(item.get("author_id") or "") == current_user_id:
-                        latest_comment = item
-                        break
-
-                latest_comment_type = ""
-                if isinstance(latest_comment, dict):
-                    latest_comment_type = str(latest_comment.get("type") or "").strip().lower()
                 logger.info(
-                    "visit_record_comment notify candidate: record_id=%s, has_latest_comment=%s, latest_comment_type=%s, latest_comment_author=%s, latest_comment_content_preview=%s",
+                    "visit_record_comment notify candidate: record_id=%s, payload_comments_count=%s, "
+                    "has_comment_type=%s, notify_author=%s, notify_content_preview=%s",
                     record_id,
-                    latest_comment is not None,
-                    latest_comment_type or "",
-                    str((latest_comment or {}).get("author") or "") if isinstance(latest_comment, dict) else "",
-                    (
-                        str((latest_comment or {}).get("content") or "")[:80]
-                        if isinstance(latest_comment, dict)
-                        else ""
-                    ),
+                    len(payload_comments),
+                    notify_comment is not None,
+                    str(notify_comment.author or "") if notify_comment else "",
+                    (str(notify_comment.content or "")[:80] if notify_comment else ""),
                 )
-                # 仅当存在当前用户的新评论且不是 task 时才推送
-                if latest_comment is not None and latest_comment_type != "task":
+
+                if notify_comment is not None:
                     from app.core.config import settings
 
-                    # 评论摘要（允许为空）
-                    comment_preview = ""
-                    if isinstance(latest_comment, dict):
-                        comment_preview = str((latest_comment.get("content") or "")).strip()
+                    comment_preview = str(notify_comment.content or "").strip()
                     if len(comment_preview) > 200:
                         comment_preview = comment_preview[:197] + "..."
 
-                    # 跳转到拜访记录评论页
                     jump_url = f"{settings.REVIEW_REPORT_HOST}/registerVisitRecord/detail?record_id={record_id}"
 
-                    author_name = ""
-                    if isinstance(latest_comment, dict):
-                        author_name = str(latest_comment.get("author") or "").strip()
-                    # 不依赖前端传 author；优先使用当前登录用户信息
+                    author_name = str(notify_comment.author or "").strip()
                     author_name = author_name or str(getattr(user, "name", "") or "").strip()
                     author_name = author_name or "有人"
 
@@ -997,9 +980,7 @@ def update_visit_record_comments(
                     logger.info(
                         "visit_record_comment notify skipped: record_id=%s, reason=%s",
                         record_id,
-                        "no_latest_comment_for_current_user"
-                        if latest_comment is None
-                        else "latest_comment_is_task",
+                        "no_comment_type_in_payload",
                     )
             else:
                 logger.info(
