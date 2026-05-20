@@ -3,7 +3,7 @@ CRM统计服务
 用于从现有的统计表中读取和处理销售人员的日报和周报数据
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from datetime import date, datetime, timedelta
 
 from sqlalchemy import text
@@ -348,46 +348,120 @@ class CRMStatisticsService:
             "tasks_by_owner": [],
         }
 
-    def _resolve_department_owner_name_map(
+    def _register_department_owner(
+        self,
+        people: Dict[str, str],
+        alias_to_canonical: Dict[str, str],
+        *,
+        display_name: str,
+        user_id: Optional[str] = None,
+        crm_user_id: Optional[str] = None,
+    ) -> None:
+        """登记部门成员：canonical 优先 user_id（与个人日报 recorder_id / crm_todos 对齐）。"""
+        ids = [
+            str(user_id or "").strip(),
+            str(crm_user_id or "").strip(),
+        ]
+        ids = [i for i in ids if i]
+        if not ids:
+            return
+        canonical = str(user_id or crm_user_id or "").strip()
+        label = (display_name or "").strip() or canonical
+        people[canonical] = label
+        for oid in ids:
+            alias_to_canonical[oid] = canonical
+
+    def _resolve_department_owners_for_todo_stats(
         self,
         session: Session,
         department_name: str,
-    ) -> Dict[str, str]:
-        """部门名称 -> {crm owner_id: owner_name}（优先 user_department_relation）。"""
+        *,
+        stat_date: Optional[date] = None,
+    ) -> Tuple[Dict[str, str], Dict[str, str]]:
+        """
+        解析部门成员用于任务统计。
+
+        Returns:
+            (canonical_id -> display_name, alias_owner_id -> canonical_id)
+        """
         from app.models.user_department_relation import UserDepartmentRelation
         from app.repositories.department_mirror import department_mirror_repo
         from app.repositories.user_profile import UserProfileRepo
 
         name = (department_name or "").strip()
-        owner_map: Dict[str, str] = {}
+        people: Dict[str, str] = {}
+        alias_to_canonical: Dict[str, str] = {}
         if not name:
-            return owner_map
+            return people, alias_to_canonical
 
         dept_ids = department_mirror_repo.get_department_ids_by_name(session, name)
         if dept_ids:
             rows = session.exec(
-                select(UserDepartmentRelation.crm_user_id, UserDepartmentRelation.user_name).where(
+                select(
+                    UserDepartmentRelation.crm_user_id,
+                    UserDepartmentRelation.user_name,
+                    UserDepartmentRelation.user_id,
+                ).where(
                     UserDepartmentRelation.department_id.in_(dept_ids),
                     UserDepartmentRelation.is_active == True,  # noqa: E712
                     UserDepartmentRelation.crm_user_id.is_not(None),
                 )
             ).all()
-            for crm_user_id, user_name in rows:
-                uid = str(crm_user_id or "").strip()
-                if not uid or uid in owner_map:
-                    continue
-                display = str(user_name or "").strip() or uid
-                owner_map[uid] = display
+            for crm_user_id, user_name, user_id in rows:
+                self._register_department_owner(
+                    people,
+                    alias_to_canonical,
+                    display_name=str(user_name or ""),
+                    user_id=str(user_id) if user_id else None,
+                    crm_user_id=str(crm_user_id) if crm_user_id else None,
+                )
 
-        if not owner_map:
-            for profile in UserProfileRepo().get_department_members(session, name):
-                uid = str(profile.crm_user_id or profile.user_id or "").strip()
-                if not uid or uid in owner_map:
-                    continue
-                display = str(profile.name or "").strip() or uid
-                owner_map[uid] = display
+        for profile in UserProfileRepo().get_department_members(session, name):
+            self._register_department_owner(
+                people,
+                alias_to_canonical,
+                display_name=str(profile.name or ""),
+                user_id=str(profile.user_id) if profile.user_id else None,
+                crm_user_id=str(profile.crm_user_id) if profile.crm_user_id else None,
+            )
 
-        return owner_map
+        if stat_date is not None:
+            cache_key = f"crm_sales_daily_stats:{stat_date.isoformat()}"
+            sales_stats = session.info.get(cache_key)
+            if sales_stats is None:
+                sales_stats = self.get_sales_daily_statistics(session, stat_date)
+                session.info[cache_key] = sales_stats
+            for sales in sales_stats:
+                if (sales.get("department") or "").strip() != name:
+                    continue
+                recorder_id = str(sales.get("recorder_id") or "").strip()
+                if not recorder_id:
+                    continue
+                self._register_department_owner(
+                    people,
+                    alias_to_canonical,
+                    display_name=str(sales.get("recorder") or ""),
+                    user_id=recorder_id,
+                )
+
+        return people, alias_to_canonical
+
+    @staticmethod
+    def _aggregate_todo_counts_by_canonical_owner(
+        counts_by_owner_id: Dict[str, Dict[str, int]],
+        alias_to_canonical: Dict[str, str],
+        people: Dict[str, str],
+    ) -> Dict[str, Dict[str, int]]:
+        aggregated: Dict[str, Dict[str, int]] = {
+            canonical: {"completed": 0, "overdued": 0} for canonical in people
+        }
+        for owner_id, counts in counts_by_owner_id.items():
+            canonical = alias_to_canonical.get(owner_id, owner_id)
+            if canonical not in aggregated:
+                continue
+            aggregated[canonical]["completed"] += int(counts.get("completed", 0))
+            aggregated[canonical]["overdued"] += int(counts.get("overdued", 0))
+        return aggregated
 
     def _query_todo_counts_by_owners_on_date(
         self,
@@ -463,22 +537,36 @@ class CRMStatisticsService:
         团队日报：统计日部门内 crm_todos 任务汇总。
 
         - completed_tasks_count / overdued_tasks_count：团队合计（字符串，供卡片模板）
-        - tasks_by_owner：按成员拆解（owner_name、completed_tasks_count、overdued_tasks_count）
+        - tasks_by_owner：按成员拆解（owner_name、completed_tasks_count、overdued_tasks_count），按已完成数量降序
         """
-        owner_map = self._resolve_department_owner_name_map(session, department_name)
-        if not owner_map:
+        people, alias_to_canonical = self._resolve_department_owners_for_todo_stats(
+            session,
+            department_name,
+            stat_date=stat_date,
+        )
+        if not people:
             return self._empty_department_todo_task_stats()
 
-        counts_by_owner = self._query_todo_counts_by_owners_on_date(
-            session,
-            list(owner_map.keys()),
-            stat_date,
+        counts_by_owner = self._aggregate_todo_counts_by_canonical_owner(
+            self._query_todo_counts_by_owners_on_date(
+                session,
+                list(alias_to_canonical.keys()),
+                stat_date,
+            ),
+            alias_to_canonical,
+            people,
         )
 
         tasks_by_owner: List[Dict[str, str]] = []
         team_completed = 0
         team_overdued = 0
-        for owner_id, owner_name in sorted(owner_map.items(), key=lambda item: item[1]):
+        for owner_id, owner_name in sorted(
+            people.items(),
+            key=lambda item: (
+                -int(counts_by_owner.get(item[0], {}).get("completed", 0)),
+                item[1],
+            ),
+        ):
             counts = counts_by_owner.get(owner_id, {})
             completed = int(counts.get("completed", 0))
             overdued = int(counts.get("overdued", 0))
