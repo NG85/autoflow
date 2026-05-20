@@ -3,7 +3,7 @@ CRM统计服务
 用于从现有的统计表中读取和处理销售人员的日报和周报数据
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from datetime import date, datetime, timedelta
 
 from sqlalchemy import text
@@ -348,46 +348,120 @@ class CRMStatisticsService:
             "tasks_by_owner": [],
         }
 
-    def _resolve_department_owner_name_map(
+    def _register_department_owner(
+        self,
+        people: Dict[str, str],
+        alias_to_canonical: Dict[str, str],
+        *,
+        display_name: str,
+        user_id: Optional[str] = None,
+        crm_user_id: Optional[str] = None,
+    ) -> None:
+        """登记部门成员：canonical 优先 user_id（与个人日报 recorder_id / crm_todos 对齐）。"""
+        ids = [
+            str(user_id or "").strip(),
+            str(crm_user_id or "").strip(),
+        ]
+        ids = [i for i in ids if i]
+        if not ids:
+            return
+        canonical = str(user_id or crm_user_id or "").strip()
+        label = (display_name or "").strip() or canonical
+        people[canonical] = label
+        for oid in ids:
+            alias_to_canonical[oid] = canonical
+
+    def _resolve_department_owners_for_todo_stats(
         self,
         session: Session,
         department_name: str,
-    ) -> Dict[str, str]:
-        """部门名称 -> {crm owner_id: owner_name}（优先 user_department_relation）。"""
+        *,
+        stat_date: Optional[date] = None,
+    ) -> Tuple[Dict[str, str], Dict[str, str]]:
+        """
+        解析部门成员用于任务统计。
+
+        Returns:
+            (canonical_id -> display_name, alias_owner_id -> canonical_id)
+        """
         from app.models.user_department_relation import UserDepartmentRelation
         from app.repositories.department_mirror import department_mirror_repo
         from app.repositories.user_profile import UserProfileRepo
 
         name = (department_name or "").strip()
-        owner_map: Dict[str, str] = {}
+        people: Dict[str, str] = {}
+        alias_to_canonical: Dict[str, str] = {}
         if not name:
-            return owner_map
+            return people, alias_to_canonical
 
         dept_ids = department_mirror_repo.get_department_ids_by_name(session, name)
         if dept_ids:
             rows = session.exec(
-                select(UserDepartmentRelation.crm_user_id, UserDepartmentRelation.user_name).where(
+                select(
+                    UserDepartmentRelation.crm_user_id,
+                    UserDepartmentRelation.user_name,
+                    UserDepartmentRelation.user_id,
+                ).where(
                     UserDepartmentRelation.department_id.in_(dept_ids),
                     UserDepartmentRelation.is_active == True,  # noqa: E712
                     UserDepartmentRelation.crm_user_id.is_not(None),
                 )
             ).all()
-            for crm_user_id, user_name in rows:
-                uid = str(crm_user_id or "").strip()
-                if not uid or uid in owner_map:
-                    continue
-                display = str(user_name or "").strip() or uid
-                owner_map[uid] = display
+            for crm_user_id, user_name, user_id in rows:
+                self._register_department_owner(
+                    people,
+                    alias_to_canonical,
+                    display_name=str(user_name or ""),
+                    user_id=str(user_id) if user_id else None,
+                    crm_user_id=str(crm_user_id) if crm_user_id else None,
+                )
 
-        if not owner_map:
-            for profile in UserProfileRepo().get_department_members(session, name):
-                uid = str(profile.crm_user_id or profile.user_id or "").strip()
-                if not uid or uid in owner_map:
-                    continue
-                display = str(profile.name or "").strip() or uid
-                owner_map[uid] = display
+        for profile in UserProfileRepo().get_department_members(session, name):
+            self._register_department_owner(
+                people,
+                alias_to_canonical,
+                display_name=str(profile.name or ""),
+                user_id=str(profile.user_id) if profile.user_id else None,
+                crm_user_id=str(profile.crm_user_id) if profile.crm_user_id else None,
+            )
 
-        return owner_map
+        if stat_date is not None:
+            cache_key = f"crm_sales_daily_stats:{stat_date.isoformat()}"
+            sales_stats = session.info.get(cache_key)
+            if sales_stats is None:
+                sales_stats = self.get_sales_daily_statistics(session, stat_date)
+                session.info[cache_key] = sales_stats
+            for sales in sales_stats:
+                if (sales.get("department") or "").strip() != name:
+                    continue
+                recorder_id = str(sales.get("recorder_id") or "").strip()
+                if not recorder_id:
+                    continue
+                self._register_department_owner(
+                    people,
+                    alias_to_canonical,
+                    display_name=str(sales.get("recorder") or ""),
+                    user_id=recorder_id,
+                )
+
+        return people, alias_to_canonical
+
+    @staticmethod
+    def _aggregate_todo_counts_by_canonical_owner(
+        counts_by_owner_id: Dict[str, Dict[str, int]],
+        alias_to_canonical: Dict[str, str],
+        people: Dict[str, str],
+    ) -> Dict[str, Dict[str, int]]:
+        aggregated: Dict[str, Dict[str, int]] = {
+            canonical: {"completed": 0, "overdued": 0} for canonical in people
+        }
+        for owner_id, counts in counts_by_owner_id.items():
+            canonical = alias_to_canonical.get(owner_id, owner_id)
+            if canonical not in aggregated:
+                continue
+            aggregated[canonical]["completed"] += int(counts.get("completed", 0))
+            aggregated[canonical]["overdued"] += int(counts.get("overdued", 0))
+        return aggregated
 
     def _query_todo_counts_by_owners_on_date(
         self,
@@ -463,22 +537,36 @@ class CRMStatisticsService:
         团队日报：统计日部门内 crm_todos 任务汇总。
 
         - completed_tasks_count / overdued_tasks_count：团队合计（字符串，供卡片模板）
-        - tasks_by_owner：按成员拆解（owner_name、completed_tasks_count、overdued_tasks_count）
+        - tasks_by_owner：按成员拆解（owner_name、completed_tasks_count、overdued_tasks_count），按已完成数量降序
         """
-        owner_map = self._resolve_department_owner_name_map(session, department_name)
-        if not owner_map:
+        people, alias_to_canonical = self._resolve_department_owners_for_todo_stats(
+            session,
+            department_name,
+            stat_date=stat_date,
+        )
+        if not people:
             return self._empty_department_todo_task_stats()
 
-        counts_by_owner = self._query_todo_counts_by_owners_on_date(
-            session,
-            list(owner_map.keys()),
-            stat_date,
+        counts_by_owner = self._aggregate_todo_counts_by_canonical_owner(
+            self._query_todo_counts_by_owners_on_date(
+                session,
+                list(alias_to_canonical.keys()),
+                stat_date,
+            ),
+            alias_to_canonical,
+            people,
         )
 
         tasks_by_owner: List[Dict[str, str]] = []
         team_completed = 0
         team_overdued = 0
-        for owner_id, owner_name in sorted(owner_map.items(), key=lambda item: item[1]):
+        for owner_id, owner_name in sorted(
+            people.items(),
+            key=lambda item: (
+                -int(counts_by_owner.get(item[0], {}).get("completed", 0)),
+                item[1],
+            ),
+        ):
             counts = counts_by_owner.get(owner_id, {})
             completed = int(counts.get("completed", 0))
             overdued = int(counts.get("overdued", 0))
@@ -516,6 +604,38 @@ class CRMStatisticsService:
         )
         department_report.update(todo_stats)
         return department_report
+
+    @staticmethod
+    def _build_department_daily_page_urls(
+        *,
+        department_name: str,
+        stat_date: date,
+        exec_date: Optional[date] = None,
+    ) -> Dict[str, str]:
+        """团队日报：跟进列表页与任务列表页链接（统计日～执行日）。"""
+        from app.utils.date_utils import beijing_today_date
+
+        if exec_date is None:
+            exec_date = beijing_today_date()
+
+        stat_date_str = stat_date.isoformat()
+        exec_date_str = exec_date.isoformat()
+        dept = (department_name or "").strip()
+
+        visit_query = f"start_date={stat_date_str}&end_date={stat_date_str}"
+        if dept:
+            visit_query = f"{visit_query}&department_name={dept}"
+        visit_detail_page = f"{settings.VISIT_DETAIL_PAGE_URL}?{visit_query}"
+
+        task_query = f"due_date__gte={stat_date_str}&due_date__lte={exec_date_str}"
+        if dept:
+            task_query = f"department_name={dept}&{task_query}"
+        task_detail_page = f"{settings.CRM_SALES_TASK_PAGE_URL}?{task_query}"
+
+        return {
+            "visit_detail_page": visit_detail_page,
+            "task_detail_page": task_detail_page,
+        }
 
     def get_sales_complete_daily_report(
         self,
@@ -574,42 +694,50 @@ class CRMStatisticsService:
                 partners=partners,
             )
             
-            # 填充评估详情中的链接信息（根据是否有商机名称拼接不同的URL）
             base_visit_url = (
                 f"{settings.VISIT_DETAIL_PAGE_URL}"
                 f"?start_date={target_date}&end_date={target_date}"
             )
             
-            for assessment in assessment_details['first']:
-                # assessment['sales_name'] = recorder_name
-                # assessment['department_name'] = ""
-                if assessment.get("opportunity_name"):
-                    assessment['account_visit_details'] = (
-                        f"{base_visit_url}"
-                        f"&account_name={assessment['account_name']}"
-                        f"&opportunity_name={assessment['opportunity_name']}"
-                    )
-                else:
-                    assessment['account_visit_details'] = (
-                        f"{base_visit_url}"
-                        f"&account_name={assessment['account_name']}"
-                    )
-            
-            for assessment in assessment_details['multi']:
-                # assessment['sales_name'] = recorder_name
-                # assessment['department_name'] = ""
-                if assessment.get("opportunity_name"):
-                    assessment['account_visit_details'] = (
-                        f"{base_visit_url}"
-                        f"&account_name={assessment['account_name']}"
-                        f"&opportunity_name={assessment['opportunity_name']}"
-                    )
-                else:
-                    assessment['account_visit_details'] = (
-                        f"{base_visit_url}"
-                        f"&account_name={assessment['account_name']}"
-                    )
-            
+            # for assessment in assessment_details['first']:
+            #     # assessment['sales_name'] = recorder_name
+            #     # assessment['department_name'] = ""
+            #     if assessment.get("opportunity_name"):
+            #         assessment['account_visit_details'] = (
+            #             f"{base_visit_url}"
+            #             f"&account_name={assessment['account_name']}"
+            #             f"&opportunity_name={assessment['opportunity_name']}"
+            #         )
+            #     else:
+            #         assessment['account_visit_details'] = (
+            #             f"{base_visit_url}"
+            #             f"&account_name={assessment['account_name']}"
+            #         )
+            # for assessment in assessment_details['multi']:
+            #     # assessment['sales_name'] = recorder_name
+            #     # assessment['department_name'] = ""
+            #     if assessment.get("opportunity_name"):
+            #         assessment['account_visit_details'] = (
+            #             f"{base_visit_url}"
+            #             f"&account_name={assessment['account_name']}"
+            #             f"&opportunity_name={assessment['opportunity_name']}"
+            #         )
+            #     else:
+            #         assessment['account_visit_details'] = (
+            #             f"{base_visit_url}"
+            #             f"&account_name={assessment['account_name']}"
+            #         )
+
+            recorder_name = str(stats.get("recorder") or "").strip()
+            stat_date_str = target_date.isoformat()
+            exec_date_str = incomplete_due_date.isoformat()
+            task_query = (
+                f"due_date__gte={stat_date_str}&due_date__lte={exec_date_str}"
+            )
+            if recorder_name:
+                task_query = f"owner_name={recorder_name}&{task_query}"
+            task_detail_page = f"{settings.CRM_SALES_TASK_PAGE_URL}?{task_query}"
+
             # 对评估数据进行排序（红灯>黄灯-团队名称-销售名称）
             sorted_first_assessments = self._sort_assessments(assessment_details['first'])
             sorted_multi_assessments = self._sort_assessments(assessment_details['multi'])
@@ -653,10 +781,8 @@ class CRMStatisticsService:
                 **todo_task_stats,
                 'first_assessment': sorted_first_assessments,
                 'multi_assessment': sorted_multi_assessments,
-                'visit_detail_page': (
-                    f"{settings.VISIT_DETAIL_PAGE_URL}"
-                    f"?start_date={target_date}&end_date={target_date}"
-                )
+                'visit_detail_page': base_visit_url,
+                'task_detail_page': task_detail_page,
             }
             
             complete_reports.append(complete_report)
@@ -990,6 +1116,7 @@ class CRMStatisticsService:
                     'report_date': report['report_date'].isoformat() if hasattr(report.get('report_date'), 'isoformat') else str(report.get('report_date')),
                     'statistics': [statistics_data],  # 将统计数据组织成数组
                     'visit_detail_page': report.get('visit_detail_page', ''),
+                    'task_detail_page': report.get('task_detail_page', ''),
                     'first_assessment': report.get('first_assessment', []),
                     'multi_assessment': report.get('multi_assessment', []),
                     'completed_tasks': report.get('completed_tasks', []),
@@ -1289,8 +1416,6 @@ class CRMStatisticsService:
         
         logger.info(f"开始从 crm_department_daily_summary 表汇总 {target_date} 的部门日报数据")
         
-        from app.core.config import settings
-        
         # 直接从部门/公司汇总表中查询部门级数据
         query = select(CRMDepartmentDailySummary).where(
             CRMDepartmentDailySummary.report_date == target_date,
@@ -1333,23 +1458,26 @@ class CRMStatisticsService:
                 "partner_green_count": record.partner_green_count or 0,
             }
             
+            page_urls = self._build_department_daily_page_urls(
+                department_name=department_name,
+                stat_date=target_date,
+            )
             department_report = {
                 "department_name": department_name,
                 "report_date": record.report_date,
                 # 统计数组：供卡片模板展示数值类指标
                 "statistics": [total_stats],
                 # 首次拜访汇总内容
-                "first_assessment":[{
+                "first_assessment": [{
                     "assessment_description": record.summary_first_visit or "",
                     "assessment_description_en": record.summary_first_visit or "",
-                    "account_visit_details": f"{settings.VISIT_DETAIL_PAGE_URL}?start_date={target_date}&end_date={target_date}&department_name={department_name}&is_first_visit=true"
                 }],
                 # 多次跟进汇总内容
-                "multi_assessment":[{
+                "multi_assessment": [{
                     "assessment_description": record.summary_regular_visit or "",
                     "assessment_description_en": record.summary_regular_visit or "",
-                    "account_visit_details": f"{settings.VISIT_DETAIL_PAGE_URL}?start_date={target_date}&end_date={target_date}&department_name={department_name}&is_first_visit=false"
                 }],
+                **page_urls,
             }
             
             self._enrich_department_report_with_todo_stats(
@@ -1373,8 +1501,6 @@ class CRMStatisticsService:
         为没有任何数据的部门生成空的部门日报结构（数值为0，文案为空）。
         该结构与 aggregate_department_reports 返回的元素保持一致，便于直接用于卡片推送。
         """
-        from app.core.config import settings
-        
         # 统计字段格式需与 aggregate_department_reports 中保持一致
         total_stats = {
             # 最终客户 - 总体（全为空数据）
@@ -1398,11 +1524,10 @@ class CRMStatisticsService:
         }
         
         # 为了兼容飞书卡片的数据结构，即使没有数据，也构造一条“空”的首次/多次汇总记录
-        base_visit_url = (
-            f"{settings.VISIT_DETAIL_PAGE_URL}"
-            f"?start_date={target_date}&end_date={target_date}"
+        page_urls = self._build_department_daily_page_urls(
+            department_name=department_name,
+            stat_date=target_date,
         )
-        
         department_report: Dict[str, Any] = {
             "department_name": department_name,
             "report_date": target_date,
@@ -1412,10 +1537,6 @@ class CRMStatisticsService:
                 {
                     "assessment_description": "",
                     "assessment_description_en": "",
-                    "account_visit_details": (
-                        f"{base_visit_url}"
-                        f"&department_name={department_name}&is_first_visit=true"
-                    ),
                 }
             ],
             # 多次跟进汇总内容（空）
@@ -1423,12 +1544,9 @@ class CRMStatisticsService:
                 {
                     "assessment_description": "",
                     "assessment_description_en": "",
-                    "account_visit_details": (
-                        f"{base_visit_url}"
-                        f"&department_name={department_name}&is_first_visit=false"
-                    ),
                 }
             ],
+            **page_urls,
         }
 
         if session is not None:
@@ -1516,10 +1634,10 @@ class CRMStatisticsService:
             summary_first_visit = record.summary_first_visit or ""
             summary_regular_visit = record.summary_regular_visit or ""
 
-        base_visit_url = (
-            f"{settings.VISIT_DETAIL_PAGE_URL}"
-            f"?start_date={target_date}&end_date={target_date}"
-        )
+        # base_visit_url = (
+        #     f"{settings.VISIT_DETAIL_PAGE_URL}"
+        #     f"?start_date={target_date}&end_date={target_date}"
+        # )
         
         # 公司日报结构与部门日报保持一致：
         # - statistics: 数值汇总
@@ -1532,18 +1650,18 @@ class CRMStatisticsService:
                 {
                     "assessment_description": summary_first_visit,
                     "assessment_description_en": summary_first_visit,
-                    "account_visit_details": (
-                        f"{base_visit_url}&is_first_visit=true"
-                    ),
+                    # "account_visit_details": (
+                    #     f"{base_visit_url}&is_first_visit=true"
+                    # ),
                 }
             ],
             "multi_assessment": [
                 {
                     "assessment_description": summary_regular_visit,
                     "assessment_description_en": summary_regular_visit,
-                    "account_visit_details": (
-                        f"{base_visit_url}&is_first_visit=false"
-                    ),
+                    # "account_visit_details": (
+                    #     f"{base_visit_url}&is_first_visit=false"
+                    # ),
                 }
             ],
         }
