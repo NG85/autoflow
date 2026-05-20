@@ -517,6 +517,38 @@ class CRMStatisticsService:
         department_report.update(todo_stats)
         return department_report
 
+    @staticmethod
+    def _build_department_daily_page_urls(
+        *,
+        department_name: str,
+        stat_date: date,
+        exec_date: Optional[date] = None,
+    ) -> Dict[str, str]:
+        """团队日报：跟进列表页与任务列表页链接（统计日～执行日）。"""
+        from app.utils.date_utils import beijing_today_date
+
+        if exec_date is None:
+            exec_date = beijing_today_date()
+
+        stat_date_str = stat_date.isoformat()
+        exec_date_str = exec_date.isoformat()
+        dept = (department_name or "").strip()
+
+        visit_query = f"start_date={stat_date_str}&end_date={stat_date_str}"
+        if dept:
+            visit_query = f"{visit_query}&department_name={dept}"
+        visit_detail_page = f"{settings.VISIT_DETAIL_PAGE_URL}?{visit_query}"
+
+        task_query = f"due_date__gte={stat_date_str}&due_date__lte={exec_date_str}"
+        if dept:
+            task_query = f"department_name={dept}&{task_query}"
+        task_detail_page = f"{settings.CRM_SALES_TASK_PAGE_URL}?{task_query}"
+
+        return {
+            "visit_detail_page": visit_detail_page,
+            "task_detail_page": task_detail_page,
+        }
+
     def get_sales_complete_daily_report(
         self,
         session: Session,
@@ -574,42 +606,50 @@ class CRMStatisticsService:
                 partners=partners,
             )
             
-            # 填充评估详情中的链接信息（根据是否有商机名称拼接不同的URL）
             base_visit_url = (
                 f"{settings.VISIT_DETAIL_PAGE_URL}"
                 f"?start_date={target_date}&end_date={target_date}"
             )
             
-            for assessment in assessment_details['first']:
-                # assessment['sales_name'] = recorder_name
-                # assessment['department_name'] = ""
-                if assessment.get("opportunity_name"):
-                    assessment['account_visit_details'] = (
-                        f"{base_visit_url}"
-                        f"&account_name={assessment['account_name']}"
-                        f"&opportunity_name={assessment['opportunity_name']}"
-                    )
-                else:
-                    assessment['account_visit_details'] = (
-                        f"{base_visit_url}"
-                        f"&account_name={assessment['account_name']}"
-                    )
-            
-            for assessment in assessment_details['multi']:
-                # assessment['sales_name'] = recorder_name
-                # assessment['department_name'] = ""
-                if assessment.get("opportunity_name"):
-                    assessment['account_visit_details'] = (
-                        f"{base_visit_url}"
-                        f"&account_name={assessment['account_name']}"
-                        f"&opportunity_name={assessment['opportunity_name']}"
-                    )
-                else:
-                    assessment['account_visit_details'] = (
-                        f"{base_visit_url}"
-                        f"&account_name={assessment['account_name']}"
-                    )
-            
+            # for assessment in assessment_details['first']:
+            #     # assessment['sales_name'] = recorder_name
+            #     # assessment['department_name'] = ""
+            #     if assessment.get("opportunity_name"):
+            #         assessment['account_visit_details'] = (
+            #             f"{base_visit_url}"
+            #             f"&account_name={assessment['account_name']}"
+            #             f"&opportunity_name={assessment['opportunity_name']}"
+            #         )
+            #     else:
+            #         assessment['account_visit_details'] = (
+            #             f"{base_visit_url}"
+            #             f"&account_name={assessment['account_name']}"
+            #         )
+            # for assessment in assessment_details['multi']:
+            #     # assessment['sales_name'] = recorder_name
+            #     # assessment['department_name'] = ""
+            #     if assessment.get("opportunity_name"):
+            #         assessment['account_visit_details'] = (
+            #             f"{base_visit_url}"
+            #             f"&account_name={assessment['account_name']}"
+            #             f"&opportunity_name={assessment['opportunity_name']}"
+            #         )
+            #     else:
+            #         assessment['account_visit_details'] = (
+            #             f"{base_visit_url}"
+            #             f"&account_name={assessment['account_name']}"
+            #         )
+
+            recorder_name = str(stats.get("recorder") or "").strip()
+            stat_date_str = target_date.isoformat()
+            exec_date_str = incomplete_due_date.isoformat()
+            task_query = (
+                f"due_date__gte={stat_date_str}&due_date__lte={exec_date_str}"
+            )
+            if recorder_name:
+                task_query = f"owner_name={recorder_name}&{task_query}"
+            task_detail_page = f"{settings.CRM_SALES_TASK_PAGE_URL}?{task_query}"
+
             # 对评估数据进行排序（红灯>黄灯-团队名称-销售名称）
             sorted_first_assessments = self._sort_assessments(assessment_details['first'])
             sorted_multi_assessments = self._sort_assessments(assessment_details['multi'])
@@ -653,10 +693,8 @@ class CRMStatisticsService:
                 **todo_task_stats,
                 'first_assessment': sorted_first_assessments,
                 'multi_assessment': sorted_multi_assessments,
-                'visit_detail_page': (
-                    f"{settings.VISIT_DETAIL_PAGE_URL}"
-                    f"?start_date={target_date}&end_date={target_date}"
-                )
+                'visit_detail_page': base_visit_url,
+                'task_detail_page': task_detail_page,
             }
             
             complete_reports.append(complete_report)
@@ -990,6 +1028,7 @@ class CRMStatisticsService:
                     'report_date': report['report_date'].isoformat() if hasattr(report.get('report_date'), 'isoformat') else str(report.get('report_date')),
                     'statistics': [statistics_data],  # 将统计数据组织成数组
                     'visit_detail_page': report.get('visit_detail_page', ''),
+                    'task_detail_page': report.get('task_detail_page', ''),
                     'first_assessment': report.get('first_assessment', []),
                     'multi_assessment': report.get('multi_assessment', []),
                     'completed_tasks': report.get('completed_tasks', []),
@@ -1289,8 +1328,6 @@ class CRMStatisticsService:
         
         logger.info(f"开始从 crm_department_daily_summary 表汇总 {target_date} 的部门日报数据")
         
-        from app.core.config import settings
-        
         # 直接从部门/公司汇总表中查询部门级数据
         query = select(CRMDepartmentDailySummary).where(
             CRMDepartmentDailySummary.report_date == target_date,
@@ -1333,23 +1370,26 @@ class CRMStatisticsService:
                 "partner_green_count": record.partner_green_count or 0,
             }
             
+            page_urls = self._build_department_daily_page_urls(
+                department_name=department_name,
+                stat_date=target_date,
+            )
             department_report = {
                 "department_name": department_name,
                 "report_date": record.report_date,
                 # 统计数组：供卡片模板展示数值类指标
                 "statistics": [total_stats],
                 # 首次拜访汇总内容
-                "first_assessment":[{
+                "first_assessment": [{
                     "assessment_description": record.summary_first_visit or "",
                     "assessment_description_en": record.summary_first_visit or "",
-                    "account_visit_details": f"{settings.VISIT_DETAIL_PAGE_URL}?start_date={target_date}&end_date={target_date}&department_name={department_name}&is_first_visit=true"
                 }],
                 # 多次跟进汇总内容
-                "multi_assessment":[{
+                "multi_assessment": [{
                     "assessment_description": record.summary_regular_visit or "",
                     "assessment_description_en": record.summary_regular_visit or "",
-                    "account_visit_details": f"{settings.VISIT_DETAIL_PAGE_URL}?start_date={target_date}&end_date={target_date}&department_name={department_name}&is_first_visit=false"
                 }],
+                **page_urls,
             }
             
             self._enrich_department_report_with_todo_stats(
@@ -1373,8 +1413,6 @@ class CRMStatisticsService:
         为没有任何数据的部门生成空的部门日报结构（数值为0，文案为空）。
         该结构与 aggregate_department_reports 返回的元素保持一致，便于直接用于卡片推送。
         """
-        from app.core.config import settings
-        
         # 统计字段格式需与 aggregate_department_reports 中保持一致
         total_stats = {
             # 最终客户 - 总体（全为空数据）
@@ -1398,11 +1436,10 @@ class CRMStatisticsService:
         }
         
         # 为了兼容飞书卡片的数据结构，即使没有数据，也构造一条“空”的首次/多次汇总记录
-        base_visit_url = (
-            f"{settings.VISIT_DETAIL_PAGE_URL}"
-            f"?start_date={target_date}&end_date={target_date}"
+        page_urls = self._build_department_daily_page_urls(
+            department_name=department_name,
+            stat_date=target_date,
         )
-        
         department_report: Dict[str, Any] = {
             "department_name": department_name,
             "report_date": target_date,
@@ -1412,10 +1449,6 @@ class CRMStatisticsService:
                 {
                     "assessment_description": "",
                     "assessment_description_en": "",
-                    "account_visit_details": (
-                        f"{base_visit_url}"
-                        f"&department_name={department_name}&is_first_visit=true"
-                    ),
                 }
             ],
             # 多次跟进汇总内容（空）
@@ -1423,12 +1456,9 @@ class CRMStatisticsService:
                 {
                     "assessment_description": "",
                     "assessment_description_en": "",
-                    "account_visit_details": (
-                        f"{base_visit_url}"
-                        f"&department_name={department_name}&is_first_visit=false"
-                    ),
                 }
             ],
+            **page_urls,
         }
 
         if session is not None:
@@ -1516,10 +1546,10 @@ class CRMStatisticsService:
             summary_first_visit = record.summary_first_visit or ""
             summary_regular_visit = record.summary_regular_visit or ""
 
-        base_visit_url = (
-            f"{settings.VISIT_DETAIL_PAGE_URL}"
-            f"?start_date={target_date}&end_date={target_date}"
-        )
+        # base_visit_url = (
+        #     f"{settings.VISIT_DETAIL_PAGE_URL}"
+        #     f"?start_date={target_date}&end_date={target_date}"
+        # )
         
         # 公司日报结构与部门日报保持一致：
         # - statistics: 数值汇总
@@ -1532,18 +1562,18 @@ class CRMStatisticsService:
                 {
                     "assessment_description": summary_first_visit,
                     "assessment_description_en": summary_first_visit,
-                    "account_visit_details": (
-                        f"{base_visit_url}&is_first_visit=true"
-                    ),
+                    # "account_visit_details": (
+                    #     f"{base_visit_url}&is_first_visit=true"
+                    # ),
                 }
             ],
             "multi_assessment": [
                 {
                     "assessment_description": summary_regular_visit,
                     "assessment_description_en": summary_regular_visit,
-                    "account_visit_details": (
-                        f"{base_visit_url}&is_first_visit=false"
-                    ),
+                    # "account_visit_details": (
+                    #     f"{base_visit_url}&is_first_visit=false"
+                    # ),
                 }
             ],
         }
