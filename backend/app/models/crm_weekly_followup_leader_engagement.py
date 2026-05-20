@@ -24,8 +24,8 @@ class CRMWeeklyFollowupLeaderEngagement(UUIDBaseModel, UpdatableBaseModel, table
     summary_id: UUID = Field(index=True, nullable=False, description="部门周总结ID")
 
     # 反范式冗余：便于按周/部门快速聚合统计
-    week_start: date = Field(sa_column=Column(Date, nullable=False), description="周开始日期（周日）")
-    week_end: date = Field(sa_column=Column(Date, nullable=False), description="周结束日期（周六）")
+    week_start: date = Field(sa_column=Column(Date, nullable=False), description="周开始日期（周六）")
+    week_end: date = Field(sa_column=Column(Date, nullable=False), description="周结束日期（周五）")
     department_id: str = Field(
         default="",
         sa_column=Column(String(100), nullable=False),

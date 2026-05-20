@@ -32,9 +32,48 @@ WeeklyFollowupScope = Literal["department", "company"]
 WeeklyFollowupWeekRangeMode = Literal["completed", "in_progress"]
 
 
+def _saturday_of_week_containing(d: date) -> date:
+    """周六~周五周：包含 d 的那一周的起始周六。"""
+    return d - timedelta(days=(d.weekday() - 5) % 7)
+
+
 def get_sunday_to_saturday_week_range(today: date) -> Tuple[date, date]:
-    """上一完整自然周（周日~周六），与现有周报默认口径一致。"""
+    """上一完整自然周（周六~周五）。"""
     return resolve_weekly_followup_week_range(today, week_range_mode="completed")
+
+
+_WEEKLY_FOLLOWUP_PERIOD_RE = re.compile(r"^(\d{4})-W(\d{1,2})$", re.IGNORECASE)
+
+
+def format_weekly_followup_period(week_end: date) -> str:
+    """由周结束日（周五）生成 period，如 2026-W20（ISO 年周）。"""
+    iso_year, iso_week, _ = week_end.isocalendar()
+    return f"{iso_year}-W{iso_week:02d}"
+
+
+def resolve_weekly_followup_week_range_from_period(period: str) -> Tuple[date, date]:
+    """
+    将 period（如 2026-W20）解析为周跟进统计区间（周六~周五）。
+
+    与周报一致：以该 ISO 周的周五为 week_end，week_start 为其前 6 天的周六。
+    """
+    raw = (period or "").strip()
+    m = _WEEKLY_FOLLOWUP_PERIOD_RE.match(raw)
+    if not m:
+        raise ValueError(f"无效的 period: {period!r}，期望格式如 2026-W20")
+
+    iso_year = int(m.group(1))
+    iso_week = int(m.group(2))
+    if iso_week < 1 or iso_week > 53:
+        raise ValueError(f"无效的 period 周数: {period!r}")
+
+    try:
+        week_end = date.fromisocalendar(iso_year, iso_week, 5)
+    except ValueError as e:
+        raise ValueError(f"无效的 period: {period!r}") from e
+
+    week_start = week_end - timedelta(days=6)
+    return week_start, week_end
 
 
 def resolve_weekly_followup_week_range(
@@ -43,23 +82,17 @@ def resolve_weekly_followup_week_range(
     week_range_mode: WeeklyFollowupWeekRangeMode = "completed",
 ) -> Tuple[date, date]:
     """
-    周跟进统计周区间（周日~周六）。
+    周跟进统计周区间（周六~周五）。
 
-    - completed：上一完整自然周（周日跑公司总结等）
-    - in_progress：当前自然周，week_end 不超过 today（周六早上跑部门用）
+    - completed：上一完整自然周（周六定时跑部门/公司总结）
+    - in_progress：当前自然周，week_end 不超过 today
     """
     if week_range_mode == "in_progress":
-        days_since_sunday = (today.weekday() + 1) % 7
-        if days_since_sunday == 0:
-            week_end = today - timedelta(days=1)
-            week_start = week_end - timedelta(days=6)
-        else:
-            week_start = today - timedelta(days=days_since_sunday)
-            week_end = min(today, week_start + timedelta(days=6))
+        week_start = _saturday_of_week_containing(today)
+        week_end = min(today, week_start + timedelta(days=6))
         return week_start, week_end
 
-    days_since_sunday = (today.weekday() + 1) % 7
-    week_start = today - timedelta(days=days_since_sunday + 7)
+    week_start = _saturday_of_week_containing(today) - timedelta(days=7)
     week_end = week_start + timedelta(days=6)
     return week_start, week_end
 
@@ -521,7 +554,7 @@ class CRMWeeklyFollowupService:
             raise ValueError("scopes 至少包含 department 或 company")
 
         logger.info(
-            "开始生成周跟进总结，日期范围：%s ~ %s（周日到周六），scopes=%s",
+            "开始生成周跟进总结，日期范围：%s ~ %s（周六到周五），scopes=%s",
             week_start,
             week_end,
             sorted(active_scopes),

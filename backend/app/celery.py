@@ -141,7 +141,7 @@ if settings.CRM_WEEKLY_REPORT_ENABLED:
         'schedule': weekly_schedule,
     }
 
-# CRM周跟进总结：周六部门（当前周）/ 周日公司
+# CRM周跟进总结：周六部门 + 周六公司（上一完整周六~周五周）
 if settings.CRM_WEEKLY_FOLLOWUP_ENABLED:
     app.conf.beat_schedule = getattr(app.conf, 'beat_schedule', {})
 
@@ -166,14 +166,14 @@ if settings.CRM_WEEKLY_FOLLOWUP_ENABLED:
         ),
         'kwargs': {
             'scopes': 'department',
-            'week_range_mode': 'in_progress',
+            'week_range_mode': 'completed',
         },
     }
     app.conf.beat_schedule['generate_crm_weekly_followup_summary_company'] = {
         'task': 'app.tasks.cron_jobs.generate_crm_weekly_followup_summary',
         'schedule': _weekly_followup_crontab(
             settings.CRM_WEEKLY_FOLLOWUP_COMPANY_CRON,
-            crontab(hour=9, minute=30, day_of_week=0),
+            crontab(hour=9, minute=30, day_of_week=6),
         ),
         'kwargs': {
             'scopes': 'company',

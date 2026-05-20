@@ -706,6 +706,23 @@ class CRMReviewService:
             return gb, c, c
         raise HTTPException(status_code=422, detail="group_by must be one of: owner, forecast_type, opportunity_stage")
 
+    @staticmethod
+    def _review_session_meta_dict(scope: dict) -> dict:
+        """构建 ReviewSessionMetaOut 对应字段（部门来自 crm_review_session）。"""
+        session = scope["session"]
+        return {
+            "session_id": str(session.unique_id),
+            "period": str(session.period or ""),
+            "period_start": session.period_start,
+            "period_end": session.period_end,
+            "stage": str(session.stage or ""),
+            "report_date": session.report_date,
+            "create_time": _format_beijing_datetime(session.create_time),
+            "review_phase": session.review_phase,
+            "department_id": (str(session.department_id or "").strip() or None),
+            "department_name": (str(session.department_name or "").strip() or None),
+        }
+
     def _resolve_session_scope(
         self,
         db_session: Session,
@@ -752,7 +769,6 @@ class CRMReviewService:
             session.stage == "initial_edit"
             or (session.stage == "lead_review" and session.review_phase == "edit")
         )
-
         return {
             "session": session,
             "is_leader": is_leader,
@@ -1364,16 +1380,7 @@ class CRMReviewService:
         ]
         return {
             "session_id": str(scope["session"].unique_id),
-            "session": {
-                "session_id": scope["session"].unique_id,
-                "period": scope["session"].period,
-                "period_start": scope["session"].period_start,
-                "period_end": scope["session"].period_end,
-                "stage": scope["session"].stage,
-                "report_date": scope["session"].report_date,
-                "create_time": _format_beijing_datetime(scope["session"].create_time),
-                "review_phase": scope["session"].review_phase,
-            },
+            "session": CRMReviewService._review_session_meta_dict(scope),
             "can_review": bool(scope["is_leader"]) and str(scope["session"].stage or "").strip() == "lead_review",
             "is_leader": scope["is_leader"],
             "editable": scope["editable"],

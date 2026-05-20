@@ -198,13 +198,12 @@ def get_department_weekly_reports(
         if request.report_date:
             parsed_date = request.report_date
         else:
-            # 没有设置 report_date 时，选择当前日期往前最近的一个周六
+            from app.services.crm_weekly_followup_service import resolve_weekly_followup_week_range
+
             today = beijing_today_date()
-            weekday = today.weekday()  # 周一为0，周六为5，周日为6
-            days_to_last_saturday = (weekday - 5) % 7
-            parsed_date = today - timedelta(days=days_to_last_saturday)
+            _, parsed_date = resolve_weekly_followup_week_range(today, week_range_mode="completed")
         
-        # 计算 report_year 和 report_week_of_year（按周日-周六口径，使用周六的 ISO week）
+        # 计算 report_year 和 report_week_of_year（按周六~周五口径，使用周五所在 ISO 周）
         iso_year, iso_week, _ = parsed_date.isocalendar()
         report_year = int(iso_year)
         report_week_of_year = int(iso_week)        
@@ -273,13 +272,12 @@ def get_company_weekly_report(
         if request.report_date:
             parsed_date = request.report_date
         else:
-            # 没有设置 report_date 时，选择当前日期往前最近的一个周六
+            from app.services.crm_weekly_followup_service import resolve_weekly_followup_week_range
+
             today = beijing_today_date()
-            weekday = today.weekday()  # 周一为0，周六为5，周日为6
-            days_to_last_saturday = (weekday - 5) % 7
-            parsed_date = today - timedelta(days=days_to_last_saturday)
+            _, parsed_date = resolve_weekly_followup_week_range(today, week_range_mode="completed")
         
-        # 计算 report_year 和 report_week_of_year（按周日-周六口径，使用周六的 ISO week）
+        # 计算 report_year 和 report_week_of_year（按周六~周五口径，使用周五所在 ISO 周）
         iso_year, iso_week, _ = parsed_date.isocalendar()
         report_year = int(iso_year)
         report_week_of_year = int(iso_week)        

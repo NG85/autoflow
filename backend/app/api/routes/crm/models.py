@@ -2,7 +2,7 @@ from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Annotated, Union
 from datetime import date, datetime
 from uuid import UUID
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 import json
 
 # 定义响应模型
@@ -765,6 +765,36 @@ class DocumentQATriggerTaskOut(BaseModel):
 WeeklyFollowupScope = Literal["my", "department", "company"]
 
 
+class _WeeklyFollowupWeekRangeQueryMixin(BaseModel):
+    """period 与 start_date/end_date 二选一；period 优先（ISO 年周，周六~周五口径）。"""
+
+    period: Optional[str] = Field(
+        None,
+        description="统计周期，如 2026-W20（ISO 年周；对应周六~周五，week_end 为该周周五）",
+    )
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+
+    @model_validator(mode="after")
+    def _resolve_week_range(self):
+        from app.services.crm_weekly_followup_service import resolve_weekly_followup_week_range_from_period
+
+        period = (self.period or "").strip() or None
+        if period:
+            week_start, week_end = resolve_weekly_followup_week_range_from_period(period)
+            if self.start_date is not None and (
+                self.start_date != week_start or self.end_date != week_end
+            ):
+                raise ValueError("period 与 start_date/end_date 不一致")
+            self.start_date = week_start
+            self.end_date = week_end
+            return self
+
+        if self.start_date is None or self.end_date is None:
+            raise ValueError("请提供 period（如 2026-W20）或同时提供 start_date 与 end_date")
+        return self
+
+
 class WeeklyFollowupEntityRowOut(BaseModel):
     id: UUID
     department_name: str
@@ -781,15 +811,13 @@ class WeeklyFollowupEntityRowOut(BaseModel):
     comments: list[CRMComment] = []
 
 
-class WeeklyFollowupDetailQueryIn(BaseModel):
+class WeeklyFollowupDetailQueryIn(_WeeklyFollowupWeekRangeQueryMixin):
     """
     单次周总结详情查询：
-    - 给定 week_start/week_end + scope（company/department/my）
+    - 给定 period（如 2026-W20）或 start_date/end_date + scope（company/department/my）
     - 返回整体 summary（company/department 有）+ scope 下的实体明细列表（可分页）
     """
     scope: WeeklyFollowupScope = "my"
-    start_date: date
-    end_date: date
     department_id: Optional[str] = None
     department_name: Optional[str] = None
     page: int = 1
@@ -805,15 +833,13 @@ class WeeklyFollowupDetailQueryIn(BaseModel):
     filter_opportunity_name: Optional[str] = None  # 商机名称筛选（单选）
 
 
-class WeeklyFollowupFilterOptionsQueryIn(BaseModel):
+class WeeklyFollowupFilterOptionsQueryIn(_WeeklyFollowupWeekRangeQueryMixin):
     """
     周总结详情筛选选项查询：
-    - 给定 week_start/week_end + scope（company/department/my）
+    - 给定 period 或 start_date/end_date + scope（company/department/my）
     - 返回该查询条件下可用的部门名称列表和负责人名称列表
     """
     scope: WeeklyFollowupScope = "my"
-    start_date: date
-    end_date: date
     department_id: Optional[str] = None
     department_name: Optional[str] = None
 
@@ -835,6 +861,7 @@ class WeeklyFollowupEntityPageOut(BaseModel):
 
 class WeeklyFollowupDetailOut(BaseModel):
     scope: WeeklyFollowupScope
+    period: str = Field(description="统计周期，如 2026-W20")
     week_start: date
     week_end: date
     summary: Optional["WeeklyFollowupSummaryItemOut"] = None
@@ -1077,6 +1104,14 @@ class ReviewSessionMetaOut(BaseModel):
     report_date: date
     create_time: Optional[str] = None
     review_phase: Optional[str] = None
+    department_id: Optional[str] = Field(
+        None,
+        description="复盘会话所属部门 ID（crm_review_session.department_id）",
+    )
+    department_name: Optional[str] = Field(
+        None,
+        description="复盘会话所属部门名称（crm_review_session.department_name）",
+    )
 
 
 class ReviewSnapshotGroupsOut(BaseModel):
