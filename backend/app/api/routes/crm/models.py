@@ -766,18 +766,18 @@ WeeklyFollowupScope = Literal["my", "department", "company"]
 
 
 class _WeeklyFollowupWeekRangeQueryMixin(BaseModel):
-    """period 与 start_date/end_date 二选一；period 优先（ISO 年周，周六~周五口径）。"""
+    """period 与 start_date/end_date 二选一；period 优先（ISO 年周，周界见 CRM_WEEKLY_FOLLOWUP_WEEK_* 配置）。"""
 
     period: Optional[str] = Field(
         None,
-        description="统计周期，如 2026-W20（ISO 年周；对应周六~周五，week_end 为该周周五）",
+        description="统计周期，如 2026-W20（ISO 年周；周界由 CRM_WEEKLY_FOLLOWUP_WEEK_PRESET 等配置决定）",
     )
     start_date: Optional[date] = None
     end_date: Optional[date] = None
 
     @model_validator(mode="after")
     def _resolve_week_range(self):
-        from app.services.crm_weekly_followup_service import resolve_weekly_followup_week_range_from_period
+        from app.utils.crm_weekly_followup_week_boundary import resolve_weekly_followup_week_range_from_period
 
         period = (self.period or "").strip() or None
         if period:

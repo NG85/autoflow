@@ -36,7 +36,7 @@ from app.repositories.user_department_relation import user_department_relation_r
 from app.repositories.user_profile import UserProfileRepo
 from app.repositories.visit_record import visit_record_repo
 from app.services.crm_weekly_followup_engagement_service import crm_weekly_followup_engagement_service
-from app.services.crm_weekly_followup_service import format_weekly_followup_period
+from app.utils.crm_weekly_followup_week_boundary import format_weekly_followup_period
 from app.services.oauth_service import oauth_client
 
 logger = logging.getLogger(__name__)
