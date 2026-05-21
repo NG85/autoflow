@@ -18,8 +18,8 @@ class CRMWeeklyFollowupSummary(UUIDBaseModel, UpdatableBaseModel, table=True):
 
     __tablename__ = "crm_weekly_followup_summary"
 
-    week_start: date = Field(sa_column=Column(Date, nullable=False), description="周开始日期（周日）")
-    week_end: date = Field(sa_column=Column(Date, nullable=False), description="周结束日期（周六）")
+    week_start: date = Field(sa_column=Column(Date, nullable=False), description="周开始日期（周六）")
+    week_end: date = Field(sa_column=Column(Date, nullable=False), description="周结束日期（周五）")
 
     summary_type: str = Field(sa_column=Column(String(50), nullable=False), description="汇总类型(company/department)")
     # 为了保证唯一性约束在 TiDB/MySQL 上生效：company 行使用空字符串而不是 NULL

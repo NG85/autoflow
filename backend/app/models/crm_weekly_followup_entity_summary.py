@@ -20,8 +20,8 @@ class CRMWeeklyFollowupEntitySummary(UUIDBaseModel, UpdatableBaseModel, table=Tr
 
     __tablename__ = "crm_weekly_followup_entity_summary"
 
-    week_start: date = Field(sa_column=Column(Date, nullable=False), description="周开始日期（周日）")
-    week_end: date = Field(sa_column=Column(Date, nullable=False), description="周结束日期（周六）")
+    week_start: date = Field(sa_column=Column(Date, nullable=False), description="周开始日期（周六）")
+    week_end: date = Field(sa_column=Column(Date, nullable=False), description="周结束日期（周五）")
     department_id: Optional[str] = Field(default=None, sa_column=Column(String(100), nullable=True), description="团队/部门ID")
     department_name: str = Field(sa_column=Column(String(255), nullable=False), description="团队/部门名称")
 

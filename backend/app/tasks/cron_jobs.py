@@ -233,14 +233,14 @@ def generate_crm_daily_statistics(self, target_date_str=None, report_type=None):
 def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, report_type=None):
     """
     生成CRM周报数据并推送给团队leader
-    每周日上午11点执行，处理上周日到本周六的销售周报数据
+    每周日上午11点执行，处理上一完整周六~周五的销售周报数据
     
     Args:
-        start_date_str: 开始日期字符串，格式YYYY-MM-DD，不传则默认为上周日
-        end_date_str: 结束日期字符串，格式YYYY-MM-DD，不传则默认为本周六
+        start_date_str: 开始日期字符串，格式YYYY-MM-DD，不传则默认为上周六
+        end_date_str: 结束日期字符串，格式YYYY-MM-DD，不传则默认为本周五
     
     工作流程：
-    1. 计算上周日到本周六的日期范围
+    1. 计算上一完整周六~周五的日期范围
     2. 调用 Aldebaran 周报接口获取周报内容（公司周报：department=null；部门周报：department=部门名）
     3. 推送部门周报飞书卡片给各部门负责人
     4. 推送公司周报给管理团队
@@ -264,18 +264,13 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                     "data": {}
                 }
         else:
-            # 默认处理上周日到本周六的数据
-            today = beijing_today_date()
-            # 计算上周日（今天往前推7天，然后找到最近的周日）
-            days_since_sunday = (today.weekday() + 1) % 7  # 0=周一，1=周二，...，6=周日
-            last_sunday = today - timedelta(days=days_since_sunday + 7)
-            this_saturday = last_sunday + timedelta(days=6)
-            
-            start_date = last_sunday
-            end_date = this_saturday
-            logger.info(f"开始执行CRM周报数据生成任务，默认处理上周日到本周六: {start_date} 到 {end_date}")
+            from app.services.crm_weekly_followup_service import resolve_weekly_followup_week_range
 
-        # 周报接口的 year/week：按周日-周六口径，使用周六的 ISO week 作为该周的 week_of_year
+            today = beijing_today_date()
+            start_date, end_date = resolve_weekly_followup_week_range(today, week_range_mode="completed")
+            logger.info(f"开始执行CRM周报数据生成任务，默认处理上周六到本周五: {start_date} 到 {end_date}")
+
+        # 周报接口的 year/week：按周六~周五口径，使用周五所在 ISO 周
         iso_year, iso_week, _ = end_date.isocalendar()
         report_year = int(iso_year)
         report_week_of_year = int(iso_week)
@@ -853,12 +848,12 @@ def generate_crm_weekly_followup_summary(
 ):
     """
     生成“周跟进总结”（公司/团队整体描述 + 明细列表），用于后台页面展示与人工评论。
-    周区间口径：周日到周六，与现有周报一致。
+    周区间口径：周六到周五。
 
     Args:
         start_date_str: 开始日期 YYYY-MM-DD，不传则按 week_range_mode 计算
         end_date_str: 结束日期 YYYY-MM-DD，不传则按 week_range_mode 计算
-        scopes: all | department | company（默认定时：周六部门、周日公司）
+        scopes: all | department | company（默认定时：周六部门、周六公司）
         week_range_mode: completed（上一完整周）| in_progress（当前周，week_end 不超过今天）
     """
     from app.services.crm_weekly_followup_service import (
@@ -1006,17 +1001,15 @@ def send_crm_weekly_followup_leader_engagement_report(self, week_start_str: str 
         from app.models.crm_weekly_followup_summary import CRMWeeklyFollowupSummary
         from app.models.crm_weekly_followup_leader_engagement import CRMWeeklyFollowupLeaderEngagement
 
-        # 计算日期范围：默认上一周（周日~周六）
+        # 计算日期范围：默认上一周（周六~周五）
         if week_start_str and week_end_str:
             week_start = datetime.strptime(week_start_str, "%Y-%m-%d").date()
             week_end = datetime.strptime(week_end_str, "%Y-%m-%d").date()
         else:
+            from app.services.crm_weekly_followup_service import resolve_weekly_followup_week_range
+
             today = beijing_today_date()
-            days_since_sunday = (today.weekday() + 1) % 7
-            last_sunday = today - timedelta(days=days_since_sunday + 7)
-            this_saturday = last_sunday + timedelta(days=6)
-            week_start = last_sunday
-            week_end = this_saturday
+            week_start, week_end = resolve_weekly_followup_week_range(today, week_range_mode="completed")
 
         bj_now = datetime.now(ZoneInfo("Asia/Shanghai"))
         logger.info(

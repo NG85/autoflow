@@ -24,6 +24,24 @@ from app.repositories.department_mirror import department_mirror_repo
 from app.repositories.user_department_relation import user_department_relation_repo
 from app.services.crm_writeback_service import crm_writeback_service
 from app.utils.ark_llm import call_ark_llm
+from app.utils.crm_weekly_followup_week_boundary import (
+    format_weekly_followup_period,
+    resolve_weekly_followup_week_range,
+    resolve_weekly_followup_week_range_from_period,
+    weekly_followup_week_boundary_label,
+)
+
+__all__ = [
+    "WeeklyFollowupScope",
+    "WeeklyFollowupWeekRangeMode",
+    "format_weekly_followup_period",
+    "resolve_weekly_followup_week_range",
+    "resolve_weekly_followup_week_range_from_period",
+    "weekly_followup_week_boundary_label",
+    "get_sunday_to_saturday_week_range",
+    "parse_weekly_followup_scopes",
+    "crm_weekly_followup_service",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -33,35 +51,8 @@ WeeklyFollowupWeekRangeMode = Literal["completed", "in_progress"]
 
 
 def get_sunday_to_saturday_week_range(today: date) -> Tuple[date, date]:
-    """上一完整自然周（周日~周六），与现有周报默认口径一致。"""
+    """上一完整自然周（周界由配置 CRM_WEEKLY_FOLLOWUP_WEEK_* 决定）。"""
     return resolve_weekly_followup_week_range(today, week_range_mode="completed")
-
-
-def resolve_weekly_followup_week_range(
-    today: date,
-    *,
-    week_range_mode: WeeklyFollowupWeekRangeMode = "completed",
-) -> Tuple[date, date]:
-    """
-    周跟进统计周区间（周日~周六）。
-
-    - completed：上一完整自然周（周日跑公司总结等）
-    - in_progress：当前自然周，week_end 不超过 today（周六早上跑部门用）
-    """
-    if week_range_mode == "in_progress":
-        days_since_sunday = (today.weekday() + 1) % 7
-        if days_since_sunday == 0:
-            week_end = today - timedelta(days=1)
-            week_start = week_end - timedelta(days=6)
-        else:
-            week_start = today - timedelta(days=days_since_sunday)
-            week_end = min(today, week_start + timedelta(days=6))
-        return week_start, week_end
-
-    days_since_sunday = (today.weekday() + 1) % 7
-    week_start = today - timedelta(days=days_since_sunday + 7)
-    week_end = week_start + timedelta(days=6)
-    return week_start, week_end
 
 
 def parse_weekly_followup_scopes(scopes: str | None) -> Set[WeeklyFollowupScope]:
@@ -521,9 +512,10 @@ class CRMWeeklyFollowupService:
             raise ValueError("scopes 至少包含 department 或 company")
 
         logger.info(
-            "开始生成周跟进总结，日期范围：%s ~ %s（周日到周六），scopes=%s",
+            "开始生成周跟进总结，日期范围：%s ~ %s（%s），scopes=%s",
             week_start,
             week_end,
+            weekly_followup_week_boundary_label(),
             sorted(active_scopes),
         )
 

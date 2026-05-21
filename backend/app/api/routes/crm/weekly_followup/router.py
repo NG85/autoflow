@@ -36,6 +36,7 @@ from app.repositories.user_department_relation import user_department_relation_r
 from app.repositories.user_profile import UserProfileRepo
 from app.repositories.visit_record import visit_record_repo
 from app.services.crm_weekly_followup_engagement_service import crm_weekly_followup_engagement_service
+from app.utils.crm_weekly_followup_week_boundary import format_weekly_followup_period
 from app.services.oauth_service import oauth_client
 
 logger = logging.getLogger(__name__)
@@ -133,15 +134,16 @@ def get_weekly_followup_detail(
     """
     查询单次周总结详情（整体总结 + scope 下实体明细列表）
     """
+    week_start = payload.start_date
+    week_end = payload.end_date
+    period = format_weekly_followup_period(week_end)
+
     can_view_team, is_company_admin, user_dept_id, user_dept_name = _can_view_weekly_followup(db_session, user)
 
     scope = payload.scope
     if scope == "company" and not is_company_admin:
         raise HTTPException(status_code=403, detail="权限不足：仅公司管理员可查看 company scope")
     # department scope：团队负责人/管理员可看全团队；普通销售允许访问，但仅返回“自己负责”的明细行
-
-    week_start = payload.start_date
-    week_end = payload.end_date
     # 详情页明细列表需要完整展示（包含评论）
     include_comments = True
     is_sales_limited = bool(scope == "department" and (not is_company_admin) and (not can_view_team))
@@ -310,6 +312,7 @@ def get_weekly_followup_detail(
 
     return WeeklyFollowupDetailOut(
         scope=scope,
+        period=period,
         week_start=week_start,
         week_end=week_end,
         summary=summary_out,
@@ -327,14 +330,15 @@ def get_weekly_followup_filter_options(
     获取周总结详情页的筛选选项（部门名称、负责人名称）
     用于前端下拉选择框填充
     """
+    week_start = payload.start_date
+    week_end = payload.end_date
+
     can_view_team, is_company_admin, user_dept_id, user_dept_name = _can_view_weekly_followup(db_session, user)
 
     scope = payload.scope
     if scope == "company" and not is_company_admin:
         raise HTTPException(status_code=403, detail="权限不足：仅公司管理员可查看 company scope")
 
-    week_start = payload.start_date
-    week_end = payload.end_date
     is_sales_limited = bool(scope == "department" and (not is_company_admin) and (not can_view_team))
 
     # 解析部门过滤（仅 department scope）
@@ -399,7 +403,7 @@ def trigger_weekly_followup_summary_task(
     """
     人工触发“周跟进总结”生成任务（异步，返回 task_id）。
     - 暂时不做权限校验，方便测试
-    - start_date/end_date 可不传；不传时任务内部按默认口径计算（上周日-本周六，北京时间）
+    - start_date/end_date 可不传；不传时任务内部按默认口径计算（上周六-本周五，北京时间）
     """
     # _, is_company_admin, _, _ = _can_view_weekly_followup(db_session, user)
     # if not is_company_admin:
@@ -427,7 +431,7 @@ def trigger_weekly_followup_leader_engagement_report_task(
     """
     人工触发“周跟进总结 leader 阅读/互动统计推送”任务（异步，返回 task_id）。
     - 暂时不做权限校验，方便测试
-    - start_date/end_date 可不传；不传时任务内部按默认口径计算（上周日-本周六，北京时间）
+    - start_date/end_date 可不传；不传时任务内部按默认口径计算（上周六-本周五，北京时间）
     """
     start_date = payload.start_date
     end_date = payload.end_date

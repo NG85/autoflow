@@ -82,6 +82,14 @@ class WritebackFrequency(str, enum.Enum):
     DAILY = "daily"    # 按天回写（默认回写昨天）
 
 
+class CRMWeeklyFollowupWeekPreset(str, enum.Enum):
+    """周跟进总结统计周界预设（Python weekday：周一=0 … 周日=6）。"""
+
+    SAT_FRI = "sat_fri"  # 周六~周五
+    SUN_SAT = "sun_sat"  # 周日~周六
+    MON_SUN = "mon_sun"  # 周一~周日
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env", env_ignore_empty=True, extra="ignore"
@@ -257,14 +265,14 @@ class Settings(BaseSettings):
 
     # CRM weekly followup summary (company/department + entity list) configuration
     CRM_WEEKLY_FOLLOWUP_ENABLED: bool = False
-    # 周六：部门+实体（当前周，截止当日；周六午后拜访不进总结为预期）
+    # 统计周界：预设 sat_fri | sun_sat | mon_sun；也可用 START/END_WEEKDAY 覆盖（0=周一 … 6=周日）
+    CRM_WEEKLY_FOLLOWUP_WEEK_PRESET: CRMWeeklyFollowupWeekPreset = CRMWeeklyFollowupWeekPreset.SUN_SAT
+    CRM_WEEKLY_FOLLOWUP_WEEK_START_WEEKDAY: Optional[int] = None
+    CRM_WEEKLY_FOLLOWUP_WEEK_END_WEEKDAY: Optional[int] = None
+    # 周六：部门+实体（上一完整周，周界见上）
     CRM_WEEKLY_FOLLOWUP_CRON: str = '30 7 * * 6'
-    # 周日：公司总结（上一完整周，需早于 generate_crm_weekly_report）
-    CRM_WEEKLY_FOLLOWUP_COMPANY_CRON: str = '30 9 * * 0'
-    # 周六：部门+实体（当前周，截止当日；周六午后拜访不进总结为预期）
-    CRM_WEEKLY_FOLLOWUP_CRON: str = '30 7 * * 6'
-    # 周日：公司总结（上一完整周，需早于 generate_crm_weekly_report）
-    CRM_WEEKLY_FOLLOWUP_COMPANY_CRON: str = '30 9 * * 0'
+    # 周六：公司总结（上一完整周六~周五周，需早于 generate_crm_weekly_report）
+    CRM_WEEKLY_FOLLOWUP_COMPANY_CRON: str = '40 7 * * 6'
     CRM_WEEKLY_FOLLOWUP_LLM_MAX_CONCURRENCY: int = 4
     # 周跟进输入规模控制：<=0 表示不限制（默认保留完整上下文）
     CRM_WEEKLY_FOLLOWUP_ENTITY_LLM_MAX_VISITS: int = 0
@@ -272,7 +280,7 @@ class Settings(BaseSettings):
     CRM_WEEKLY_FOLLOWUP_VISIT_CONTEXT_MAX_CHARS: int = 0
 
     # CRM weekly followup leader engagement report configuration
-    # - 周一早上 9:00（北京时间）统计上一周部门周跟进总结：哪些 leader 已阅已评论/已阅未评论/未阅
+    # - 周一早上 9:00（北京时间）统计上一周（周六~周五）部门周跟进总结：哪些 leader 已阅已评论/已阅未评论/未阅
     CRM_WEEKLY_FOLLOWUP_ENGAGEMENT_ENABLED: bool = False
     CRM_WEEKLY_FOLLOWUP_ENGAGEMENT_CRON: str = '0 9 * * 1'  # 每周一上午9:00执行（统计上一周）
     
@@ -401,6 +409,22 @@ class Settings(BaseSettings):
             port=self.TIDB_PORT,
             path=self.TIDB_DATABASE,
         )
+
+    @model_validator(mode="after")
+    def _validate_weekly_followup_week_boundary(self) -> Self:
+        start = self.CRM_WEEKLY_FOLLOWUP_WEEK_START_WEEKDAY
+        end = self.CRM_WEEKLY_FOLLOWUP_WEEK_END_WEEKDAY
+        if (start is None) != (end is None):
+            raise ValueError(
+                "CRM_WEEKLY_FOLLOWUP_WEEK_START_WEEKDAY and CRM_WEEKLY_FOLLOWUP_WEEK_END_WEEKDAY "
+                "must be set together or both omitted"
+            )
+        for name, val in (("START", start), ("END", end)):
+            if val is not None and not (0 <= val <= 6):
+                raise ValueError(
+                    f"CRM_WEEKLY_FOLLOWUP_WEEK_{name}_WEEKDAY must be between 0 (Monday) and 6 (Sunday), got {val!r}"
+                )
+        return self
 
     @model_validator(mode="after")
     def _validate_secrets(self) -> Self:
