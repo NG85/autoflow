@@ -50,6 +50,13 @@ def _build_chat_review_detail(chat_id: Optional[Any]) -> str:
     return f"{settings.REVIEW_REPORT_HOST}/c"
 
 
+def _build_visit_prep_review_detail(chat_id: Optional[Any]) -> str:
+    host = settings.REVIEW_REPORT_HOST.rstrip("/")
+    if chat_id:
+        return f"{host}/agent/sanYeZhi/{chat_id}"
+    return f"{host}/agent/clientVisitHistory"
+
+
 def _check_sia_quota_or_raise() -> None:
     try:
         quota_ok, quota_msg, _ = check_billing_quota()
@@ -148,7 +155,7 @@ def _billing_after_visit_prep_stream_complete(
             return
         _report_visit_prep_usage(
             user,
-            _build_chat_review_detail(chat_id),
+            _build_visit_prep_review_detail(chat_id),
             _visit_prep_trace_key(chat_id),
         )
 
@@ -295,7 +302,7 @@ def chats(
             elif should_bill_visit_prep and chat_id:
                 _report_visit_prep_usage(
                     user,
-                    review_detail=_build_chat_review_detail(chat_id),
+                    review_detail=_build_visit_prep_review_detail(chat_id),
                     trace_key=_visit_prep_trace_key(chat_id),
                 )
             return result
