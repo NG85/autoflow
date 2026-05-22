@@ -44,6 +44,9 @@ class NotifyTosUploadRequest(BaseModel):
 class ChatMode(str, enum.Enum):
     CREATE_CVG_REPORT = "create_cvg_report"
     SAVE_CVG_REPORT = "save_cvg_report"
+    # cvg_chat 与 chat_type 组合决定计费，见 chat._should_bill_sia：
+    # - default + cvg_chat：三方拜访攻略流程内 chat，不计 SIA
+    # - client_visit_guide + cvg_chat：基于已有攻略报告问答，计 SIA
     CVG_CHAT = "cvg_chat"
     DEFAULT = "default"
 

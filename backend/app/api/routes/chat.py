@@ -43,6 +43,48 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# chat_type=default 时允许的 chat_mode（含三方拜访攻略流程内普通 chat）
+_DEFAULT_CHAT_TYPE_MODES = frozenset({
+    ChatMode.DEFAULT,
+    ChatMode.CVG_CHAT,
+})
+
+# chat_type=client_visit_guide 时允许的 chat_mode
+_CLIENT_VISIT_GUIDE_CHAT_MODES = frozenset({
+    ChatMode.CREATE_CVG_REPORT,
+    ChatMode.SAVE_CVG_REPORT,
+    ChatMode.CVG_CHAT,
+})
+
+# create/save 均不走 SIA 计费
+_VISIT_PREP_NO_SIA_MODES = frozenset({
+    ChatMode.CREATE_CVG_REPORT,
+    ChatMode.SAVE_CVG_REPORT,
+})
+
+# 仅生成攻略时做租户额度预检；save 只上报不预检
+_VISIT_PREP_QUOTA_MODES = frozenset({
+    ChatMode.CREATE_CVG_REPORT,
+})
+
+
+def _should_bill_sia(chat_type: ChatType, chat_mode: ChatMode) -> bool:
+    """是否按普通 chat（SIA）计费。
+
+    不计 SIA：
+    - create/save_cvg_report（拜访攻略生成/保存）
+    - default + cvg_chat（三方拜访攻略流程内的内部 chat）
+
+    计 SIA：
+    - default + default、review 等常规问答
+    - client_visit_guide + cvg_chat（基于已有攻略报告的问答）
+    """
+    if chat_mode in _VISIT_PREP_NO_SIA_MODES:
+        return False
+    if chat_type == ChatType.DEFAULT and chat_mode == ChatMode.CVG_CHAT:
+        return False
+    return True
+
 
 def _build_chat_review_detail(chat_id: Optional[Any]) -> str:
     if chat_id:
@@ -191,10 +233,28 @@ class ChatRequest(BaseModel):
          
     @model_validator(mode="after")
     def validate_chat_mode(self) -> 'ChatRequest':
-        if self.chat_type == ChatType.CLIENT_VISIT_GUIDE and self.chat_mode == ChatMode.DEFAULT:
-            raise ValueError("chat_mode must be specified when chat_type is CLIENT_VISIT_GUIDE")
-        if self.chat_type == ChatType.DEFAULT and self.chat_mode != ChatMode.DEFAULT:
-            raise ValueError("chat_mode must be DEFAULT when chat_type is DEFAULT")
+        if (
+            self.chat_type == ChatType.CLIENT_VISIT_GUIDE
+            and self.chat_mode not in _CLIENT_VISIT_GUIDE_CHAT_MODES
+        ):
+            raise ValueError(
+                "chat_mode must be create_cvg_report, save_cvg_report, or cvg_chat "
+                "when chat_type is client_visit_guide"
+            )
+        if (
+            self.chat_type == ChatType.DEFAULT
+            and self.chat_mode not in _DEFAULT_CHAT_TYPE_MODES
+        ):
+            raise ValueError(
+                "chat_mode must be DEFAULT or CVG_CHAT when chat_type is DEFAULT"
+            )
+
+        if (
+            self.chat_type == ChatType.CLIENT_VISIT_GUIDE
+            and self.chat_mode == ChatMode.CVG_CHAT
+            and self.messages[-1].role != MessageRole.USER
+        ):
+            raise ValueError("last message must be from user")
    
         if self.chat_mode == ChatMode.SAVE_CVG_REPORT:
             if not self.chat_id:
@@ -234,14 +294,13 @@ def chats(
     browser_id = request.state.browser_id
 
     try:
-        should_bill_sia = chat_request.chat_mode not in {
-            ChatMode.CREATE_CVG_REPORT,
-            ChatMode.SAVE_CVG_REPORT,
-        }
+        should_bill_sia = _should_bill_sia(
+            chat_request.chat_type,
+            chat_request.chat_mode,
+        )
         needs_visit_prep_quota = (
             chat_request.chat_type == ChatType.CLIENT_VISIT_GUIDE
-            and chat_request.chat_mode
-            in {ChatMode.CREATE_CVG_REPORT, ChatMode.SAVE_CVG_REPORT}
+            and chat_request.chat_mode in _VISIT_PREP_QUOTA_MODES
         )
         should_bill_visit_prep = (
             chat_request.chat_type == ChatType.CLIENT_VISIT_GUIDE
