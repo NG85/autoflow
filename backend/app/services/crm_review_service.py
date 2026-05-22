@@ -1981,6 +1981,27 @@ class CRMReviewService:
                     ) from e
                 if not wb_result.get("success"):
                     db_session.rollback()
+                    wb_opp_ids = [
+                        str(op.get("opportunity_id") or "").strip()
+                        for op in (crm_ops_to_send or [])
+                        if isinstance(op, dict) and str(op.get("opportunity_id") or "").strip()
+                    ]
+                    logger.error(
+                        "CRM review writeback failed after cache flush (rollback): "
+                        "session_id=%s user_id=%s snapshot_period=%s op_count=%s "
+                        "opportunity_ids=%s message=%s writeback_count=%s "
+                        "gateway_response=%s response_text=%s data=%s",
+                        session_id,
+                        user_id,
+                        snapshot_period,
+                        len(crm_ops_to_send or []),
+                        wb_opp_ids[:20],
+                        wb_result.get("message"),
+                        wb_result.get("writeback_count"),
+                        wb_result.get("gateway_response"),
+                        (str(wb_result.get("response_text") or "")[:2000] or None),
+                        wb_result.get("data"),
+                    )
                     raise HTTPException(
                         status_code=502,
                         detail=wb_result.get("message") or "CRM review writeback failed",
