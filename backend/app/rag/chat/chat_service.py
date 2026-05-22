@@ -25,7 +25,7 @@ from app.models import (
 )
 from app.models.recommend_question import RecommendQuestion
 from app.rag.chat.retrieve.retrieve_flow import RetrieveFlow, SourceDocument
-from app.rag.chat.stream_protocol import ChatEvent
+from app.rag.chat.stream_protocol import ChatEvent, extract_data_part_from_stream_item
 from app.rag.retrievers.knowledge_graph.schema import (
     KnowledgeGraphRetrievalResult,
     StoredKnowledgeGraph,
@@ -62,29 +62,32 @@ class ChatResult(BaseModel):
 
 
 def get_final_chat_result(
-    generator: Generator[ChatEvent | str, None, None],
+    generator: Generator[ChatEvent | str | bytes, None, None],
 ) -> ChatResult:
     trace, sources, content = None, [], ""
     chat_id, message_id = None, None
     for m in generator:
+        if chat_id is None:
+            data_part = extract_data_part_from_stream_item(m)
+            if data_part:
+                chat_id = data_part["chat_id"]
+                if data_part.get("message_id") is not None:
+                    message_id = data_part["message_id"]
+                trace = data_part.get("trace")
+                continue
+
         if not isinstance(m, ChatEvent):
             continue
         if m.event_type == ChatEventType.MESSAGE_ANNOTATIONS_PART:
             if m.payload.state == ChatMessageSate.SOURCE_NODES:
                 sources = m.payload.context
         elif m.event_type == ChatEventType.TEXT_PART:
-            content += m.payload
-        elif m.event_type == ChatEventType.DATA_PART:
-            chat_id = m.payload.chat.id
-            message_id = m.payload.assistant_message.id
-            trace = m.payload.assistant_message.trace_url
+            content += m.payload or ""
         elif m.event_type == ChatEventType.ERROR_PART:
             raise HTTPException(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
                 detail=m.payload,
             )
-        else:
-            pass
     return ChatResult(
         chat_id=chat_id,
         message_id=message_id,

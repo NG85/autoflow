@@ -1,7 +1,6 @@
 import logging
-import json
 from uuid import UUID
-from typing import Dict, List, Optional, Annotated, Iterable, Iterator, Any
+from typing import Callable, Dict, List, Optional, Annotated, Iterable, Iterator, Any
 from http import HTTPStatus
 
 from pydantic import (
@@ -17,7 +16,7 @@ from llama_index.core.base.llms.types import ChatMessage, MessageRole
 from app.api.deps import SessionDep, OptionalUserDep, CurrentUserDep
 from app.rag.chat.chat_flow import ChatFlow
 from app.rag.retrievers.knowledge_graph.schema import KnowledgeGraphRetrievalResult
-from app.rag.types import ChatEventType
+from app.rag.chat.stream_protocol import encode_chat_stream, extract_chat_id_from_stream_item
 from app.repositories import chat_repo
 from app.models import Chat, ChatUpdate
 
@@ -69,42 +68,91 @@ def _report_sia_usage(user: Optional[Any], review_detail: str) -> None:
     )
 
 
-def _extract_chat_id_from_chunk(chunk: Any) -> Optional[str]:
+def _visit_prep_trace_key(chat_id: Any) -> str:
+    return f"client-visit-guide:{chat_id}"
+
+
+def _check_visit_prep_quota_or_raise() -> None:
     try:
-        text = chunk.decode("utf-8") if isinstance(chunk, (bytes, bytearray)) else str(chunk)
-        # ChatEventType.DATA_PART is encoded as: "2:[{...chat...}]\n"
-        for line in text.splitlines():
-            if not line.startswith(f"{ChatEventType.DATA_PART.value}:"):
-                continue
-            payload_str = line.split(":", 1)[1]
-            payload = json.loads(payload_str)
-            if isinstance(payload, list) and payload:
-                first = payload[0] or {}
-                chat = first.get("chat") if isinstance(first, dict) else None
-                chat_id = chat.get("id") if isinstance(chat, dict) else None
-                if chat_id:
-                    return str(chat_id)
+        quota_ok, quota_msg, _ = check_billing_quota()
+    except Exception as exc:
+        logger.error("Visit prep guide quota check failed before /chats: %s", exc)
+        raise HTTPException(status_code=502, detail="计费服务异常，请稍后重试")
+    if not quota_ok:
+        raise HTTPException(status_code=400, detail=quota_msg)
+
+
+def _report_visit_prep_usage(
+    user: Optional[Any],
+    review_detail: str,
+    trace_key: str,
+) -> None:
+    report_billing_usage(
+        BillingScenario.ACCOUNT_VISIT_PREP_GUIDE,
+        review_detail=review_detail,
+        trace_key=trace_key,
+        operator_user_id=getattr(user, "id", None) if user else None,
+    )
+
+
+def _resolve_chat_id(
+    request_chat_id: Optional[Any],
+    stream_chat_id: Optional[str],
+) -> Optional[str]:
+    """请求体 ``chat_id`` 优先；否则使用流里第一条 ``2:[]`` 解析出的 id。"""
+    if request_chat_id:
+        return str(request_chat_id)
+    return stream_chat_id
+
+
+def _wrap_billing_stream(
+    stream: Iterable[Any],
+    request_chat_id: Optional[Any],
+    on_stream_success: Callable[[Optional[str]], None],
+) -> Iterator[Any]:
+    """流式结束后回调；仅在未抛错时上报（与普通聊天一致）。"""
+    stream_chat_id: Optional[str] = None
+    try:
+        for chunk in stream:
+            if stream_chat_id is None:
+                parsed = extract_chat_id_from_stream_item(chunk)
+                if parsed:
+                    stream_chat_id = parsed
+            yield chunk
     except Exception:
-        return None
-    return None
+        raise
+    else:
+        on_stream_success(_resolve_chat_id(request_chat_id, stream_chat_id))
 
 
 def _billing_after_stream_complete(
     stream: Iterable[Any],
     user: Optional[Any],
-    initial_chat_id: Optional[Any],
+    request_chat_id: Optional[Any],
 ) -> Iterator[Any]:
-    final_chat_id = str(initial_chat_id) if initial_chat_id else None
-    try:
-        for chunk in stream:
-            parsed_chat_id = _extract_chat_id_from_chunk(chunk)
-            if parsed_chat_id:
-                final_chat_id = parsed_chat_id
-            yield chunk
-    except Exception:
-        raise
-    else:
-        _report_sia_usage(user, _build_chat_review_detail(final_chat_id))
+    return _wrap_billing_stream(
+        stream,
+        request_chat_id,
+        lambda chat_id: _report_sia_usage(user, _build_chat_review_detail(chat_id)),
+    )
+
+
+def _billing_after_visit_prep_stream_complete(
+    stream: Iterable[Any],
+    user: Optional[Any],
+    request_chat_id: Optional[Any],
+) -> Iterator[Any]:
+    def _on_success(chat_id: Optional[str]) -> None:
+        if not chat_id:
+            logger.warning("Visit prep billing skipped: no chat_id after successful save stream")
+            return
+        _report_visit_prep_usage(
+            user,
+            _build_chat_review_detail(chat_id),
+            _visit_prep_trace_key(chat_id),
+        )
+
+    return _wrap_billing_stream(stream, request_chat_id, _on_success)
 
 
 class ChatRequest(BaseModel):
@@ -183,8 +231,19 @@ def chats(
             ChatMode.CREATE_CVG_REPORT,
             ChatMode.SAVE_CVG_REPORT,
         }
+        needs_visit_prep_quota = (
+            chat_request.chat_type == ChatType.CLIENT_VISIT_GUIDE
+            and chat_request.chat_mode
+            in {ChatMode.CREATE_CVG_REPORT, ChatMode.SAVE_CVG_REPORT}
+        )
+        should_bill_visit_prep = (
+            chat_request.chat_type == ChatType.CLIENT_VISIT_GUIDE
+            and chat_request.chat_mode == ChatMode.SAVE_CVG_REPORT
+        )
         if should_bill_sia:
             _check_sia_quota_or_raise()
+        if needs_visit_prep_quota:
+            _check_visit_prep_quota_or_raise()
         incoming_cookie = request.headers.get("cookie")
         if incoming_cookie:
             logger.debug(f"Incoming cookie: {incoming_cookie}")
@@ -210,10 +269,16 @@ def chats(
                 stream = _billing_after_stream_complete(
                     stream,
                     user=user,
-                    initial_chat_id=chat_request.chat_id,
+                    request_chat_id=chat_request.chat_id,
+                )
+            elif should_bill_visit_prep:
+                stream = _billing_after_visit_prep_stream_complete(
+                    stream,
+                    user=user,
+                    request_chat_id=chat_request.chat_id,
                 )
             return StreamingResponse(
-                stream,
+                encode_chat_stream(stream),
                 media_type="text/event-stream",
                 headers={
                     "X-Content-Type-Options": "nosniff",
@@ -221,8 +286,18 @@ def chats(
             )
         else:
             result = get_final_chat_result(chat_flow.chat())
+            chat_id = _resolve_chat_id(
+                chat_request.chat_id,
+                str(result.chat_id) if result.chat_id else None,
+            )
             if should_bill_sia:
-                _report_sia_usage(user, review_detail=_build_chat_review_detail(result.chat_id))
+                _report_sia_usage(user, review_detail=_build_chat_review_detail(chat_id))
+            elif should_bill_visit_prep and chat_id:
+                _report_visit_prep_usage(
+                    user,
+                    review_detail=_build_chat_review_detail(chat_id),
+                    trace_key=_visit_prep_trace_key(chat_id),
+                )
             return result
     except HTTPException as e:
         raise e

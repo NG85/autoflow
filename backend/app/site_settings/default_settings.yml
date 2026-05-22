@@ -320,7 +320,7 @@ notification:
   department_group_chats:
     default: []
     data_type: list
-    description: "部门与群聊对应关系。每条含 department_id、department_name（可选）、chat_id、platform、client_id、notification_type（visit_record/department_review/all）。可选 include_children=true 表示该群包含子部门，填写人所在部门为该部门或其任意子部门时都会推送到此群。"
+    description: "部门与群聊对应关系。每条含 department_id、department_name（可选）、chat_id、platform、client_id、notification_type（visit_record/department_review/department_review_reports/all）。department_review 收拜访上级卡片与部门日/周报；department_review_reports 仅收部门日/周报（拜访卡片仍按汇报上级推送给个人）。可选 include_children=true 表示该群包含子部门，填写人所在部门为该部门或其任意子部门时都会推送到此群。"
     client: false
   # 按报告类型与平台配置卡片模板 ID（feishu/lark/dingtalk），未配置或缺失键时使用代码默认值
   card_templates:

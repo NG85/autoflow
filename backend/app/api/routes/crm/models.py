@@ -452,6 +452,7 @@ class VisitRecordQueryRequest(BaseModel):
     page_size: int = 20
     
     # 过滤条件
+    record_id: Optional[str] = None  # 记录ID
     customer_level: Optional[List[str]] = None  # 客户等级（多选）
     account_id: Optional[List[str]] = None  # 客户ID（多选）
     account_name: Optional[List[str]] = None  # 客户名称（多选）
