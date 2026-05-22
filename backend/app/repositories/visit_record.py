@@ -365,6 +365,11 @@ class VisitRecordRepo(BaseRepo):
             query = query.where(predicate)
 
         # 应用过滤条件
+        if request.record_id:
+            query = query.where(
+                CRMSalesVisitRecord.record_id == request.record_id
+            )
+
         if request.customer_level:
             query = query.where(
                 CRMAccount.customer_level.in_(request.customer_level)
