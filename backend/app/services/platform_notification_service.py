@@ -27,6 +27,32 @@ from app.services.oauth_service import oauth_client
 
 logger = logging.getLogger(__name__)
 
+# department_group_chats.notification_type：部门 review 群按推送内容细分
+_DEPARTMENT_REVIEW_VISIT_TYPES = frozenset({"department_review", "all"})
+_DEPARTMENT_REVIEW_REPORT_TYPES = frozenset(
+    {"department_review", "department_review_reports", "all"}
+)
+
+
+def _department_group_entry_matches_notification_type(
+    entry: Dict[str, Any],
+    notification_type: str,
+    review_scope: Optional[str] = None,
+) -> bool:
+    """
+    判断群配置是否匹配请求的 notification_type。
+    review_scope 仅在请求 department_review 时使用：
+      visit — 收拜访上级卡片（不含 department_review_reports）
+      report — 收部门日/周报（含 department_review_reports）
+    """
+    entry_type = (entry.get("notification_type") or "all").strip().lower()
+    requested = notification_type.strip().lower()
+    if review_scope == "report" and requested == "department_review":
+        return entry_type in _DEPARTMENT_REVIEW_REPORT_TYPES
+    if review_scope == "visit" and requested == "department_review":
+        return entry_type in _DEPARTMENT_REVIEW_VISIT_TYPES
+    return entry_type == "all" or entry_type == requested
+
 
 def _parse_ops_cc_provider() -> tuple[Optional[str], str]:
     """
@@ -247,7 +273,7 @@ class PlatformNotificationService:
         self, db_session: Optional[Session] = None
     ) -> List[str]:
         """
-        返回配置了 department_review（或 all）群的部门名称列表，用于部门日报/周报：有群则无论是否有负责人都要推送。
+        返回配置了 department_review、department_review_reports（或 all）群的部门名称列表，用于部门日报/周报：有群则无论是否有负责人都要推送。
         配置中仅有 department_id 时通过 department_mirror 解析为名称。
         """
         department_group_chats = self._get_department_group_chats_config()
@@ -262,7 +288,7 @@ class PlatformNotificationService:
             if current_app_id is None or current_app_id != entry_client_id:
                 continue
             entry_type = (entry.get("notification_type") or "all").strip().lower()
-            if entry_type not in ("department_review", "all"):
+            if entry_type not in _DEPARTMENT_REVIEW_REPORT_TYPES:
                 continue
             entry_dept_name = (entry.get("department_name") or "").strip()
             if entry_dept_name:
@@ -325,13 +351,17 @@ class PlatformNotificationService:
         department_name: Optional[str] = None,
         notification_type: Optional[str] = None,
         db_session: Optional[Session] = None,
+        review_scope: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         按部门解析要推送的群列表。优先用 department_id 匹配，否则用 department_name。
         只返回当前应用（client_id）可用的群。
         notification_type 用于区分消息类型，仅返回配置了该类型或 "all" 的群：
           "visit_record" - 部门简报群（收文本，部门leader+销售）
-          "department_review" - 部门review群（收拜访上级卡片、部门日报卡片、部门周报卡片）
+          "department_review" - 部门 review 群；配合 review_scope 区分拜访卡片与日/周报：
+            review_scope="visit" — department_review、all（拜访上级卡片）
+            review_scope="report" — department_review、department_review_reports、all（部门日/周报）
+          "department_review_reports" - 仅收部门日/周报，不收拜访卡片（拜访仍按汇报上级推送给个人）
         若配置项含 include_children=true 且传入 db_session，则填写人所在部门为配置部门的任意子部门时也会匹配该群（父部门一个群包住所有子部门）。
         数据来源：站点配置 department_group_chats（每家客户可独立配置）。
         """
@@ -384,8 +414,9 @@ class PlatformNotificationService:
             if current_app_id is None or current_app_id != entry_client_id:
                 continue
             if notification_type:
-                entry_type = (entry.get("notification_type") or "all").strip().lower()
-                if entry_type != "all" and entry_type != notification_type.lower():
+                if not _department_group_entry_matches_notification_type(
+                    entry, notification_type, review_scope=review_scope
+                ):
                     continue
             entry_dept_id = (entry.get("department_id") or "").strip()
             entry_dept_name = (entry.get("department_name") or "").strip()
@@ -1150,7 +1181,8 @@ class PlatformNotificationService:
     ) -> Tuple[Dict[str, List[Dict[str, Any]]], List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
         汇总拜访记录推送的接收者与部门群配置。
-        若配置了 department_review 群，则从个人接收者中移除 leader/管理层，仅保留记录人与协同人。
+        若配置了会收拜访卡片的 department_review 群，则从个人接收者中移除 leader/管理层，仅保留记录人与协同人。
+        department_review_reports 群不参与拜访推送，也不影响个人接收者中的 leader。
         返回 (recipients_by_platform, department_groups_review, department_groups_brief)。
         """
         recipients_by_platform = self.get_recipients_for_recorder(
@@ -1171,6 +1203,7 @@ class PlatformNotificationService:
             department_name=recorder_dept_name,
             notification_type="department_review",
             db_session=db_session,
+            review_scope="visit",
         )
         department_groups_brief = self._get_group_chats_by_department(
             department_id=recorder_dept_id,
@@ -1529,6 +1562,7 @@ class PlatformNotificationService:
             department_name=department_name,
             notification_type="department_review",
             db_session=db_session,
+            review_scope="report",
         )
         if not recipients and not department_groups_review:
             logger.warning(
