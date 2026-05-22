@@ -282,6 +282,12 @@ class CrmReviewWritebackClient:
                 for op in batch_request.ops:
                     payload = review_op_to_gateway_update_json(op)
                     if not str(payload.get("id") or "").strip():
+                        logger.error(
+                            "CRM review writeback missing opportunity id: url=%s source=%s payload_keys=%s",
+                            url,
+                            batch_request.source,
+                            list(payload.keys()),
+                        )
                         return {
                             "success": False,
                             "message": "CRM review 回写缺少商机 id",
@@ -316,6 +322,19 @@ class CrmReviewWritebackClient:
                     if isinstance(data, dict) and not _crm_writeback_gateway_envelope_ok(data):
                         gw = _crm_writeback_gateway_json_message(data)
                         msg = gw or f"CRM 网关返回失败（code={data.get('code')!s}）"
+                        logger.error(
+                            "CRM review writeback gateway envelope rejected: url=%s id=%s "
+                            "source=%s http_status=%s gateway_code=%s gateway_success=%s "
+                            "message=%s gateway_response=%s",
+                            url,
+                            payload.get("id"),
+                            batch_request.source,
+                            response.status_code,
+                            data.get("code"),
+                            data.get("success"),
+                            msg,
+                            data,
+                        )
                         return {
                             "success": False,
                             "message": msg,
@@ -873,6 +892,12 @@ class CrmWritebackService:
                 )
 
         if not validated:
+            logger.error(
+                "review opportunity writeback: no valid ops session_id=%s source=%s ops_len=%s",
+                session_id,
+                writeback_source,
+                len(ops),
+            )
             return {
                 "success": False,
                 "message": "本批 ops 无法解析为 review 回写请求体，未调用网关",
@@ -897,6 +922,8 @@ class CrmWritebackService:
             out["data"] = result.get("data")
         if result.get("response_text") is not None:
             out["response_text"] = result.get("response_text")
+        if result.get("gateway_response") is not None:
+            out["gateway_response"] = result.get("gateway_response")
         return out
 
     def _execute_visit_writeback(
