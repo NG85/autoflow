@@ -11,6 +11,7 @@ from typing import Any, Optional
 
 from app.core.config import settings
 from app.services.feishu_billing_service import (
+    ACCOUNT_VISIT_PREP_GUIDE_AI_MODULE_KEY,
     SALES_PERSONAL_DAILY_REPORT_AI_MODULE_KEY,
     SALES_TEAM_DAILY_REPORT_AI_MODULE_KEY,
     SIA_AI_INTERACTION_AI_MODULE_KEY,
@@ -34,6 +35,7 @@ class BillingScenario(str, Enum):
     CRM_SALES_TEAM_COMPANY_DAILY = "crm_sales_team_company_daily"
     CRM_TEAM_WEEKLY_REPORT = "crm_team_weekly_report"
     CRM_WEEKLY_FOLLOWUP_SUMMARY = "crm_weekly_followup_summary"
+    ACCOUNT_VISIT_PREP_GUIDE = "account_visit_prep_guide"
 
 
 _SCENARIO_MODULE_KEY: dict[BillingScenario, str] = {
@@ -45,6 +47,7 @@ _SCENARIO_MODULE_KEY: dict[BillingScenario, str] = {
     BillingScenario.CRM_SALES_TEAM_COMPANY_DAILY: SALES_TEAM_DAILY_REPORT_AI_MODULE_KEY,
     BillingScenario.CRM_TEAM_WEEKLY_REPORT: TEAM_WEEKLY_REPORT_AI_MODULE_KEY,
     BillingScenario.CRM_WEEKLY_FOLLOWUP_SUMMARY: WEEKLY_FOLLOWUP_SUMMARY_AI_MODULE_KEY,
+    BillingScenario.ACCOUNT_VISIT_PREP_GUIDE: ACCOUNT_VISIT_PREP_GUIDE_AI_MODULE_KEY,
 }
 
 # 使用随机 trace_id（每次调用一条新流水）；值为 new_trace_id 的 prefix

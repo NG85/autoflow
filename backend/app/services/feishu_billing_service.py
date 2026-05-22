@@ -85,6 +85,7 @@ SALES_PERSONAL_DAILY_REPORT_AI_MODULE_KEY = "sales_personal_daily_report"
 SALES_TEAM_DAILY_REPORT_AI_MODULE_KEY = "sales_team_daily_report"
 TEAM_WEEKLY_REPORT_AI_MODULE_KEY = "team_weekly_report"
 WEEKLY_FOLLOWUP_SUMMARY_AI_MODULE_KEY = "weekly_followup_summary"
+ACCOUNT_VISIT_PREP_GUIDE_AI_MODULE_KEY = "account_visit_prep_guide"
 SIA_AI_INTERACTION_AI_MODULE_KEY = "sia_ai_interaction"
 
 

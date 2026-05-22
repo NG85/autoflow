@@ -2,7 +2,7 @@
 
 import json
 import logging
-from typing import Any, Dict, Iterable, Iterator, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -12,7 +12,12 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import text
 from sqlmodel import distinct, func, select
 
-from app.api.routes.chat import _build_chat_review_detail, _extract_chat_id_from_chunk
+from app.api.routes.chat import (
+    _build_chat_review_detail,
+    _resolve_chat_id,
+    _wrap_billing_stream,
+)
+from app.rag.chat.stream_protocol import encode_chat_stream
 from app.api.deps import CurrentUserDep, OptionalUserDep, SessionDep
 from app.core.config import settings
 from app.api.routes.crm.models import (
@@ -85,24 +90,6 @@ def _report_sia_usage(user: Any, review_detail: str) -> None:
         review_detail=review_detail,
         operator_user_id=getattr(user, "id", None),
     )
-
-
-def _billing_after_stream_complete(
-    stream: Iterable[Any],
-    user: Any,
-    initial_chat_id: Optional[Any],
-) -> Iterator[Any]:
-    final_chat_id = str(initial_chat_id) if initial_chat_id else None
-    try:
-        for chunk in stream:
-            parsed_chat_id = _extract_chat_id_from_chunk(chunk)
-            if parsed_chat_id:
-                final_chat_id = parsed_chat_id
-            yield chunk
-    except Exception:
-        raise
-    else:
-        _report_sia_usage(user, _build_chat_review_detail(final_chat_id))
 
 
 def _has_review_session_viewer_permission(user: Any, _cache: Optional[Dict[str, bool]] = None) -> bool:
@@ -1152,17 +1139,21 @@ def review_session_chat(
 
     _check_sia_quota_or_raise()
     if chat_request.stream:
-        wrapped_stream = _billing_after_stream_complete(
+        wrapped_stream = _wrap_billing_stream(
             chat_flow.chat(),
-            user,
             chat_request.chat_id,
+            lambda chat_id: _report_sia_usage(user, _build_chat_review_detail(chat_id)),
         )
         return StreamingResponse(
-            wrapped_stream,
+            encode_chat_stream(wrapped_stream),
             media_type="text/event-stream",
         )
     result = get_final_chat_result(chat_flow.chat())
-    _report_sia_usage(user, _build_chat_review_detail(result.chat_id))
+    chat_id = _resolve_chat_id(
+        chat_request.chat_id,
+        str(result.chat_id) if result.chat_id else None,
+    )
+    _report_sia_usage(user, _build_chat_review_detail(chat_id))
     return result
 
 
