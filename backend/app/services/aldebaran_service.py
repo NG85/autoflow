@@ -323,7 +323,6 @@ class AldebaranClient:
         self,
         *,
         record_id: str,
-        visit_snapshot: Optional[dict[str, Any]] = None,
         event_time: Optional[datetime] = None,
         timeout_seconds: int = 30,
     ) -> dict[str, Any]:
@@ -333,14 +332,12 @@ class AldebaranClient:
         """
         message_type = settings.ALDEBARAN_VISIT_RECORD_MESSAGE_TYPE
         dedupe_key = f"{message_type}:{record_id}:v1"
-        payload = dict(visit_snapshot) if visit_snapshot else {"record_id": record_id}
-        payload.setdefault("record_id", record_id)
 
         return self.submit_incoming_message(
             message_type=message_type,
             source_unique_id=record_id,
             source_table="crm_sales_visit_records",
-            payload=payload,
+            payload={"record_id": record_id},
             event_time=event_time or datetime.now(timezone.utc),
             dedupe_key=dedupe_key,
             trace_id=record_id,

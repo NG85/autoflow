@@ -655,7 +655,6 @@ def _notify_aldebaran_visit_record_saved_impl(
 
         aldebaran_client.trigger_visit_record_post_process(
             record_id=record_id,
-            visit_snapshot=visit_snapshot,
             event_time=saved_time,
         )
         update_visit_record_card_push_status(
