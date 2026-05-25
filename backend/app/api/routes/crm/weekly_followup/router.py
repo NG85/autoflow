@@ -459,6 +459,7 @@ def list_weekly_followup_weekly_summaries(
     不同用户 scope 不同：
     - department: 团队负责人/普通销售均可（返回团队周总结列表）
     - company: 公司管理员（返回公司周总结列表）
+    可选 period（如 2026-W20）或 start_date/end_date 过滤周区间（period 优先）。
     """
     can_view_team, is_company_admin, user_dept_id, user_dept_name = _can_view_weekly_followup(db_session, user)
 

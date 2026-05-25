@@ -796,6 +796,34 @@ class _WeeklyFollowupWeekRangeQueryMixin(BaseModel):
         return self
 
 
+class _WeeklyFollowupOptionalWeekRangeFilterMixin(BaseModel):
+    """列表等可选周过滤：period 优先；不传 period 时 start_date/end_date 可单独或组合使用。"""
+
+    period: Optional[str] = Field(
+        None,
+        description="统计周期，如 2026-W20（ISO 年周；周界由 CRM_WEEKLY_FOLLOWUP_WEEK_PRESET 等配置决定）",
+    )
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+
+    @model_validator(mode="after")
+    def _resolve_optional_week_range(self):
+        from app.utils.crm_weekly_followup_week_boundary import resolve_weekly_followup_week_range_from_period
+
+        period = (self.period or "").strip() or None
+        if not period:
+            return self
+
+        week_start, week_end = resolve_weekly_followup_week_range_from_period(period)
+        if self.start_date is not None and (
+            self.start_date != week_start or self.end_date != week_end
+        ):
+            raise ValueError("period 与 start_date/end_date 不一致")
+        self.start_date = week_start
+        self.end_date = week_end
+        return self
+
+
 class WeeklyFollowupEntityRowOut(BaseModel):
     id: UUID
     department_name: str
@@ -869,19 +897,17 @@ class WeeklyFollowupDetailOut(BaseModel):
     entities: "WeeklyFollowupEntityPageOut"
 
 
-class WeeklyFollowupWeeklyListQueryIn(BaseModel):
+class WeeklyFollowupWeeklyListQueryIn(_WeeklyFollowupOptionalWeekRangeFilterMixin):
     """
     每周跟进总结列表（每周一行）：
     - scope="department": 团队周总结（按 CRMWeeklyFollowupSummary.department）
     - scope="company": 公司周总结
+    - 可选 period（如 2026-W20）或 start_date/end_date 过滤周区间（period 优先）
     """
     scope: WeeklyFollowupScope = "department"
     # department scope 下：公司管理员可指定；非公司管理员忽略该字段，固定为本人团队
     department_id: Optional[str] = None
     department_name: Optional[str] = None
-    # 可选的起止日期过滤，按照 week_start 进行筛选
-    start_date: Optional[date] = None
-    end_date: Optional[date] = None
     page: int = 1
     page_size: int = 20
 
