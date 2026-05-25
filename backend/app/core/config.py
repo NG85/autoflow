@@ -230,7 +230,7 @@ class Settings(BaseSettings):
     ALDEBARAN_MESSAGE_RETRY_ATTEMPTS: int = 3
     ALDEBARAN_MESSAGE_RETRY_BASE_SECONDS: float = 0.5
     # 关闭时走本地空任务推卡降级（便于本地/联调）
-    ALDEBARAN_VISIT_RECORD_POST_PROCESS_ENABLED: bool = False
+    ALDEBARAN_VISIT_RECORD_POST_PROCESS_ENABLED: bool = True
     
     EMBEDDING_THRESHOLD: float = 0.92
 

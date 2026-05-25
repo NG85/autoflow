@@ -106,23 +106,23 @@ _DEFAULT_CARD_TEMPLATES: Dict[str, Dict[str, str]] = {
 # 拜访记录卡片默认模板（与 default_settings.yml 中 notification.visit_record_templates 一致）
 _DEFAULT_VISIT_RECORD_TEMPLATES: Dict[str, Dict[str, str]] = {
     PLATFORM_DINGTALK: {
-        "form_recorder": "ceda714f-6862-4f42-a77f-7f6d6f95f06d.schema",
-        "form_leader": "1ea96d75-f14a-4dbc-87e5-baf3f893f5b5.schema",
-        "link": "28dd4d85-7f38-4a5c-9bdb-8156bdff4d20.schema",
+        "form_recorder": "fe17c6bb-6006-41da-97f5-91c15830f062.schema",
+        "form_leader": "af75d2dc-9c7c-49d2-9439-2949b5d27a89.schema",
+        "link": "5ff1921d-ed33-4fe4-8f90-9f81ade3c251.schema",
     },
     PLATFORM_FEISHU: {
         "form_simple_recorder": "AAqzQK6iUiK2k",
         "form_simple_leader": "AAqzQKvKzOW1z",
-        "form_complete_recorder": "AAqv2BVqurMLn",
-        "form_complete_leader": "AAqv2BIB41oor",
-        "link": "AAqv2BCd4MmZW",
+        "form_complete_recorder": "AAqtkc54S2MHM",
+        "form_complete_leader": "AAqtkwxHYOT0O",
+        "link": "AAqtkykBnxIID",
     },
     PLATFORM_LARK: {
         "form_simple_recorder": "AAqzQK6iUiK2k",
         "form_simple_leader": "AAqzQKvKzOW1z",
-        "form_complete_recorder": "AAqv2BVqurMLn",
-        "form_complete_leader": "AAqv2BIB41oor",
-        "link": "AAqv2BCd4MmZW",
+        "form_complete_recorder": "AAqtkc54S2MHM",
+        "form_complete_leader": "AAqtkwxHYOT0O",
+        "link": "AAqtkykBnxIID",
     },
 }
 
