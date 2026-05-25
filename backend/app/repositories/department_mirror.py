@@ -22,8 +22,9 @@ class DepartmentMirrorRepo(BaseRepo):
         支持多棵树：mirror 里可有多个根节点（parent_id 为空），每条链在各自树的根结束，
         不要求所有部门归到同一公共根，不会因此报错。若存在环则用 visited 提前退出，不死循环。
 
-        返回: dept_id -> [(dept_id, dept_name), ...]，链中第一个为自身，最后为该树根。
-        若部门不在 mirror 中或未激活，该 id 仍会出现在返回中且链仅含 (id, "未知部门")。
+        返回: dept_id -> [(dept_id, dept_name), ...]，链中第一个为自身，最后为 mirror 内可见的最高层。
+        若起始部门不在 mirror 中或未激活，链仅含 (id, "未知部门")。
+        若 parent_id 指向的父节点不在 mirror 中，在此截断，不把缺失父节点写入链。
         """
         ids = [str(x).strip() for x in (department_ids or []) if x and str(x).strip()]
         if not ids:
@@ -55,16 +56,23 @@ class DepartmentMirrorRepo(BaseRepo):
             chain: List[Tuple[str, str]] = []
             current_id = did
             visited: set[str] = set()
-            # 从当前部门沿 parent_id 向上遍历，每一层上级都会加入 chain
+            # 从当前部门沿 parent_id 向上遍历；父节点不在 mirror 时截断，避免 phantom 上级
             while current_id:
                 if current_id in visited:
                     break
                 visited.add(current_id)
-                parent_id, dept_name = node_by_id.get(
-                    current_id, (None, "未知部门")
-                )
+                if current_id not in node_by_id:
+                    if not chain:
+                        chain.append((current_id, "未知部门"))
+                    break
+                parent_id, dept_name = node_by_id[current_id]
                 chain.append((current_id, dept_name))
-                current_id = (parent_id or "").strip() if parent_id else ""
+                next_parent = (parent_id or "").strip() if parent_id else ""
+                if not next_parent:
+                    break
+                if next_parent not in node_by_id:
+                    break
+                current_id = next_parent
             result[did] = chain
         return result
 

@@ -269,10 +269,10 @@ class Settings(BaseSettings):
     CRM_WEEKLY_FOLLOWUP_WEEK_PRESET: CRMWeeklyFollowupWeekPreset = CRMWeeklyFollowupWeekPreset.SUN_SAT
     CRM_WEEKLY_FOLLOWUP_WEEK_START_WEEKDAY: Optional[int] = None
     CRM_WEEKLY_FOLLOWUP_WEEK_END_WEEKDAY: Optional[int] = None
-    # 周六：部门+实体（上一完整周，周界见上）
-    CRM_WEEKLY_FOLLOWUP_CRON: str = '30 7 * * 6'
-    # 周六：公司总结（上一完整周六~周五周，需早于 generate_crm_weekly_report）
-    CRM_WEEKLY_FOLLOWUP_COMPANY_CRON: str = '40 7 * * 6'
+    # 周日：部门+实体（上一完整周，周界见上）
+    CRM_WEEKLY_FOLLOWUP_CRON: str = '30 9 * * 0'
+    # 周日：公司总结（上一完整周，需早于 generate_crm_weekly_report）
+    CRM_WEEKLY_FOLLOWUP_COMPANY_CRON: str = '40 9 * * 0'
     CRM_WEEKLY_FOLLOWUP_LLM_MAX_CONCURRENCY: int = 4
     # 周跟进输入规模控制：<=0 表示不限制（默认保留完整上下文）
     CRM_WEEKLY_FOLLOWUP_ENTITY_LLM_MAX_VISITS: int = 0
