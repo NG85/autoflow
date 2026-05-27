@@ -3,7 +3,7 @@ import json
 import requests
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Any
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 from app.core.config import settings
 from app.core.db import get_db_session
@@ -655,7 +655,6 @@ def _notify_aldebaran_visit_record_saved_impl(
 
         aldebaran_client.trigger_visit_record_post_process(
             record_id=record_id,
-            visit_snapshot=visit_snapshot,
             event_time=saved_time,
         )
         update_visit_record_card_push_status(
@@ -736,6 +735,8 @@ def _crm_visit_record_row_to_push_dict(row: Any) -> dict:
         if isinstance(value, UUID):
             data[key] = str(value)
         elif isinstance(value, datetime):
+            data[key] = value.isoformat()
+        elif isinstance(value, date):
             data[key] = value.isoformat()
     return data
 
