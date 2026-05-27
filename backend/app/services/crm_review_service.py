@@ -177,6 +177,29 @@ def _load_forecast_type_rank_alias_tuples(db_session: Session) -> Tuple[Tuple[st
     )
 
 
+def _forecast_type_sort_rank(
+    forecast_type: str,
+    a0: Tuple[str, ...],
+    a1: Tuple[str, ...],
+    a2: Tuple[str, ...],
+) -> int:
+    ft = str(forecast_type or "")
+    if a0 and ft in a0:
+        return 0
+    if a1 and ft in a1:
+        return 1
+    if a2 and ft in a2:
+        return 2
+    ft_lower = ft.lower()
+    if ft_lower == "commit":
+        return 0
+    if ft_lower == "upside":
+        return 1
+    if ft_lower == "closed_won":
+        return 2
+    return 99
+
+
 def _get_forecast_type_rank_alias_tuples_cached(
     db_session: Session,
 ) -> Tuple[Tuple[str, ...], Tuple[str, ...], Tuple[str, ...]]:
@@ -706,6 +729,56 @@ class CRMReviewService:
             return gb, c, c
         raise HTTPException(status_code=422, detail="group_by must be one of: owner, forecast_type, opportunity_stage")
 
+    def _query_forecast_amount_aggregates(
+        self,
+        db_session: Session,
+        *,
+        base_where: List[Any],
+        snapshot_cls: Any,
+        use_baseline_business_fields: bool = False,
+    ) -> Dict[str, Any]:
+        """Per forecast_type sums and grand total (all types) for rows matching base_where."""
+        ft_col = (
+            snapshot_cls.baseline_forecast_type
+            if use_baseline_business_fields
+            else snapshot_cls.forecast_type
+        )
+        famount_col = (
+            snapshot_cls.baseline_forecast_amount
+            if use_baseline_business_fields
+            else snapshot_cls.forecast_amount
+        )
+        group_key_expr = func.coalesce(ft_col, "")
+        stmt = (
+            select(
+                group_key_expr.label("forecast_type"),
+                func.sum(func.coalesce(famount_col, 0)).label("amount"),
+            )
+            .select_from(snapshot_cls)
+            .where(*base_where)
+            .group_by(group_key_expr)
+        )
+        rows = db_session.exec(stmt).all()
+        a0, a1, a2 = _get_forecast_type_rank_alias_tuples_cached(db_session)
+        out: List[Dict[str, Any]] = []
+        for ft, amount in rows:
+            try:
+                amt = float(amount) if amount is not None else 0.0
+            except (TypeError, ValueError):
+                amt = 0.0
+            out.append({"forecast_type": str(ft or ""), "amount": amt})
+        out.sort(
+            key=lambda row: (
+                _forecast_type_sort_rank(row["forecast_type"], a0, a1, a2),
+                row["forecast_type"],
+            )
+        )
+        forecast_amount_total = sum(row["amount"] for row in out)
+        return {
+            "forecast_type_amount_totals": out,
+            "forecast_amount_total": forecast_amount_total,
+        }
+
     @staticmethod
     def _review_session_meta_dict(scope: dict) -> dict:
         """构建 ReviewSessionMetaOut 对应字段（部门来自 crm_review_session）。"""
@@ -1081,6 +1154,12 @@ class CRMReviewService:
                 select(func.count()).select_from(snap).where(*base_where)
             ).one()
         )
+        amount_aggregates = self._query_forecast_amount_aggregates(
+            db_session,
+            base_where=base_where,
+            snapshot_cls=snap,
+            use_baseline_business_fields=use_baseline_business_fields,
+        )
         norm_sorts = self._normalize_sorts_list(sorts)
         order_by = self._build_snapshot_sort_order(
             db_session,
@@ -1114,6 +1193,7 @@ class CRMReviewService:
             "page": page,
             "size": size,
             "total": total,
+            **amount_aggregates,
             "items": output_items,
         }
 
@@ -1446,6 +1526,12 @@ class CRMReviewService:
                 select(func.count()).select_from(snap).where(*base_where)
             ).one()
         )
+        amount_aggregates = self._query_forecast_amount_aggregates(
+            db_session,
+            base_where=base_where,
+            snapshot_cls=snap,
+            use_baseline_business_fields=use_baseline_business_fields,
+        )
         norm_sorts = self._normalize_sorts_list(sorts)
         order_by = self._build_snapshot_sort_order(
             db_session,
@@ -1481,6 +1567,7 @@ class CRMReviewService:
             "page": page,
             "size": size,
             "total": total,
+            **amount_aggregates,
             "items": output_items,
         }
 
