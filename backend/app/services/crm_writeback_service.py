@@ -77,6 +77,26 @@ def _money_compare_value(raw: Any) -> Optional[float]:
     return round(float(raw), 6)
 
 
+def _coerce_reason_code(raw: Any) -> Optional[int]:
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s:
+            return None
+        if re.fullmatch(r"-?\d+", s):
+            try:
+                return int(s)
+            except ValueError:
+                return None
+        return None
+    return None
+
+
 def review_op_to_gateway_update_json(op: ReviewOpportunityWritebackOp) -> Dict[str, Any]:
     """仅包含相对变更前确有变化的可编辑字段 → 网关单条商机更新 JSON（camelCase，与 ``CrmBusinessOpportunityUpdateBody`` 对齐）。"""
     before = op.before_editable or {}
@@ -97,6 +117,16 @@ def review_op_to_gateway_update_json(op: ReviewOpportunityWritebackOp) -> Dict[s
 
     if _money_compare_value(before.get("forecast_amount")) != _money_compare_value(after.get("forecast_amount")):
         payload["money"] = _coerce_money(after.get("forecast_amount"))
+
+    # 业务补充字段：由 review 提交透传到 CRM（不参与本地快照持久化）
+    if "reason" in after:
+        reason_code = _coerce_reason_code(after.get("reason"))
+        if reason_code is not None:
+            payload["reason"] = reason_code
+    if "reasonDesc" in after or "reason_desc" in after:
+        payload["reasonDesc"] = _str_or_none(after.get("reasonDesc", after.get("reason_desc")))
+    # 暂为固定值，后续再扩展为按业务输入
+    payload["lostOrderCompetitors"] = "未知"
 
     return payload
 

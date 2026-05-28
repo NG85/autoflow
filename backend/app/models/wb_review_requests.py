@@ -40,6 +40,9 @@ class CrmBusinessOpportunityUpdateBody(BaseModel):
     prediction_type: str | None = Field(default=None, serialization_alias="predictionType")
     expected_sign_month: str | None = Field(default=None, serialization_alias="expectedSignMonth")
     money: float = Field(default=0.0, serialization_alias="money")
+    reason: int | None = Field(default=None, serialization_alias="reason")
+    reason_desc: str | None = Field(default=None, serialization_alias="reasonDesc")
+    lost_order_competitors: str | None = Field(default=None, serialization_alias="lostOrderCompetitors")
 
 
 class ReviewOpportunityWritebackBatchRequest(BaseModel):

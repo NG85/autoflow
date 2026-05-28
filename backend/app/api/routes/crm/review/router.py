@@ -73,6 +73,32 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["crm", "crm/review"])
 
+_SPECIAL_REASON_OPTIONS_BY_TENANT: dict[str, dict[str, Any]] = {
+    "up-pharma": {
+        "reason_options_by_stage": {
+            "丢单": [
+                {"value": 1, "label": "价格高"},
+                {"value": 2, "label": "技术困难"},
+                {"value": 3, "label": "仪器缺乏"},
+                {"value": 4, "label": "经验不足"},
+                {"value": 5, "label": "申办方指定CRO"},
+                {"value": 7, "label": "竞标失败"},
+                {"value": 8, "label": "其他事项"},
+            ],
+            "取消": [
+                {"value": 101, "label": "客户预算取消/缩减"},
+                {"value": 102, "label": "客户项目暂停/终止"},
+                {"value": 103, "label": "客户需求变更不再匹配"},
+                {"value": 104, "label": "客户失联/无法推进"},
+                {"value": 105, "label": "重复或无效商机"},
+                {"value": 106, "label": "信息录入错误"},
+                {"value": 107, "label": "客户已倒闭/注销"},
+                {"value": 108, "label": "不符合我司业务方向"},
+            ],
+        },
+    },
+}
+
 
 def _check_sia_quota_or_raise() -> None:
     try:
@@ -630,6 +656,7 @@ def query_review_snapshot_filter_enums(
             "forecast_types": forecast_types,
             "opportunity_stages": opportunity_stages,
             "ai_forecast_types": ["NonCommit", "Commit"],
+            "special_reason_options_by_tenant": _SPECIAL_REASON_OPTIONS_BY_TENANT,
         }
     )
 
