@@ -704,10 +704,10 @@ class CrmWritebackService:
                     
                     # 使用原生SQL查询，一次性获取fxiaoke_id和departId
                     sql_query = text("""
-                        SELECT u.fxiaoke_id, o.departId 
-                        FROM user u 
-                        LEFT JOIN olm.crm_user_olm o ON u.fxiaoke_id = o.id 
-                        WHERE u.ask_id = :ask_id
+                        SELECT u.crm_user_id, o.departId
+                        FROM user_profiles u
+                        LEFT JOIN olm.crm_user_olm o ON u.crm_user_id = o.id
+                        WHERE u.oauth_user_id = :ask_id
                     """)
                     
                     result = session.exec(sql_query, params={"ask_id": ask_id_str}).first()
