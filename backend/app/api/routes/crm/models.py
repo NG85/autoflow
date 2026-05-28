@@ -1004,6 +1004,14 @@ class ReviewBranchSnapshotUpdateIn(BaseModel):
     forecast_amount: Optional[float] = None
     opportunity_stage: Optional[str] = None
     expected_closing_date: Optional[str] = None
+    reason: Optional[int] = Field(
+        default=None,
+        description="丢单/取消原因编码（仅透传 CRM 回写）",
+    )
+    reasonDesc: Optional[str] = Field(
+        default=None,
+        description="原因描述（仅透传 CRM 回写）",
+    )
 
 
 class ReviewSessionSubmitStatsOut(BaseModel):
@@ -1353,6 +1361,18 @@ class ReviewSnapshotGroupByOptionOut(BaseModel):
 AiForecastTypeFilter = Literal["NonCommit", "Commit"]
 
 
+class ReviewSnapshotReasonOptionOut(BaseModel):
+    value: int
+    label: str
+
+
+class ReviewSnapshotReasonOptionsOut(BaseModel):
+    reason_options_by_stage: dict[str, List[ReviewSnapshotReasonOptionOut]] = Field(
+        default_factory=dict,
+        description="按商机阶段名称分组的原因选项（例如：丢单/取消）",
+    )
+
+
 class ReviewSnapshotFilterEnumsOut(BaseModel):
     group_by_options: List[ReviewSnapshotGroupByOptionOut] = Field(default_factory=list)
     forecast_types: List[str] = Field(default_factory=list)
@@ -1360,6 +1380,10 @@ class ReviewSnapshotFilterEnumsOut(BaseModel):
     ai_forecast_types: List[AiForecastTypeFilter] = Field(
         default_factory=lambda: ["NonCommit", "Commit"],
         description="AI 预测类型筛选项：NonCommit / Commit",
+    )
+    special_reason_options_by_tenant: dict[str, ReviewSnapshotReasonOptionsOut] = Field(
+        default_factory=dict,
+        description="按 tenant 分组的原因枚举，前端按环境 key 选择对应列表",
     )
 
 

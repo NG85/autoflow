@@ -60,6 +60,7 @@ def _audit_json_default(obj: Any) -> str:
 
 
 EDITABLE_FIELDS = REVIEW_BRANCH_SNAPSHOT_EDITABLE_FIELDS
+WRITEBACK_ONLY_FIELDS: tuple[str, ...] = ("reason", "reasonDesc")
 
 # submit 写入 cache 的元数据；leader merge 回主表时可能与主表不一致，需一并按 cache 覆盖。
 _MERGE_SUBMIT_SYNC_FIELD_NAMES: tuple[str, ...] = tuple(
@@ -1875,6 +1876,10 @@ class CRMReviewService:
                 if f in u:
                     patch[f] = u.get(f)
                     has_any = True
+            for f in WRITEBACK_ONLY_FIELDS:
+                if f in u:
+                    patch[f] = u.get(f)
+                    has_any = True
             if not has_any:
                 continue
             patch["version"] = int(client_version)
@@ -1926,6 +1931,9 @@ class CRMReviewService:
         pending_field_updates: List[
             Tuple[Any, Dict[str, Any], int, int, Dict[str, Any], Dict[str, Any], str]
         ] = []
+        pending_writeback_only_updates: List[
+            Tuple[Any, Dict[str, Any], Dict[str, Any], Dict[str, Any], str]
+        ] = []
 
         for patch in normalized:
             snapshot_unique_id = patch["unique_id"]
@@ -1955,7 +1963,12 @@ class CRMReviewService:
                     (row, patch, client_version, db_version, before_fields, after_fields, snapshot_unique_id)
                 )
             else:
-                unchanged_snapshot_unique_ids.add(snapshot_unique_id)
+                if any(f in patch for f in WRITEBACK_ONLY_FIELDS):
+                    pending_writeback_only_updates.append(
+                        (row, patch, before_fields, after_fields, snapshot_unique_id)
+                    )
+                else:
+                    unchanged_snapshot_unique_ids.add(snapshot_unique_id)
 
         if conflict_snapshot_unique_ids:
             raise HTTPException(
@@ -1967,11 +1980,15 @@ class CRMReviewService:
             )
 
         crm_ops_to_send: Optional[List[Dict[str, Any]]] = None
-        if updated_count > 0 and settings.CRM_WRITEBACK_REVIEW_ENABLED:
+        if (updated_count > 0 or pending_writeback_only_updates) and settings.CRM_WRITEBACK_REVIEW_ENABLED:
             opp_ids = sorted(
                 {
                     str(getattr(r, "opportunity_id", "") or "").strip()
-                    for r, _, _, _, _, _, _ in pending_field_updates
+                    for r, *_ in pending_field_updates
+                }
+                | {
+                    str(getattr(r, "opportunity_id", "") or "").strip()
+                    for r, *_ in pending_writeback_only_updates
                     if str(getattr(r, "opportunity_id", "") or "").strip()
                 }
             )
@@ -2017,9 +2034,39 @@ class CRMReviewService:
                         "main_unique_id": str(getattr(main_row, "unique_id", "") or "") if main_row else "",
                         "cache_unique_id": str(getattr(row, "unique_id", "") or ""),
                         "before_editable": before_fields,
-                        "after_editable": after_fields,
+                        "after_editable": {
+                            **after_fields,
+                            **{
+                                f: patch.get(f)
+                                for f in WRITEBACK_ONLY_FIELDS
+                                if f in patch
+                            },
+                        },
                         "before_submit_sync": before_submit,
                         "after_submit_sync": after_submit,
+                    }
+                )
+            for row, patch, before_fields, after_fields, _sid in pending_writeback_only_updates:
+                oid = str(getattr(row, "opportunity_id", "") or "").strip()
+                per = str(getattr(row, "snapshot_period", "") or "").strip()
+                main_row = main_by_key.get((oid, per)) if oid and per else None
+                crm_ops.append(
+                    {
+                        "op": "update",
+                        "opportunity_id": oid,
+                        "main_unique_id": str(getattr(main_row, "unique_id", "") or "") if main_row else "",
+                        "cache_unique_id": str(getattr(row, "unique_id", "") or ""),
+                        "before_editable": before_fields,
+                        "after_editable": {
+                            **after_fields,
+                            **{
+                                f: patch.get(f)
+                                for f in WRITEBACK_ONLY_FIELDS
+                                if f in patch
+                            },
+                        },
+                        "before_submit_sync": {},
+                        "after_submit_sync": {},
                     }
                 )
             crm_ops_to_send = crm_ops
@@ -2047,52 +2094,52 @@ class CRMReviewService:
             db_session.add_all(list(rows_by_snapshot_unique_id.values()))
             db_session.flush()
             # ``SessionDep`` 使用 ``engine_transactional``：``flush`` 仍在同一未提交事务内，CRM 失败可 ``rollback``。
-            if crm_ops_to_send:
-                try:
-                    wb_result = crm_writeback_service.writeback_review_opportunity_updates_to_crm(
-                        session_id=session_id,
-                        snapshot_period=str(snapshot_period or ""),
-                        ops=crm_ops_to_send,
-                        writeback_source="review_cache_submit",
-                    )
-                except Exception as e:  # noqa: BLE001
-                    db_session.rollback()
-                    logger.exception(
-                        "CRM review writeback raised after cache flush: session_id=%s err=%s",
-                        session_id,
-                        e,
-                    )
-                    raise HTTPException(
-                        status_code=502,
-                        detail=str(e),
-                    ) from e
-                if not wb_result.get("success"):
-                    db_session.rollback()
-                    wb_opp_ids = [
-                        str(op.get("opportunity_id") or "").strip()
-                        for op in (crm_ops_to_send or [])
-                        if isinstance(op, dict) and str(op.get("opportunity_id") or "").strip()
-                    ]
-                    logger.error(
-                        "CRM review writeback failed after cache flush (rollback): "
-                        "session_id=%s user_id=%s snapshot_period=%s op_count=%s "
-                        "opportunity_ids=%s message=%s writeback_count=%s "
-                        "gateway_response=%s response_text=%s data=%s",
-                        session_id,
-                        user_id,
-                        snapshot_period,
-                        len(crm_ops_to_send or []),
-                        wb_opp_ids[:20],
-                        wb_result.get("message"),
-                        wb_result.get("writeback_count"),
-                        wb_result.get("gateway_response"),
-                        (str(wb_result.get("response_text") or "")[:2000] or None),
-                        wb_result.get("data"),
-                    )
-                    raise HTTPException(
-                        status_code=502,
-                        detail=wb_result.get("message") or "CRM review writeback failed",
-                    )
+        if crm_ops_to_send:
+            try:
+                wb_result = crm_writeback_service.writeback_review_opportunity_updates_to_crm(
+                    session_id=session_id,
+                    snapshot_period=str(snapshot_period or ""),
+                    ops=crm_ops_to_send,
+                    writeback_source="review_cache_submit",
+                )
+            except Exception as e:  # noqa: BLE001
+                db_session.rollback()
+                logger.exception(
+                    "CRM review writeback raised after cache flush: session_id=%s err=%s",
+                    session_id,
+                    e,
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail=str(e),
+                ) from e
+            if not wb_result.get("success"):
+                db_session.rollback()
+                wb_opp_ids = [
+                    str(op.get("opportunity_id") or "").strip()
+                    for op in (crm_ops_to_send or [])
+                    if isinstance(op, dict) and str(op.get("opportunity_id") or "").strip()
+                ]
+                logger.error(
+                    "CRM review writeback failed after cache flush (rollback): "
+                    "session_id=%s user_id=%s snapshot_period=%s op_count=%s "
+                    "opportunity_ids=%s message=%s writeback_count=%s "
+                    "gateway_response=%s response_text=%s data=%s",
+                    session_id,
+                    user_id,
+                    snapshot_period,
+                    len(crm_ops_to_send or []),
+                    wb_opp_ids[:20],
+                    wb_result.get("message"),
+                    wb_result.get("writeback_count"),
+                    wb_result.get("gateway_response"),
+                    (str(wb_result.get("response_text") or "")[:2000] or None),
+                    wb_result.get("data"),
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail=wb_result.get("message") or "CRM review writeback failed",
+                )
 
         db_session.commit()
 

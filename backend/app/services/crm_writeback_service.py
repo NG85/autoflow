@@ -77,6 +77,26 @@ def _money_compare_value(raw: Any) -> Optional[float]:
     return round(float(raw), 6)
 
 
+def _coerce_reason_code(raw: Any) -> Optional[int]:
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s:
+            return None
+        if re.fullmatch(r"-?\d+", s):
+            try:
+                return int(s)
+            except ValueError:
+                return None
+        return None
+    return None
+
+
 def review_op_to_gateway_update_json(op: ReviewOpportunityWritebackOp) -> Dict[str, Any]:
     """仅包含相对变更前确有变化的可编辑字段 → 网关单条商机更新 JSON（camelCase，与 ``CrmBusinessOpportunityUpdateBody`` 对齐）。"""
     before = op.before_editable or {}
@@ -97,6 +117,16 @@ def review_op_to_gateway_update_json(op: ReviewOpportunityWritebackOp) -> Dict[s
 
     if _money_compare_value(before.get("forecast_amount")) != _money_compare_value(after.get("forecast_amount")):
         payload["money"] = _coerce_money(after.get("forecast_amount"))
+
+    # 业务补充字段：由 review 提交透传到 CRM（不参与本地快照持久化）
+    if "reason" in after:
+        reason_code = _coerce_reason_code(after.get("reason"))
+        if reason_code is not None:
+            payload["reason"] = reason_code
+    if "reasonDesc" in after or "reason_desc" in after:
+        payload["reasonDesc"] = _str_or_none(after.get("reasonDesc", after.get("reason_desc")))
+    # 暂为固定值，后续再扩展为按业务输入
+    payload["lostOrderCompetitors"] = "未知"
 
     return payload
 
@@ -602,12 +632,6 @@ class CrmWritebackService:
                     """)
                     
                     result = session.exec(sql_query, params={"ask_id": ask_id_str}).first()
-                    if not result:
-                        # 从user表查询fxiaoke_id作为CRM用户ID(向后兼容，后续user表会下线)
-                        sql_query = text("""
-                            SELECT fxiaoke_id as crm_user_id FROM user WHERE ask_id = :ask_id
-                        """)
-                        result = session.exec(sql_query, params={"ask_id": ask_id_str}).first()
                         
                     if result:
                         # 单列查询，first() 返回 Row/tuple，直接取第 0 列即可
@@ -693,7 +717,7 @@ class CrmWritebackService:
             # 是否新客户：1=是, 2=否
             custom_item6 = 1 if record.is_first_visit else 2
             
-            # 所有人ID和部门ID（从user表查询fxiaoke_id，再从crm_user_olm表查询departId）
+            # 所有人ID和部门ID（从user_profiles表查询crm_user_id，再从crm_user_olm表查询departId）
             owner_id = None
             dim_depart = None
             if record.recorder_id:
@@ -702,7 +726,7 @@ class CrmWritebackService:
                     # recorder_id是UUID对象，转成字符串会自动变成36位格式
                     ask_id_str = str(record.recorder_id)
                     
-                    # 使用原生SQL查询，一次性获取fxiaoke_id和departId
+                    # 使用原生SQL查询，一次性获取crm_user_id和departId
                     sql_query = text("""
                         SELECT u.crm_user_id, o.departId
                         FROM user_profiles u
@@ -713,18 +737,18 @@ class CrmWritebackService:
                     result = session.exec(sql_query, params={"ask_id": ask_id_str}).first()
                     
                     if result:
-                        fxiaoke_id, depart_id = result
-                        if fxiaoke_id:
+                        crm_user_id, depart_id = result
+                        if crm_user_id:
                             try:
-                                owner_id = int(fxiaoke_id)
+                                owner_id = int(crm_user_id)
                                 if depart_id:
                                     dim_depart = int(depart_id)
                                 else:
-                                    logger.warning(f"记录 ID {record.id}：未找到fxiaoke_id {fxiaoke_id} 对应的部门信息")
+                                    logger.warning(f"记录 ID {record.id}：未找到crm_user_id {crm_user_id} 对应的部门信息")
                             except (ValueError, TypeError) as e:
-                                logger.warning(f"记录 ID {record.id}：数据格式错误: fxiaoke_id={fxiaoke_id}, depart_id={depart_id}, 错误: {e}")
+                                logger.warning(f"记录 ID {record.id}：数据格式错误: crm_user_id={crm_user_id}, depart_id={depart_id}, 错误: {e}")
                         else:
-                            logger.warning(f"记录 ID {record.id}：fxiaoke_id为空")
+                            logger.warning(f"记录 ID {record.id}：crm_user_id为空")
                     else:
                         logger.warning(f"记录 ID {record.id}：未找到recorder_id {ask_id_str} 对应的用户")
                 except Exception as e:
