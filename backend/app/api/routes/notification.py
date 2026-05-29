@@ -404,22 +404,20 @@ def _handle_daily_no_followup_reminder_push(
     )
     send_fn = platform_notification_service.send_daily_no_followup_reminder_notification
 
-    success_count = 0
-    failed: List[dict] = []
-    for rid in recipient_ids:
-        r = send_fn(db_session, recipient_user_id=rid, message_text=message_text)
-        if r.get("success"):
-            success_count += 1
-        else:
-            failed.append({"recipient_user_id": rid, "message": r.get("message")})
+    batch_result = _dispatch_text_notification_batch(
+        db_session,
+        recipient_ids=recipient_ids,
+        message_text=message_text,
+        send_fn=send_fn,
+    )
 
     return {
-        "success": success_count > 0,
+        "success": batch_result["success"],
         "check_date": check_date.isoformat(),
-        "recipients_count": len(recipient_ids),
-        "success_count": success_count,
+        "recipients_count": batch_result["recipients_count"],
+        "success_count": batch_result["success_count"],
         "skipped_with_records_count": len(skipped_with_records),
-        "failed_recipients": failed,
+        "failed_recipients": batch_result["failed_recipients"],
     }
 
 
@@ -460,7 +458,17 @@ def _dispatch_text_notification_batch(
     success_count = 0
     failed: List[dict] = []
     for rid in recipient_ids:
-        r = send_fn(db_session, recipient_user_id=rid, message_text=message_text)
+        try:
+            r = send_fn(db_session, recipient_user_id=rid, message_text=message_text)
+        except Exception as exc:
+            logger.warning(
+                "Text notification failed for recipient=%s: %s",
+                rid,
+                exc,
+                exc_info=True,
+            )
+            failed.append({"recipient_user_id": rid, "message": str(exc)})
+            continue
         if r.get("success"):
             success_count += 1
         else:
