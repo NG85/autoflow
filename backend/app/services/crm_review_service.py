@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
-from sqlalchemy import case, false
+from sqlalchemy import case, false, text
 from sqlalchemy.orm import load_only
 from sqlmodel import Session, select, func
 
@@ -199,6 +199,24 @@ def _forecast_type_sort_rank(
     if ft_lower == "closed_won":
         return 2
     return 99
+
+
+def _load_closed_won_stages(db_session: Session) -> List[str]:
+    rows = db_session.exec(
+        text(
+            "select sales_stage from diagnostic_playbook "
+            "where status = 'active' and stage_category = 'closed_won'"
+        )
+    ).all()
+    out: List[str] = []
+    seen: set[str] = set()
+    for r in rows:
+        stage = str(getattr(r, "sales_stage", "") or "").strip()
+        if not stage or stage in seen:
+            continue
+        seen.add(stage)
+        out.append(stage)
+    return out
 
 
 def _get_forecast_type_rank_alias_tuples_cached(
@@ -749,6 +767,39 @@ class CRMReviewService:
             if use_baseline_business_fields
             else snapshot_cls.forecast_amount
         )
+        stage_col = (
+            snapshot_cls.baseline_opportunity_stage
+            if use_baseline_business_fields
+            else snapshot_cls.opportunity_stage
+        )
+        forecast_amount_total_raw = db_session.exec(
+            select(func.sum(func.coalesce(famount_col, 0))).select_from(snapshot_cls).where(*base_where)
+        ).one()
+        try:
+            forecast_amount_total = (
+                float(forecast_amount_total_raw) if forecast_amount_total_raw is not None else 0.0
+            )
+        except (TypeError, ValueError):
+            forecast_amount_total = 0.0
+
+        closed_won_stages = _load_closed_won_stages(db_session)
+        closed_won_amount = 0.0
+        per_type_where = list(base_where)
+        if closed_won_stages:
+            closed_won_amount_raw = db_session.exec(
+                select(func.sum(func.coalesce(famount_col, 0)))
+                .select_from(snapshot_cls)
+                .where(*base_where)
+                .where(func.coalesce(stage_col, "").in_(closed_won_stages))
+            ).one()
+            try:
+                closed_won_amount = (
+                    float(closed_won_amount_raw) if closed_won_amount_raw is not None else 0.0
+                )
+            except (TypeError, ValueError):
+                closed_won_amount = 0.0
+            per_type_where.append(func.coalesce(stage_col, "").not_in(closed_won_stages))
+
         group_key_expr = func.coalesce(ft_col, "")
         stmt = (
             select(
@@ -756,7 +807,7 @@ class CRMReviewService:
                 func.sum(func.coalesce(famount_col, 0)).label("amount"),
             )
             .select_from(snapshot_cls)
-            .where(*base_where)
+            .where(*per_type_where)
             .group_by(group_key_expr)
         )
         rows = db_session.exec(stmt).all()
@@ -774,10 +825,10 @@ class CRMReviewService:
                 row["forecast_type"],
             )
         )
-        forecast_amount_total = sum(row["amount"] for row in out)
         return {
             "forecast_type_amount_totals": out,
             "forecast_amount_total": forecast_amount_total,
+            "closed_won_amount": closed_won_amount,
         }
 
     @staticmethod
