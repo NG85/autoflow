@@ -1480,15 +1480,18 @@ class CRMStatisticsService:
                 "report_date": record.report_date,
                 # 统计数组：供卡片模板展示数值类指标
                 "statistics": [total_stats],
-                # 首次拜访汇总内容
-                "first_assessment": [{
-                    "assessment_description": record.summary_first_visit or "",
-                    "assessment_description_en": record.summary_first_visit or "",
+                # 红黄绿灯评估汇总内容
+                "red_assessment": [{
+                    "assessment_description": record.summary_red or "",
+                    "assessment_description_en": record.summary_red or "",
                 }],
-                # 多次跟进汇总内容
-                "multi_assessment": [{
-                    "assessment_description": record.summary_regular_visit or "",
-                    "assessment_description_en": record.summary_regular_visit or "",
+                "yellow_assessment": [{
+                    "assessment_description": record.summary_yellow or "",
+                    "assessment_description_en": record.summary_yellow or "",
+                }],
+                "green_assessment": [{
+                    "assessment_description": record.summary_green or "",
+                    "assessment_description_en": record.summary_green or "",
                 }],
                 **page_urls,
             }
@@ -1536,29 +1539,22 @@ class CRMStatisticsService:
             "partner_green_count": 0,
         }
         
-        # 为了兼容飞书卡片的数据结构，即使没有数据，也构造一条“空”的首次/多次汇总记录
+        # 为了兼容飞书卡片的数据结构，即使没有数据，也构造空的红黄绿灯汇总记录
         page_urls = self._build_department_daily_page_urls(
             department_name=department_name,
             stat_date=target_date,
         )
+        empty_assessment = {
+            "assessment_description": "",
+            "assessment_description_en": "",
+        }
         department_report: Dict[str, Any] = {
             "department_name": department_name,
             "report_date": target_date,
             "statistics": [total_stats],
-            # 首次拜访汇总内容（空）
-            "first_assessment": [
-                {
-                    "assessment_description": "",
-                    "assessment_description_en": "",
-                }
-            ],
-            # 多次跟进汇总内容（空）
-            "multi_assessment": [
-                {
-                    "assessment_description": "",
-                    "assessment_description_en": "",
-                }
-            ],
+            "red_assessment": [empty_assessment.copy()],
+            "yellow_assessment": [empty_assessment.copy()],
+            "green_assessment": [empty_assessment.copy()],
             **page_urls,
         }
 
@@ -1621,8 +1617,9 @@ class CRMStatisticsService:
                 "partner_yellow_count": 0,
                 "partner_green_count": 0,
             }
-            summary_first_visit = ""
-            summary_regular_visit = ""
+            summary_red = ""
+            summary_yellow = ""
+            summary_green = ""
         else:
             total_stats = {
                 # 最终客户 - 总体
@@ -1644,37 +1641,32 @@ class CRMStatisticsService:
                 "partner_yellow_count": record.partner_yellow_count or 0,
                 "partner_green_count": record.partner_green_count or 0,
             }
-            summary_first_visit = record.summary_first_visit or ""
-            summary_regular_visit = record.summary_regular_visit or ""
+            summary_red = record.summary_red or ""
+            summary_yellow = record.summary_yellow or ""
+            summary_green = record.summary_green or ""
 
-        # base_visit_url = (
-        #     f"{settings.VISIT_DETAIL_PAGE_URL}"
-        #     f"?start_date={target_date}&end_date={target_date}"
-        # )
-        
         # 公司日报结构与部门日报保持一致：
         # - statistics: 数值汇总
-        # - first_assessment: 公司层面的首次拜访汇总文案
-        # - multi_assessment: 公司层面的多次跟进汇总文案
+        # - red/yellow/green_assessment: 公司层面的红黄绿灯评估汇总文案
         company_report = {
             "report_date": target_date,
             "statistics": [total_stats],
-            "first_assessment": [
+            "red_assessment": [
                 {
-                    "assessment_description": summary_first_visit,
-                    "assessment_description_en": summary_first_visit,
-                    # "account_visit_details": (
-                    #     f"{base_visit_url}&is_first_visit=true"
-                    # ),
+                    "assessment_description": summary_red,
+                    "assessment_description_en": summary_red,
                 }
             ],
-            "multi_assessment": [
+            "yellow_assessment": [
                 {
-                    "assessment_description": summary_regular_visit,
-                    "assessment_description_en": summary_regular_visit,
-                    # "account_visit_details": (
-                    #     f"{base_visit_url}&is_first_visit=false"
-                    # ),
+                    "assessment_description": summary_yellow,
+                    "assessment_description_en": summary_yellow,
+                }
+            ],
+            "green_assessment": [
+                {
+                    "assessment_description": summary_green,
+                    "assessment_description_en": summary_green,
                 }
             ],
         }

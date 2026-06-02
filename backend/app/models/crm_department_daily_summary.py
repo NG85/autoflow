@@ -131,6 +131,21 @@ class CRMDepartmentDailySummary(SQLModel, table=True):
     summary_content_en: Optional[str] = Field(default=None, sa_column=Column(Text), description="汇总内容（英文）")
     summary_first_visit: Optional[str] = Field(default=None, sa_column=Column(Text), description="首次拜访汇总内容（中文）")
     summary_regular_visit: Optional[str] = Field(default=None, sa_column=Column(Text), description="多次拜访汇总内容（中文）")
+    summary_red: Optional[str] = Field(
+        default=None,
+        sa_column=Column(Text),
+        description="红灯评估汇总（中文；【首次跟进】与【多次跟进】分段）",
+    )
+    summary_yellow: Optional[str] = Field(
+        default=None,
+        sa_column=Column(Text),
+        description="黄灯评估汇总（中文；【首次跟进】与【多次跟进】分段）",
+    )
+    summary_green: Optional[str] = Field(
+        default=None,
+        sa_column=Column(Text),
+        description="绿灯评估汇总（中文；【首次跟进】与【多次跟进】分段）",
+    )
     
     # Key highlights and concerns
     key_highlights: Optional[str] = Field(default=None, sa_column=Column(Text), description="关键亮点（JSON格式）")
