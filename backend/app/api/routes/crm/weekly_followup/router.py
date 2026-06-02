@@ -1,5 +1,6 @@
 """CRM 周跟进 HTTP 路由。"""
 import logging
+import io
 from datetime import datetime
 from typing import List, Optional
 from urllib.parse import quote_plus
@@ -7,6 +8,8 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Body, HTTPException
+from fastapi.responses import StreamingResponse
+from openpyxl import Workbook
 from sqlmodel import distinct, func, or_, select
 
 from app.api.deps import CurrentUserDep, SessionDep
@@ -125,6 +128,8 @@ def _to_comments(v: object) -> list[CRMComment]:
         except Exception:
             continue
     return out
+
+
 @router.post("/crm/weekly-followup/detail")
 def get_weekly_followup_detail(
     db_session: SessionDep,
@@ -318,6 +323,105 @@ def get_weekly_followup_detail(
         summary=summary_out,
         entities=WeeklyFollowupEntityPageOut(total=int(total or 0), page=page, size=size, items=items),
     )
+
+
+@router.post("/crm/weekly-followup/detail/export")
+def export_weekly_followup_detail(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    payload: WeeklyFollowupDetailQueryIn,
+):
+    """
+    导出单次周总结详情的明细列表（entities）为 XLSX。
+    复用 /crm/weekly-followup/detail 的权限、scope 与筛选逻辑。
+    """
+    try:
+        wb = Workbook()
+        ws_entities = wb.active
+        ws_entities.title = "entities"
+        ws_entities.append(
+            [
+                "department_name",
+                "account_id",
+                "account_name",
+                "opportunity_id",
+                "opportunity_name",
+                "partner_id",
+                "partner_name",
+                "owner_name",
+                "progress",
+                "risks",
+                "comments",
+            ]
+        )
+
+        page = 1
+        page_size = 200
+        total = 0
+
+        while True:
+            query_payload = payload.model_copy(update={"page": page, "size": page_size})
+            detail = get_weekly_followup_detail(
+                db_session=db_session,
+                user=user,
+                payload=query_payload,
+            )
+
+            if page == 1:
+                total = int(detail.entities.total or 0)
+
+            for item in detail.entities.items:
+                comments_text = "\n".join(
+                    [
+                        f"{c.author or ''}({c.type or ''}): {c.content or ''}"
+                        for c in (item.comments or [])
+                    ]
+                )
+                ws_entities.append(
+                    [
+                        item.department_name or "",
+                        item.account_id or "",
+                        item.account_name or "",
+                        item.opportunity_id or "",
+                        item.opportunity_name or "",
+                        item.partner_id or "",
+                        item.partner_name or "",
+                        item.owner_name or "",
+                        item.progress or "",
+                        item.risks or "",
+                        comments_text,
+                    ]
+                )
+
+            if page * page_size >= total or not detail.entities.items:
+                break
+            page += 1
+
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        scope_text = (payload.scope or "all").strip()
+        filename = (
+            "weekly_followup_detail_"
+            f"{scope_text}_"
+            f"{payload.start_date.isoformat()}_{payload.end_date.isoformat()}_"
+            f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        )
+
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}",
+                "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(e)
+        raise HTTPException(status_code=500, detail="导出周跟进总结失败")
 
 
 @router.post("/crm/weekly-followup/detail/filter-options")

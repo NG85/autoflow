@@ -468,6 +468,13 @@ class CrmWritebackService:
             if isinstance(v, str):
                 return v.strip()
             return str(v).strip()
+
+        followup_object = _safe_str(record.account_name) or _safe_str(record.partner_name)
+        if followup_object:
+            content_parts.append(f"跟进对象: {followup_object}")
+        external_partner = _safe_str(getattr(record, "external_collaboration_partner_name", None))
+        if external_partner:
+            content_parts.append(f"外部协同伙伴: {external_partner}")
         
         # 处理联系人信息：优先使用contacts字段，否则使用旧字段
         if record.contacts and isinstance(record.contacts, list) and len(record.contacts) > 0:
