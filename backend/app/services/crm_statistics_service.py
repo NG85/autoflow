@@ -1645,12 +1645,18 @@ class CRMStatisticsService:
             summary_yellow = record.summary_yellow or ""
             summary_green = record.summary_green or ""
 
+        visit_detail_page = (
+            f"{settings.VISIT_DETAIL_PAGE_URL}"
+            f"?start_date={target_date}&end_date={target_date}"
+        )
+
         # 公司日报结构与部门日报保持一致：
         # - statistics: 数值汇总
         # - red/yellow/green_assessment: 公司层面的红黄绿灯评估汇总文案
         company_report = {
             "report_date": target_date,
             "statistics": [total_stats],
+            "visit_detail_page": visit_detail_page,
             "red_assessment": [
                 {
                     "assessment_description": summary_red,
