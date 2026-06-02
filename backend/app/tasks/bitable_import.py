@@ -231,11 +231,36 @@ def map_fields(item, batch_time=None):
 # 反向字段映射（DB字段名 -> Feishu字段名），用于写入多维表格
 DB_TO_FEISHU_FIELD_MAP = {v: k for k, v in FIELD_MAP.items()}
 
+
+def _is_blank_field_value(value) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    return False
+
+
+def _apply_partner_fallback_from_external_collaboration(crm_row: dict) -> None:
+    """
+    写回多维表格时：拜访对象合作伙伴为空则使用外部协同方（如有）。
+    不修改库表，仅在构建 bitable fields 前填充 partner_* 副本。
+    """
+    if _is_blank_field_value(crm_row.get("partner_name")):
+        ext_name = crm_row.get("external_collaboration_partner_name")
+        if not _is_blank_field_value(ext_name):
+            crm_row["partner_name"] = ext_name
+    if _is_blank_field_value(crm_row.get("partner_id")):
+        ext_id = crm_row.get("external_collaboration_partner_id")
+        if not _is_blank_field_value(ext_id):
+            crm_row["partner_id"] = ext_id
+
+
 def build_bitable_fields_from_crm_row(crm_row: dict) -> dict:
     """
     将CRM表中的行数据（以DB字段命名）转换为Feishu/Lark多维表格可接受的fields结构。
     仅包含有值的字段。
     """
+    _apply_partner_fallback_from_external_collaboration(crm_row)
     feishu_fields = {}
     ts_fields = {"拜访及沟通日期", "创建时间"}
     bool_fields = {"是否首次拜访", "是否关键决策人拜访"}
@@ -543,6 +568,8 @@ def sync_bitable_visit_records(
             # 写回联系人姓名/职位需要优先使用 contacts（即使多维表格没有“联系人列表”字段，也需要从DB取出来做拼接）
             # 注意：contacts 不再出现在 DISPLAY_FIELD_MAP（避免写回不存在的多维字段），这里只是用于 SELECT
             cols_list.append(f"{CRM_TABLE}.contacts")
+            cols_list.append(f"{CRM_TABLE}.external_collaboration_partner_name")
+            cols_list.append(f"{CRM_TABLE}.external_collaboration_partner_id")
             cols = ", ".join(cols_list)
             # 添加部门字段和open_id（通过JOIN获取）
             sql = text(f"""

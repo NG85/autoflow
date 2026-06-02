@@ -97,6 +97,11 @@ def _coerce_reason_code(raw: Any) -> Optional[int]:
     return None
 
 
+def _safe_parse_int_id(raw: Any) -> Optional[int]:
+    """将 CRM 实体 ID（客户/伙伴等）安全转为 int；非数字或解析失败时返回 None。"""
+    return _coerce_reason_code(raw)
+
+
 def review_op_to_gateway_update_json(op: ReviewOpportunityWritebackOp) -> Dict[str, Any]:
     """仅包含相对变更前确有变化的可编辑字段 → 网关单条商机更新 JSON（camelCase，与 ``CrmBusinessOpportunityUpdateBody`` 对齐）。"""
     before = op.before_editable or {}
@@ -524,6 +529,23 @@ class CrmWritebackService:
         """
         task_requests = []
         
+        def _norm_id(v: Optional[str]) -> Optional[str]:
+            if v is None:
+                return None
+            s = str(v).strip()
+            return s if s else None
+
+        def _legacy_partner_id(record: CRMSalesVisitRecord) -> Optional[str]:
+            """
+            兼容外部协同口径：
+            - 历史：partner_id 表示合作伙伴
+            - 现在：客户跟进时 partner_id 可能为空，外部协同方写在 external_collaboration_partner_id
+            为保持旧 writeback 语义：当 partner_id 为空时，用 external_collaboration_partner_id 作为等价 partner。
+            """
+            return _norm_id(record.partner_id) or _norm_id(
+                getattr(record, "external_collaboration_partner_id", None)
+            )
+
         for record in visit_records:
             # 确定what_id（优先级：商机 > 客户 > 合作伙伴）
             what_id = None
@@ -531,8 +553,8 @@ class CrmWritebackService:
                 what_id = record.opportunity_id
             elif record.account_id:
                 what_id = record.account_id
-            elif record.partner_id:
-                what_id = record.partner_id
+            else:
+                what_id = _legacy_partner_id(record)
             
             if not what_id:
                 continue
@@ -618,6 +640,17 @@ class CrmWritebackService:
         """
         visit_requests = CbgVisitRecordBatchCreateRequest(records=[])
         
+        def _norm_id(v: Optional[str]) -> Optional[str]:
+            if v is None:
+                return None
+            s = str(v).strip()
+            return s if s else None
+
+        def _legacy_partner_id(record: CRMSalesVisitRecord) -> Optional[str]:
+            return _norm_id(record.partner_id) or _norm_id(
+                getattr(record, "external_collaboration_partner_id", None)
+            )
+
         for record in visit_records:
             crm_user_id = None
             if record.recorder_id:
@@ -648,14 +681,12 @@ class CrmWritebackService:
             
             record_type = self._map_visit_method_to_cbg_record_type(record.visit_communication_method)
             
-            # 构建请求
-            def _norm_id(v: Optional[str]) -> Optional[str]:
-                if v is None:
-                    return None
-                s = str(v).strip()
-                return s if s else None
-
-            account_ids = [x for x in [_norm_id(record.account_id), _norm_id(record.partner_id)] if x is not None]
+            legacy_partner_id = _legacy_partner_id(record)
+            account_ids = [
+                x
+                for x in [_norm_id(record.account_id), legacy_partner_id]
+                if x is not None
+            ]
             opportunity_ids = [x for x in [_norm_id(record.opportunity_id)] if x is not None]
 
             # account_id / partner_id 业务上至少一个应有值；若都为空，跳过该记录避免创建无关联对象
@@ -792,9 +823,20 @@ class CrmWritebackService:
                         # 解析失败则为None
                         visit_photo_time = None
             
-            # 构建请求
+            # 构建请求（account 优先客户 ID，否则伙伴/外部协同 ID；须为可解析的整数）
+            legacy_partner_id = _str_or_none(record.partner_id) or _str_or_none(
+                getattr(record, "external_collaboration_partner_id", None)
+            )
+            account = _safe_parse_int_id(record.account_id) or _safe_parse_int_id(
+                legacy_partner_id
+            )
+            if account is None and (record.account_id or legacy_partner_id):
+                logger.warning(
+                    f"记录 ID {record.id}：account/partner ID 无法解析为整数: "
+                    f"account_id={record.account_id!r}, legacy_partner_id={legacy_partner_id!r}"
+                )
             visit_request = OlmVisitRecordCreateRequest(
-                account=int(record.account_id) if record.account_id else int(record.partner_id),
+                account=account,
                 dim_depart=dim_depart,
                 custom_item3=record.visit_communication_method,
                 sign_in_date=sign_in_date,
@@ -862,8 +904,9 @@ class CrmWritebackService:
                 continue
             
             # 构建请求
+            legacy_partner_id = record.partner_id or getattr(record, "external_collaboration_partner_id", None)
             visit_request = ChaitinVisitRecordCreateRequest(
-                company_id=record.account_id if record.account_id else record.partner_id,
+                company_id=record.account_id if record.account_id else legacy_partner_id,
                 content=f"跟进记录：{record.followup_record_zh or record.followup_record}\n下一步计划：{record.next_steps_zh or record.next_steps}",
                 username=user_name,
                 project_id=record.opportunity_id,

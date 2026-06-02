@@ -14,6 +14,12 @@ class CRMSalesVisitRecord(SQLModel, table=True):
     opportunity_id: Optional[str] = Field(nullable=True, max_length=255, description="商机ID")
     partner_name: Optional[str] = Field(nullable=True, max_length=255, description="合作伙伴")
     partner_id: Optional[str] = Field(nullable=True, max_length=255, description="合作伙伴ID")
+    external_collaboration_partner_name: Optional[str] = Field(
+        nullable=True, max_length=255, description="外部协同合作伙伴名称"
+    )
+    external_collaboration_partner_id: Optional[str] = Field(
+        nullable=True, max_length=255, description="外部协同合作伙伴ID"
+    )
     customer_lead_source: Optional[str] = Field(nullable=True, max_length=255, description="客户/线索来源")
     visit_object_category: Optional[str] = Field(nullable=True, max_length=255, description="拜访对象类别")
     contact_position: Optional[str] = Field(nullable=True, max_length=255, description="客户职位（旧字段，保留以兼容旧数据）")

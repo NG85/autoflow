@@ -285,6 +285,14 @@ class VisitRecordBase(BaseModel):
     opportunity_id: Optional[str] = None # 商机ID
     partner_name: Optional[str] = None # 合作伙伴名称
     partner_id: Optional[str] = None # 合作伙伴ID
+    external_collaboration_partner_name: Optional[str] = Field(
+        default=None,
+        description="外部协同合作伙伴名称（与拜访对象 partner_* 独立）",
+    )
+    external_collaboration_partner_id: Optional[str] = Field(
+        default=None,
+        description="外部协同合作伙伴ID（与拜访对象 partner_* 独立）",
+    )
     visit_communication_date: Optional[str] = None # 拜访及沟通日期
     recorder: Optional[str] = None # 记录人
     recorder_id: Optional[str] = None # 记录人ID    
@@ -324,6 +332,20 @@ class VisitRecordBase(BaseModel):
         if v is None or v == "":
             return None
         return VisitAttachment.from_legacy_value(v)
+
+    @field_validator(
+        "external_collaboration_partner_name",
+        "external_collaboration_partner_id",
+        mode="before",
+    )
+    @classmethod
+    def normalize_external_collaboration_partner_fields(cls, v: Any) -> Any:
+        if v is None:
+            return None
+        if isinstance(v, str):
+            stripped = v.strip()
+            return stripped if stripped else None
+        return v
 
 # 协同参与人数据结构
 class CollaborativeParticipant(BaseModel):
@@ -454,6 +476,7 @@ class VisitRecordQueryRequest(BaseModel):
     # 过滤条件
     record_id: Optional[str] = None  # 记录ID
     customer_level: Optional[List[str]] = None  # 客户等级（多选）
+    customer_attribute: Optional[List[str]] = None  # 客户属性（多选，来自 crm_accounts）
     account_id: Optional[List[str]] = None  # 客户ID（多选）
     account_name: Optional[List[str]] = None  # 客户名称（多选）
     partner_id: Optional[List[str]] = None  # 合作伙伴ID（多选）
@@ -491,6 +514,20 @@ class VisitRecordResponse(BaseModel):
     opportunity_id: Optional[str] = Field(default=None, description="商机ID")
     partner_name: Optional[str] = Field(default=None, description="合作伙伴")
     partner_id: Optional[str] = Field(default=None, description="合作伙伴ID")
+    followup_object_name: Optional[str] = Field(
+        default=None,
+        description="跟进对象名称（有客户用 account_name，否则 partner_name）",
+    )
+    followup_object_id: Optional[str] = Field(
+        default=None,
+        description="跟进对象ID（有客户用 account_id，否则 partner_id）",
+    )
+    external_collaboration_partner_name: Optional[str] = Field(
+        default=None, description="外部协同合作伙伴名称"
+    )
+    external_collaboration_partner_id: Optional[str] = Field(
+        default=None, description="外部协同合作伙伴ID"
+    )
     customer_lead_source: Optional[str] = Field(default=None, description="客户/线索来源")
     visit_object_category: Optional[str] = Field(default=None, description="拜访对象类别")
     contact_position: Optional[str] = Field(default=None, description="联系人职位（旧字段，保留以兼容旧数据）")
@@ -547,7 +584,14 @@ class VisitRecordResponse(BaseModel):
     longitude: Optional[float] = Field(default=None, description="经度，范围 -180 到 180")
 
     # 关联字段 - 来自crm_accounts表
-    customer_level: Optional[str] = Field(default=None, description="客户等级")
+    customer_level: Optional[str] = Field(
+        default=None,
+        description="客户分类/等级（crm_accounts.customer_level，按 account_id 或 partner_id 关联）",
+    )
+    customer_attribute: Optional[str] = Field(
+        default=None,
+        description="跟进对象属性（crm_accounts.customer_attribute，按 account_id 或 partner_id 关联）",
+    )
     
     # 关联字段 - 来自user_profiles表
     department: Optional[str] = Field(default=None, description="拜访人所在部门")
