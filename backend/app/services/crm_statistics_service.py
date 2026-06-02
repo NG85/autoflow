@@ -738,14 +738,17 @@ class CRMStatisticsService:
                 task_query = f"owner_name={recorder_name}&{task_query}"
             task_detail_page = f"{settings.CRM_SALES_TASK_PAGE_URL}?{task_query}"
 
-            # 对评估数据进行排序（红灯>黄灯-团队名称-销售名称）
-            sorted_first_assessments = self._sort_assessments(assessment_details['first'])
-            sorted_multi_assessments = self._sort_assessments(assessment_details['multi'])
+            # 对评估明细按红黄绿灯分组后排序（团队名称-销售名称）
+            sorted_red_assessments = self._sort_assessments(assessment_details['red'])
+            sorted_yellow_assessments = self._sort_assessments(assessment_details['yellow'])
+            sorted_green_assessments = self._sort_assessments(assessment_details['green'])
             
             # 移除用于排序的临时字段
-            for assessment in sorted_first_assessments:
-                assessment.pop('assessment_flag_raw', None)
-            for assessment in sorted_multi_assessments:
+            for assessment in (
+                sorted_red_assessments
+                + sorted_yellow_assessments
+                + sorted_green_assessments
+            ):
                 assessment.pop('assessment_flag_raw', None)
             
             # 获取评估统计（按首次/多次、红黄绿灯计数，以及合作伙伴统计）
@@ -779,8 +782,9 @@ class CRMStatisticsService:
             complete_report = {
                 **stats_with_assessment,  # 包含所有统计数据（包括首次和多次拜访的红黄绿灯统计）
                 **todo_task_stats,
-                'first_assessment': sorted_first_assessments,
-                'multi_assessment': sorted_multi_assessments,
+                'red_assessment': sorted_red_assessments,
+                'yellow_assessment': sorted_yellow_assessments,
+                'green_assessment': sorted_green_assessments,
                 'visit_detail_page': base_visit_url,
                 'task_detail_page': task_detail_page,
             }
@@ -790,8 +794,9 @@ class CRMStatisticsService:
             logger.info(
                 f"销售 {stats['recorder']} 的完整日报数据已组装，"
                 f"所在团队 {stats['department']}，"
-                f"首次评估明细（含绿灯，客户和合作伙伴） {len(assessment_details['first'])} 个，"
-                f"多次评估明细（含绿灯，客户和合作伙伴） {len(assessment_details['multi'])} 个，"
+                f"红灯评估明细 {len(assessment_details['red'])} 个，"
+                f"黄灯评估明细 {len(assessment_details['yellow'])} 个，"
+                f"绿灯评估明细 {len(assessment_details['green'])} 个，"
                 f"任务：已完成 {todo_task_stats['completed_task_count']}，"
                 f"逾期 {todo_task_stats['overdued_task_count']}，"
                 f"待完成 {todo_task_stats['incomplete_tasks_count']}"
@@ -811,10 +816,9 @@ class CRMStatisticsService:
         基于去重的商机列表、无商机客户列表和合作伙伴列表，从客户商机评估表获取评估详情（包含客户和合作伙伴）。
         
         评估数据划分为：
-        - first: 首次拜访评估详情列表（包含绿灯，客户和合作伙伴）
-        - multi: 多次跟进评估详情列表（包含绿灯，客户和合作伙伴）
+        - red/yellow/green: 按评估 flag 分组的评估详情列表（客户和合作伙伴）
         - statistics: 统计数据字典，包含：
-            - first: 首次拜访的红黄绿灯数量（客户和合作伙伴）
+            - first: 首次拜访的红黄绿灯数量（仅客户）
             - multi: 多次跟进的红黄绿灯数量（仅客户）
             - partner: 合作伙伴的红黄绿灯数量（不区分首次/多次）
         """
@@ -838,8 +842,9 @@ class CRMStatisticsService:
         if not opportunity_ids and not account_ids_without_opp and not partner_ids:
             # 没有任何目标，直接返回空结果
             return {
-                "first": [],
-                "multi": [],
+                "red": [],
+                "yellow": [],
+                "green": [],
                 "statistics": {
                     "first": {"red": 0, "yellow": 0, "green": 0},
                     "multi": {"red": 0, "yellow": 0, "green": 0},
@@ -889,8 +894,9 @@ class CRMStatisticsService:
         
         if not all_records:
             return {
-                "first": [],
-                "multi": [],
+                "red": [],
+                "yellow": [],
+                "green": [],
                 "statistics": {
                     "first": {"red": 0, "yellow": 0, "green": 0},
                     "multi": {"red": 0, "yellow": 0, "green": 0},
@@ -899,13 +905,15 @@ class CRMStatisticsService:
             }
         
         # 统计与分组逻辑：
-        # 1. 客户：按首次/多次分别统计和分组（都包含绿灯）
-        # 2. 合作伙伴：不区分首次/多次，统一统计和分组（都包含绿灯）
+        # 1. 客户：按首次/多次分别统计（都包含绿灯）
+        # 2. 合作伙伴：不区分首次/多次，统一统计（都包含绿灯）
+        # 3. 明细列表：按评估 flag（红/黄/绿）分组
         first_stats = {"red": 0, "yellow": 0, "green": 0}
         multi_stats = {"red": 0, "yellow": 0, "green": 0}
         partner_stats = {"red": 0, "yellow": 0, "green": 0}
-        first_assessments: List[Dict[str, Any]] = []
-        multi_assessments: List[Dict[str, Any]] = []
+        red_assessments: List[Dict[str, Any]] = []
+        yellow_assessments: List[Dict[str, Any]] = []
+        green_assessments: List[Dict[str, Any]] = []
         
         for assessment in all_records:
             flag = (assessment.assessment_flag or "").lower()
@@ -929,20 +937,15 @@ class CRMStatisticsService:
             }
             
             if is_partner:
-                # 合作伙伴：不区分首次/多次，统一统计和分组（都包含绿灯）
+                # 合作伙伴：不区分首次/多次，统一统计（都包含绿灯）
                 if flag == "red":
                     partner_stats["red"] += 1
                 elif flag == "yellow":
                     partner_stats["yellow"] += 1
                 elif flag == "green":
                     partner_stats["green"] += 1
-                # 明细仍按首次/多次分组；仅统计不区分首次/多次
-                if is_first_visit:
-                    first_assessments.append(assessment_data)
-                else:
-                    multi_assessments.append(assessment_data)
             else:
-                # 客户：按首次/多次分别统计和分组（都包含绿灯）
+                # 客户：按首次/多次分别统计（都包含绿灯）
                 if is_first_visit:
                     if flag == "red":
                         first_stats["red"] += 1
@@ -950,7 +953,6 @@ class CRMStatisticsService:
                         first_stats["yellow"] += 1
                     elif flag == "green":
                         first_stats["green"] += 1
-                    first_assessments.append(assessment_data)
                 else:
                     if flag == "red":
                         multi_stats["red"] += 1
@@ -958,11 +960,19 @@ class CRMStatisticsService:
                         multi_stats["yellow"] += 1
                     elif flag == "green":
                         multi_stats["green"] += 1
-                    multi_assessments.append(assessment_data)
+
+            # 明细按评估 flag 分组
+            if flag == "red":
+                red_assessments.append(assessment_data)
+            elif flag == "yellow":
+                yellow_assessments.append(assessment_data)
+            elif flag == "green":
+                green_assessments.append(assessment_data)
         
         return {
-            "first": first_assessments,
-            "multi": multi_assessments,
+            "red": red_assessments,
+            "yellow": yellow_assessments,
+            "green": green_assessments,
             "statistics": {
                 "first": first_stats,
                 "multi": multi_stats,
@@ -1054,13 +1064,15 @@ class CRMStatisticsService:
             if sales_count > 0:
                 logger.info(f"成功生成 {target_date} 的完整销售个人日报数据，包含 {sales_count} 个销售人员的数据")
                 
-                # 统计总的评估数量
-                total_first_assessments = sum(len(report['first_assessment']) for report in complete_reports)
-                total_multi_assessments = sum(len(report['multi_assessment']) for report in complete_reports)
+                # 统计总的评估明细数量（按红黄绿灯分组）
+                total_red_assessments = sum(len(report['red_assessment']) for report in complete_reports)
+                total_yellow_assessments = sum(len(report['yellow_assessment']) for report in complete_reports)
+                total_green_assessments = sum(len(report['green_assessment']) for report in complete_reports)
                 
                 logger.info(
-                    f"总计: {total_first_assessments} 个销售个人首次拜访评估（含绿灯），"
-                    f"{total_multi_assessments} 个销售个人多次拜访评估（含绿灯）"
+                    f"总计: {total_red_assessments} 个红灯评估明细，"
+                    f"{total_yellow_assessments} 个黄灯评估明细，"
+                    f"{total_green_assessments} 个绿灯评估明细"
                 )
                 
                 # 推送个人日报（只在开关启用时发送卡片）
@@ -1117,8 +1129,9 @@ class CRMStatisticsService:
                     'statistics': [statistics_data],  # 将统计数据组织成数组
                     'visit_detail_page': report.get('visit_detail_page', ''),
                     'task_detail_page': report.get('task_detail_page', ''),
-                    'first_assessment': report.get('first_assessment', []),
-                    'multi_assessment': report.get('multi_assessment', []),
+                    'red_assessment': report.get('red_assessment', []),
+                    'yellow_assessment': report.get('yellow_assessment', []),
+                    'green_assessment': report.get('green_assessment', []),
                     'completed_tasks': report.get('completed_tasks', []),
                     'completed_task_count': report.get('completed_task_count', 0),
                     'overdued_tasks': report.get('overdued_tasks', []),
