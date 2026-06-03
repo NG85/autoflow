@@ -910,6 +910,8 @@ class CRMReviewService:
         Current supported fields:
         - opportunity_ids: List[str]
         - opportunity_names: List[str]
+        - account_ids / customer_ids: List[str] (customer_ids alias)
+        - account_names / customer_names: List[str] (customer_names alias)
         - owner_ids: List[str]
         - owner_names: List[str]
         - forecast_types: List[str]
@@ -1018,9 +1020,22 @@ class CRMReviewService:
                 detail=f"invalid {field_name}, expected boolean",
             )
 
+        def _normalize_string_list_from_keys(*keys: str) -> List[str]:
+            out: List[str] = []
+            seen: set[str] = set()
+            for key in keys:
+                for s in _normalize_string_list(raw.get(key)):
+                    if s in seen:
+                        continue
+                    seen.add(s)
+                    out.append(s)
+            return out
+
         return {
             "opportunity_ids": _normalize_string_list(raw.get("opportunity_ids")),
             "opportunity_names": _normalize_string_list(raw.get("opportunity_names")),
+            "account_ids": _normalize_string_list_from_keys("account_ids", "customer_ids"),
+            "account_names": _normalize_string_list_from_keys("account_names", "customer_names"),
             "owner_ids": _normalize_string_list(raw.get("owner_ids")),
             "owner_names": _normalize_string_list(raw.get("owner_names")),
             "forecast_types": _normalize_string_list(raw.get("forecast_types")),
@@ -1080,6 +1095,12 @@ class CRMReviewService:
         opportunity_names = normalized_filters.get("opportunity_names") or []
         if opportunity_names:
             base_where.append(S.opportunity_name.in_(opportunity_names))
+        account_ids = normalized_filters.get("account_ids") or []
+        if account_ids:
+            base_where.append(S.account_id.in_(account_ids))
+        account_names = normalized_filters.get("account_names") or []
+        if account_names:
+            base_where.append(S.account_name.in_(account_names))
         owner_ids = normalized_filters.get("owner_ids") or []
         if owner_ids:
             base_where.append(S.owner_id.in_(owner_ids))

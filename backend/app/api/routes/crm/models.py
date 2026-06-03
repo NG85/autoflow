@@ -1132,7 +1132,9 @@ class ReviewOppBranchSnapshotsQueryIn(BaseModel):
     snapshot_filters: Optional[Dict[str, Any]] = Field(
         default=None,
         description=(
-            "可选筛选器，支持 opportunity_ids/opportunity_names/owner_ids/owner_names/"
+            "可选筛选器，支持 opportunity_ids/opportunity_names/"
+            "account_ids/account_names（别名 customer_ids/customer_names）/"
+            "owner_ids/owner_names/"
             "forecast_types/opportunity_stages/opportunity_types: string[]；"
             "expected_closing_date_start/end: YYYY-MM-DD；"
             "forecast_amount_min/max: number；"
@@ -1157,7 +1159,9 @@ class ReviewSnapshotGroupsQueryIn(BaseModel):
     snapshot_filters: Optional[Dict[str, Any]] = Field(
         default=None,
         description=(
-            "可选筛选器，支持 opportunity_ids/opportunity_names/owner_ids/owner_names/"
+            "可选筛选器，支持 opportunity_ids/opportunity_names/"
+            "account_ids/account_names（别名 customer_ids/customer_names）/"
+            "owner_ids/owner_names/"
             "forecast_types/opportunity_stages/opportunity_types: string[]；"
             "expected_closing_date_start/end: YYYY-MM-DD；"
             "forecast_amount_min/max: number；"
@@ -1225,7 +1229,9 @@ class ReviewSnapshotGroupDataQueryIn(BaseModel):
     snapshot_filters: Optional[Dict[str, Any]] = Field(
         default=None,
         description=(
-            "可选筛选器，支持 opportunity_ids/opportunity_names/owner_ids/owner_names/"
+            "可选筛选器，支持 opportunity_ids/opportunity_names/"
+            "account_ids/account_names（别名 customer_ids/customer_names）/"
+            "owner_ids/owner_names/"
             "forecast_types/opportunity_stages/opportunity_types: string[]；"
             "expected_closing_date_start/end: YYYY-MM-DD；"
             "forecast_amount_min/max: number；"
