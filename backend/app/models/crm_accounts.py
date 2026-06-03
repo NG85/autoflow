@@ -53,9 +53,6 @@ class CRMAccount(SQLModel, table=True):
     daily_followup: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="客户日常跟进")
     account_type: Optional[str] = Field(nullable=True, max_length=255, description="实体类型")
     extra: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSON, nullable=True), description="扩展内容")
-    # 忽略原始值字段
-    # sf_raw: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSON, nullable=True))
-    client_id: Optional[str] = Field(nullable=True, max_length=255)
     support_person: Optional[List[Dict[str, Any]]] = Field(
         default=None,
         sa_column=Column(JSON, nullable=True),
