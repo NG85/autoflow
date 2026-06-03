@@ -11,9 +11,11 @@ from fastapi import APIRouter, Body, HTTPException
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from sqlmodel import distinct, func, or_, select
+from sqlalchemy import false
 
 from app.api.deps import CurrentUserDep, SessionDep
 from app.api.routes.crm.models import (
+    AccountTagOptionOut,
     CRMComment,
     SaveWeeklyFollowupCommentsIn,
     WeeklyFollowupDetailOut,
@@ -34,6 +36,7 @@ from app.api.routes.crm.models import (
 from app.models.crm_weekly_followup_entity_summary import CRMWeeklyFollowupEntitySummary
 from app.models.crm_weekly_followup_leader_engagement import CRMWeeklyFollowupLeaderEngagement
 from app.models.crm_weekly_followup_summary import CRMWeeklyFollowupSummary
+from app.repositories.crm_account import crm_account_repo
 from app.repositories.department_mirror import department_mirror_repo
 from app.repositories.user_department_relation import user_department_relation_repo
 from app.repositories.user_profile import UserProfileRepo
@@ -41,6 +44,7 @@ from app.repositories.visit_record import visit_record_repo
 from app.services.crm_weekly_followup_engagement_service import crm_weekly_followup_engagement_service
 from app.utils.crm_weekly_followup_week_boundary import format_weekly_followup_period
 from app.services.oauth_service import oauth_client
+from app.utils.crm_account_tags import resolve_followup_account_id
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +134,152 @@ def _to_comments(v: object) -> list[CRMComment]:
     return out
 
 
+def _resolve_weekly_followup_department_scope(
+    db_session: SessionDep,
+    scope: str,
+    *,
+    is_company_admin: bool,
+    user_dept_id: Optional[str],
+    user_dept_name: Optional[str],
+    department_id: Optional[str],
+    department_name: Optional[str],
+) -> tuple[Optional[str], Optional[str], List[str]]:
+    dept_id = None
+    dept_name = None
+    subtree_dept_ids: List[str] = []
+    if scope != "department":
+        return dept_id, dept_name, subtree_dept_ids
+
+    if is_company_admin:
+        dept_id = (department_id or "").strip() or None
+        dept_name = (department_name or "").strip() or None
+        if dept_id is None and dept_name is None:
+            raise HTTPException(status_code=400, detail="department scope 需要指定 department_id 或 department_name")
+    else:
+        dept_id = user_dept_id
+        dept_name = user_dept_name
+        if dept_id is None and dept_name is None:
+            raise HTTPException(status_code=403, detail="无法获取本团队信息")
+
+    if dept_id:
+        subtree_dept_ids = department_mirror_repo.get_subtree_department_ids(db_session, dept_id)
+    elif dept_name:
+        ids_with_name = department_mirror_repo.get_department_ids_by_name(db_session, dept_name)
+        seen: set[str] = set()
+        for did in ids_with_name:
+            for sid in department_mirror_repo.get_subtree_department_ids(db_session, did):
+                if sid not in seen:
+                    seen.add(sid)
+                    subtree_dept_ids.append(sid)
+    return dept_id, dept_name, subtree_dept_ids
+
+
+def _build_weekly_followup_entity_base_conds(
+    *,
+    week_start,
+    week_end,
+    scope: str,
+    user_id: UUID,
+    dept_id: Optional[str],
+    dept_name: Optional[str],
+    subtree_dept_ids: List[str],
+    is_sales_limited: bool,
+) -> list:
+    conds = [
+        CRMWeeklyFollowupEntitySummary.week_start == week_start,
+        CRMWeeklyFollowupEntitySummary.week_end == week_end,
+    ]
+    if scope == "my":
+        conds.append(CRMWeeklyFollowupEntitySummary.owner_user_id == str(user_id))
+    elif scope == "department":
+        if subtree_dept_ids:
+            conds.append(CRMWeeklyFollowupEntitySummary.department_id.in_(subtree_dept_ids))
+        elif dept_id:
+            conds.append(CRMWeeklyFollowupEntitySummary.department_id == dept_id)
+        elif dept_name:
+            conds.append(CRMWeeklyFollowupEntitySummary.department_name == dept_name)
+        if is_sales_limited:
+            conds.append(CRMWeeklyFollowupEntitySummary.owner_user_id == str(user_id))
+    return conds
+
+
+def _append_weekly_followup_entity_filters(
+    db_session: SessionDep,
+    conds: list,
+    payload: WeeklyFollowupDetailQueryIn,
+) -> None:
+    if payload.filter_department_name:
+        filter_dept_names = list({name.strip() for name in payload.filter_department_name if name and name.strip()})
+        if filter_dept_names:
+            conds.append(CRMWeeklyFollowupEntitySummary.department_name.in_(filter_dept_names))
+
+    if payload.filter_owner_name:
+        filter_owner_names = list({name.strip() for name in payload.filter_owner_name if name and name.strip()})
+        if filter_owner_names:
+            conds.append(CRMWeeklyFollowupEntitySummary.owner_name.in_(filter_owner_names))
+
+    account_conds = []
+    if payload.filter_account_id:
+        filter_account_id = payload.filter_account_id.strip()
+        if filter_account_id:
+            account_conds.append(CRMWeeklyFollowupEntitySummary.account_id == filter_account_id)
+
+    if payload.filter_account_name:
+        filter_account_name = payload.filter_account_name.strip()
+        if filter_account_name:
+            account_conds.append(CRMWeeklyFollowupEntitySummary.account_name == filter_account_name)
+
+    if account_conds:
+        conds.append(or_(*account_conds) if len(account_conds) > 1 else account_conds[0])
+
+    opportunity_conds = []
+    if payload.filter_opportunity_id:
+        filter_opportunity_id = payload.filter_opportunity_id.strip()
+        if filter_opportunity_id:
+            opportunity_conds.append(CRMWeeklyFollowupEntitySummary.opportunity_id == filter_opportunity_id)
+
+    if payload.filter_opportunity_name:
+        filter_opportunity_name = payload.filter_opportunity_name.strip()
+        if filter_opportunity_name:
+            opportunity_conds.append(CRMWeeklyFollowupEntitySummary.opportunity_name == filter_opportunity_name)
+
+    if opportunity_conds:
+        conds.append(or_(*opportunity_conds) if len(opportunity_conds) > 1 else opportunity_conds[0])
+
+    if payload.filter_tag_ids:
+        tag_ids = list({tag_id.strip() for tag_id in payload.filter_tag_ids if tag_id and tag_id.strip()})
+        if tag_ids:
+            scoped_account_ids = _list_followup_account_ids_for_entity_conds(db_session, conds)
+            matching_account_ids = crm_account_repo.get_account_unique_ids_by_tag_ids(
+                db_session,
+                tag_ids,
+                account_ids=scoped_account_ids,
+            )
+            followup_account_id = func.coalesce(
+                func.nullif(CRMWeeklyFollowupEntitySummary.account_id, ""),
+                CRMWeeklyFollowupEntitySummary.partner_id,
+            )
+            if matching_account_ids:
+                conds.append(followup_account_id.in_(matching_account_ids))
+            else:
+                conds.append(false())
+
+
+def _list_followup_account_ids_for_entity_conds(db_session: SessionDep, conds: list) -> list[str]:
+    rows = db_session.exec(
+        select(
+            CRMWeeklyFollowupEntitySummary.account_id,
+            CRMWeeklyFollowupEntitySummary.partner_id,
+        ).where(*conds)
+    ).all()
+    account_ids: set[str] = set()
+    for account_id, partner_id in rows:
+        followup_account_id = resolve_followup_account_id(account_id, partner_id)
+        if followup_account_id:
+            account_ids.add(followup_account_id)
+    return list(account_ids)
+
+
 @router.post("/crm/weekly-followup/detail")
 def get_weekly_followup_detail(
     db_session: SessionDep,
@@ -157,32 +307,15 @@ def get_weekly_followup_detail(
     size = max(min(int(payload.size or 50), 200), 1)
     offset = (page - 1) * size
 
-    # 解析部门过滤（仅 department scope）
-    dept_id = None
-    dept_name = None
-    # 本部门 + 所有子部门的 department_id 列表，用于匹配 summary/entities（含子部门数据）
-    subtree_dept_ids: List[str] = []
-    if scope == "department":
-        if is_company_admin:
-            dept_id = (payload.department_id or "").strip() or None
-            dept_name = (payload.department_name or "").strip() or None
-            if dept_id is None and dept_name is None:
-                raise HTTPException(status_code=400, detail="department scope 需要指定 department_id 或 department_name")
-        else:
-            dept_id = user_dept_id
-            dept_name = user_dept_name
-            if dept_id is None and dept_name is None:
-                raise HTTPException(status_code=403, detail="无法获取本团队信息")
-        if dept_id:
-            subtree_dept_ids = department_mirror_repo.get_subtree_department_ids(db_session, dept_id)
-        elif dept_name:
-            ids_with_name = department_mirror_repo.get_department_ids_by_name(db_session, dept_name)
-            seen: set[str] = set()
-            for did in ids_with_name:
-                for sid in department_mirror_repo.get_subtree_department_ids(db_session, did):
-                    if sid not in seen:
-                        seen.add(sid)
-                        subtree_dept_ids.append(sid)
+    dept_id, dept_name, subtree_dept_ids = _resolve_weekly_followup_department_scope(
+        db_session,
+        scope,
+        is_company_admin=is_company_admin,
+        user_dept_id=user_dept_id,
+        user_dept_name=user_dept_name,
+        department_id=payload.department_id,
+        department_name=payload.department_name,
+    )
 
     # summary（company/department）
     summary_out: Optional[WeeklyFollowupSummaryItemOut] = None
@@ -219,74 +352,17 @@ def get_weekly_followup_detail(
             )
 
     # entities list
-    conds = [
-        CRMWeeklyFollowupEntitySummary.week_start == week_start,
-        CRMWeeklyFollowupEntitySummary.week_end == week_end,
-    ]
-    if scope == "my":
-        conds.append(CRMWeeklyFollowupEntitySummary.owner_user_id == str(user.id))
-    elif scope == "department":
-        # 匹配本部门及所有子部门的实体
-        if subtree_dept_ids:
-            conds.append(CRMWeeklyFollowupEntitySummary.department_id.in_(subtree_dept_ids))
-        elif dept_id:
-            conds.append(CRMWeeklyFollowupEntitySummary.department_id == dept_id)
-        elif dept_name:
-            conds.append(CRMWeeklyFollowupEntitySummary.department_name == dept_name)
-        if is_sales_limited:
-            # 普通销售：只能看自己负责的商机/客户明细
-            conds.append(CRMWeeklyFollowupEntitySummary.owner_user_id == str(user.id))
-    
-    # 添加筛选条件（支持多选）
-    if payload.filter_department_name:
-        # 过滤空字符串并去重
-        filter_dept_names = list(set([name.strip() for name in payload.filter_department_name if name and name.strip()]))
-        if filter_dept_names:
-            conds.append(CRMWeeklyFollowupEntitySummary.department_name.in_(filter_dept_names))
-    
-    if payload.filter_owner_name:
-        # 过滤空字符串并去重
-        filter_owner_names = list(set([name.strip() for name in payload.filter_owner_name if name and name.strip()]))
-        if filter_owner_names:
-            conds.append(CRMWeeklyFollowupEntitySummary.owner_name.in_(filter_owner_names))
-    
-    # Account 筛选（支持 id 或 name，任一匹配即可）
-    account_conds = []
-    if payload.filter_account_id:
-        filter_account_id = payload.filter_account_id.strip()
-        if filter_account_id:
-            account_conds.append(CRMWeeklyFollowupEntitySummary.account_id == filter_account_id)
-    
-    if payload.filter_account_name:
-        filter_account_name = payload.filter_account_name.strip()
-        if filter_account_name:
-            account_conds.append(CRMWeeklyFollowupEntitySummary.account_name == filter_account_name)
-    
-    if account_conds:
-        # 如果同时提供了 id 和 name，使用 OR 逻辑（匹配任一即可）
-        if len(account_conds) > 1:
-            conds.append(or_(*account_conds))
-        else:
-            conds.append(account_conds[0])
-    
-    # Opportunity 筛选（支持 id 或 name，任一匹配即可）
-    opportunity_conds = []
-    if payload.filter_opportunity_id:
-        filter_opportunity_id = payload.filter_opportunity_id.strip()
-        if filter_opportunity_id:
-            opportunity_conds.append(CRMWeeklyFollowupEntitySummary.opportunity_id == filter_opportunity_id)
-    
-    if payload.filter_opportunity_name:
-        filter_opportunity_name = payload.filter_opportunity_name.strip()
-        if filter_opportunity_name:
-            opportunity_conds.append(CRMWeeklyFollowupEntitySummary.opportunity_name == filter_opportunity_name)
-    
-    if opportunity_conds:
-        # 如果同时提供了 id 和 name，使用 OR 逻辑（匹配任一即可）
-        if len(opportunity_conds) > 1:
-            conds.append(or_(*opportunity_conds))
-        else:
-            conds.append(opportunity_conds[0])
+    conds = _build_weekly_followup_entity_base_conds(
+        week_start=week_start,
+        week_end=week_end,
+        scope=scope,
+        user_id=user.id,
+        dept_id=dept_id,
+        dept_name=dept_name,
+        subtree_dept_ids=subtree_dept_ids,
+        is_sales_limited=is_sales_limited,
+    )
+    _append_weekly_followup_entity_filters(db_session, conds, payload)
 
     total = db_session.exec(select(func.count()).select_from(CRMWeeklyFollowupEntitySummary).where(*conds)).one()
     entities = db_session.exec(
@@ -431,7 +507,7 @@ def get_weekly_followup_filter_options(
     payload: WeeklyFollowupFilterOptionsQueryIn,
 ) -> WeeklyFollowupFilterOptionsOut:
     """
-    获取周总结详情页的筛选选项（部门名称、负责人名称）
+    获取周总结详情页的筛选选项（部门名称、负责人名称、客户 tags）
     用于前端下拉选择框填充
     """
     week_start = payload.start_date
@@ -445,36 +521,26 @@ def get_weekly_followup_filter_options(
 
     is_sales_limited = bool(scope == "department" and (not is_company_admin) and (not can_view_team))
 
-    # 解析部门过滤（仅 department scope）
-    dept_id = None
-    dept_name = None
-    if scope == "department":
-        if is_company_admin:
-            dept_id = (payload.department_id or "").strip() or None
-            dept_name = (payload.department_name or "").strip() or None
-            if dept_id is None and dept_name is None:
-                raise HTTPException(status_code=400, detail="department scope 需要指定 department_id 或 department_name")
-        else:
-            dept_id = user_dept_id
-            dept_name = user_dept_name
-            if dept_id is None and dept_name is None:
-                raise HTTPException(status_code=403, detail="无法获取本团队信息")
+    dept_id, dept_name, subtree_dept_ids = _resolve_weekly_followup_department_scope(
+        db_session,
+        scope,
+        is_company_admin=is_company_admin,
+        user_dept_id=user_dept_id,
+        user_dept_name=user_dept_name,
+        department_id=payload.department_id,
+        department_name=payload.department_name,
+    )
 
-    # 构建基础查询条件（与详情接口保持一致）
-    conds = [
-        CRMWeeklyFollowupEntitySummary.week_start == week_start,
-        CRMWeeklyFollowupEntitySummary.week_end == week_end,
-    ]
-    if scope == "my":
-        conds.append(CRMWeeklyFollowupEntitySummary.owner_user_id == str(user.id))
-    elif scope == "department":
-        if dept_id:
-            conds.append(CRMWeeklyFollowupEntitySummary.department_id == dept_id)
-        elif dept_name:
-            conds.append(CRMWeeklyFollowupEntitySummary.department_name == dept_name)
-        if is_sales_limited:
-            # 普通销售：只能看自己负责的商机/客户明细
-            conds.append(CRMWeeklyFollowupEntitySummary.owner_user_id == str(user.id))
+    conds = _build_weekly_followup_entity_base_conds(
+        week_start=week_start,
+        week_end=week_end,
+        scope=scope,
+        user_id=user.id,
+        dept_id=dept_id,
+        dept_name=dept_name,
+        subtree_dept_ids=subtree_dept_ids,
+        is_sales_limited=is_sales_limited,
+    )
 
     # 获取去重后的部门名称列表
     department_names = db_session.exec(
@@ -492,9 +558,13 @@ def get_weekly_followup_filter_options(
         .order_by(CRMWeeklyFollowupEntitySummary.owner_name)
     ).all()
 
+    followup_account_ids = _list_followup_account_ids_for_entity_conds(db_session, conds)
+    tag_options = crm_account_repo.list_distinct_tags_by_account_ids(db_session, followup_account_ids)
+
     return WeeklyFollowupFilterOptionsOut(
-        department_names=[name for name in department_names if name],  # 过滤空字符串
-        owner_names=[name for name in owner_names if name],  # 过滤空字符串
+        department_names=[name for name in department_names if name],
+        owner_names=[name for name in owner_names if name],
+        tags=[AccountTagOptionOut(id=tag.id, name=tag.name) for tag in tag_options],
     )
 
 

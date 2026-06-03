@@ -1,6 +1,7 @@
 from typing import Any, Dict, Optional, List
 from datetime import datetime
 import logging
+from sqlalchemy import text
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, select, func, or_, desc, asc
 from fastapi_pagination import Params, Page
@@ -16,14 +17,46 @@ from app.api.routes.crm.models import (
     VisitRecordResponse,
 )
 from app.policies.visit_record_access import VisitRecordAccessPolicy
+from app.repositories.crm_account import crm_account_repo
 from app.repositories.base_repo import BaseRepo
 from app.repositories.user_profile import user_profile_repo
 from app.repositories.user_department_relation import user_department_relation_repo
 from app.repositories.department_mirror import department_mirror_repo
 from app.services.oauth_service import oauth_client
+from app.utils.crm_account_tags import parse_account_tags
 from app.utils.date_utils import convert_beijing_date_to_utc_range
 
 logger = logging.getLogger(__name__)
+
+_VISIT_RECORD_FILTER_OPTION_SEP = "\x1e"
+
+# AI 评估质量等级（filter-options 固定枚举，与 save_engine 评估结果一致）
+_VISIT_QUALITY_LEVELS_ZH: tuple[str, ...] = ("不合格", "合格", "优秀")
+_VISIT_QUALITY_LEVELS_EN: tuple[str, ...] = ("unqualified", "qualified", "excellent")
+_VISIT_RECORD_QUALITY_FILTER_OPTIONS: Dict[str, List[str]] = {
+    "followup_quality_levels_zh": list(_VISIT_QUALITY_LEVELS_ZH),
+    "followup_quality_levels_en": list(_VISIT_QUALITY_LEVELS_EN),
+    "next_steps_quality_levels_zh": list(_VISIT_QUALITY_LEVELS_ZH),
+    "next_steps_quality_levels_en": list(_VISIT_QUALITY_LEVELS_EN),
+}
+
+# filter-options：响应字段名 -> crm_sales_visit_records 列名
+_VISIT_RECORD_BASE_FILTER_FIELDS: tuple[tuple[str, str], ...] = (
+    ("recorders", "recorder"),
+    ("departments", "recorder_department_name"),
+)
+_VISIT_RECORD_SIMPLE_FILTER_FIELDS: tuple[tuple[str, str], ...] = (("subjects", "subject"),)
+_VISIT_RECORD_COMPLETE_FILTER_FIELDS: tuple[tuple[str, str], ...] = (
+    ("communication_methods", "visit_communication_method"),
+    ("visit_purposes", "visit_purpose"),
+    ("visit_types", "visit_type"),
+)
+
+
+def _split_group_concat(value: Optional[str]) -> List[str]:
+    if not value:
+        return []
+    return [part for part in value.split(_VISIT_RECORD_FILTER_OPTION_SEP) if part]
 
 
 def _followup_object_crm_account_join():
@@ -36,7 +69,8 @@ def _followup_object_crm_account_join():
     customer_attribute_col = func.coalesce(
         account_crm.customer_attribute, partner_crm.customer_attribute
     )
-    return account_crm, partner_crm, customer_level_col, customer_attribute_col
+    followup_extra_col = func.coalesce(account_crm.extra, partner_crm.extra)
+    return account_crm, partner_crm, customer_level_col, customer_attribute_col, followup_extra_col
 
 
 def _resolve_followup_object_name(
@@ -89,6 +123,7 @@ def _convert_to_response(
     customer_level: Optional[str] = None,
     customer_attribute: Optional[str] = None,
     department: Optional[str] = None,
+    followup_extra: Optional[dict] = None,
 ) -> VisitRecordResponse:
     """
     将CRMSalesVisitRecord转换为VisitRecordResponse
@@ -140,11 +175,17 @@ def _convert_to_response(
         record_dict["contacts"] = contacts_list
 
     # 使用处理后的字典创建VisitRecordResponse
+    from app.api.routes.crm.models import AccountTagOptionOut
+
     response = VisitRecordResponse.model_validate(record_dict)
     
     # 添加关联字段
     response.customer_level = customer_level
     response.customer_attribute = customer_attribute
+    response.tags = [
+        AccountTagOptionOut(id=tag.id, name=tag.name)
+        for tag in parse_account_tags(followup_extra if isinstance(followup_extra, dict) else None)
+    ]
     response.department = department  # 拜访人部门
     response.followup_object_name = _resolve_followup_object_name(
         record.account_name, record.partner_name
@@ -417,7 +458,7 @@ class VisitRecordRepo(BaseRepo):
         )
             
         # 构建基础查询：跟进对象属性/分类来自 account_id 或 partner_id 关联的 crm_accounts
-        account_crm, partner_crm, customer_level_col, customer_attribute_col = (
+        account_crm, partner_crm, customer_level_col, customer_attribute_col, followup_extra_col = (
             _followup_object_crm_account_join()
         )
         query = (
@@ -425,6 +466,7 @@ class VisitRecordRepo(BaseRepo):
                 CRMSalesVisitRecord,
                 customer_level_col,
                 customer_attribute_col,
+                followup_extra_col,
             )
             .outerjoin(account_crm, CRMSalesVisitRecord.account_id == account_crm.unique_id)
             .outerjoin(partner_crm, CRMSalesVisitRecord.partner_id == partner_crm.unique_id)
@@ -446,6 +488,28 @@ class VisitRecordRepo(BaseRepo):
 
         if request.customer_attribute:
             query = query.where(customer_attribute_col.in_(request.customer_attribute))
+
+        if request.tag_ids:
+            tag_ids = list({tag_id.strip() for tag_id in request.tag_ids if tag_id and tag_id.strip()})
+            if tag_ids:
+                matching_account_ids = crm_account_repo.get_account_unique_ids_by_tag_ids(
+                    session,
+                    tag_ids,
+                )
+                followup_account_id = func.coalesce(
+                    func.nullif(CRMSalesVisitRecord.account_id, ""),
+                    CRMSalesVisitRecord.partner_id,
+                )
+                if matching_account_ids:
+                    query = query.where(followup_account_id.in_(matching_account_ids))
+                else:
+                    return Page(
+                        items=[],
+                        total=0,
+                        page=request.page,
+                        size=request.page_size,
+                        pages=0,
+                    )
 
         if request.account_id:
             query = query.where(
@@ -499,50 +563,10 @@ class VisitRecordRepo(BaseRepo):
                 CRMSalesVisitRecord.recorder.in_(request.recorder)
             )
 
-        # 使用拜访人的department字段作为所在团队
-        # 优化：先查询符合条件的recorder_ids，然后过滤
         if request.department:
-            department_user_profiles = user_profile_repo.get_oauth_user_ids_by_departments(
-                session,
-                request.department,
+            query = query.where(
+                CRMSalesVisitRecord.recorder_department_name.in_(request.department)
             )
-            
-            if department_user_profiles:
-                # 将oauth_user_id转换为UUID格式的recorder_id
-                department_recorder_ids = []
-                for oauth_id in department_user_profiles:
-                    if oauth_id:
-                        try:
-                            # 处理可能没有短横线的UUID
-                            if len(oauth_id) == 32:
-                                formatted_uuid = f"{oauth_id[:8]}-{oauth_id[8:12]}-{oauth_id[12:16]}-{oauth_id[16:20]}-{oauth_id[20:32]}"
-                                department_recorder_ids.append(UUID(formatted_uuid))
-                            else:
-                                department_recorder_ids.append(UUID(oauth_id))
-                        except ValueError:
-                            continue
-                
-                if department_recorder_ids:
-                    # 这里不再额外做“权限交集”过滤（权限已在上方通过 EXISTS/本人过滤处理）
-                    query = query.where(CRMSalesVisitRecord.recorder_id.in_(department_recorder_ids))
-                else:
-                    # 没有有效的recorder_id，返回空结果
-                    return Page(
-                        items=[],
-                        total=0,
-                        page=request.page,
-                        size=request.page_size,
-                        pages=0
-                    )
-            else:
-                # 没有匹配的部门用户，返回空结果
-                return Page(
-                    items=[],
-                    total=0,
-                    page=request.page,
-                    size=request.page_size,
-                    pages=0
-                )
 
         if request.visit_communication_method:
             query = query.where(
@@ -625,7 +649,7 @@ class VisitRecordRepo(BaseRepo):
         # 优化：批量获取部门信息，避免N+1查询
         # 收集所有需要查询的recorder_id（UUID格式）
         recorder_ids = set()
-        for record, _customer_level, _customer_attribute in result.items:
+        for record, _customer_level, _customer_attribute, _followup_extra in result.items:
             if record.recorder_id:
                 recorder_ids.add(record.recorder_id)
         
@@ -657,10 +681,16 @@ class VisitRecordRepo(BaseRepo):
 
         # 转换结果格式 - 复用现有模型
         items = []
-        for record, customer_level, customer_attribute in result.items:
+        for record, customer_level, customer_attribute, followup_extra in result.items:
             department = department_map.get(record.recorder_id) if record.recorder_id else None
             items.append(
-                _convert_to_response(record, customer_level, customer_attribute, department)
+                _convert_to_response(
+                    record,
+                    customer_level,
+                    customer_attribute,
+                    department,
+                    followup_extra=followup_extra if isinstance(followup_extra, dict) else None,
+                )
             )
 
         # 返回自定义分页结果
@@ -671,6 +701,39 @@ class VisitRecordRepo(BaseRepo):
             size=result.size,
             pages=result.pages
         )
+
+    def get_visit_record_filter_option_values(
+        self,
+        session: Session,
+        form_type: str,
+    ) -> Dict[str, List[str]]:
+        """一次扫描 crm_sales_visit_records，聚合去重值（响应 key 与原 filter-options 一致）。"""
+        field_specs = list(_VISIT_RECORD_BASE_FILTER_FIELDS)
+        if form_type == "simple":
+            field_specs.extend(_VISIT_RECORD_SIMPLE_FILTER_FIELDS)
+        else:
+            field_specs.extend(_VISIT_RECORD_COMPLETE_FILTER_FIELDS)
+
+        select_parts = [
+            (
+                f"GROUP_CONCAT(DISTINCT `{column}` ORDER BY `{column}` "
+                f"SEPARATOR :sep) AS `{column}`"
+            )
+            for _response_key, column in field_specs
+        ]
+        sql = f"SELECT {', '.join(select_parts)} FROM crm_sales_visit_records"
+
+        session.exec(text("SET SESSION group_concat_max_len = 1048576"))
+        row = session.exec(text(sql), params={"sep": _VISIT_RECORD_FILTER_OPTION_SEP}).one()
+        if row is None:
+            options = {response_key: [] for response_key, _ in field_specs}
+        else:
+            options = {
+                response_key: _split_group_concat(row[i])
+                for i, (response_key, _) in enumerate(field_specs)
+            }
+        options.update(_VISIT_RECORD_QUALITY_FILTER_OPTIONS)
+        return options
 
     def get_visit_record_by_id(
         self,
@@ -683,7 +746,7 @@ class VisitRecordRepo(BaseRepo):
         根据当前用户的汇报关系限制数据访问权限
         """
         # 单条记录查询：先拿到记录本身，再做权限判断，避免 IN 大集合
-        account_crm, partner_crm, customer_level_col, customer_attribute_col = (
+        account_crm, partner_crm, customer_level_col, customer_attribute_col, followup_extra_col = (
             _followup_object_crm_account_join()
         )
         result = session.exec(
@@ -691,6 +754,7 @@ class VisitRecordRepo(BaseRepo):
                 CRMSalesVisitRecord,
                 customer_level_col,
                 customer_attribute_col,
+                followup_extra_col,
             )
             .outerjoin(account_crm, CRMSalesVisitRecord.account_id == account_crm.unique_id)
             .outerjoin(partner_crm, CRMSalesVisitRecord.partner_id == partner_crm.unique_id)
@@ -700,7 +764,7 @@ class VisitRecordRepo(BaseRepo):
         if not result:
             return None
 
-        record, customer_level, customer_attribute = result
+        record, customer_level, customer_attribute, followup_extra = result
 
         if not self._can_access_visit_record_by_recorder_id(
             session=session,
@@ -720,7 +784,13 @@ class VisitRecordRepo(BaseRepo):
             if dept_id:
                 department = department_mirror_repo.get_department_name_by_id(session, dept_id)
 
-        return _convert_to_response(record, customer_level, customer_attribute, department)
+        return _convert_to_response(
+            record,
+            customer_level,
+            customer_attribute,
+            department,
+            followup_extra=followup_extra if isinstance(followup_extra, dict) else None,
+        )
 
     def update_visit_record_comments(
         self,

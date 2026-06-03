@@ -12,7 +12,6 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Body, HTTPException
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
-from sqlmodel import distinct, select
 
 from app.api.deps import CurrentUserDep, SessionDep
 from app.api.routes.crm.models import (
@@ -29,9 +28,7 @@ from app.crm.save_engine import (
     save_visit_record_with_content,
 )
 from app.exceptions import InternalServerError
-from app.models.crm_accounts import CRMAccount
-from app.models.crm_sales_visit_records import CRMSalesVisitRecord
-from app.models.user_profile import UserProfile
+from app.repositories.crm_account import crm_account_repo
 from app.repositories.crm_account_opportunity_assessment import crm_account_opportunity_assessment_repo
 from app.repositories.document_content import DocumentContentRepo
 from app.repositories.user_profile import UserProfileRepo
@@ -396,7 +393,7 @@ def query_visit_records(
 ):
     """
     查询CRM拜访记录
-    支持条件查询和分页
+    支持条件查询和分页（含 tag_ids：按跟进对象关联客户的 extra.tags 筛选，多选 OR）
     根据当前用户的汇报关系限制数据访问权限
     """
     try:
@@ -746,124 +743,23 @@ def get_visit_record_filter_options(
         if not form_type:
             from app.core.config import settings
             form_type = settings.CRM_VISIT_RECORD_FORM_TYPE.value
-        
-        # 通用字段：无论哪种类型都返回
-        # 获取客户名称选项
-        account_names = db_session.exec(
-            select(distinct(CRMSalesVisitRecord.account_name))
-            .where(CRMSalesVisitRecord.account_name.is_not(None))
-            .order_by(CRMSalesVisitRecord.account_name)
-        ).all()
-        
-        # 获取合作伙伴选项
-        partner_names = db_session.exec(
-            select(distinct(CRMSalesVisitRecord.partner_name))
-            .where(CRMSalesVisitRecord.partner_name.is_not(None))
-            .order_by(CRMSalesVisitRecord.partner_name)
-        ).all()
-        
-        # 获取记录人选项
-        recorders = db_session.exec(
-            select(distinct(CRMSalesVisitRecord.recorder))
-            .where(CRMSalesVisitRecord.recorder.is_not(None))
-            .order_by(CRMSalesVisitRecord.recorder)
-        ).all()
-        
-        # 获取跟进质量等级选项（中英文）
-        followup_quality_levels_zh = db_session.exec(
-            select(distinct(CRMSalesVisitRecord.followup_quality_level_zh))
-            .where(CRMSalesVisitRecord.followup_quality_level_zh.is_not(None))
-            .order_by(CRMSalesVisitRecord.followup_quality_level_zh)
-        ).all()
-        
-        followup_quality_levels_en = db_session.exec(
-            select(distinct(CRMSalesVisitRecord.followup_quality_level_en))
-            .where(CRMSalesVisitRecord.followup_quality_level_en.is_not(None))
-            .order_by(CRMSalesVisitRecord.followup_quality_level_en)
-        ).all()
-        
-        # 获取下一步计划质量等级选项（中英文）
-        next_steps_quality_levels_zh = db_session.exec(
-            select(distinct(CRMSalesVisitRecord.next_steps_quality_level_zh))
-            .where(CRMSalesVisitRecord.next_steps_quality_level_zh.is_not(None))
-            .order_by(CRMSalesVisitRecord.next_steps_quality_level_zh)
-        ).all()
-        
-        next_steps_quality_levels_en = db_session.exec(
-            select(distinct(CRMSalesVisitRecord.next_steps_quality_level_en))
-            .where(CRMSalesVisitRecord.next_steps_quality_level_en.is_not(None))
-            .order_by(CRMSalesVisitRecord.next_steps_quality_level_en)
-        ).all()
-        
-        # 获取客户分类选项
-        customer_levels = db_session.exec(
-            select(distinct(CRMAccount.customer_level))
-            .where(CRMAccount.customer_level.is_not(None))
-            .order_by(CRMAccount.customer_level)
-        ).all()
 
-        customer_attributes = db_session.exec(
-            select(distinct(CRMAccount.customer_attribute))
-            .where(CRMAccount.customer_attribute.is_not(None))
-            .order_by(CRMAccount.customer_attribute)
-        ).all()
-        
-        # 获取部门选项 - 从用户档案表获取拜访人的部门
-        departments = db_session.exec(
-            select(distinct(UserProfile.department))
-            .where(UserProfile.department.is_not(None))
-            .order_by(UserProfile.department)
-        ).all()
-        
-        # 基础返回数据
+        visit_record_options = visit_record_repo.get_visit_record_filter_option_values(
+            db_session,
+            form_type,
+        )
+
+        customer_levels, customer_attributes = (
+            crm_account_repo.get_distinct_customer_level_and_attribute(db_session)
+        )
+        tag_options = crm_account_repo.list_all_distinct_tags(db_session)
         result_data = {
-            "account_names": account_names,
-            "partner_names": partner_names,
-            "recorders": recorders,
-            "followup_quality_levels_zh": followup_quality_levels_zh,
-            "followup_quality_levels_en": followup_quality_levels_en,
-            "next_steps_quality_levels_zh": next_steps_quality_levels_zh,
-            "next_steps_quality_levels_en": next_steps_quality_levels_en,
+            **visit_record_options,
             "customer_levels": customer_levels,
             "customer_attributes": customer_attributes,
-            "departments": departments,
+            "tags": [{"id": tag.id, "name": tag.name} for tag in tag_options],
         }
-        
-        # 根据表单类型添加特定字段
-        if form_type == "simple":
-            # 简易版：添加拜访主题
-            subjects = db_session.exec(
-                select(distinct(CRMSalesVisitRecord.subject))
-                .where(CRMSalesVisitRecord.subject.is_not(None))
-                .order_by(CRMSalesVisitRecord.subject)
-            ).all()
-            result_data["subjects"] = subjects
-        else:
-            # 完整版：添加其他现有字段
-            communication_methods = db_session.exec(
-                select(distinct(CRMSalesVisitRecord.visit_communication_method))
-                .where(CRMSalesVisitRecord.visit_communication_method.is_not(None))
-                .order_by(CRMSalesVisitRecord.visit_communication_method)
-            ).all()
-            
-            visit_purposes = db_session.exec(
-                select(distinct(CRMSalesVisitRecord.visit_purpose))
-                .where(CRMSalesVisitRecord.visit_purpose.is_not(None))
-                .order_by(CRMSalesVisitRecord.visit_purpose)
-            ).all()
-            
-            visit_types = db_session.exec(
-                select(distinct(CRMSalesVisitRecord.visit_type))
-                .where(CRMSalesVisitRecord.visit_type.is_not(None))
-                .order_by(CRMSalesVisitRecord.visit_type)
-            ).all()
-            
-            result_data.update({
-                "communication_methods": communication_methods,
-                "visit_purposes": visit_purposes,
-                "visit_types": visit_types,
-            })
-        
+
         return {
             "code": 0,
             "message": "success",

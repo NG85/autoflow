@@ -467,6 +467,12 @@ VisitRecordCreate = Annotated[
     Field(discriminator='form_type')
 ]
 
+# 客户 tag（来自 crm_accounts.extra.tags）
+class AccountTagOptionOut(BaseModel):
+    id: str
+    name: str
+
+
 # 拜访记录查询请求模型
 class VisitRecordQueryRequest(BaseModel):
     # 分页参数
@@ -477,6 +483,7 @@ class VisitRecordQueryRequest(BaseModel):
     record_id: Optional[str] = None  # 记录ID
     customer_level: Optional[List[str]] = None  # 客户等级（多选）
     customer_attribute: Optional[List[str]] = None  # 客户属性（多选，来自 crm_accounts）
+    tag_ids: Optional[List[str]] = None  # 客户 tag（多选，OR，来自 crm_accounts.extra.tags）
     account_id: Optional[List[str]] = None  # 客户ID（多选）
     account_name: Optional[List[str]] = None  # 客户名称（多选）
     partner_id: Optional[List[str]] = None  # 合作伙伴ID（多选）
@@ -591,6 +598,10 @@ class VisitRecordResponse(BaseModel):
     customer_attribute: Optional[str] = Field(
         default=None,
         description="跟进对象属性（crm_accounts.customer_attribute，按 account_id 或 partner_id 关联）",
+    )
+    tags: List[AccountTagOptionOut] = Field(
+        default_factory=list,
+        description="跟进对象 tags（crm_accounts.extra.tags，按 account_id 或 partner_id 关联）",
     )
     
     # 关联字段 - 来自user_profiles表
@@ -904,6 +915,7 @@ class WeeklyFollowupDetailQueryIn(_WeeklyFollowupWeekRangeQueryMixin):
     filter_account_name: Optional[str] = None  # 客户名称筛选（单选）
     filter_opportunity_id: Optional[str] = None  # 商机ID筛选（单选）
     filter_opportunity_name: Optional[str] = None  # 商机名称筛选（单选）
+    filter_tag_ids: Optional[List[str]] = None  # 客户 tag 筛选（多选，OR）
 
 
 class WeeklyFollowupFilterOptionsQueryIn(_WeeklyFollowupWeekRangeQueryMixin):
@@ -923,6 +935,7 @@ class WeeklyFollowupFilterOptionsOut(BaseModel):
     """
     department_names: List[str]  # 可用的部门名称列表（去重、排序）
     owner_names: List[str]  # 可用的负责人名称列表（去重、排序）
+    tags: List[AccountTagOptionOut] = []  # 可用的客户 tag 列表（去重、按 name 排序）
 
 
 class WeeklyFollowupEntityPageOut(BaseModel):
