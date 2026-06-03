@@ -473,6 +473,14 @@ class AccountTagOptionOut(BaseModel):
     name: str
 
 
+class VisitRecordFieldMappingOut(BaseModel):
+    """拜访/卡片/通知等展示的字段标题映射（DB 覆盖默认值后的生效配置）"""
+
+    mapping: Dict[str, str] = Field(
+        description="字段 key -> 展示标题，如 partner_title、followup_title_en",
+    )
+
+
 # 拜访记录查询请求模型
 class VisitRecordQueryRequest(BaseModel):
     # 分页参数
