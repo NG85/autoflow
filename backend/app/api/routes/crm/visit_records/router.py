@@ -12,7 +12,6 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Body, HTTPException
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
-from sqlmodel import distinct, select
 
 from app.api.deps import CurrentUserDep, SessionDep
 from app.api.routes.crm.models import (
@@ -29,9 +28,7 @@ from app.crm.save_engine import (
     save_visit_record_with_content,
 )
 from app.exceptions import InternalServerError
-from app.models.crm_accounts import CRMAccount
-from app.models.crm_sales_visit_records import CRMSalesVisitRecord
-from app.models.user_profile import UserProfile
+from app.repositories.crm_account import crm_account_repo
 from app.repositories.crm_account_opportunity_assessment import crm_account_opportunity_assessment_repo
 from app.repositories.document_content import DocumentContentRepo
 from app.repositories.user_profile import UserProfileRepo
@@ -42,6 +39,31 @@ from app.services.feishu_billing_facade import check_billing_quota
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["crm", "crm/visit-records"])
+
+
+def _is_non_empty(value: Optional[str]) -> bool:
+    return bool(str(value or "").strip())
+
+
+def _validate_visit_record_first_stage(record: VisitRecordCreate) -> Optional[str]:
+    """
+    第一阶段校验策略：
+    1) 跟进对象（客户/合作伙伴）必须且只能填写一侧
+    2) 外部协同名称/ID 需成对填写
+    """
+    has_account = _is_non_empty(record.account_name) or _is_non_empty(record.account_id)
+    has_partner = _is_non_empty(record.partner_name) or _is_non_empty(record.partner_id)
+    if not (has_account or has_partner):
+        return "请填写跟进对象"
+    if has_account and has_partner:
+        return "跟进对象只能填写一个"
+
+    has_external_name = _is_non_empty(record.external_collaboration_partner_name)
+    has_external_id = _is_non_empty(record.external_collaboration_partner_id)
+    if has_external_name != has_external_id:
+        return "外部协同合作伙伴名称与ID需同时填写"
+
+    return None
 
 
 @router.post("/crm/visit_record")
@@ -93,6 +115,10 @@ def create_visit_record(
         else:
             logger.warning(f"Could not find user profile for recorder_id: {record.recorder_id}, use payload recorder name: {record.recorder}")
             record.recorder = record.recorder or '未知用户'
+
+        validation_error = _validate_visit_record_first_stage(record)
+        if validation_error:
+            return {"code": 400, "message": validation_error, "data": {}}
 
         # 根据拜访类型处理
         if record.visit_type == "link":
@@ -367,7 +393,7 @@ def query_visit_records(
 ):
     """
     查询CRM拜访记录
-    支持条件查询和分页
+    支持条件查询和分页（含 tag_ids：按跟进对象关联客户的 extra.tags 筛选，多选 OR）
     根据当前用户的汇报关系限制数据访问权限
     """
     try:
@@ -448,8 +474,9 @@ def export_visit_records_to_xlsx(
         if language == "en":
             # 英文版表头 - 只包含英文字段
             headers = [
-                "ID", "Customer Level", "Account Name", "Account ID", "First Visit", "Call High",
-                "Partner Name", "Partner ID", "Opportunity Name", "Opportunity ID", "Follow-up Date", "Person in Charge", "Department",
+                "ID", "Customer Level", "Follow-up Object", "Follow-up Object Attribute", "First Visit", "Call High",
+                "External Collaboration Partner", "External Collaboration Partner ID",
+                "Opportunity Name", "Opportunity ID", "Follow-up Date", "Person in Charge", "Department",
                 "Contact Position", "Contact Name", "Collaborative Participants", "Follow-up Method",
                 "Visit Purpose", "Attachment Location", "Attachment Latitude", "Attachment Longitude", "Attachment Taken At", "Follow-up Record", 
                 "AI Follow-up Record Quality Evaluation", "AI Follow-up Record Quality Evaluation Details", 
@@ -459,8 +486,9 @@ def export_visit_records_to_xlsx(
         else:
             # 中文版表头（默认）- 只包含中文字段
             headers = [
-                "ID", "客户分类", "客户名称", "客户ID", "是否首次拜访", "是否Call High",
-                "合作伙伴", "合作伙伴ID", "商机名称", "商机ID", "跟进日期", "负责销售", "所在团队",
+                "ID", "客户分类", "跟进对象", "跟进对象属性", "是否首次拜访", "是否Call High",
+                "外部协同合作伙伴", "外部协同合作伙伴ID",
+                "商机名称", "商机ID", "跟进日期", "负责销售", "所在团队",
                 "联系人职位", "联系人姓名", "协同参与人", "跟进方式",
                 "拜访目的", "附件地点", "附件纬度", "附件经度", "附件拍摄时间", "跟进记录", 
                 "AI对跟进记录质量评估", "AI对跟进记录质量评估详情",
@@ -496,10 +524,31 @@ def export_visit_records_to_xlsx(
                 contact_names_str = ", ".join([c.name or "" for c in item.contacts if c.name])
             else:
                 contact_names_str = item.contact_name or ""
+
+            followup_object_name = item.followup_object_name or ""
+
+            # 历史兼容：旧数据里 account 与 partner 同时有值、external 为空；
+            # 导出时按新语义将 partner 映射为 external 协同展示（仅导出视图，不改数据）。
+            external_collaboration_partner_name = (
+                item.external_collaboration_partner_name or ""
+            )
+            external_collaboration_partner_id = (
+                item.external_collaboration_partner_id or ""
+            )
+            if (
+                (item.account_name or item.account_id)
+                and (item.partner_name or item.partner_id)
+                and not (
+                    external_collaboration_partner_name
+                    or external_collaboration_partner_id
+                )
+            ):
+                external_collaboration_partner_name = item.partner_name or ""
+                external_collaboration_partner_id = item.partner_id or ""
             
             key_fields = [
                 str(item.id or ""),
-                str(item.account_name or item.partner_name or item.opportunity_name or ""),
+                str(followup_object_name or item.opportunity_name or ""),
                 str(item.visit_communication_date or ""),
                 str(item.recorder or ""),
                 contact_names_str,
@@ -577,12 +626,12 @@ def export_visit_records_to_xlsx(
             return [
                 item.record_id or record_id,
                 item.customer_level or "",
-                item.account_name or "",
-                item.account_id or "",
+                followup_object_name,
+                item.customer_attribute or "",
                 first_visit_text,
                 call_high_text,
-                item.partner_name or "",
-                item.partner_id or "",
+                external_collaboration_partner_name,
+                external_collaboration_partner_id,
                 item.opportunity_name or "",
                 item.opportunity_id or "",
                 item.visit_communication_date or "",
@@ -694,117 +743,23 @@ def get_visit_record_filter_options(
         if not form_type:
             from app.core.config import settings
             form_type = settings.CRM_VISIT_RECORD_FORM_TYPE.value
-        
-        # 通用字段：无论哪种类型都返回
-        # 获取客户名称选项
-        account_names = db_session.exec(
-            select(distinct(CRMSalesVisitRecord.account_name))
-            .where(CRMSalesVisitRecord.account_name.is_not(None))
-            .order_by(CRMSalesVisitRecord.account_name)
-        ).all()
-        
-        # 获取合作伙伴选项
-        partner_names = db_session.exec(
-            select(distinct(CRMSalesVisitRecord.partner_name))
-            .where(CRMSalesVisitRecord.partner_name.is_not(None))
-            .order_by(CRMSalesVisitRecord.partner_name)
-        ).all()
-        
-        # 获取记录人选项
-        recorders = db_session.exec(
-            select(distinct(CRMSalesVisitRecord.recorder))
-            .where(CRMSalesVisitRecord.recorder.is_not(None))
-            .order_by(CRMSalesVisitRecord.recorder)
-        ).all()
-        
-        # 获取跟进质量等级选项（中英文）
-        followup_quality_levels_zh = db_session.exec(
-            select(distinct(CRMSalesVisitRecord.followup_quality_level_zh))
-            .where(CRMSalesVisitRecord.followup_quality_level_zh.is_not(None))
-            .order_by(CRMSalesVisitRecord.followup_quality_level_zh)
-        ).all()
-        
-        followup_quality_levels_en = db_session.exec(
-            select(distinct(CRMSalesVisitRecord.followup_quality_level_en))
-            .where(CRMSalesVisitRecord.followup_quality_level_en.is_not(None))
-            .order_by(CRMSalesVisitRecord.followup_quality_level_en)
-        ).all()
-        
-        # 获取下一步计划质量等级选项（中英文）
-        next_steps_quality_levels_zh = db_session.exec(
-            select(distinct(CRMSalesVisitRecord.next_steps_quality_level_zh))
-            .where(CRMSalesVisitRecord.next_steps_quality_level_zh.is_not(None))
-            .order_by(CRMSalesVisitRecord.next_steps_quality_level_zh)
-        ).all()
-        
-        next_steps_quality_levels_en = db_session.exec(
-            select(distinct(CRMSalesVisitRecord.next_steps_quality_level_en))
-            .where(CRMSalesVisitRecord.next_steps_quality_level_en.is_not(None))
-            .order_by(CRMSalesVisitRecord.next_steps_quality_level_en)
-        ).all()
-        
-        # 获取客户分类选项
-        customer_levels = db_session.exec(
-            select(distinct(CRMAccount.customer_level))
-            .where(CRMAccount.customer_level.is_not(None))
-            .order_by(CRMAccount.customer_level)
-        ).all()
-        
-        # 获取部门选项 - 从用户档案表获取拜访人的部门
-        departments = db_session.exec(
-            select(distinct(UserProfile.department))
-            .where(UserProfile.department.is_not(None))
-            .order_by(UserProfile.department)
-        ).all()
-        
-        # 基础返回数据
+
+        visit_record_options = visit_record_repo.get_visit_record_filter_option_values(
+            db_session,
+            form_type,
+        )
+
+        customer_levels, customer_attributes = (
+            crm_account_repo.get_distinct_customer_level_and_attribute(db_session)
+        )
+        tag_options = crm_account_repo.list_all_distinct_tags(db_session)
         result_data = {
-            "account_names": account_names,
-            "partner_names": partner_names,
-            "recorders": recorders,
-            "followup_quality_levels_zh": followup_quality_levels_zh,
-            "followup_quality_levels_en": followup_quality_levels_en,
-            "next_steps_quality_levels_zh": next_steps_quality_levels_zh,
-            "next_steps_quality_levels_en": next_steps_quality_levels_en,
+            **visit_record_options,
             "customer_levels": customer_levels,
-            "departments": departments,
+            "customer_attributes": customer_attributes,
+            "tags": [{"id": tag.id, "name": tag.name} for tag in tag_options],
         }
-        
-        # 根据表单类型添加特定字段
-        if form_type == "simple":
-            # 简易版：添加拜访主题
-            subjects = db_session.exec(
-                select(distinct(CRMSalesVisitRecord.subject))
-                .where(CRMSalesVisitRecord.subject.is_not(None))
-                .order_by(CRMSalesVisitRecord.subject)
-            ).all()
-            result_data["subjects"] = subjects
-        else:
-            # 完整版：添加其他现有字段
-            communication_methods = db_session.exec(
-                select(distinct(CRMSalesVisitRecord.visit_communication_method))
-                .where(CRMSalesVisitRecord.visit_communication_method.is_not(None))
-                .order_by(CRMSalesVisitRecord.visit_communication_method)
-            ).all()
-            
-            visit_purposes = db_session.exec(
-                select(distinct(CRMSalesVisitRecord.visit_purpose))
-                .where(CRMSalesVisitRecord.visit_purpose.is_not(None))
-                .order_by(CRMSalesVisitRecord.visit_purpose)
-            ).all()
-            
-            visit_types = db_session.exec(
-                select(distinct(CRMSalesVisitRecord.visit_type))
-                .where(CRMSalesVisitRecord.visit_type.is_not(None))
-                .order_by(CRMSalesVisitRecord.visit_type)
-            ).all()
-            
-            result_data.update({
-                "communication_methods": communication_methods,
-                "visit_purposes": visit_purposes,
-                "visit_types": visit_types,
-            })
-        
+
         return {
             "code": 0,
             "message": "success",

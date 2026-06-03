@@ -326,17 +326,17 @@ notification:
   card_templates:
     default:
       sales_daily_report:
-        feishu: "AAqtDj0mrwabU"
-        lark: "AAqtDj0mrwabU"
-        dingtalk: "3ef4e8f9-5034-40f9-9d05-3a9d13ae447f.schema"
+        feishu: "AAqtGR7vr9ezt"
+        lark: "AAqtGR7vr9ezt"
+        dingtalk: "e94991d3-1d40-4c9e-aec6-b748f6b787dd.schema"
       department_daily_report:
-        feishu: "AAqtDDhydGUDU"
-        lark: "AAqtDDhydGUDU"
-        dingtalk: "8beadba0-4793-41bd-bd3f-99d9cff514a2.schema"
+        feishu: "AAqtGIwiqBUyg"
+        lark: "AAqtGIwiqBUyg"
+        dingtalk: "dcc4133e-465d-4284-8e0b-801fd60e30b4.schema"
       company_daily_report:
-        feishu: "AAqvGhJJNR59v"
-        lark: "AAqvGhJJNR59v"
-        dingtalk: "6618eed4-1d1a-4536-9625-61e99cb14837.schema"
+        feishu: "AAqtEO2pagr39"
+        lark: "AAqtEO2pagr39"
+        dingtalk: "76858e58-57e7-4fed-bc81-fd5843ec9801.schema"
       department_weekly_report:
         feishu: "AAqX5j2jPq2Cn"
         lark: "AAqX5j2jPq2Cn"
@@ -356,21 +356,21 @@ notification:
   visit_record_templates:
     default:
       dingtalk:
-        form_recorder: "fe17c6bb-6006-41da-97f5-91c15830f062.schema"
-        form_leader: "af75d2dc-9c7c-49d2-9439-2949b5d27a89.schema"
-        link: "5ff1921d-ed33-4fe4-8f90-9f81ade3c251.schema"
+        form_recorder: "c218df2f-4032-4230-ac22-ce3809dbf740.schema"
+        form_leader: "b4de9410-c8b3-4f43-bcb6-dcc30cad3b44.schema"
+        link: "3285297e-224c-47f7-b2b7-fe5a703061c1.schema"
       feishu:
         form_simple_recorder: "AAqzQK6iUiK2k"
         form_simple_leader: "AAqzQKvKzOW1z"
-        form_complete_recorder: "AAqtkc54S2MHM"
-        form_complete_leader: "AAqtkwxHYOT0O"
-        link: "AAqtkykBnxIID"
+        form_complete_recorder: "AAqtEOBYVGBGe"
+        form_complete_leader: "AAqtEOHUJGdza"
+        link: "AAqtEOgZn8Ou3"
       lark:
         form_simple_recorder: "AAqzQK6iUiK2k"
         form_simple_leader: "AAqzQKvKzOW1z"
-        form_complete_recorder: "AAqtkc54S2MHM"
-        form_complete_leader: "AAqtkwxHYOT0O"
-        link: "AAqtkykBnxIID"
+        form_complete_recorder: "AAqtEOBYVGBGe"
+        form_complete_leader: "AAqtEOHUJGdza"
+        link: "AAqtEOgZn8Ou3"
     data_type: dict
     description: "拜访记录卡片模板 ID。按平台（dingtalk/feishu/lark）与变体（form_recorder/form_leader/link 或 form_simple_* /form_complete_*/link）配置。"
     client: false

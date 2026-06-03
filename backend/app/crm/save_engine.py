@@ -311,13 +311,51 @@ Content to analyze:
         return followup_content, ""
 
 
+def _safe_strip_field_value(v) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return v.strip()
+    return str(v).strip()
+
+
+def _is_blank_field_value(v) -> bool:
+    return not _safe_strip_field_value(v)
+
+
+def _merge_visit_record_snapshot_from_db(snapshot: dict, db_row: Any) -> None:
+    """推送前从库表补全快照中缺失的字段（不覆盖已有非空值）。"""
+    if not db_row:
+        return
+    for attr in (
+        "account_name",
+        "account_id",
+        "partner_name",
+        "partner_id",
+        "external_collaboration_partner_name",
+        "external_collaboration_partner_id",
+    ):
+        if _is_blank_field_value(snapshot.get(attr)):
+            db_val = getattr(db_row, attr, None)
+            if not _is_blank_field_value(db_val):
+                snapshot[attr] = db_val
+
+
 def fill_sales_visit_record_fields(sales_visit_record, db_session):
-    # 处理客户名称和合作伙伴
-    account_name = sales_visit_record.get("account_name")
-    partner_name = sales_visit_record.get("partner_name")
-    if not account_name and partner_name:
+    # 拜访对象展示：纯伙伴拜访时无客户名，用伙伴名填充 account_name 供卡片「客户」位展示
+    account_name = _safe_strip_field_value(sales_visit_record.get("account_name"))
+    partner_name = _safe_strip_field_value(sales_visit_record.get("partner_name"))
+    if account_name:
+        sales_visit_record["account_name"] = account_name
+    elif partner_name:
         sales_visit_record["account_name"] = partner_name
-    
+
+    if partner_name:
+        sales_visit_record["partner_name"] = partner_name
+
+    ext_name = _safe_strip_field_value(sales_visit_record.get("external_collaboration_partner_name"))
+    sales_visit_record["external_collaboration_partner_name"] = ext_name or None
+
     # 处理是否首次拜访字段
     is_first_visit = sales_visit_record.get("is_first_visit")
     sales_visit_record["is_first_visit"] = "首次拜访" if is_first_visit else None
@@ -333,21 +371,13 @@ def fill_sales_visit_record_fields(sales_visit_record, db_session):
     contact_info_parts = []
     has_contacts_field = contacts is not None  # 标记是否明确提供了contacts字段
 
-    def _safe_strip(v) -> str:
-        """将可能为 None/非字符串 的值安全转成字符串并 strip，避免 AttributeError。"""
-        if v is None:
-            return ""
-        if isinstance(v, str):
-            return v.strip()
-        return str(v).strip()
-    
     if contacts:
         # 如果提供了contacts字段（列表格式）
         if isinstance(contacts, list):
             for contact in contacts:
                 if isinstance(contact, dict):
-                    name = _safe_strip(contact.get("name"))
-                    position = _safe_strip(contact.get("position"))
+                    name = _safe_strip_field_value(contact.get("name"))
+                    position = _safe_strip_field_value(contact.get("position"))
                     if name:
                         if position:
                             contact_info_parts.append(f"{name}（{position}）")
@@ -365,8 +395,8 @@ def fill_sales_visit_record_fields(sales_visit_record, db_session):
     
     # 如果没有contacts字段（不是空列表，而是字段不存在），尝试从旧字段构造
     if not has_contacts_field and not contact_info_parts:
-        contact_name = _safe_strip(sales_visit_record.get("contact_name"))
-        contact_position = _safe_strip(sales_visit_record.get("contact_position"))
+        contact_name = _safe_strip_field_value(sales_visit_record.get("contact_name"))
+        contact_position = _safe_strip_field_value(sales_visit_record.get("contact_position"))
         if contact_name:
             if contact_position:
                 contact_info_parts.append(f"{contact_name}（{contact_position}）")
@@ -440,8 +470,20 @@ def fill_sales_visit_record_fields(sales_visit_record, db_session):
                 sales_visit_record["subject_en"] = original_subject
 
     # 其他字段（排除特殊处理的字段和动态字段）
+    skip_none_to_dash = {
+        "is_first_visit",
+        "is_first_visit_en",
+        "is_call_high",
+        "is_call_high_en",
+        "subject",
+        "subject_en",
+        "visit_start_time",
+        "visit_end_time",
+        "record_type",
+        "visit_purpose",
+    }
     for k, v in sales_visit_record.items():
-        if v is None and k not in ["is_first_visit", "is_first_visit_en", "is_call_high", "is_call_high_en", "subject", "subject_en", "visit_start_time", "visit_end_time", "record_type", "visit_purpose"]:
+        if v is None and k not in skip_none_to_dash:
             sales_visit_record[k] = "--"
     return sales_visit_record
 
@@ -759,14 +801,22 @@ def push_visit_record_message(
             db_session = get_db_session()
             should_close_session = True
         
-        sales_visit_record = fill_sales_visit_record_fields(sales_visit_record, db_session)
-        # 补充记录人部门快照信息（从已落库的拜访记录中读取），供后续部门群匹配使用
+        db_row = None
         try:
             from sqlmodel import select
             from app.models.crm_sales_visit_records import CRMSalesVisitRecord
 
             stmt = select(CRMSalesVisitRecord).where(CRMSalesVisitRecord.record_id == record_id)
             db_row = db_session.exec(stmt).first()
+            if db_row:
+                _merge_visit_record_snapshot_from_db(sales_visit_record, db_row)
+        except Exception as e:
+            logger.warning("Failed to load visit record row before card fill, record_id=%s: %s", record_id, e)
+
+        sales_visit_record = fill_sales_visit_record_fields(sales_visit_record, db_session)
+
+        # 补充记录人部门快照信息（从已落库的拜访记录中读取），供后续部门群匹配使用
+        try:
             if not db_row:
                 logger.debug("No CRMSalesVisitRecord found when enriching department snapshot, record_id=%s", record_id)
             else:

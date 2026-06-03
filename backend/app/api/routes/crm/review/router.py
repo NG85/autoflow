@@ -184,8 +184,8 @@ def query_my_review_opp_branch_snapshots(
 ):
     """
     商机快照分页列表（不分组）。
-    - 返回结构与 ``snapshot-group-data`` 一致，只是没有 ``group_by`` / ``group_key``；另含 ``forecast_type_amount_totals``、``forecast_amount_total``（当前筛选条件下全量金额，按类型拆分与合计）。
-    - 可见范围：普通成员只看本人；负责人和有 ``review_session:all:view`` 权限的用户看本次 review 的全部成员。支持筛选、排序、字段级别；``sorts`` 未传或空时默认：负责人 → 预测类型 → 金额（降序）。
+    - 返回结构与 ``snapshot-group-data`` 一致，只是没有 ``group_by`` / ``group_key``；另含 ``forecast_type_amount_totals``、``forecast_amount_total``、``closed_won_amount``（当前筛选条件下全量金额、已成单金额，以及排除已成单后的按预测类型拆分）。
+    - 可见范围：普通成员只看本人；负责人和有 ``review_session:all:view`` 权限的用户看本次 review 的全部成员。支持筛选、排序、字段级别；``snapshot_filters`` 支持按客户筛选（``account_ids``/``account_names``，或别名 ``customer_ids``/``customer_names``）；``sorts`` 未传或空时默认：负责人 → 预测类型 → 金额（降序）。
     - 当 ``snapshot_filters.opportunity_ids`` 非空时，自动切到主表 + T2 baseline 口径查询；否则保持原 cache 可编辑口径。
     - 排序：请求体 ``sorts`` 为按优先级排列的多字段排序。
     - 需要 session 信息、提交统计时请先调 ``snapshot-groups``。
@@ -226,7 +226,7 @@ def query_session_main_baseline_opp_branch_snapshots(
 ):
     """
     主表 ``crm_review_opp_branch_snapshot`` + T2 baseline 口径的分页列表（只读）。
-    - 返回结构与 ``my-opp-branch-snapshots`` 一致（含 ``forecast_type_amount_totals``、``forecast_amount_total``），业务槽位 ``forecast_type/forecast_amount/opportunity_stage/expected_closing_date`` 映射为 baseline 列。
+    - 返回结构与 ``my-opp-branch-snapshots`` 一致（含 ``forecast_type_amount_totals``、``forecast_amount_total``、``closed_won_amount``），业务槽位 ``forecast_type/forecast_amount/opportunity_stage/expected_closing_date`` 映射为 baseline 列。
     - 可见范围同 ``my-opp-branch-snapshots``（成员仅本人；负责人/``review_session:all:view`` 可看全员）。
     - 前端常用调用链：先调 risk/KPI 等关联接口拿 ``opportunity_id``，再传 ``snapshot_filters.opportunity_ids`` 到本接口取主表 baseline 字段。
     - 示例筛选：``{"snapshot_filters": {"opportunity_ids": ["oppA", "oppB"]}}``。
@@ -373,7 +373,7 @@ def query_review_snapshot_group_data(
     """
     某一分组下的商机快照分页列表。可见范围同 ``snapshot-groups``（成员只看自己；负责人和有 ``review_session:all:view`` 权限的用户看全部成员）。
     - ``group_key``：按负责人传 owner_id；按预测/阶段传字段值，空值用 ``__EMPTY__``。
-    - 含 ``forecast_type_amount_totals``、``forecast_amount_total``：在当前 ``group_by``/``group_key`` 及 ``snapshot_filters`` 下，该分组内全量金额（按预测类型拆分与合计，非当前页）。
+    - 含 ``forecast_type_amount_totals``、``forecast_amount_total``、``closed_won_amount``：在当前 ``group_by``/``group_key`` 及 ``snapshot_filters`` 下，该分组内全量金额、已成单金额，以及排除已成单后的按预测类型拆分（非当前页）。
     - 当 ``snapshot_filters.opportunity_ids`` 非空时，自动切到主表 + T2 baseline 口径查询；否则保持原 cache 可编辑口径。
     - 支持筛选、排序、字段级别；``sorts`` 未传或空时默认：负责人 → 预测类型 → 金额（降序）。
     """

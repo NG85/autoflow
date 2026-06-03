@@ -80,6 +80,52 @@ def get_crm_config_service(db_session: Session) -> CRMConfigService:
     return CRMConfigService(db_session)
 
 
+DEFAULT_VISIT_RECORD_FIELD_MAPPING: Dict[str, str] = {
+    "partner_title": "合作伙伴",
+    "opportunity_title": "商机名称",
+    "account_title": "最终客户",
+    "followup_title": "跟进记录",
+    "next_steps_title": "下一步计划",
+    "partner_title_en": "Partner",
+    "opportunity_title_en": "Opportunity",
+    "account_title_en": "End Customer",
+    "followup_title_en": "Follow-up Record",
+    "next_steps_title_en": "Next Steps",
+    # 兼容旧 key（与 *_title 默认同值；解析后仍会从 *_title 同步）
+    "partner": "合作伙伴",
+    "end_customer": "最终客户",
+}
+
+# alias_key -> source_key：DB 只改 partner_title / account_title 时，别名跟随生效
+_FIELD_MAPPING_ALIASES: tuple[tuple[str, str], ...] = (
+    ("partner", "partner_title"),
+    ("end_customer", "account_title"),
+)
+
+
+def get_resolved_field_mapping(db_session: Session, report_type: str = "报告") -> Dict[str, str]:
+    """
+    获取生效的字段标题映射：默认值 + crm_system_configurations.VisitRecordFieldMapping 覆盖。
+    """
+    field_title_mapping = DEFAULT_VISIT_RECORD_FIELD_MAPPING.copy()
+    try:
+        config_service = get_crm_config_service(db_session)
+        db_field_mapping = config_service.get_field_mapping_config()
+        if db_field_mapping:
+            field_title_mapping.update(db_field_mapping)
+            logger.info(f"{report_type}使用数据库字段映射配置: {db_field_mapping}")
+        else:
+            logger.info(f"{report_type}未找到数据库字段映射配置，使用默认配置")
+    except Exception as e:
+        logger.warning(f"{report_type}获取数据库字段映射配置失败，使用默认配置: {e}")
+
+    for alias_key, source_key in _FIELD_MAPPING_ALIASES:
+        if source_key in field_title_mapping:
+            field_title_mapping[alias_key] = field_title_mapping[source_key]
+
+    return field_title_mapping
+
+
 def add_field_mapping_to_data(data: Dict[str, Any], db_session: Session, report_type: str = "报告") -> Dict[str, Any]:
     """
     为数据添加字段名映射，用于卡片展示
@@ -92,36 +138,8 @@ def add_field_mapping_to_data(data: Dict[str, Any], db_session: Session, report_
     Returns:
         添加了字段映射的数据
     """
-    # 默认字段名映射
-    default_field_mapping = {
-        "partner_title": "合作伙伴",
-        "opportunity_title": "商机名称", 
-        "account_title": "最终客户",
-        "followup_title": "跟进记录",
-        "next_steps_title": "下一步计划",
-        "partner_title_en": "Partner",
-        "opportunity_title_en": "Opportunity",
-        "account_title_en": "End Customer",
-        "followup_title_en": "Follow-up Record",
-        "next_steps_title_en": "Next Steps"
-    }
-    
-    # 尝试从数据库获取自定义字段映射
-    field_title_mapping = default_field_mapping.copy()
-    
-    try:
-        config_service = get_crm_config_service(db_session)
-        db_field_mapping = config_service.get_field_mapping_config()
-        
-        if db_field_mapping:
-            field_title_mapping.update(db_field_mapping)
-            logger.info(f"{report_type}使用数据库字段映射配置: {db_field_mapping}")
-        else:
-            logger.info(f"{report_type}未找到数据库字段映射配置，使用默认配置")
-            
-    except Exception as e:
-        logger.warning(f"{report_type}获取数据库字段映射配置失败，使用默认配置: {e}")
-    
+    field_title_mapping = get_resolved_field_mapping(db_session, report_type)
+
     # 将字段名映射添加到数据中
     for field_key, field_label in field_title_mapping.items():
         data[field_key] = field_label

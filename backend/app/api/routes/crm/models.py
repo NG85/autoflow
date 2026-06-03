@@ -285,6 +285,14 @@ class VisitRecordBase(BaseModel):
     opportunity_id: Optional[str] = None # 商机ID
     partner_name: Optional[str] = None # 合作伙伴名称
     partner_id: Optional[str] = None # 合作伙伴ID
+    external_collaboration_partner_name: Optional[str] = Field(
+        default=None,
+        description="外部协同合作伙伴名称（与拜访对象 partner_* 独立）",
+    )
+    external_collaboration_partner_id: Optional[str] = Field(
+        default=None,
+        description="外部协同合作伙伴ID（与拜访对象 partner_* 独立）",
+    )
     visit_communication_date: Optional[str] = None # 拜访及沟通日期
     recorder: Optional[str] = None # 记录人
     recorder_id: Optional[str] = None # 记录人ID    
@@ -324,6 +332,20 @@ class VisitRecordBase(BaseModel):
         if v is None or v == "":
             return None
         return VisitAttachment.from_legacy_value(v)
+
+    @field_validator(
+        "external_collaboration_partner_name",
+        "external_collaboration_partner_id",
+        mode="before",
+    )
+    @classmethod
+    def normalize_external_collaboration_partner_fields(cls, v: Any) -> Any:
+        if v is None:
+            return None
+        if isinstance(v, str):
+            stripped = v.strip()
+            return stripped if stripped else None
+        return v
 
 # 协同参与人数据结构
 class CollaborativeParticipant(BaseModel):
@@ -445,6 +467,20 @@ VisitRecordCreate = Annotated[
     Field(discriminator='form_type')
 ]
 
+# 客户 tag（来自 crm_accounts.extra.tags）
+class AccountTagOptionOut(BaseModel):
+    id: str
+    name: str
+
+
+class VisitRecordFieldMappingOut(BaseModel):
+    """拜访/卡片/通知等展示的字段标题映射（DB 覆盖默认值后的生效配置）"""
+
+    mapping: Dict[str, str] = Field(
+        description="字段 key -> 展示标题，如 partner_title、followup_title_en",
+    )
+
+
 # 拜访记录查询请求模型
 class VisitRecordQueryRequest(BaseModel):
     # 分页参数
@@ -454,6 +490,8 @@ class VisitRecordQueryRequest(BaseModel):
     # 过滤条件
     record_id: Optional[str] = None  # 记录ID
     customer_level: Optional[List[str]] = None  # 客户等级（多选）
+    customer_attribute: Optional[List[str]] = None  # 客户属性（多选，来自 crm_accounts）
+    tag_ids: Optional[List[str]] = None  # 客户 tag（多选，OR，来自 crm_accounts.extra.tags）
     account_id: Optional[List[str]] = None  # 客户ID（多选）
     account_name: Optional[List[str]] = None  # 客户名称（多选）
     partner_id: Optional[List[str]] = None  # 合作伙伴ID（多选）
@@ -491,6 +529,20 @@ class VisitRecordResponse(BaseModel):
     opportunity_id: Optional[str] = Field(default=None, description="商机ID")
     partner_name: Optional[str] = Field(default=None, description="合作伙伴")
     partner_id: Optional[str] = Field(default=None, description="合作伙伴ID")
+    followup_object_name: Optional[str] = Field(
+        default=None,
+        description="跟进对象名称（有客户用 account_name，否则 partner_name）",
+    )
+    followup_object_id: Optional[str] = Field(
+        default=None,
+        description="跟进对象ID（有客户用 account_id，否则 partner_id）",
+    )
+    external_collaboration_partner_name: Optional[str] = Field(
+        default=None, description="外部协同合作伙伴名称"
+    )
+    external_collaboration_partner_id: Optional[str] = Field(
+        default=None, description="外部协同合作伙伴ID"
+    )
     customer_lead_source: Optional[str] = Field(default=None, description="客户/线索来源")
     visit_object_category: Optional[str] = Field(default=None, description="拜访对象类别")
     contact_position: Optional[str] = Field(default=None, description="联系人职位（旧字段，保留以兼容旧数据）")
@@ -547,7 +599,18 @@ class VisitRecordResponse(BaseModel):
     longitude: Optional[float] = Field(default=None, description="经度，范围 -180 到 180")
 
     # 关联字段 - 来自crm_accounts表
-    customer_level: Optional[str] = Field(default=None, description="客户等级")
+    customer_level: Optional[str] = Field(
+        default=None,
+        description="客户分类/等级（crm_accounts.customer_level，按 account_id 或 partner_id 关联）",
+    )
+    customer_attribute: Optional[str] = Field(
+        default=None,
+        description="跟进对象属性（crm_accounts.customer_attribute，按 account_id 或 partner_id 关联）",
+    )
+    tags: List[AccountTagOptionOut] = Field(
+        default_factory=list,
+        description="跟进对象 tags（crm_accounts.extra.tags，按 account_id 或 partner_id 关联）",
+    )
     
     # 关联字段 - 来自user_profiles表
     department: Optional[str] = Field(default=None, description="拜访人所在部门")
@@ -833,6 +896,22 @@ class WeeklyFollowupEntityRowOut(BaseModel):
     opportunity_name: Optional[str] = None
     partner_id: Optional[str] = None
     partner_name: Optional[str] = None
+    followup_object_name: Optional[str] = Field(
+        default=None,
+        description="跟进对象名称（有客户用 account_name，否则 partner_name）",
+    )
+    followup_object_id: Optional[str] = Field(
+        default=None,
+        description="跟进对象ID（有客户用 account_id，否则 partner_id）",
+    )
+    customer_attribute: Optional[str] = Field(
+        default=None,
+        description="跟进对象属性（crm_accounts.customer_attribute，按跟进对象 ID 关联）",
+    )
+    tags: List[AccountTagOptionOut] = Field(
+        default_factory=list,
+        description="对象标签（crm_accounts.extra.tags，按跟进对象 ID 关联）",
+    )
     owner_name: Optional[str] = None
     progress: Optional[str] = None
     risks: Optional[str] = None
@@ -860,6 +939,7 @@ class WeeklyFollowupDetailQueryIn(_WeeklyFollowupWeekRangeQueryMixin):
     filter_account_name: Optional[str] = None  # 客户名称筛选（单选）
     filter_opportunity_id: Optional[str] = None  # 商机ID筛选（单选）
     filter_opportunity_name: Optional[str] = None  # 商机名称筛选（单选）
+    filter_tag_ids: Optional[List[str]] = None  # 客户 tag 筛选（多选，OR）
 
 
 class WeeklyFollowupFilterOptionsQueryIn(_WeeklyFollowupWeekRangeQueryMixin):
@@ -879,6 +959,7 @@ class WeeklyFollowupFilterOptionsOut(BaseModel):
     """
     department_names: List[str]  # 可用的部门名称列表（去重、排序）
     owner_names: List[str]  # 可用的负责人名称列表（去重、排序）
+    tags: List[AccountTagOptionOut] = []  # 可用的客户 tag 列表（去重、按 name 排序）
 
 
 class WeeklyFollowupEntityPageOut(BaseModel):
@@ -1088,7 +1169,9 @@ class ReviewOppBranchSnapshotsQueryIn(BaseModel):
     snapshot_filters: Optional[Dict[str, Any]] = Field(
         default=None,
         description=(
-            "可选筛选器，支持 opportunity_ids/opportunity_names/owner_ids/owner_names/"
+            "可选筛选器，支持 opportunity_ids/opportunity_names/"
+            "account_ids/account_names（别名 customer_ids/customer_names）/"
+            "owner_ids/owner_names/"
             "forecast_types/opportunity_stages/opportunity_types: string[]；"
             "expected_closing_date_start/end: YYYY-MM-DD；"
             "forecast_amount_min/max: number；"
@@ -1113,7 +1196,9 @@ class ReviewSnapshotGroupsQueryIn(BaseModel):
     snapshot_filters: Optional[Dict[str, Any]] = Field(
         default=None,
         description=(
-            "可选筛选器，支持 opportunity_ids/opportunity_names/owner_ids/owner_names/"
+            "可选筛选器，支持 opportunity_ids/opportunity_names/"
+            "account_ids/account_names（别名 customer_ids/customer_names）/"
+            "owner_ids/owner_names/"
             "forecast_types/opportunity_stages/opportunity_types: string[]；"
             "expected_closing_date_start/end: YYYY-MM-DD；"
             "forecast_amount_min/max: number；"
@@ -1181,7 +1266,9 @@ class ReviewSnapshotGroupDataQueryIn(BaseModel):
     snapshot_filters: Optional[Dict[str, Any]] = Field(
         default=None,
         description=(
-            "可选筛选器，支持 opportunity_ids/opportunity_names/owner_ids/owner_names/"
+            "可选筛选器，支持 opportunity_ids/opportunity_names/"
+            "account_ids/account_names（别名 customer_ids/customer_names）/"
+            "owner_ids/owner_names/"
             "forecast_types/opportunity_stages/opportunity_types: string[]；"
             "expected_closing_date_start/end: YYYY-MM-DD；"
             "forecast_amount_min/max: number；"

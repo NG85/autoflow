@@ -85,8 +85,9 @@ class CRMWeeklyFollowupService:
             return "opportunity", str(record.opportunity_id).strip()
         if record.account_id:
             return "account", str(record.account_id).strip()
-        if record.partner_id:
-            return "partner", str(record.partner_id).strip()
+        partner_id = self._legacy_partner_id(record)
+        if partner_id:
+            return "partner", partner_id
         return None
 
     def _truncate(self, s: str, limit: int) -> str:
@@ -112,6 +113,16 @@ class CRMWeeklyFollowupService:
     def _norm_id(self, v: Optional[str]) -> Optional[str]:
         s = (str(v).strip() if v is not None else "")
         return s or None
+
+    def _legacy_partner_id(self, record: CRMSalesVisitRecord) -> Optional[str]:
+        return self._norm_id(record.partner_id) or self._norm_id(
+            getattr(record, "external_collaboration_partner_id", None)
+        )
+
+    def _legacy_partner_name(self, record: CRMSalesVisitRecord) -> Optional[str]:
+        return self._norm_id(record.partner_name) or self._norm_id(
+            getattr(record, "external_collaboration_partner_name", None)
+        )
 
     def _build_summary_title(self, *, week_start: date, week_end: date, summary_type: str, department_name: str) -> str:
         # 格式约定：
@@ -148,6 +159,8 @@ class CRMWeeklyFollowupService:
         opportunity_name = _pick_first_non_empty("opportunity_name")
         account_name = _pick_first_non_empty("account_name")
         partner_name = _pick_first_non_empty("partner_name")
+        external_partner_name = _pick_first_non_empty("external_collaboration_partner_name")
+        followup_object_name = account_name or partner_name or external_partner_name
 
         visits_text = "\n".join(
             [
@@ -162,9 +175,10 @@ class CRMWeeklyFollowupService:
 你是销售管理周复盘助手。请基于“本周拜访记录摘要（较完整）”，输出该【{key.department_name}】团队下该实体的“本周进展与风险”结构化总结。
 
 {preamble_block}实体信息（同一组拜访记录对应同一实体）：
-- 客户: {account_name or '--'}
+- 跟进对象: {followup_object_name or '--'}
 - 商机: {opportunity_name or '--'}
-- 伙伴: {partner_name or '--'}
+- 合作伙伴: {partner_name or '--'}
+- 外部协同伙伴: {external_partner_name or '--'}
 
 任务目标：
 - progress：总结该实体本周最有价值的推进结果（结论优先），并给出关键依据与下一步动作（可选）。
@@ -216,7 +230,12 @@ class CRMWeeklyFollowupService:
         cache = visit_context_cache if visit_context_cache is not None else {}
         rollup_cap = settings.CRM_WEEKLY_FOLLOWUP_ROLLUP_MAX_VISITS_PER_ENTITY
         def _entity_title_from_record(last_record: CRMSalesVisitRecord) -> str:
-            customer = (last_record.account_name or last_record.partner_name or "--").strip()
+            customer = (
+                last_record.account_name
+                or last_record.partner_name
+                or getattr(last_record, "external_collaboration_partner_name", None)
+                or "--"
+            ).strip()
             opp = (last_record.opportunity_name or "").strip()
             return f"{customer}" + (f" / {opp}" if opp else "")
 
@@ -528,6 +547,8 @@ class CRMWeeklyFollowupService:
             CRMSalesVisitRecord.opportunity_id,
             CRMSalesVisitRecord.partner_name,
             CRMSalesVisitRecord.partner_id,
+            CRMSalesVisitRecord.external_collaboration_partner_name,
+            CRMSalesVisitRecord.external_collaboration_partner_id,
             CRMSalesVisitRecord.contacts,
             CRMSalesVisitRecord.contact_position,
             CRMSalesVisitRecord.contact_name,
@@ -590,7 +611,7 @@ class CRMWeeklyFollowupService:
         opportunity_ids = {str(r.opportunity_id).strip() for r in records if r.opportunity_id}
         account_ids = {str(r.account_id).strip() for r in records if r.account_id}
         # 仅有 partner_id（无商机、无客户）时，也需要从客户表中查负责人
-        partner_ids = {str(r.partner_id).strip() for r in records if r.partner_id}
+        partner_ids = {pid for r in records if (pid := self._legacy_partner_id(r))}
 
         # 只缓存周跟进生成所需的少数字段，避免 select(CRMOpportunity) 拉全量大字段
         opp_by_id: dict[str, dict[str, Optional[str]]] = {}
@@ -808,7 +829,10 @@ class CRMWeeklyFollowupService:
                             "id": r.id,
                             "opportunity_name": r.opportunity_name,
                             "account_name": r.account_name,
-                            "partner_name": r.partner_name,
+                            "partner_name": self._legacy_partner_name(r),
+                            "external_collaboration_partner_name": getattr(
+                                r, "external_collaboration_partner_name", None
+                            ),
                             "context": self._visit_context_for_prompt(r, visit_context_cache),
                         }
                     )
@@ -856,12 +880,15 @@ class CRMWeeklyFollowupService:
                 owner_name = (owner_name or "").strip() or None
                 owner_name_by_key[key] = owner_name
 
-                account_id = last_record.account_id
-                account_name = last_record.account_name
+                # 查询口径约束：
+                # - 客户：仅当客户字段本身有值时才返回，否则为空
+                # - 合作伙伴：优先 partner_*，为空时回退 external_collaboration_partner_*
+                account_id = self._norm_id(last_record.account_id)
+                account_name = self._norm_id(last_record.account_name)
                 opportunity_id = last_record.opportunity_id
                 opportunity_name = last_record.opportunity_name
-                partner_id = last_record.partner_id
-                partner_name = last_record.partner_name
+                partner_id = self._legacy_partner_id(last_record)
+                partner_name = self._legacy_partner_name(last_record)
 
                 if key.entity_type == "opportunity":
                     opp = opp_by_id.get(key.entity_id)
