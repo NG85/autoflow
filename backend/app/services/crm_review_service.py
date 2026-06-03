@@ -8,7 +8,6 @@ import uuid
 from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
-from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 from sqlalchemy import case, false, text
@@ -131,26 +130,6 @@ def _parse_forecast_type_aliases_from_config_value(raw: Optional[str]) -> List[s
 _FORECAST_RANK_ALIASES_CACHE_TTL_SEC = 120.0
 _forecast_rank_aliases_cache_lock = threading.Lock()
 _forecast_rank_aliases_cache: Optional[Tuple[float, Tuple[Tuple[str, ...], Tuple[str, ...], Tuple[str, ...]]]] = None
-
-_SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
-
-
-def _to_beijing_datetime(dt: Optional[datetime]) -> Optional[datetime]:
-    """Convert datetime to Asia/Shanghai for API response."""
-    if dt is None:
-        return None
-    if dt.tzinfo is None:
-        # Assume DB stores UTC when tzinfo is missing.
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(_SHANGHAI_TZ)
-
-
-def _format_beijing_datetime(dt: Optional[datetime]) -> Optional[str]:
-    """Format datetime to `YYYY-MM-DD HH:MM:SS` in Asia/Shanghai."""
-    beijing = _to_beijing_datetime(dt)
-    if beijing is None:
-        return None
-    return beijing.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _load_forecast_type_rank_alias_tuples(db_session: Session) -> Tuple[Tuple[str, ...], Tuple[str, ...], Tuple[str, ...]]:
@@ -842,7 +821,11 @@ class CRMReviewService:
             "period_end": session.period_end,
             "stage": str(session.stage or ""),
             "report_date": session.report_date,
-            "create_time": _format_beijing_datetime(session.create_time),
+            "create_time": (
+                session.create_time.strftime("%Y-%m-%d %H:%M:%S")
+                if session.create_time
+                else None
+            ),
             "review_phase": session.review_phase,
             "department_id": (str(session.department_id or "").strip() or None),
             "department_name": (str(session.department_name or "").strip() or None),
