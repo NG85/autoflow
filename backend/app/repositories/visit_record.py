@@ -458,15 +458,15 @@ class VisitRecordRepo(BaseRepo):
         )
             
         # 构建基础查询：跟进对象属性/分类来自 account_id 或 partner_id 关联的 crm_accounts
-        account_crm, partner_crm, customer_level_col, customer_attribute_col, followup_extra_col = (
+        account_crm, partner_crm, customer_level_col, customer_attribute_col, _followup_extra_col = (
             _followup_object_crm_account_join()
         )
+        # 不在分页 SELECT 中带 extra（JSON 不可 hash，会导致 paginate unique() 失败）
         query = (
             select(
                 CRMSalesVisitRecord,
                 customer_level_col,
                 customer_attribute_col,
-                followup_extra_col,
             )
             .outerjoin(account_crm, CRMSalesVisitRecord.account_id == account_crm.unique_id)
             .outerjoin(partner_crm, CRMSalesVisitRecord.partner_id == partner_crm.unique_id)
@@ -646,10 +646,22 @@ class VisitRecordRepo(BaseRepo):
         params = Params(page=request.page, size=request.page_size)
         result = paginate(session, query, params)
 
+        # 批量加载跟进对象 extra（用于 tags），避免 SELECT JSON 导致分页去重失败
+        followup_account_ids = list({
+            fid
+            for record, _, _ in result.items
+            if (fid := _resolve_followup_object_id(record.account_id, record.partner_id))
+        })
+        followup_extra_by_account_id: Dict[str, Any] = {}
+        if followup_account_ids:
+            for account in crm_account_repo.get_by_account_ids(session, followup_account_ids):
+                if account.unique_id and account.extra is not None:
+                    followup_extra_by_account_id[account.unique_id] = account.extra
+
         # 优化：批量获取部门信息，避免N+1查询
         # 收集所有需要查询的recorder_id（UUID格式）
         recorder_ids = set()
-        for record, _customer_level, _customer_attribute, _followup_extra in result.items:
+        for record, _customer_level, _customer_attribute in result.items:
             if record.recorder_id:
                 recorder_ids.add(record.recorder_id)
         
@@ -681,15 +693,18 @@ class VisitRecordRepo(BaseRepo):
 
         # 转换结果格式 - 复用现有模型
         items = []
-        for record, customer_level, customer_attribute, followup_extra in result.items:
+        for record, customer_level, customer_attribute in result.items:
             department = department_map.get(record.recorder_id) if record.recorder_id else None
+            followup_id = _resolve_followup_object_id(record.account_id, record.partner_id)
+            raw_extra = followup_extra_by_account_id.get(followup_id) if followup_id else None
+            followup_extra = raw_extra if isinstance(raw_extra, dict) else None
             items.append(
                 _convert_to_response(
                     record,
                     customer_level,
                     customer_attribute,
                     department,
-                    followup_extra=followup_extra if isinstance(followup_extra, dict) else None,
+                    followup_extra=followup_extra,
                 )
             )
 
