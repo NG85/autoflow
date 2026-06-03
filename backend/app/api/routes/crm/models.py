@@ -896,6 +896,22 @@ class WeeklyFollowupEntityRowOut(BaseModel):
     opportunity_name: Optional[str] = None
     partner_id: Optional[str] = None
     partner_name: Optional[str] = None
+    followup_object_name: Optional[str] = Field(
+        default=None,
+        description="跟进对象名称（有客户用 account_name，否则 partner_name）",
+    )
+    followup_object_id: Optional[str] = Field(
+        default=None,
+        description="跟进对象ID（有客户用 account_id，否则 partner_id）",
+    )
+    customer_attribute: Optional[str] = Field(
+        default=None,
+        description="跟进对象属性（crm_accounts.customer_attribute，按跟进对象 ID 关联）",
+    )
+    tags: List[AccountTagOptionOut] = Field(
+        default_factory=list,
+        description="对象标签（crm_accounts.extra.tags，按跟进对象 ID 关联）",
+    )
     owner_name: Optional[str] = None
     progress: Optional[str] = None
     risks: Optional[str] = None

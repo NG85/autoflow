@@ -44,7 +44,12 @@ from app.repositories.visit_record import visit_record_repo
 from app.services.crm_weekly_followup_engagement_service import crm_weekly_followup_engagement_service
 from app.utils.crm_weekly_followup_week_boundary import format_weekly_followup_period
 from app.services.oauth_service import oauth_client
-from app.utils.crm_account_tags import resolve_followup_account_id
+from app.utils.crm_account_tags import (
+    parse_account_tags,
+    resolve_followup_account_id,
+    resolve_followup_object_id,
+    resolve_followup_object_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -265,6 +270,68 @@ def _append_weekly_followup_entity_filters(
                 conds.append(false())
 
 
+def _weekly_followup_entities_to_row_out(
+    db_session: SessionDep,
+    entities: list[CRMWeeklyFollowupEntitySummary],
+    *,
+    include_comments: bool,
+) -> list[WeeklyFollowupEntityRowOut]:
+    followup_ids: list[str] = []
+    for entity in entities:
+        followup_id = resolve_followup_account_id(entity.account_id, entity.partner_id)
+        if followup_id:
+            followup_ids.append(followup_id)
+
+    crm_by_id: dict[str, object] = {}
+    if followup_ids:
+        for account in crm_account_repo.get_by_account_ids(db_session, list(dict.fromkeys(followup_ids))):
+            uid = str(getattr(account, "unique_id", "") or "").strip()
+            if uid:
+                crm_by_id[uid] = account
+
+    rows: list[WeeklyFollowupEntityRowOut] = []
+    for entity in entities:
+        followup_object_id = resolve_followup_object_id(entity.account_id, entity.partner_id)
+        crm_account = crm_by_id.get(followup_object_id or "") if followup_object_id else None
+        customer_attribute = None
+        tag_options: list[AccountTagOptionOut] = []
+        if crm_account is not None:
+            raw_attr = getattr(crm_account, "customer_attribute", None)
+            customer_attribute = str(raw_attr).strip() if raw_attr else None
+            tag_options = [
+                AccountTagOptionOut(id=tag.id, name=tag.name)
+                for tag in parse_account_tags(
+                    getattr(crm_account, "extra", None)
+                    if isinstance(getattr(crm_account, "extra", None), dict)
+                    else None
+                )
+            ]
+
+        rows.append(
+            WeeklyFollowupEntityRowOut(
+                id=entity.id,
+                department_name=entity.department_name,
+                account_id=entity.account_id,
+                account_name=entity.account_name,
+                opportunity_id=entity.opportunity_id,
+                opportunity_name=entity.opportunity_name,
+                partner_id=entity.partner_id,
+                partner_name=entity.partner_name,
+                followup_object_name=resolve_followup_object_name(
+                    entity.account_name, entity.partner_name
+                ),
+                followup_object_id=followup_object_id,
+                customer_attribute=customer_attribute,
+                tags=tag_options,
+                owner_name=entity.owner_name,
+                progress=entity.progress,
+                risks=entity.risks,
+                comments=_to_comments(entity.comments) if include_comments else [],
+            )
+        )
+    return rows
+
+
 def _list_followup_account_ids_for_entity_conds(db_session: SessionDep, conds: list) -> list[str]:
     rows = db_session.exec(
         select(
@@ -373,23 +440,9 @@ def get_weekly_followup_detail(
         .limit(size)
     ).all()
 
-    items = [
-        WeeklyFollowupEntityRowOut(
-            id=e.id,
-            department_name=e.department_name,
-            account_id=e.account_id,
-            account_name=e.account_name,
-            opportunity_id=e.opportunity_id,
-            opportunity_name=e.opportunity_name,
-            partner_id=e.partner_id,
-            partner_name=e.partner_name,
-            owner_name=e.owner_name,
-            progress=e.progress,
-            risks=e.risks,
-            comments=_to_comments(e.comments) if include_comments else [],
-        )
-        for e in entities
-    ]
+    items = _weekly_followup_entities_to_row_out(
+        db_session, entities, include_comments=include_comments
+    )
 
     return WeeklyFollowupDetailOut(
         scope=scope,
@@ -418,6 +471,10 @@ def export_weekly_followup_detail(
         ws_entities.append(
             [
                 "department_name",
+                "followup_object_name",
+                "followup_object_id",
+                "customer_attribute",
+                "object_tags",
                 "account_id",
                 "account_name",
                 "opportunity_id",
@@ -453,9 +510,16 @@ def export_weekly_followup_detail(
                         for c in (item.comments or [])
                     ]
                 )
+                object_tags_text = ", ".join(
+                    tag.name for tag in (item.tags or []) if tag.name
+                )
                 ws_entities.append(
                     [
                         item.department_name or "",
+                        item.followup_object_name or "",
+                        item.followup_object_id or "",
+                        item.customer_attribute or "",
+                        object_tags_text,
                         item.account_id or "",
                         item.account_name or "",
                         item.opportunity_id or "",
@@ -954,17 +1018,5 @@ def save_weekly_followup_comments(
     except Exception as e:
         logger.warning(f"发送周跟进评论提醒失败（不影响保存评论）：{e}")
 
-    return WeeklyFollowupEntityRowOut(
-        id=entity.id,
-        department_name=entity.department_name,
-        account_id=entity.account_id,
-        account_name=entity.account_name,
-        opportunity_id=entity.opportunity_id,
-        opportunity_name=entity.opportunity_name,
-        partner_id=entity.partner_id,
-        partner_name=entity.partner_name,
-        owner_name=entity.owner_name,
-        progress=entity.progress,
-        risks=entity.risks,
-        comments=_to_comments(entity.comments),
-    )
+    rows = _weekly_followup_entities_to_row_out(db_session, [entity], include_comments=True)
+    return rows[0]
