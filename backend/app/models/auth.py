@@ -25,6 +25,12 @@ class User(UUIDBaseModel, UpdatableBaseModel, table=True):
 
 
 class UserSession(SQLModel, table=True):
+    """
+    ORM for ``user_sessions`` (table retained; no runtime reads/writes in app auth).
+
+    Historical rows archived to ``user_sessions_archive_20260522``.
+    """
+
     token: str = Field(max_length=43, primary_key=True)
     created_at: Optional[datetime] = Field(
         default=None,

@@ -63,7 +63,7 @@ from app.api.routes.retrieve import (
 )
 from app.api.routes.crm import routes as crm_routes
 
-from app.auth.users import auth_backend, fastapi_users
+from app.api.routes import auth_legacy_login, auth_oauth
 
 api_router = APIRouter()
 api_router.include_router(index.router, tags=["index"])
@@ -115,6 +115,5 @@ api_router.include_router(
 )
 api_router.include_router(admin_user.router)
 
-api_router.include_router(
-    fastapi_users.get_auth_router(auth_backend), prefix="/auth", tags=["auth"]
-)
+api_router.include_router(auth_legacy_login.router, prefix="/auth", tags=["auth"])
+api_router.include_router(auth_oauth.router, prefix="/auth", tags=["auth"])

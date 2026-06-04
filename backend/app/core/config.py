@@ -209,6 +209,27 @@ class Settings(BaseSettings):
     
     # OAuth base URL
     OAUTH_BASE_URL: str = "http://auth:8018"
+    # OAuth service connectivity (read-only; must not break /healthz liveness)
+    OAUTH_HEALTH_PROBE_ENABLED: bool = True
+    OAUTH_HEALTH_PROBE_TIMEOUT_SECONDS: float = 3.0
+    OAUTH_CLIENT_DEFAULT_TIMEOUT_SECONDS: float = 30.0
+    OAUTH_CLIENT_RETRY_ATTEMPTS: int = 1  # extra attempts after the first (transport errors only)
+    OAUTH_CLIENT_RETRY_BACKOFF_SECONDS: float = 0.2
+    OAUTH_SESSION_ME_TIMEOUT_SECONDS: float = 10.0
+    # Optional BFF: POST /auth/login/oauth (POST /auth/login remains the primary form login)
+    OAUTH_BFF_LOGIN_ENABLED: bool = True
+    OAUTH_ACCESS_TOKEN_COOKIE_NAME: str = "oauth_access_token"
+    OAUTH_ACCESS_TOKEN_COOKIE_SAMESITE: str = "none"  # lax | strict | none
+    # Registration: prefer oauth; fallback to local UserRepository.create
+    OAUTH_REGISTER_ENABLED: bool = True
+    OAUTH_REGISTER_CHANNEL: str = "siaweb"
+    OAUTH_BOOTSTRAP_VIA_OAUTH: bool = False
+    # After POST /auth/login succeeds, issue oauth_access_token via session/issue
+    AUTH_LEGACY_OAUTH_SHADOW_ENABLED: bool = True
+    OAUTH_LOGIN_CHANNEL: str = ""  # empty → OAUTH_REGISTER_CHANNEL (default siaweb)
+    OAUTH_SESSION_ISSUE_ENABLED: bool = True
+    OAUTH_SESSION_ISSUE_SECRET: str = ""  # shared with aptsell-oauth SESSION_ISSUE_SERVICE_SECRET
+    AUTH_LEGACY_OAUTH_SHADOW_PASSWORD_FALLBACK: bool = False  # fallback: session/login with form creds
 
     # Feishu paid API configuration
     FEISHU_PAID_API_BASE_URL: str = "http://feishu-paid-api:8000"

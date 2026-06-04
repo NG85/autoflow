@@ -11,16 +11,17 @@ readme = "README.md"
 requires-python = ">= 3.10"
 dependencies = [
     "fastapi>=0.115.6",
+    "python-multipart>=0.0.9",
     "fastapi-cli>=0.0.5",
-    "fastapi-users>=13.0.0",
     "fastapi-pagination>=0.12.25",
-    "fastapi-users-db-sqlmodel>=0.3.0",
+    "pwdlib[argon2,bcrypt]>=0.2.1",
     "sqlmodel==0.0.19",
     "pymysql>=1.1.1",
     "asyncmy>=0.2.9",
     "tidb-vector>=0.0.14",
     "alembic>=1.14.0",
     "pydantic>=2.10.5",
+    "email-validator>=2.0.0",
     # Update Check: https://github.com/pydantic/pydantic/issues/8061
     "pydantic-settings>=2.3.3",
     "redis>=5.0.5",

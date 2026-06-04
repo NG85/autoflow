@@ -77,4 +77,17 @@ async def identify_browser(request: Request, call_next):
     return response
 
 
+@app.middleware("http")
+async def legacy_logout_oauth_shadow(request: Request, call_next):
+    from app.auth.oauth_shadow import (
+        clear_oauth_cookie_on_legacy_logout,
+        is_legacy_logout_request,
+    )
+
+    response: Response = await call_next(request)
+    if is_legacy_logout_request(request):
+        clear_oauth_cookie_on_legacy_logout(request, response)
+    return response
+
+
 app.include_router(api_router, prefix=settings.API_V1_STR)

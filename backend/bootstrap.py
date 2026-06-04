@@ -15,17 +15,14 @@ async def ensure_admin_user(
     result = await session.exec(select(User).where(User.is_superuser == True))
     user = result.first()
     if not user:
-        from app.auth.users import create_user
+        from app.auth.registration import ensure_admin_user_account
 
         admin_email = email or "admin@example.com"
         admin_password = password or secrets.token_urlsafe(16)
-        user = await create_user(
+        user = await ensure_admin_user_account(
             session,
             email=admin_email,
             password=admin_password,
-            is_active=True,
-            is_verified=True,
-            is_superuser=True,
         )
         print(Fore.RED + "\n" + "!" * 80)
         print(
