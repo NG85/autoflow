@@ -33,6 +33,7 @@ from app.repositories.crm_account_opportunity_assessment import crm_account_oppo
 from app.repositories.document_content import DocumentContentRepo
 from app.repositories.user_profile import UserProfileRepo
 from app.repositories.visit_record import visit_record_repo
+from app.services.crm_config_service import get_resolved_field_mapping
 from app.services.document_processing_service import document_processing_service
 from app.services.feishu_billing_facade import check_billing_quota
 
@@ -749,9 +750,15 @@ def get_visit_record_filter_options(
             form_type,
         )
 
-        customer_levels, customer_attributes = (
-            crm_account_repo.get_distinct_customer_level_and_attribute(db_session)
+        customer_levels = crm_account_repo.get_distinct_customer_levels(db_session)
+        field_mapping = get_resolved_field_mapping(
+            db_session, report_type="拜访记录过滤选项"
         )
+        customer_attributes = {
+            key: label
+            for key in ("end_customer", "partner")
+            if (label := (field_mapping.get(key) or "").strip())
+        }
         tag_options = crm_account_repo.list_all_distinct_tags(db_session)
         result_data = {
             **visit_record_options,
