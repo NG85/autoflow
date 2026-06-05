@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 from sqlalchemy import func, or_, text
 from sqlmodel import Session, select
@@ -60,11 +60,8 @@ class CRMAccountRepo(BaseRepo):
             tags.extend(parse_account_tags(account.extra))
         return merge_distinct_account_tags(tags)
 
-    def get_distinct_customer_level_and_attribute(
-        self,
-        db_session: Session,
-    ) -> Tuple[List[str], List[str]]:
-        """一次查询 crm_accounts，聚合 customer_level / customer_attribute 去重值。"""
+    def get_distinct_customer_levels(self, db_session: Session) -> List[str]:
+        """查询 crm_accounts，聚合 customer_level 去重值。"""
         db_session.exec(text("SET SESSION group_concat_max_len = 1048576"))
         row = db_session.exec(
             text(
@@ -72,10 +69,7 @@ class CRMAccountRepo(BaseRepo):
                 SELECT
                   GROUP_CONCAT(
                     DISTINCT customer_level ORDER BY customer_level SEPARATOR :sep
-                  ) AS customer_levels,
-                  GROUP_CONCAT(
-                    DISTINCT customer_attribute ORDER BY customer_attribute SEPARATOR :sep
-                  ) AS customer_attributes
+                  ) AS customer_levels
                 FROM crm_accounts
                 WHERE (delete_flag = 0 OR delete_flag IS NULL)
                 """
@@ -83,8 +77,8 @@ class CRMAccountRepo(BaseRepo):
             params={"sep": _CRM_ACCOUNT_FILTER_OPTION_SEP},
         ).one()
         if row is None:
-            return [], []
-        return _split_group_concat(row[0]), _split_group_concat(row[1])
+            return []
+        return _split_group_concat(row[0])
 
     def list_all_distinct_tags(self, db_session: Session) -> List[AccountTagOption]:
         not_deleted = or_(CRMAccount.delete_flag == 0, CRMAccount.delete_flag.is_(None))

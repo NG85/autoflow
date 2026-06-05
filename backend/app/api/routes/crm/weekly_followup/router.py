@@ -41,6 +41,7 @@ from app.repositories.department_mirror import department_mirror_repo
 from app.repositories.user_department_relation import user_department_relation_repo
 from app.repositories.user_profile import UserProfileRepo
 from app.repositories.visit_record import visit_record_repo
+from app.services.crm_config_service import get_resolved_field_mapping
 from app.services.crm_weekly_followup_engagement_service import crm_weekly_followup_engagement_service
 from app.utils.crm_weekly_followup_week_boundary import format_weekly_followup_period
 from app.services.oauth_service import oauth_client
@@ -50,6 +51,7 @@ from app.utils.crm_account_tags import (
     resolve_followup_object_id,
     resolve_followup_object_name,
 )
+from app.utils.crm_followup_object_type import resolve_customer_attribute_display_label
 
 logger = logging.getLogger(__name__)
 
@@ -282,6 +284,8 @@ def _weekly_followup_entities_to_row_out(
         if followup_id:
             followup_ids.append(followup_id)
 
+    field_mapping = get_resolved_field_mapping(db_session, report_type="周跟进实体明细")
+
     crm_by_id: dict[str, object] = {}
     if followup_ids:
         for account in crm_account_repo.get_by_account_ids(db_session, list(dict.fromkeys(followup_ids))):
@@ -293,11 +297,13 @@ def _weekly_followup_entities_to_row_out(
     for entity in entities:
         followup_object_id = resolve_followup_object_id(entity.account_id, entity.partner_id)
         crm_account = crm_by_id.get(followup_object_id or "") if followup_object_id else None
-        customer_attribute = None
+        customer_attribute = resolve_customer_attribute_display_label(
+            entity.account_id,
+            entity.partner_id,
+            field_mapping,
+        )
         tag_options: list[AccountTagOptionOut] = []
         if crm_account is not None:
-            raw_attr = getattr(crm_account, "customer_attribute", None)
-            customer_attribute = str(raw_attr).strip() if raw_attr else None
             tag_options = [
                 AccountTagOptionOut(id=tag.id, name=tag.name)
                 for tag in parse_account_tags(

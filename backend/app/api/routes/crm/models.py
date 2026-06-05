@@ -490,7 +490,7 @@ class VisitRecordQueryRequest(BaseModel):
     # 过滤条件
     record_id: Optional[str] = None  # 记录ID
     customer_level: Optional[List[str]] = None  # 客户等级（多选）
-    customer_attribute: Optional[List[str]] = None  # 客户属性（多选，来自 crm_accounts）
+    customer_attribute: Optional[List[str]] = None  # 跟进对象类型（多选：end_customer、partner，可多选 OR）
     tag_ids: Optional[List[str]] = None  # 客户 tag（多选，OR，来自 crm_accounts.extra.tags）
     account_id: Optional[List[str]] = None  # 客户ID（多选）
     account_name: Optional[List[str]] = None  # 客户名称（多选）
@@ -605,7 +605,7 @@ class VisitRecordResponse(BaseModel):
     )
     customer_attribute: Optional[str] = Field(
         default=None,
-        description="跟进对象属性（crm_accounts.customer_attribute，按 account_id 或 partner_id 关联）",
+        description="跟进对象类型（字段映射 end_customer/partner；有 account_id 为最终客户，否则为合作伙伴）",
     )
     tags: List[AccountTagOptionOut] = Field(
         default_factory=list,
@@ -906,7 +906,7 @@ class WeeklyFollowupEntityRowOut(BaseModel):
     )
     customer_attribute: Optional[str] = Field(
         default=None,
-        description="跟进对象属性（crm_accounts.customer_attribute，按跟进对象 ID 关联）",
+        description="跟进对象类型展示名（有 account_id 为 end_customer，否则 partner；来自字段映射）",
     )
     tags: List[AccountTagOptionOut] = Field(
         default_factory=list,

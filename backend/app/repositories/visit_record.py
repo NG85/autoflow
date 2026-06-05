@@ -1,9 +1,9 @@
 from typing import Any, Dict, Optional, List
 from datetime import datetime
 import logging
-from sqlalchemy import text
+from sqlalchemy import and_, or_, text
 from sqlalchemy.orm import aliased
-from sqlmodel import Session, select, func, or_, desc, asc
+from sqlmodel import Session, select, func, desc, asc
 from fastapi_pagination import Params, Page
 from fastapi_pagination.ext.sqlmodel import paginate
 from uuid import UUID
@@ -22,8 +22,10 @@ from app.repositories.base_repo import BaseRepo
 from app.repositories.user_profile import user_profile_repo
 from app.repositories.user_department_relation import user_department_relation_repo
 from app.repositories.department_mirror import department_mirror_repo
+from app.services.crm_config_service import get_resolved_field_mapping
 from app.services.oauth_service import oauth_client
 from app.utils.crm_account_tags import parse_account_tags
+from app.utils.crm_followup_object_type import resolve_customer_attribute_display_label
 from app.utils.date_utils import convert_beijing_date_to_utc_range
 
 logger = logging.getLogger(__name__)
@@ -61,7 +63,7 @@ def _split_group_concat(value: Optional[str]) -> List[str]:
 
 def _followup_object_crm_account_join():
     """
-    跟进对象与客户/伙伴二选一：等级、属性分别从 account_id / partner_id 关联 crm_accounts，再 coalesce。
+    跟进对象与客户/伙伴二选一：等级、extra 分别从 account_id / partner_id 关联 crm_accounts，再 coalesce。
     """
     account_crm = aliased(CRMAccount, name="followup_object_account_crm")
     partner_crm = aliased(CRMAccount, name="followup_object_partner_crm")
@@ -93,6 +95,72 @@ def _resolve_followup_object_id(
         return aid
     pid = (partner_id or "").strip()
     return pid or None
+
+
+def _visit_record_account_id_is_set():
+    trimmed = func.trim(CRMSalesVisitRecord.account_id)
+    return and_(
+        CRMSalesVisitRecord.account_id.isnot(None),
+        trimmed != "",
+    )
+
+
+def _visit_record_account_id_is_empty():
+    """account_id 为空（含 NULL、空串、仅空白），用于 partner 类跟进对象筛选。"""
+    trimmed = func.trim(CRMSalesVisitRecord.account_id)
+    return or_(
+        CRMSalesVisitRecord.account_id.is_(None),
+        trimmed == "",
+    )
+
+
+def _visit_record_partner_id_is_set():
+    trimmed = func.trim(CRMSalesVisitRecord.partner_id)
+    return and_(
+        CRMSalesVisitRecord.partner_id.isnot(None),
+        trimmed != "",
+    )
+
+
+def _visit_record_followup_is_partner_type():
+    """
+    跟进对象为合作伙伴：account 必须为空且 partner 非空。
+    历史数据可能 account/partner 同时有值（跟进对象实为 account），不可仅凭 partner 有值命中。
+    """
+    return and_(
+        _visit_record_account_id_is_empty(),
+        _visit_record_partner_id_is_set(),
+    )
+
+
+def _customer_attribute_filter_predicate(selected_values: List[str]):
+    """
+    customer_attribute 仅接受 end_customer / partner 键（与 filter-options 一致），多选 OR。
+    - end_customer：account_id 非空（含历史双填，跟进对象以 account 为准）
+    - partner：account_id 为空且 partner_id 非空（排除历史双填误命中）
+    """
+    selected = {value.strip() for value in selected_values if value and value.strip()}
+    if not selected:
+        return None
+
+    predicates = []
+    if "end_customer" in selected:
+        predicates.append(_visit_record_account_id_is_set())
+    if "partner" in selected:
+        predicates.append(_visit_record_followup_is_partner_type())
+    if not predicates:
+        return None
+    return or_(*predicates) if len(predicates) > 1 else predicates[0]
+
+
+def _empty_visit_record_page(request: VisitRecordQueryRequest) -> Page[VisitRecordResponse]:
+    return Page(
+        items=[],
+        total=0,
+        page=request.page,
+        size=request.page_size,
+        pages=0,
+    )
 
 
 def _fill_external_collaboration_from_legacy_partner(record_dict: Dict[str, Any]) -> None:
@@ -457,16 +525,16 @@ class VisitRecordRepo(BaseRepo):
             is_admin_user_fn=self._is_admin_user,
         )
             
-        # 构建基础查询：跟进对象属性/分类来自 account_id 或 partner_id 关联的 crm_accounts
-        account_crm, partner_crm, customer_level_col, customer_attribute_col, _followup_extra_col = (
+        # 构建基础查询：customer_level 来自跟进对象关联的 crm_accounts
+        account_crm, partner_crm, customer_level_col, _customer_attribute_col, _followup_extra_col = (
             _followup_object_crm_account_join()
         )
+        field_mapping = get_resolved_field_mapping(session, report_type="拜访记录查询")
         # 不在分页 SELECT 中带 extra（JSON 不可 hash，会导致 paginate unique() 失败）
         query = (
             select(
                 CRMSalesVisitRecord,
                 customer_level_col,
-                customer_attribute_col,
             )
             .outerjoin(account_crm, CRMSalesVisitRecord.account_id == account_crm.unique_id)
             .outerjoin(partner_crm, CRMSalesVisitRecord.partner_id == partner_crm.unique_id)
@@ -487,7 +555,10 @@ class VisitRecordRepo(BaseRepo):
             query = query.where(customer_level_col.in_(request.customer_level))
 
         if request.customer_attribute:
-            query = query.where(customer_attribute_col.in_(request.customer_attribute))
+            attr_predicate = _customer_attribute_filter_predicate(request.customer_attribute)
+            if attr_predicate is None:
+                return _empty_visit_record_page(request)
+            query = query.where(attr_predicate)
 
         if request.tag_ids:
             tag_ids = list({tag_id.strip() for tag_id in request.tag_ids if tag_id and tag_id.strip()})
@@ -503,13 +574,7 @@ class VisitRecordRepo(BaseRepo):
                 if matching_account_ids:
                     query = query.where(followup_account_id.in_(matching_account_ids))
                 else:
-                    return Page(
-                        items=[],
-                        total=0,
-                        page=request.page,
-                        size=request.page_size,
-                        pages=0,
-                    )
+                    return _empty_visit_record_page(request)
 
         if request.account_id:
             query = query.where(
@@ -649,7 +714,7 @@ class VisitRecordRepo(BaseRepo):
         # 批量加载跟进对象 extra（用于 tags），避免 SELECT JSON 导致分页去重失败
         followup_account_ids = list({
             fid
-            for record, _, _ in result.items
+            for record, _ in result.items
             if (fid := _resolve_followup_object_id(record.account_id, record.partner_id))
         })
         followup_extra_by_account_id: Dict[str, Any] = {}
@@ -661,7 +726,7 @@ class VisitRecordRepo(BaseRepo):
         # 优化：批量获取部门信息，避免N+1查询
         # 收集所有需要查询的recorder_id（UUID格式）
         recorder_ids = set()
-        for record, _customer_level, _customer_attribute in result.items:
+        for record, _customer_level in result.items:
             if record.recorder_id:
                 recorder_ids.add(record.recorder_id)
         
@@ -693,11 +758,16 @@ class VisitRecordRepo(BaseRepo):
 
         # 转换结果格式 - 复用现有模型
         items = []
-        for record, customer_level, customer_attribute in result.items:
+        for record, customer_level in result.items:
             department = department_map.get(record.recorder_id) if record.recorder_id else None
             followup_id = _resolve_followup_object_id(record.account_id, record.partner_id)
             raw_extra = followup_extra_by_account_id.get(followup_id) if followup_id else None
             followup_extra = raw_extra if isinstance(raw_extra, dict) else None
+            customer_attribute = resolve_customer_attribute_display_label(
+                record.account_id,
+                record.partner_id,
+                field_mapping,
+            )
             items.append(
                 _convert_to_response(
                     record,
@@ -761,14 +831,14 @@ class VisitRecordRepo(BaseRepo):
         根据当前用户的汇报关系限制数据访问权限
         """
         # 单条记录查询：先拿到记录本身，再做权限判断，避免 IN 大集合
-        account_crm, partner_crm, customer_level_col, customer_attribute_col, followup_extra_col = (
+        account_crm, partner_crm, customer_level_col, _customer_attribute_col, followup_extra_col = (
             _followup_object_crm_account_join()
         )
+        field_mapping = get_resolved_field_mapping(session, report_type="拜访记录详情")
         result = session.exec(
             select(
                 CRMSalesVisitRecord,
                 customer_level_col,
-                customer_attribute_col,
                 followup_extra_col,
             )
             .outerjoin(account_crm, CRMSalesVisitRecord.account_id == account_crm.unique_id)
@@ -779,7 +849,12 @@ class VisitRecordRepo(BaseRepo):
         if not result:
             return None
 
-        record, customer_level, customer_attribute, followup_extra = result
+        record, customer_level, followup_extra = result
+        customer_attribute = resolve_customer_attribute_display_label(
+            record.account_id,
+            record.partner_id,
+            field_mapping,
+        )
 
         if not self._can_access_visit_record_by_recorder_id(
             session=session,
