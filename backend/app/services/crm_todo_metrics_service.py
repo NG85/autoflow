@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
 from typing import Optional
@@ -18,6 +18,73 @@ logger = logging.getLogger(__name__)
 
 _ASSIGNEE_ALL = "__ALL__"
 _DEPT_ALL = "__ALL__"
+_BATCH_UPSERT_SIZE = 500
+
+_WEEKLY_UPSERT_SQL = text(
+    """
+    INSERT INTO crm_todos_weekly_metrics
+        (id, week_start, week_end, assignee_id, department_id, metric, data_source, value)
+    VALUES
+        (:id, :week_start, :week_end, :assignee_id, :department_id, :metric, :data_source, :value)
+    ON DUPLICATE KEY UPDATE
+        value = VALUES(value),
+        updated_at = CURRENT_TIMESTAMP
+    """
+)
+
+_FACT_UPSERT_SQL = text(
+    """
+    INSERT INTO crm_todo_metrics_facts
+        (
+            id,
+            anchor,
+            grain,
+            period_start,
+            period_end,
+            hour_of_day,
+            subject_type,
+            subject_id,
+            data_source,
+            metric,
+            value_int
+        )
+    VALUES
+        (
+            :id,
+            :anchor,
+            :grain,
+            :period_start,
+            :period_end,
+            :hour_of_day,
+            :subject_type,
+            :subject_id,
+            :data_source,
+            :metric,
+            :value_int
+        )
+    ON DUPLICATE KEY UPDATE
+        value_int = VALUES(value_int),
+        updated_at = CURRENT_TIMESTAMP
+    """
+)
+
+
+@dataclass
+class AssigneeMappingCache:
+    """任务级负责人→用户/部门映射缓存，避免重复查 user_profiles 与部门关系。"""
+
+    raw_to_resolved: dict[str, str] = field(default_factory=dict)
+    raw_to_dept: dict[str, str] = field(default_factory=dict)
+    _known: set[str] = field(default_factory=set)
+
+    def ensure(self, session: Session, owner_keys: list[str]) -> None:
+        new_keys = [k for k in owner_keys if k and k not in self._known]
+        if not new_keys:
+            return
+        resolved, dept = crm_sales_task_statistics_service._map_assignee_to_department_id(session, new_keys)  # noqa: SLF001
+        self.raw_to_resolved.update(resolved)
+        self.raw_to_dept.update(dept)
+        self._known.update(new_keys)
 
 
 def _week_sun_sat_containing(d: date) -> tuple[date, date]:
@@ -48,6 +115,17 @@ def default_todo_metrics_windows() -> TodoMetricsWindows:
     return TodoMetricsWindows(week_starts=[prev_week_start, this_week_start])
 
 
+def _resolve_assignees(
+    session: Session,
+    owner_keys: list[str],
+    mapping_cache: AssigneeMappingCache | None = None,
+) -> tuple[dict[str, str], dict[str, str]]:
+    if mapping_cache is not None:
+        mapping_cache.ensure(session, owner_keys)
+        return mapping_cache.raw_to_resolved, mapping_cache.raw_to_dept
+    return crm_sales_task_statistics_service._map_assignee_to_department_id(session, owner_keys)  # noqa: SLF001
+
+
 class CRMTodoMetricsService:
     """
     crm_todos 指标固化：
@@ -65,9 +143,8 @@ class CRMTodoMetricsService:
     - company 级 due_date IS NULL 存量三条线（按 data_source）会同时落到 weekly 表与 facts 表
     """
 
-    def _upsert_weekly_metric(
-        self,
-        session: Session,
+    @staticmethod
+    def _weekly_row(
         week_start: date,
         week_end: date,
         assignee_id: str,
@@ -75,34 +152,20 @@ class CRMTodoMetricsService:
         metric: str,
         data_source: str,
         value: int,
-    ) -> None:
-        session.exec(
-            text(
-                """
-                INSERT INTO crm_todos_weekly_metrics
-                    (id, week_start, week_end, assignee_id, department_id, metric, data_source, value)
-                VALUES
-                    (:id, :week_start, :week_end, :assignee_id, :department_id, :metric, :data_source, :value)
-                ON DUPLICATE KEY UPDATE
-                    value = VALUES(value),
-                    updated_at = CURRENT_TIMESTAMP
-                """
-            ),
-            params={
-                "id": uuid7().hex.replace("-", ""),
-                "week_start": week_start,
-                "week_end": week_end,
-                "assignee_id": assignee_id,
-                "department_id": department_id,
-                "metric": metric,
-                "data_source": data_source,
-                "value": int(value or 0),
-            },
-        )
+    ) -> dict:
+        return {
+            "id": uuid7().hex.replace("-", ""),
+            "week_start": week_start,
+            "week_end": week_end,
+            "assignee_id": assignee_id,
+            "department_id": department_id,
+            "metric": metric,
+            "data_source": data_source,
+            "value": int(value or 0),
+        }
 
-    def _upsert_fact_metric(
-        self,
-        session: Session,
+    @staticmethod
+    def _fact_row(
         *,
         anchor: str,
         grain: str,
@@ -114,63 +177,42 @@ class CRMTodoMetricsService:
         data_source: str,
         metric: str,
         value_int: int,
-    ) -> None:
-        session.exec(
-            text(
-                """
-                INSERT INTO crm_todo_metrics_facts
-                    (
-                        id,
-                        anchor,
-                        grain,
-                        period_start,
-                        period_end,
-                        hour_of_day,
-                        subject_type,
-                        subject_id,
-                        data_source,
-                        metric,
-                        value_int
-                    )
-                VALUES
-                    (
-                        :id,
-                        :anchor,
-                        :grain,
-                        :period_start,
-                        :period_end,
-                        :hour_of_day,
-                        :subject_type,
-                        :subject_id,
-                        :data_source,
-                        :metric,
-                        :value_int
-                    )
-                ON DUPLICATE KEY UPDATE
-                    value_int = VALUES(value_int),
-                    updated_at = CURRENT_TIMESTAMP
-                """
-            ),
-            params={
-                "id": uuid7().hex.replace("-", ""),
-                "anchor": anchor,
-                "grain": grain,
-                "period_start": period_start,
-                "period_end": period_end,
-                "hour_of_day": int(hour_of_day or 0),
-                "subject_type": subject_type,
-                "subject_id": subject_id,
-                "data_source": data_source,
-                "metric": metric,
-                "value_int": int(value_int or 0),
-            },
-        )
+    ) -> dict:
+        return {
+            "id": uuid7().hex.replace("-", ""),
+            "anchor": anchor,
+            "grain": grain,
+            "period_start": period_start,
+            "period_end": period_end,
+            "hour_of_day": int(hour_of_day or 0),
+            "subject_type": subject_type,
+            "subject_id": subject_id,
+            "data_source": data_source,
+            "metric": metric,
+            "value_int": int(value_int or 0),
+        }
+
+    def _execute_batch_upsert(self, session: Session, sql, rows: list[dict]) -> int:
+        if not rows:
+            return 0
+        conn = session.connection()
+        for i in range(0, len(rows), _BATCH_UPSERT_SIZE):
+            conn.execute(sql, rows[i : i + _BATCH_UPSERT_SIZE])
+        return len(rows)
+
+    def _batch_upsert_weekly_metrics(self, session: Session, rows: list[dict]) -> int:
+        return self._execute_batch_upsert(session, _WEEKLY_UPSERT_SQL, rows)
+
+    def _batch_upsert_fact_metrics(self, session: Session, rows: list[dict]) -> int:
+        return self._execute_batch_upsert(session, _FACT_UPSERT_SQL, rows)
 
     def rebuild_weekly_manual_created(
         self,
         session: Session,
         week_start: date,
         week_end: date,
+        *,
+        mapping_cache: AssigneeMappingCache | None = None,
     ) -> dict[str, int]:
         """
         每周自创建任务数（按创建时间落周）。
@@ -195,8 +237,7 @@ class CRMTodoMetricsService:
             params={"utc_start": utc_start, "utc_end": utc_end},
         ).fetchall()
 
-        # assignee_id 选择优先 owner_id，其次 owner_name
-        assignee_ids = []
+        assignee_ids: list[str] = []
         key_rows: list[tuple[str, int]] = []
         for r in rows:
             owner_id = str(getattr(r, "owner_id", None) or (r[0] if len(r) > 0 else "") or "").strip()
@@ -208,66 +249,68 @@ class CRMTodoMetricsService:
             assignee_ids.append(assignee_id)
             key_rows.append((assignee_id, cnt))
 
-        raw_to_resolved, raw_to_dept = crm_sales_task_statistics_service._map_assignee_to_department_id(session, assignee_ids)  # noqa: SLF001
+        raw_to_resolved, raw_to_dept = _resolve_assignees(session, assignee_ids, mapping_cache)
 
+        weekly_rows: list[dict] = []
+        fact_rows: list[dict] = []
         total_company = 0
-        written = 0
         for raw_assignee_id, cnt in key_rows:
             resolved = raw_to_resolved.get(raw_assignee_id, raw_assignee_id)
             dept = raw_to_dept.get(raw_assignee_id, "UNKNOWN")
-            self._upsert_weekly_metric(
-                session,
+            weekly_rows.append(
+                self._weekly_row(
+                    week_start,
+                    week_end,
+                    assignee_id=resolved,
+                    department_id=dept,
+                    metric="tasks_created_manual",
+                    data_source="MANUAL",
+                    value=cnt,
+                )
+            )
+            fact_rows.append(
+                self._fact_row(
+                    anchor="created",
+                    grain="week",
+                    period_start=week_start,
+                    period_end=week_end,
+                    hour_of_day=0,
+                    subject_type="assignee",
+                    subject_id=resolved,
+                    data_source="MANUAL",
+                    metric="tasks_created_manual",
+                    value_int=int(cnt or 0),
+                )
+            )
+            total_company += int(cnt)
+
+        weekly_rows.append(
+            self._weekly_row(
                 week_start,
                 week_end,
-                assignee_id=resolved,
-                department_id=dept,
+                assignee_id=_ASSIGNEE_ALL,
+                department_id=_DEPT_ALL,
                 metric="tasks_created_manual",
                 data_source="MANUAL",
-                value=cnt,
+                value=total_company,
             )
-            # facts：周粒度 created（manual）
-            self._upsert_fact_metric(
-                session,
+        )
+        fact_rows.append(
+            self._fact_row(
                 anchor="created",
                 grain="week",
                 period_start=week_start,
                 period_end=week_end,
                 hour_of_day=0,
-                subject_type="assignee",
-                subject_id=resolved,
+                subject_type="company",
+                subject_id=_ASSIGNEE_ALL,
                 data_source="MANUAL",
                 metric="tasks_created_manual",
-                value_int=int(cnt or 0),
+                value_int=int(total_company or 0),
             )
-            total_company += int(cnt)
-            written += 1
-
-        # 公司汇总
-        self._upsert_weekly_metric(
-            session,
-            week_start,
-            week_end,
-            assignee_id=_ASSIGNEE_ALL,
-            department_id=_DEPT_ALL,
-            metric="tasks_created_manual",
-            data_source="MANUAL",
-            value=total_company,
         )
-        self._upsert_fact_metric(
-            session,
-            anchor="created",
-            grain="week",
-            period_start=week_start,
-            period_end=week_end,
-            hour_of_day=0,
-            subject_type="company",
-            subject_id=_ASSIGNEE_ALL,
-            data_source="MANUAL",
-            metric="tasks_created_manual",
-            value_int=int(total_company or 0),
-        )
-        written += 1
 
+        written = self._batch_upsert_weekly_metrics(session, weekly_rows) + self._batch_upsert_fact_metrics(session, fact_rows)
         return {"rows": written}
 
     def rebuild_weekly_completed_by_due_date(
@@ -277,6 +320,7 @@ class CRMTodoMetricsService:
         week_end: date,
         *,
         include_sources: Optional[list[str]] = None,
+        mapping_cache: AssigneeMappingCache | None = None,
     ) -> dict[str, int]:
         """
         每周任务完成数（你定义的口径）：
@@ -328,9 +372,9 @@ class CRMTodoMetricsService:
                 owner_keys.append(key)
             per_owner[key][ds] = per_owner[key].get(ds, 0) + cnt
 
-        raw_to_resolved, _raw_to_dept = crm_sales_task_statistics_service._map_assignee_to_department_id(session, owner_keys)  # noqa: SLF001
+        raw_to_resolved, _raw_to_dept = _resolve_assignees(session, owner_keys, mapping_cache)
 
-        written = 0
+        fact_rows: list[dict] = []
         company_by_source = {ds: 0 for ds in sources}
 
         for raw_owner, ds_map in per_owner.items():
@@ -340,8 +384,23 @@ class CRMTodoMetricsService:
                 v = int(ds_map.get(ds, 0))
                 total_owner += v
                 company_by_source[ds] += v
-                self._upsert_fact_metric(
-                    session,
+                fact_rows.append(
+                    self._fact_row(
+                        anchor="due_week",
+                        grain="week",
+                        period_start=week_start,
+                        period_end=week_end,
+                        hour_of_day=0,
+                        subject_type="assignee",
+                        subject_id=resolved,
+                        data_source=ds,
+                        metric="tasks_completed_by_due_date",
+                        value_int=v,
+                    )
+                )
+
+            fact_rows.append(
+                self._fact_row(
                     anchor="due_week",
                     grain="week",
                     period_start=week_start,
@@ -349,35 +408,33 @@ class CRMTodoMetricsService:
                     hour_of_day=0,
                     subject_type="assignee",
                     subject_id=resolved,
-                    data_source=ds,
+                    data_source="__ALL__",
                     metric="tasks_completed_by_due_date",
-                    value_int=v,
+                    value_int=int(total_owner),
                 )
-                written += 1
-
-            # per-owner total
-            self._upsert_fact_metric(
-                session,
-                anchor="due_week",
-                grain="week",
-                period_start=week_start,
-                period_end=week_end,
-                hour_of_day=0,
-                subject_type="assignee",
-                subject_id=resolved,
-                data_source="__ALL__",
-                metric="tasks_completed_by_due_date",
-                value_int=int(total_owner),
             )
-            written += 1
 
-        # company: by source + total
         company_total = 0
         for ds in sources:
             v = int(company_by_source.get(ds, 0))
             company_total += v
-            self._upsert_fact_metric(
-                session,
+            fact_rows.append(
+                self._fact_row(
+                    anchor="due_week",
+                    grain="week",
+                    period_start=week_start,
+                    period_end=week_end,
+                    hour_of_day=0,
+                    subject_type="company",
+                    subject_id=_ASSIGNEE_ALL,
+                    data_source=ds,
+                    metric="tasks_completed_by_due_date",
+                    value_int=v,
+                )
+            )
+
+        fact_rows.append(
+            self._fact_row(
                 anchor="due_week",
                 grain="week",
                 period_start=week_start,
@@ -385,27 +442,13 @@ class CRMTodoMetricsService:
                 hour_of_day=0,
                 subject_type="company",
                 subject_id=_ASSIGNEE_ALL,
-                data_source=ds,
+                data_source="__ALL__",
                 metric="tasks_completed_by_due_date",
-                value_int=v,
+                value_int=int(company_total),
             )
-            written += 1
-
-        self._upsert_fact_metric(
-            session,
-            anchor="due_week",
-            grain="week",
-            period_start=week_start,
-            period_end=week_end,
-            hour_of_day=0,
-            subject_type="company",
-            subject_id=_ASSIGNEE_ALL,
-            data_source="__ALL__",
-            metric="tasks_completed_by_due_date",
-            value_int=int(company_total),
         )
-        written += 1
 
+        written = self._batch_upsert_fact_metrics(session, fact_rows)
         return {"rows": written}
 
     def rebuild_weekly_due_week_status_distribution(
@@ -413,6 +456,8 @@ class CRMTodoMetricsService:
         session: Session,
         week_start: date,
         week_end: date,
+        *,
+        mapping_cache: AssigneeMappingCache | None = None,
     ) -> dict[str, int]:
         """
         due_date 落在统计周的任务，按 ai_status 分桶数量 + 当周总量（写入 facts，便于算状态占比）。
@@ -465,9 +510,9 @@ class CRMTodoMetricsService:
                 owner_keys.append(key)
             per_owner[key][st] = per_owner[key].get(st, 0) + cnt
 
-        raw_to_resolved, _ = crm_sales_task_statistics_service._map_assignee_to_department_id(session, owner_keys)  # noqa: SLF001
+        raw_to_resolved, _ = _resolve_assignees(session, owner_keys, mapping_cache)
 
-        written = 0
+        fact_rows: list[dict] = []
         company_by_status = {st: 0 for st in statuses}
 
         for raw_owner, st_map in per_owner.items():
@@ -477,8 +522,22 @@ class CRMTodoMetricsService:
                 v = int(st_map.get(st, 0))
                 total_owner += v
                 company_by_status[st] += v
-                self._upsert_fact_metric(
-                    session,
+                fact_rows.append(
+                    self._fact_row(
+                        anchor="due_week",
+                        grain="week",
+                        period_start=week_start,
+                        period_end=week_end,
+                        hour_of_day=0,
+                        subject_type="assignee",
+                        subject_id=resolved,
+                        data_source="",
+                        metric=f"tasks_by_due_week_status_{st.lower()}",
+                        value_int=v,
+                    )
+                )
+            fact_rows.append(
+                self._fact_row(
                     anchor="due_week",
                     grain="week",
                     period_start=week_start,
@@ -487,29 +546,29 @@ class CRMTodoMetricsService:
                     subject_type="assignee",
                     subject_id=resolved,
                     data_source="",
-                    metric=f"tasks_by_due_week_status_{st.lower()}",
-                    value_int=v,
+                    metric="tasks_by_due_week_total",
+                    value_int=int(total_owner),
                 )
-                written += 1
-            self._upsert_fact_metric(
-                session,
-                anchor="due_week",
-                grain="week",
-                period_start=week_start,
-                period_end=week_end,
-                hour_of_day=0,
-                subject_type="assignee",
-                subject_id=resolved,
-                data_source="",
-                metric="tasks_by_due_week_total",
-                value_int=int(total_owner),
             )
-            written += 1
 
         company_total = sum(company_by_status.get(st, 0) for st in statuses)
         for st in statuses:
-            self._upsert_fact_metric(
-                session,
+            fact_rows.append(
+                self._fact_row(
+                    anchor="due_week",
+                    grain="week",
+                    period_start=week_start,
+                    period_end=week_end,
+                    hour_of_day=0,
+                    subject_type="company",
+                    subject_id=_ASSIGNEE_ALL,
+                    data_source="",
+                    metric=f"tasks_by_due_week_status_{st.lower()}",
+                    value_int=int(company_by_status.get(st, 0)),
+                )
+            )
+        fact_rows.append(
+            self._fact_row(
                 anchor="due_week",
                 grain="week",
                 period_start=week_start,
@@ -518,25 +577,12 @@ class CRMTodoMetricsService:
                 subject_type="company",
                 subject_id=_ASSIGNEE_ALL,
                 data_source="",
-                metric=f"tasks_by_due_week_status_{st.lower()}",
-                value_int=int(company_by_status.get(st, 0)),
+                metric="tasks_by_due_week_total",
+                value_int=int(company_total),
             )
-            written += 1
-        self._upsert_fact_metric(
-            session,
-            anchor="due_week",
-            grain="week",
-            period_start=week_start,
-            period_end=week_end,
-            hour_of_day=0,
-            subject_type="company",
-            subject_id=_ASSIGNEE_ALL,
-            data_source="",
-            metric="tasks_by_due_week_total",
-            value_int=int(company_total),
         )
-        written += 1
 
+        written = self._batch_upsert_fact_metrics(session, fact_rows)
         return {"rows": written}
 
     def rebuild_stock_metrics_for_week(
@@ -544,6 +590,8 @@ class CRMTodoMetricsService:
         session: Session,
         week_start: date,
         week_end: date,
+        *,
+        mapping_cache: AssigneeMappingCache | None = None,
     ) -> dict[str, int]:
         """
         存量类指标：写到当前周的 week_start/week_end 下（每次重算覆盖）。
@@ -552,14 +600,18 @@ class CRMTodoMetricsService:
         """
         statuses = ["PENDING", "IN_PROGRESS", "COMPLETED", "CANCELLED"]
 
-        # 1) due_date IS NULL 的存量（按负责人 + 状态分桶）
+        # 一次扫描同时产出 no_due_date 存量与全量 status 分布
         rows = session.exec(
             text(
                 """
-                SELECT owner_id, owner_name, ai_status, COUNT(1) AS cnt
+                SELECT
+                  owner_id,
+                  owner_name,
+                  ai_status,
+                  SUM(CASE WHEN due_date IS NULL THEN 1 ELSE 0 END) AS no_due_cnt,
+                  COUNT(1) AS status_cnt
                 FROM crm_todos
                 WHERE data_source IS NOT NULL
-                  AND due_date IS NULL
                   AND ai_status IS NOT NULL
                   AND (owner_id IS NOT NULL OR owner_name IS NOT NULL)
                 GROUP BY owner_id, owner_name, ai_status
@@ -567,30 +619,38 @@ class CRMTodoMetricsService:
             )
         ).fetchall()
 
-        # owner -> status -> cnt
         per_owner_due_null: dict[str, dict[str, int]] = {}
+        per_owner_status: dict[str, dict[str, int]] = {}
         owner_keys: list[str] = []
+        seen_owners: set[str] = set()
         for r in rows:
             owner_id = str(getattr(r, "owner_id", None) or (r[0] if len(r) > 0 else "") or "").strip()
             owner_name = str(getattr(r, "owner_name", None) or (r[1] if len(r) > 1 else "") or "").strip()
             st = str(getattr(r, "ai_status", None) or (r[2] if len(r) > 2 else "") or "").strip().upper()
-            cnt = int(getattr(r, "cnt", None) or (r[3] if len(r) > 3 else 0) or 0)
+            no_due_cnt = int(getattr(r, "no_due_cnt", None) or (r[3] if len(r) > 3 else 0) or 0)
+            status_cnt = int(getattr(r, "status_cnt", None) or (r[4] if len(r) > 4 else 0) or 0)
             if st not in statuses:
                 continue
             key = owner_id or owner_name
             if not key:
                 continue
-            if key not in per_owner_due_null:
-                per_owner_due_null[key] = {}
+            if key not in seen_owners:
+                seen_owners.add(key)
                 owner_keys.append(key)
-            per_owner_due_null[key][st] = per_owner_due_null[key].get(st, 0) + cnt
+            if no_due_cnt:
+                per_owner_due_null.setdefault(key, {})
+                per_owner_due_null[key][st] = per_owner_due_null[key].get(st, 0) + no_due_cnt
+            if status_cnt:
+                per_owner_status.setdefault(key, {})
+                per_owner_status[key][st] = per_owner_status[key].get(st, 0) + status_cnt
 
-        raw_to_resolved, raw_to_dept = crm_sales_task_statistics_service._map_assignee_to_department_id(session, owner_keys)  # noqa: SLF001
+        raw_to_resolved, raw_to_dept = _resolve_assignees(session, owner_keys, mapping_cache)
 
-        written = 0
+        weekly_rows: list[dict] = []
+        fact_rows: list[dict] = []
+
         company_totals_by_status = {st: 0 for st in statuses}
-        company_total = 0
-
+        company_no_due_total = 0
         for raw_owner, st_map in per_owner_due_null.items():
             resolved = raw_to_resolved.get(raw_owner, raw_owner)
             dept = raw_to_dept.get(raw_owner, "UNKNOWN")
@@ -600,18 +660,46 @@ class CRMTodoMetricsService:
                 cnt = int(st_map.get(st, 0))
                 total_for_owner += cnt
                 company_totals_by_status[st] += cnt
-                self._upsert_weekly_metric(
-                    session,
+                weekly_rows.append(
+                    self._weekly_row(
+                        week_start,
+                        week_end,
+                        assignee_id=resolved,
+                        department_id=dept,
+                        metric=f"no_due_date_stock_{st.lower()}",
+                        data_source="",
+                        value=cnt,
+                    )
+                )
+                fact_rows.append(
+                    self._fact_row(
+                        anchor="stock",
+                        grain="week",
+                        period_start=week_start,
+                        period_end=week_end,
+                        hour_of_day=0,
+                        subject_type="assignee",
+                        subject_id=resolved,
+                        data_source="",
+                        metric=f"no_due_date_stock_{st.lower()}",
+                        value_int=cnt,
+                    )
+                )
+
+            company_no_due_total += total_for_owner
+            weekly_rows.append(
+                self._weekly_row(
                     week_start,
                     week_end,
                     assignee_id=resolved,
                     department_id=dept,
-                    metric=f"no_due_date_stock_{st.lower()}",
+                    metric="no_due_date_stock_total",
                     data_source="",
-                    value=cnt,
+                    value=total_for_owner,
                 )
-                self._upsert_fact_metric(
-                    session,
+            )
+            fact_rows.append(
+                self._fact_row(
                     anchor="stock",
                     grain="week",
                     period_start=week_start,
@@ -620,52 +708,51 @@ class CRMTodoMetricsService:
                     subject_type="assignee",
                     subject_id=resolved,
                     data_source="",
-                    metric=f"no_due_date_stock_{st.lower()}",
-                    value_int=cnt,
+                    metric="no_due_date_stock_total",
+                    value_int=int(total_for_owner),
                 )
-                written += 1
-
-            company_total += total_for_owner
-            # 同时写一条 total，方便下游直接取总量
-            self._upsert_weekly_metric(
-                session,
-                week_start,
-                week_end,
-                assignee_id=resolved,
-                department_id=dept,
-                metric="no_due_date_stock_total",
-                data_source="",
-                value=total_for_owner,
             )
-            self._upsert_fact_metric(
-                session,
-                anchor="stock",
-                grain="week",
-                period_start=week_start,
-                period_end=week_end,
-                hour_of_day=0,
-                subject_type="assignee",
-                subject_id=resolved,
-                data_source="",
-                metric="no_due_date_stock_total",
-                value_int=int(total_for_owner),
-            )
-            written += 1
 
-        # 公司汇总：按状态 + total
         for st in statuses:
-            self._upsert_weekly_metric(
-                session,
+            weekly_rows.append(
+                self._weekly_row(
+                    week_start,
+                    week_end,
+                    assignee_id=_ASSIGNEE_ALL,
+                    department_id=_DEPT_ALL,
+                    metric=f"no_due_date_stock_{st.lower()}",
+                    data_source="",
+                    value=int(company_totals_by_status[st]),
+                )
+            )
+            fact_rows.append(
+                self._fact_row(
+                    anchor="stock",
+                    grain="week",
+                    period_start=week_start,
+                    period_end=week_end,
+                    hour_of_day=0,
+                    subject_type="company",
+                    subject_id=_ASSIGNEE_ALL,
+                    data_source="",
+                    metric=f"no_due_date_stock_{st.lower()}",
+                    value_int=int(company_totals_by_status[st]),
+                )
+            )
+
+        weekly_rows.append(
+            self._weekly_row(
                 week_start,
                 week_end,
                 assignee_id=_ASSIGNEE_ALL,
                 department_id=_DEPT_ALL,
-                metric=f"no_due_date_stock_{st.lower()}",
+                metric="no_due_date_stock_total",
                 data_source="",
-                value=int(company_totals_by_status[st]),
+                value=int(company_no_due_total),
             )
-            self._upsert_fact_metric(
-                session,
+        )
+        fact_rows.append(
+            self._fact_row(
                 anchor="stock",
                 grain="week",
                 period_start=week_start,
@@ -674,128 +761,75 @@ class CRMTodoMetricsService:
                 subject_type="company",
                 subject_id=_ASSIGNEE_ALL,
                 data_source="",
-                metric=f"no_due_date_stock_{st.lower()}",
-                value_int=int(company_totals_by_status[st]),
+                metric="no_due_date_stock_total",
+                value_int=int(company_no_due_total),
             )
-            written += 1
-
-        self._upsert_weekly_metric(
-            session,
-            week_start,
-            week_end,
-            assignee_id=_ASSIGNEE_ALL,
-            department_id=_DEPT_ALL,
-            metric="no_due_date_stock_total",
-            data_source="",
-            value=int(company_total),
         )
-        self._upsert_fact_metric(
-            session,
-            anchor="stock",
-            grain="week",
-            period_start=week_start,
-            period_end=week_end,
-            hour_of_day=0,
-            subject_type="company",
-            subject_id=_ASSIGNEE_ALL,
-            data_source="",
-            metric="no_due_date_stock_total",
-            value_int=int(company_total),
-        )
-        written += 1
-
-        # 2) status distribution（按负责人分组）
-        status_rows = session.exec(
-            text(
-                """
-                SELECT owner_id, owner_name, ai_status, COUNT(1) AS cnt
-                FROM crm_todos
-                WHERE data_source IS NOT NULL
-                  AND ai_status IS NOT NULL
-                  AND (owner_id IS NOT NULL OR owner_name IS NOT NULL)
-                GROUP BY owner_id, owner_name, ai_status
-                """
-            )
-        ).fetchall()
-
-        # owner -> status -> cnt
-        per_owner: dict[str, dict[str, int]] = {}
-        owner_keys: list[str] = []
-        for r in status_rows:
-            owner_id = str(getattr(r, "owner_id", None) or (r[0] if len(r) > 0 else "") or "").strip()
-            owner_name = str(getattr(r, "owner_name", None) or (r[1] if len(r) > 1 else "") or "").strip()
-            st = str(getattr(r, "ai_status", None) or (r[2] if len(r) > 2 else "") or "").strip().upper()
-            cnt = int(getattr(r, "cnt", None) or (r[3] if len(r) > 3 else 0) or 0)
-            if st not in statuses:
-                continue
-            key = owner_id or owner_name
-            if not key:
-                continue
-            if key not in per_owner:
-                per_owner[key] = {}
-                owner_keys.append(key)
-            per_owner[key][st] = per_owner[key].get(st, 0) + cnt
-
-        raw_to_resolved2, raw_to_dept2 = crm_sales_task_statistics_service._map_assignee_to_department_id(session, owner_keys)  # noqa: SLF001
 
         company_status_totals = {st: 0 for st in statuses}
-        for raw_owner, st_map in per_owner.items():
-            resolved = raw_to_resolved2.get(raw_owner, raw_owner)
-            dept = raw_to_dept2.get(raw_owner, "UNKNOWN")
+        for raw_owner in owner_keys:
+            st_map = per_owner_status.get(raw_owner, {})
+            if not st_map:
+                continue
+            resolved = raw_to_resolved.get(raw_owner, raw_owner)
+            dept = raw_to_dept.get(raw_owner, "UNKNOWN")
             for st in statuses:
                 cnt = int(st_map.get(st, 0))
-                self._upsert_weekly_metric(
-                    session,
-                    week_start,
-                    week_end,
-                    assignee_id=resolved,
-                    department_id=dept,
-                    metric=f"status_{st.lower()}",
-                    data_source="",
-                    value=cnt,
+                weekly_rows.append(
+                    self._weekly_row(
+                        week_start,
+                        week_end,
+                        assignee_id=resolved,
+                        department_id=dept,
+                        metric=f"status_{st.lower()}",
+                        data_source="",
+                        value=cnt,
+                    )
                 )
-                self._upsert_fact_metric(
-                    session,
-                    anchor="stock",
-                    grain="week",
-                    period_start=week_start,
-                    period_end=week_end,
-                    hour_of_day=0,
-                    subject_type="assignee",
-                    subject_id=resolved,
-                    data_source="",
-                    metric=f"status_{st.lower()}",
-                    value_int=cnt,
+                fact_rows.append(
+                    self._fact_row(
+                        anchor="stock",
+                        grain="week",
+                        period_start=week_start,
+                        period_end=week_end,
+                        hour_of_day=0,
+                        subject_type="assignee",
+                        subject_id=resolved,
+                        data_source="",
+                        metric=f"status_{st.lower()}",
+                        value_int=cnt,
+                    )
                 )
-                written += 1
                 company_status_totals[st] += cnt
 
         for st in statuses:
-            self._upsert_weekly_metric(
-                session,
-                week_start,
-                week_end,
-                assignee_id=_ASSIGNEE_ALL,
-                department_id=_DEPT_ALL,
-                metric=f"status_{st.lower()}",
-                data_source="",
-                value=int(company_status_totals[st]),
+            weekly_rows.append(
+                self._weekly_row(
+                    week_start,
+                    week_end,
+                    assignee_id=_ASSIGNEE_ALL,
+                    department_id=_DEPT_ALL,
+                    metric=f"status_{st.lower()}",
+                    data_source="",
+                    value=int(company_status_totals[st]),
+                )
             )
-            self._upsert_fact_metric(
-                session,
-                anchor="stock",
-                grain="week",
-                period_start=week_start,
-                period_end=week_end,
-                hour_of_day=0,
-                subject_type="company",
-                subject_id=_ASSIGNEE_ALL,
-                data_source="",
-                metric=f"status_{st.lower()}",
-                value_int=int(company_status_totals[st]),
+            fact_rows.append(
+                self._fact_row(
+                    anchor="stock",
+                    grain="week",
+                    period_start=week_start,
+                    period_end=week_end,
+                    hour_of_day=0,
+                    subject_type="company",
+                    subject_id=_ASSIGNEE_ALL,
+                    data_source="",
+                    metric=f"status_{st.lower()}",
+                    value_int=int(company_status_totals[st]),
+                )
             )
-            written += 1
 
+        written = self._batch_upsert_weekly_metrics(session, weekly_rows) + self._batch_upsert_fact_metrics(session, fact_rows)
         return {"rows": written}
 
     def persist_company_no_due_date_stock_by_source(
@@ -836,35 +870,37 @@ class CRMTodoMetricsService:
             if ds:
                 by_source[ds] = cnt
 
-        written = 0
+        weekly_rows: list[dict] = []
+        fact_rows: list[dict] = []
         for ds in sources:
             value = int(by_source.get(ds, 0))
-            self._upsert_weekly_metric(
-                session,
-                week_start,
-                week_end,
-                assignee_id=_ASSIGNEE_ALL,
-                department_id=_DEPT_ALL,
-                metric="no_due_date_stock_total",
-                data_source=ds,
-                value=value,
+            weekly_rows.append(
+                self._weekly_row(
+                    week_start,
+                    week_end,
+                    assignee_id=_ASSIGNEE_ALL,
+                    department_id=_DEPT_ALL,
+                    metric="no_due_date_stock_total",
+                    data_source=ds,
+                    value=value,
+                )
             )
-            # 并行写入 todo_facts（便于未来按日/小时扩展）
-            self._upsert_fact_metric(
-                session,
-                anchor="stock",
-                grain="week",
-                period_start=week_start,
-                period_end=week_end,
-                hour_of_day=0,
-                subject_type="company",
-                subject_id=_ASSIGNEE_ALL,
-                data_source=ds,
-                metric="no_due_date_stock_total",
-                value_int=value,
+            fact_rows.append(
+                self._fact_row(
+                    anchor="stock",
+                    grain="week",
+                    period_start=week_start,
+                    period_end=week_end,
+                    hour_of_day=0,
+                    subject_type="company",
+                    subject_id=_ASSIGNEE_ALL,
+                    data_source=ds,
+                    metric="no_due_date_stock_total",
+                    value_int=value,
+                )
             )
-            written += 1
 
+        written = self._batch_upsert_weekly_metrics(session, weekly_rows) + self._batch_upsert_fact_metrics(session, fact_rows)
         return {"rows": written}
 
     def persist_company_no_due_date_stock_by_source_to_facts(
@@ -906,24 +942,25 @@ class CRMTodoMetricsService:
             if ds:
                 by_source[ds] = cnt
 
-        written = 0
+        fact_rows: list[dict] = []
         for ds in sources:
             value = int(by_source.get(ds, 0))
-            self._upsert_fact_metric(
-                session,
-                anchor="stock",
-                grain=grain,
-                period_start=period_start,
-                period_end=period_end,
-                hour_of_day=hour_of_day,
-                subject_type="company",
-                subject_id=_ASSIGNEE_ALL,
-                data_source=ds,
-                metric="no_due_date_stock_total",
-                value_int=value,
+            fact_rows.append(
+                self._fact_row(
+                    anchor="stock",
+                    grain=grain,
+                    period_start=period_start,
+                    period_end=period_end,
+                    hour_of_day=hour_of_day,
+                    subject_type="company",
+                    subject_id=_ASSIGNEE_ALL,
+                    data_source=ds,
+                    metric="no_due_date_stock_total",
+                    value_int=value,
+                )
             )
-            written += 1
 
+        written = self._batch_upsert_fact_metrics(session, fact_rows)
         return {"rows": written}
 
 

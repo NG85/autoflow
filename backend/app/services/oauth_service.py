@@ -6,6 +6,7 @@ from cachetools import TTLCache
 import requests
 
 from app.core.config import settings
+from app.services.oauth_http import post_json
 
 logger = logging.getLogger(__name__)
 
@@ -40,23 +41,22 @@ class OAuthClient:
         if cached_result is not None:
             return cached_result
 
-        url = f"{self._base_url}/permission/query"
-        try:
-            resp = self._session.post(
-                url,
-                json={"user_id": str(user_id)},
-                headers={"Content-Type": "application/json"},
-                timeout=timeout_seconds,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            raw = data.get("result", {}) if isinstance(data, dict) else {}
-            result = {"roles": raw.get("roles", []), "permissions": raw.get("permissions", [])}
-            self._roles_permissions_cache[cache_key] = result
-            return result
-        except Exception:
-            logger.exception("OAuth permission/query failed, user_id=%s", user_id)
+        data = post_json(
+            self._session,
+            base_url=self._base_url,
+            operation="permission_query",
+            path="/permission/query",
+            json_body={"user_id": str(user_id)},
+            timeout_seconds=timeout_seconds,
+        )
+        if data is None:
+            logger.error("OAuth permission/query failed, user_id=%s", user_id)
             return {"roles": [], "permissions": []}
+
+        raw = data.get("result", {}) if isinstance(data, dict) else {}
+        result = {"roles": raw.get("roles", []), "permissions": raw.get("permissions", [])}
+        self._roles_permissions_cache[cache_key] = result
+        return result
 
     def get_departments_with_leaders(
         self,
@@ -83,7 +83,6 @@ class OAuthClient:
         - key: department_name
         - value: managers list 或 None
         """
-        url = f"{self._base_url}/organization/departments/leaders"
         payload: Dict[str, Any] = {"include_leader_identity": include_leader_identity}
         if level is not None:
             if level < 0:
@@ -93,151 +92,149 @@ class OAuthClient:
         if root_department_id:
             payload["root_department_id"] = root_department_id
 
-        try:
-            resp = self._session.post(
-                url,
-                json=payload,
-                headers={"Content-Type": "application/json"},
-                timeout=timeout_seconds,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        data = post_json(
+            self._session,
+            base_url=self._base_url,
+            operation="departments_leaders",
+            path="/organization/departments/leaders",
+            json_body=payload,
+            timeout_seconds=timeout_seconds,
+        )
+        if data is None:
+            return {}
 
-            if not isinstance(data, dict) or data.get("code") != 0:
-                logger.error("OAuth departments/leaders returned error: %s", data)
-                return {}
+        if data.get("code") != 0:
+            logger.error("OAuth departments/leaders returned error: %s", data)
+            return {}
 
-            result = data.get("result", [])
-            if not isinstance(result, list):
-                logger.error("OAuth departments/leaders invalid result format: %s", result)
-                return {}
+        result = data.get("result", [])
+        if not isinstance(result, list):
+            logger.error("OAuth departments/leaders invalid result format: %s", result)
+            return {}
 
-            if group_by_first_level_department:
-                # deptId/path -> deptName lookup for resolving first-level group name
-                dept_id_to_name: Dict[str, str] = {}
-                path_to_name: Dict[str, str] = {}
-                for dept_info in result:
-                    if not isinstance(dept_info, dict):
-                        continue
-                    dept_name = (dept_info.get("departmentName") or "").strip()
-                    if not dept_name:
-                        continue
-                    dept_id = (str(dept_info.get("departmentId")) if dept_info.get("departmentId") is not None else "").strip()
-                    if dept_id:
-                        dept_id_to_name[dept_id] = dept_name
-                    dept_path = (dept_info.get("path") or "").strip()
-                    if dept_path:
-                        path_to_name[dept_path] = dept_name
+        if group_by_first_level_department:
+            # deptId/path -> deptName lookup for resolving first-level group name
+            dept_id_to_name: Dict[str, str] = {}
+            path_to_name: Dict[str, str] = {}
+            for dept_info in result:
+                if not isinstance(dept_info, dict):
+                    continue
+                dept_name = (dept_info.get("departmentName") or "").strip()
+                if not dept_name:
+                    continue
+                dept_id = (str(dept_info.get("departmentId")) if dept_info.get("departmentId") is not None else "").strip()
+                if dept_id:
+                    dept_id_to_name[dept_id] = dept_name
+                dept_path = (dept_info.get("path") or "").strip()
+                if dept_path:
+                    path_to_name[dept_path] = dept_name
 
-                grouped: Dict[str, List[Dict[str, Any]]] = {}
-                grouped_seen: Dict[str, set] = {}
+            grouped: Dict[str, List[Dict[str, Any]]] = {}
+            grouped_seen: Dict[str, set] = {}
 
-                for dept_info in result:
-                    if not isinstance(dept_info, dict):
-                        continue
-                    department_name = dept_info.get("departmentName")
-                    if not department_name:
-                        continue
-                    dept_path = (dept_info.get("path") or "").strip()
-                    first_seg = dept_path.split("/", 1)[0] if dept_path else ""
-
-                    group_name = ""
-                    if first_seg:
-                        group_name = (
-                            path_to_name.get(first_seg)
-                            or dept_id_to_name.get(first_seg)
-                            or first_seg
-                        )
-                    else:
-                        # If path missing, fallback to the department itself
-                        group_name = str(department_name)
-
-                    leaders = dept_info.get("leaders", []) or []
-                    if not isinstance(leaders, list) or not leaders:
-                        grouped.setdefault(group_name, [])
-                        grouped_seen.setdefault(group_name, set())
-                        continue
-
-                    bucket = grouped.setdefault(group_name, [])
-                    seen = grouped_seen.setdefault(group_name, set())
-
-                    for leader in leaders:
-                        if not isinstance(leader, dict):
-                            continue
-                        manager = {
-                            "open_id": leader.get("openId"),
-                            "name": leader.get("name", "") or "",
-                            "crmUserId": leader.get("crmUserId", "") or "",
-                            "userId": leader.get("userId", "") or "",
-                            "platform": leader.get("platform", "feishu"),
-                            "type": "department_manager",
-                            # 保留 leader 的来源部门，避免聚合后丢上下文
-                            "department": department_name,
-                            "receive_id_type": "open_id",
-                        }
-
-                        # Reasonable per-group dedupe (openId/userId/crmUserId/uid/askUserId)
-                        platform = str(manager.get("platform") or "")
-                        ident = (
-                            leader.get("openId")
-                            or leader.get("userId")
-                            or leader.get("crmUserId")
-                            or leader.get("uid")
-                            or leader.get("askUserId")
-                            or ""
-                        )
-                        key = f"{platform}:{ident}" if ident else f"{platform}:{manager.get('name')}"
-                        if key in seen:
-                            continue
-                        seen.add(key)
-                        bucket.append(manager)
-
-                grouped_final: Dict[str, Optional[List[Dict[str, Any]]]] = {}
-                for k, v in grouped.items():
-                    grouped_final[k] = v or None
-
-                logger.info(
-                    "OAuth departments/leaders loaded (grouped): %s first-level departments",
-                    len(grouped_final),
-                )
-                return grouped_final
-
-            departments_with_managers: Dict[str, Optional[List[Dict[str, Any]]]] = {}
             for dept_info in result:
                 if not isinstance(dept_info, dict):
                     continue
                 department_name = dept_info.get("departmentName")
                 if not department_name:
                     continue
+                dept_path = (dept_info.get("path") or "").strip()
+                first_seg = dept_path.split("/", 1)[0] if dept_path else ""
+
+                group_name = ""
+                if first_seg:
+                    group_name = (
+                        path_to_name.get(first_seg)
+                        or dept_id_to_name.get(first_seg)
+                        or first_seg
+                    )
+                else:
+                    # If path missing, fallback to the department itself
+                    group_name = str(department_name)
 
                 leaders = dept_info.get("leaders", []) or []
-                if not leaders:
-                    departments_with_managers[department_name] = None
+                if not isinstance(leaders, list) or not leaders:
+                    grouped.setdefault(group_name, [])
+                    grouped_seen.setdefault(group_name, set())
                     continue
 
-                manager_list: List[Dict[str, Any]] = []
+                bucket = grouped.setdefault(group_name, [])
+                seen = grouped_seen.setdefault(group_name, set())
+
                 for leader in leaders:
                     if not isinstance(leader, dict):
                         continue
-                    manager_list.append(
-                        {
-                            "open_id": leader.get("openId"),
-                            "name": leader.get("name", "") or "",
-                            "crmUserId": leader.get("crmUserId", "") or "",
-                            "userId": leader.get("userId", "") or "",
-                            "platform": leader.get("platform", "feishu"),
-                            "type": "department_manager",
-                            "department": department_name,
-                            "receive_id_type": "open_id",
-                        }
-                    )
-                departments_with_managers[department_name] = manager_list
+                    manager = {
+                        "open_id": leader.get("openId"),
+                        "name": leader.get("name", "") or "",
+                        "crmUserId": leader.get("crmUserId", "") or "",
+                        "userId": leader.get("userId", "") or "",
+                        "platform": leader.get("platform", "feishu"),
+                        "type": "department_manager",
+                        # 保留 leader 的来源部门，避免聚合后丢上下文
+                        "department": department_name,
+                        "receive_id_type": "open_id",
+                    }
 
-            logger.info("OAuth departments/leaders loaded: %s departments", len(departments_with_managers))
-            return departments_with_managers
-        except Exception:
-            logger.exception("OAuth departments/leaders failed")
-            return {}
+                    # Reasonable per-group dedupe (openId/userId/crmUserId/uid/askUserId)
+                    platform = str(manager.get("platform") or "")
+                    ident = (
+                        leader.get("openId")
+                        or leader.get("userId")
+                        or leader.get("crmUserId")
+                        or leader.get("uid")
+                        or leader.get("askUserId")
+                        or ""
+                    )
+                    key = f"{platform}:{ident}" if ident else f"{platform}:{manager.get('name')}"
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    bucket.append(manager)
+
+            grouped_final: Dict[str, Optional[List[Dict[str, Any]]]] = {}
+            for k, v in grouped.items():
+                grouped_final[k] = v or None
+
+            logger.info(
+                "OAuth departments/leaders loaded (grouped): %s first-level departments",
+                len(grouped_final),
+            )
+            return grouped_final
+
+        departments_with_managers: Dict[str, Optional[List[Dict[str, Any]]]] = {}
+        for dept_info in result:
+            if not isinstance(dept_info, dict):
+                continue
+            department_name = dept_info.get("departmentName")
+            if not department_name:
+                continue
+
+            leaders = dept_info.get("leaders", []) or []
+            if not leaders:
+                departments_with_managers[department_name] = None
+                continue
+
+            manager_list: List[Dict[str, Any]] = []
+            for leader in leaders:
+                if not isinstance(leader, dict):
+                    continue
+                manager_list.append(
+                    {
+                        "open_id": leader.get("openId"),
+                        "name": leader.get("name", "") or "",
+                        "crmUserId": leader.get("crmUserId", "") or "",
+                        "userId": leader.get("userId", "") or "",
+                        "platform": leader.get("platform", "feishu"),
+                        "type": "department_manager",
+                        "department": department_name,
+                        "receive_id_type": "open_id",
+                    }
+                )
+            departments_with_managers[department_name] = manager_list
+
+        logger.info("OAuth departments/leaders loaded: %s departments", len(departments_with_managers))
+        return departments_with_managers
 
     def get_reporting_chain_leaders(
         self,
@@ -255,22 +252,23 @@ class OAuthClient:
         if not base_user_id:
             return []
 
-        url = f"{self._base_url}/permission/reporting-chain/query"
-        payload = {
-            "userId": base_user_id,
-            "maxLevels": max_levels,
-            "includeLeaderIdentity": include_leader_identity,
-        }
-
-        try:
-            resp = self._session.post(url, json=payload, timeout=timeout_seconds)
-            resp.raise_for_status()
-            data = resp.json() or {}
-        except Exception:
-            logger.exception("OAuth reporting-chain/query failed, userId=%s", base_user_id)
+        data = post_json(
+            self._session,
+            base_url=self._base_url,
+            operation="reporting_chain_query",
+            path="/permission/reporting-chain/query",
+            json_body={
+                "userId": base_user_id,
+                "maxLevels": max_levels,
+                "includeLeaderIdentity": include_leader_identity,
+            },
+            timeout_seconds=timeout_seconds,
+        )
+        if data is None:
+            logger.error("OAuth reporting-chain/query failed, userId=%s", base_user_id)
             return []
 
-        if not isinstance(data, dict) or data.get("code") != 0:
+        if data.get("code") != 0:
             logger.error("OAuth reporting-chain/query returned error: %s", data)
             return []
 
@@ -311,18 +309,23 @@ class OAuthClient:
 
         返回值保持与 platform_notification_service 历史逻辑一致：已做简化后的 users 列表。
         """
-        url = f"{self._base_url}/permission/users/by-permission"
-        payload = {"permission": permission, "roleCodes": role_codes, "includeIdentity": include_identity}
-
-        try:
-            resp = self._session.post(url, json=payload, timeout=timeout_seconds)
-            resp.raise_for_status()
-            data = resp.json() or {}
-        except Exception:
-            logger.exception("OAuth users/by-permission failed, permission=%s", permission)
+        data = post_json(
+            self._session,
+            base_url=self._base_url,
+            operation="users_by_permission",
+            path="/permission/users/by-permission",
+            json_body={
+                "permission": permission,
+                "roleCodes": role_codes,
+                "includeIdentity": include_identity,
+            },
+            timeout_seconds=timeout_seconds,
+        )
+        if data is None:
+            logger.error("OAuth users/by-permission failed, permission=%s", permission)
             return []
 
-        if not isinstance(data, dict) or data.get("code") != 0:
+        if data.get("code") != 0:
             logger.error("OAuth users/by-permission returned error: %s", data)
             return []
 
@@ -358,22 +361,22 @@ class OAuthClient:
 
         返回简化的下属列表（含简化后的 subordinates + raw 兜底）。
         """
-        url = f"{self._base_url}/permission/subordinate-chain/query"
-        payload = {
-            "user_id": str(user_id),
-            "include_subordinate_identity": include_subordinate_identity,
-        }
-        headers: Dict[str, str] = {"Content-Type": "application/json"}
-
-        try:
-            resp = self._session.post(url, json=payload, headers=headers, timeout=timeout_seconds)
-            resp.raise_for_status()
-            data = resp.json() or {}
-        except Exception:
-            logger.exception("OAuth subordinate-chain/query failed, user_id=%s", user_id)
+        data = post_json(
+            self._session,
+            base_url=self._base_url,
+            operation="subordinate_chain_query",
+            path="/permission/subordinate-chain/query",
+            json_body={
+                "user_id": str(user_id),
+                "include_subordinate_identity": include_subordinate_identity,
+            },
+            timeout_seconds=timeout_seconds,
+        )
+        if data is None:
+            logger.error("OAuth subordinate-chain/query failed, user_id=%s", user_id)
             return {}
 
-        if not isinstance(data, dict) or data.get("code") != 0:
+        if data.get("code") != 0:
             logger.error("OAuth subordinate-chain/query returned error: %s", data)
             return {}
 
@@ -408,15 +411,14 @@ class OAuthClient:
             "raw": result,
         }
 
-
     def check_user_has_permission(self, *, user_id: UUID, permission: str) -> bool:
         """
         检查用户是否具有指定权限
-        
+
         Args:
             user_id: 用户ID
             permission: 权限名称，如 "report51:company:view" 或 "report51:dept:view"
-            
+
         Returns:
             bool: 是否具有该权限
         """
@@ -438,7 +440,6 @@ class OAuthClient:
         has_permission = target_permission in normalized_permissions
         logger.info(f"User {user_id} permission check for {permission}: {has_permission}")
         return has_permission
-
 
     def check_user_has_role(self, *, user_id: UUID, role: str) -> bool:
         """
@@ -463,7 +464,6 @@ class OAuthClient:
         has_role = target_role in role_codes
         logger.info(f"User {user_id} role check for {role}: {has_role}")
         return has_role
-    
-    
-oauth_client = OAuthClient()
 
+
+oauth_client = OAuthClient()

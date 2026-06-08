@@ -9,6 +9,7 @@ from app.rag.chat.chat_service import (
     check_rag_optional_config,
     check_rag_config_need_migration,
 )
+from app.services.oauth_health import oauth_health_response_body
 
 router = APIRouter()
 
@@ -17,6 +18,12 @@ router = APIRouter()
 def status(session: SessionDep):
     now = session.exec(text("SELECT NOW()")).scalar()
     return {"now": now}
+
+
+@router.get("/healthz/oauth")
+def oauth_status():
+    """Read-only aptsell-oauth connectivity probe (HTTP 200; check body.status for alerts)."""
+    return oauth_health_response_body()
 
 
 @router.get("/site-config")
