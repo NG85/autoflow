@@ -19,8 +19,16 @@ from app.services.platform_notification_service import platform_notification_ser
 from app.services.crm_writeback_service import crm_writeback_service
 from app.services.crm_sales_task_statistics_service import crm_sales_task_statistics_service
 from app.services.crm_weekly_followup_service import crm_weekly_followup_service
-from app.services.crm_visit_metrics_service import crm_visit_metrics_service, default_rebuild_windows
-from app.services.crm_todo_metrics_service import crm_todo_metrics_service, default_todo_metrics_windows
+from app.services.crm_visit_metrics_service import (
+    VisitMetricsContext,
+    crm_visit_metrics_service,
+    default_rebuild_windows,
+)
+from app.services.crm_todo_metrics_service import (
+    AssigneeMappingCache,
+    crm_todo_metrics_service,
+    default_todo_metrics_windows,
+)
 from app.services.feishu_billing_facade import (
     BillingScenario,
     check_billing_quota,
@@ -1347,7 +1355,7 @@ def rebuild_crm_visit_metrics(
 
     默认口径：
     - entry-week：按北京时间 last_modified_time 归周（周日~周六），默认重算“当前周 + 上一周”
-    - followup：按 visit_communication_date（date），默认重算“最近 N 天”（N=settings.CRM_VISIT_METRICS_FOLLOWUP_DAYS，默认 60）
+    - followup：按 visit_communication_date（date），默认重算“最近 N 天”（N=settings.CRM_VISIT_METRICS_FOLLOWUP_DAYS，默认 7）
 
     手工触发时可传入：
     - entry_week_start_str / entry_week_end_str：YYYY-MM-DD（任意一天），内部会归一到周日~周六并按周步进
@@ -1391,10 +1399,17 @@ def rebuild_crm_visit_metrics(
         }
 
         with Session(engine) as session:
+            metrics_context = VisitMetricsContext()
+
             # entry-week：逐周重算
             for ws in entry_week_starts:
                 we = ws + timedelta(days=6)
-                r = crm_visit_metrics_service.rebuild_entry_week(session, week_start=ws, week_end=we)
+                r = crm_visit_metrics_service.rebuild_entry_week(
+                    session,
+                    week_start=ws,
+                    week_end=we,
+                    metrics_context=metrics_context,
+                )
                 results["entry_weeks"].append({"week_start": ws.isoformat(), "week_end": we.isoformat(), **r})
 
             # followup：按日期范围重算
@@ -1466,12 +1481,20 @@ def rebuild_crm_todo_metrics(
         results: dict[str, object] = {"weeks": []}
 
         with Session(engine) as session:
+            mapping_cache = AssigneeMappingCache()
+
             # 逐周：created（manual）
             for ws in week_starts:
                 we = ws + timedelta(days=6)
-                r = crm_todo_metrics_service.rebuild_weekly_manual_created(session, week_start=ws, week_end=we)
-                completed_r = crm_todo_metrics_service.rebuild_weekly_completed_by_due_date(session, week_start=ws, week_end=we)
-                due_week_status_r = crm_todo_metrics_service.rebuild_weekly_due_week_status_distribution(session, week_start=ws, week_end=we)
+                r = crm_todo_metrics_service.rebuild_weekly_manual_created(
+                    session, week_start=ws, week_end=we, mapping_cache=mapping_cache
+                )
+                completed_r = crm_todo_metrics_service.rebuild_weekly_completed_by_due_date(
+                    session, week_start=ws, week_end=we, mapping_cache=mapping_cache
+                )
+                due_week_status_r = crm_todo_metrics_service.rebuild_weekly_due_week_status_distribution(
+                    session, week_start=ws, week_end=we, mapping_cache=mapping_cache
+                )
                 results["weeks"].append(
                     {
                         "week_start": ws.isoformat(),
@@ -1486,7 +1509,9 @@ def rebuild_crm_todo_metrics(
             today = beijing_today_date()
             this_ws = today - timedelta(days=(today.weekday() + 1) % 7)
             this_we = this_ws + timedelta(days=6)
-            stock_r = crm_todo_metrics_service.rebuild_stock_metrics_for_week(session, week_start=this_ws, week_end=this_we)
+            stock_r = crm_todo_metrics_service.rebuild_stock_metrics_for_week(
+                session, week_start=this_ws, week_end=this_we, mapping_cache=mapping_cache
+            )
             results["stock_week"] = {"week_start": this_ws.isoformat(), "week_end": this_we.isoformat(), **stock_r}
 
             try:

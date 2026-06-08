@@ -326,7 +326,7 @@ class Settings(BaseSettings):
     # CRM visit metrics (固化指标) configuration
     CRM_VISIT_METRICS_ENABLED: bool = False
     CRM_VISIT_METRICS_CRON: str = '0 * * * *'  # 每小时执行
-    CRM_VISIT_METRICS_FOLLOWUP_DAYS: int = 60  # 跟进日期分布默认回填窗口（天）
+    CRM_VISIT_METRICS_FOLLOWUP_DAYS: int = 7  # 跟进日期分布默认回填窗口（天）
 
     # CRM todo metrics (固化指标) configuration
     CRM_TODO_METRICS_ENABLED: bool = False
