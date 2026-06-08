@@ -1,12 +1,15 @@
 import logging
 import os
 import re
+import time
 from typing import Dict, Any, Optional
 from app.platforms.utils.url_parser import (
     UnsupportedDocumentTypeError,
     parse_platform_document_url,
     check_document_type_support,
-    get_platform_from_url
+    get_platform_from_url,
+    parse_dingtalk_transcribe_url,
+    parse_dingtalk_notable_url,
 )
 from app.platforms.feishu.oauth_service import feishu_oauth_service
 from app.platforms.lark.oauth_service import lark_oauth_service
@@ -20,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 class DocumentProcessingService:
-    """通用文档处理服务，支持飞书、Lark、钉钉会议和本地文件"""
+    """通用文档处理服务，支持飞书、Lark、钉钉会议、钉钉听记和本地文件"""
     
     def __init__(self):
         self.feishu_oauth = feishu_oauth_service
@@ -52,7 +55,7 @@ class DocumentProcessingService:
         auth_code: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        处理文档URL，支持飞书、Lark文档、钉钉会议和本地文件
+        处理文档URL，支持飞书、Lark文档、钉钉会议、钉钉听记和本地文件
         
         Args:
             document_url: 文档URL或钉钉会议号
@@ -65,6 +68,10 @@ class DocumentProcessingService:
         # 检查是否为钉钉会议号
         if self._is_dingtalk_room_code(document_url):
             return self._handle_dingtalk_conference(document_url)
+
+        # 检查是否为钉钉听记链接
+        if parse_dingtalk_transcribe_url(document_url):
+            return self._handle_dingtalk_transcribe(document_url)
         
         # 检查是否为飞书/Lark链接
         if 'feishu.cn' in document_url or 'larksuite.com' in document_url:
@@ -365,6 +372,116 @@ class DocumentProcessingService:
             "document_type": "dingtalk_conference",
             "title": f"钉钉会议_{room_code}_录制文本"
         }
+
+    def _handle_dingtalk_transcribe(self, transcribe_url: str) -> Dict[str, Any]:
+        """
+        处理钉钉听记链接：写入预建 AI 表格，轮询读取转录内容。
+
+        operatorId 使用配置中的固定 unionId（表格创建人），避免当前用户无写权限。
+        """
+        transcribe_id = parse_dingtalk_transcribe_url(transcribe_url)
+        if not transcribe_id:
+            return {"success": False, "message": "无法解析钉钉听记链接"}
+
+        notable_url = settings.DINGTALK_TRANSCRIBE_NOTABLE_URL
+        operator_id = settings.DINGTALK_NOTABLE_OPERATOR_UNION_ID
+        if not notable_url:
+            return {"success": False, "message": "听记功能未配置目标 AI 表格"}
+        if not operator_id:
+            return {"success": False, "message": "听记功能未配置 operator unionId"}
+
+        base_id, sheet_id_or_name = parse_dingtalk_notable_url(notable_url)
+        if not base_id or not sheet_id_or_name:
+            return {
+                "success": False,
+                "message": "听记 AI 表格 URL 配置无效，需包含 baseId 和 sheetId 参数",
+            }
+
+        link_field = settings.DINGTALK_TRANSCRIBE_LINK_FIELD
+        content_field = settings.DINGTALK_TRANSCRIBE_CONTENT_FIELD
+
+        try:
+            access_token = self.dingtalk_client.get_tenant_access_token()
+        except Exception as e:
+            logger.error("获取钉钉 access token 失败: %s", e)
+            return {"success": False, "message": "获取钉钉访问令牌失败，请重试"}
+
+        record_ids = self.dingtalk_client.create_notable_records(
+            base_id=base_id,
+            sheet_id_or_name=sheet_id_or_name,
+            operator_id=operator_id,
+            records=[{"fields": {link_field: transcribe_url.strip()}}],
+            access_token=access_token,
+        )
+        if not record_ids:
+            return {"success": False, "message": "写入听记链接到 AI 表格失败，请重试"}
+
+        record_id = record_ids[0]
+        logger.info(
+            "已写入听记链接到 AI 表格: transcribe_id=%s, record_id=%s",
+            transcribe_id,
+            record_id,
+        )
+
+        poll_interval = settings.DINGTALK_TRANSCRIBE_POLL_INTERVAL_SEC
+        poll_timeout = settings.DINGTALK_TRANSCRIBE_POLL_TIMEOUT_SEC
+        deadline = time.monotonic() + poll_timeout
+        text_content = ""
+
+        while time.monotonic() < deadline:
+            record = self.dingtalk_client.get_notable_record(
+                base_id=base_id,
+                sheet_id_or_name=sheet_id_or_name,
+                record_id=record_id,
+                operator_id=operator_id,
+                access_token=access_token,
+            )
+            if record:
+                fields = record.get("fields") or {}
+                text_content = self._extract_notable_field_text(fields.get(content_field))
+                if text_content:
+                    break
+            time.sleep(poll_interval)
+
+        if not text_content:
+            return {
+                "success": False,
+                "message": "听记内容获取超时，请稍后重试",
+            }
+
+        logger.info(
+            "成功获取钉钉听记内容: transcribe_id=%s, length=%d",
+            transcribe_id,
+            len(text_content),
+        )
+        return {
+            "success": True,
+            "content": text_content,
+            "document_type": "dingtalk_transcribe",
+            "title": f"钉钉听记_{transcribe_id}",
+        }
+
+    @staticmethod
+    def _extract_notable_field_text(field_value: Any) -> str:
+        """从 AI 表格字段值中提取文本内容。"""
+        if field_value is None:
+            return ""
+        if isinstance(field_value, str):
+            return field_value.strip()
+        if isinstance(field_value, (int, float)):
+            return str(field_value).strip()
+        if isinstance(field_value, dict):
+            for key in ("text", "link", "name", "value"):
+                val = field_value.get(key)
+                if isinstance(val, str) and val.strip():
+                    return val.strip()
+        if isinstance(field_value, list) and field_value:
+            parts = [
+                DocumentProcessingService._extract_notable_field_text(item)
+                for item in field_value
+            ]
+            return "\n".join(p for p in parts if p)
+        return ""
     
     def _handle_local_document(self, document_url: str) -> Dict[str, Any]:
         """处理本地文档"""
