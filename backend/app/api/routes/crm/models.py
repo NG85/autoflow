@@ -625,6 +625,8 @@ class VisitRecordResponse(BaseModel):
 class CRMComment(BaseModel):
     """通用评论结构（拜访记录/周总结复用）"""
 
+    id: Optional[str] = Field(default=None, description="评论唯一标识（服务端生成；客户端回复时引用被回复条目的 id）")
+    reply_to_id: Optional[str] = Field(default=None, description="被回复评论的 id；为空表示顶层评论")
     author_id: str = ""
     author: str = ""
     content: str

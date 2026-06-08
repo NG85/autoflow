@@ -32,7 +32,7 @@ from app.repositories.crm_account import crm_account_repo
 from app.repositories.crm_account_opportunity_assessment import crm_account_opportunity_assessment_repo
 from app.repositories.document_content import DocumentContentRepo
 from app.repositories.user_profile import UserProfileRepo
-from app.repositories.visit_record import visit_record_repo
+from app.repositories.visit_record import VisitRecordCommentError, visit_record_repo
 from app.services.crm_config_service import get_resolved_field_mapping
 from app.services.document_processing_service import document_processing_service
 from app.services.feishu_billing_facade import check_billing_quota
@@ -845,7 +845,8 @@ def update_visit_record_comments(
     追加保存指定拜访记录的评论（comments，JSON数组）；请求体只需传本次新增条目。
     - 每条评论的 author_id 须与当前登录用户一致，否则返回 400
     - 复用拜访记录的权限控制逻辑：无权限/不存在返回 404
-    - 保存成功后：若本次追加条目含 type=comment，则向记录人推送评论提醒（type=task 不推送）
+    - 支持 reply_to_id 回复已有评论；无效 reply_to_id 返回 400
+    - 保存成功后：type=comment 的顶层评论向记录人推送提醒；带 reply_to_id 的回复向被回复评论作者推送提醒（type=task 不推送）
     """
     try:
         current_user_id_str = str(user.id)
@@ -861,94 +862,106 @@ def update_visit_record_comments(
             str(getattr(user, "id", "") or ""),
             len(payload.comments or []),
         )
-        updated_record = visit_record_repo.update_visit_record_comments(
-            session=db_session,
-            record_id=record_id,
-            comments=[c.model_dump() for c in (payload.comments or [])],
-            current_user_id=user.id
-        )
+        try:
+            updated_record = visit_record_repo.update_visit_record_comments(
+                session=db_session,
+                record_id=record_id,
+                comments=[c.model_dump() for c in (payload.comments or [])],
+                current_user_id=user.id,
+            )
+        except VisitRecordCommentError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
         if updated_record is None:
             raise HTTPException(status_code=404, detail="拜访记录不存在或无权限访问")
 
-        # 保存评论成功后：推送提醒给拜访记录的记录人（不影响主流程，失败仅记录日志）
+        # 保存评论成功后推送提醒（不影响主流程，失败仅记录日志）
         try:
+            from app.services.platform_notification_service import platform_notification_service
+
             record = updated_record
-            recipient_user_id = str(getattr(record, "recorder_id", "") or "")
             current_user_id = str(getattr(user, "id", "") or "")
+            recorder_user_id = str(getattr(record, "recorder_id", "") or "")
+            saved_comments = getattr(record, "comments", None) or []
+            comment_by_id: dict[str, dict] = {}
+            for raw in saved_comments:
+                if not isinstance(raw, dict):
+                    continue
+                cid = str(raw.get("id") or "").strip()
+                if cid:
+                    comment_by_id[cid] = raw
+
             logger.info(
-                "update_visit_record_comments saved: record_id=%s, current_user_id=%s, recipient_user_id=%s, saved_comments_count=%s",
+                "update_visit_record_comments saved: record_id=%s, current_user_id=%s, recorder_user_id=%s, saved_comments_count=%s",
                 record_id,
                 current_user_id,
-                recipient_user_id,
-                len(getattr(record, "comments", None) or []),
+                recorder_user_id,
+                len(saved_comments),
             )
 
-            if record and recipient_user_id and recipient_user_id != current_user_id:
-                # 请求体为本次追加条目；存在 comment 类型即推送（task 类型不推送）
-                payload_comments = payload.comments or []
-                notify_comment = None
-                for item in payload_comments:
-                    item_type = str(item.type or "comment").strip().lower()
-                    if item_type == "comment":
-                        notify_comment = item
+            jump_url = f"{settings.REVIEW_REPORT_HOST}/registerVisitRecord/detail?record_id={record_id}"
+            title = (getattr(record, "account_name", None) or getattr(record, "partner_name", None) or "") or ""
+            opp = (getattr(record, "opportunity_name", None) or "") or ""
+            link_text = f"{title}  {opp}".strip() or "拜访记录"
 
-                logger.info(
-                    "visit_record_comment notify candidate: record_id=%s, payload_comments_count=%s, "
-                    "has_comment_type=%s, notify_author=%s, notify_content_preview=%s",
-                    record_id,
-                    len(payload_comments),
-                    notify_comment is not None,
-                    str(notify_comment.author or "") if notify_comment else "",
-                    (str(notify_comment.content or "")[:80] if notify_comment else ""),
-                )
+            for item in payload.comments or []:
+                item_type = str(item.type or "comment").strip().lower()
+                if item_type != "comment":
+                    continue
 
-                if notify_comment is not None:
-                    from app.core.config import settings
+                comment_preview = str(item.content or "").strip()
+                if len(comment_preview) > 200:
+                    comment_preview = comment_preview[:197] + "..."
 
-                    comment_preview = str(notify_comment.content or "").strip()
-                    if len(comment_preview) > 200:
-                        comment_preview = comment_preview[:197] + "..."
+                author_name = str(item.author or "").strip()
+                author_name = author_name or str(getattr(user, "name", "") or "").strip()
+                author_name = author_name or "有人"
 
-                    jump_url = f"{settings.REVIEW_REPORT_HOST}/registerVisitRecord/detail?record_id={record_id}"
-
-                    author_name = str(notify_comment.author or "").strip()
-                    author_name = author_name or str(getattr(user, "name", "") or "").strip()
-                    author_name = author_name or "有人"
-
-                    title = (getattr(record, "account_name", None) or getattr(record, "partner_name", None) or "") or ""
-                    opp = (getattr(record, "opportunity_name", None) or "") or ""
-                    link_text = f"{title}  {opp}".strip() or "拜访记录"
-
+                reply_to_id = str(item.reply_to_id or "").strip()
+                if reply_to_id:
+                    parent = comment_by_id.get(reply_to_id)
+                    recipient_user_id = str((parent or {}).get("author_id") or "").strip()
+                    notify_kind = "reply"
+                    if not recipient_user_id or recipient_user_id == current_user_id:
+                        logger.info(
+                            "visit_record_comment notify skipped: record_id=%s, reply_to_id=%s, reason=%s",
+                            record_id,
+                            reply_to_id,
+                            "invalid_recipient_or_self_notification",
+                        )
+                        continue
+                    text = (
+                        f"{author_name}回复了你的评论\n"
+                        f"[{link_text}]({jump_url})\n"
+                        f"回复：{comment_preview or '--'}\n"
+                    )
+                else:
+                    recipient_user_id = recorder_user_id
+                    notify_kind = "comment"
+                    if not recipient_user_id or recipient_user_id == current_user_id:
+                        logger.info(
+                            "visit_record_comment notify skipped: record_id=%s, reason=%s",
+                            record_id,
+                            "invalid_recipient_or_self_notification",
+                        )
+                        continue
                     text = (
                         f"{author_name}评论了你的拜访记录\n"
                         f"[{link_text}]({jump_url})\n"
                         f"评论：{comment_preview or '--'}\n"
                     )
 
-                    from app.services.platform_notification_service import platform_notification_service
-                    platform_notification_service.send_visit_record_comment_notification(
-                        db_session,
-                        recipient_user_id=recipient_user_id,
-                        message_text=text,
-                    )
-                    logger.info(
-                        "visit_record_comment notify sent: record_id=%s, recipient_user_id=%s, author_name=%s",
-                        record_id,
-                        recipient_user_id,
-                        author_name,
-                    )
-                else:
-                    logger.info(
-                        "visit_record_comment notify skipped: record_id=%s, reason=%s",
-                        record_id,
-                        "no_comment_type_in_payload",
-                    )
-            else:
+                platform_notification_service.send_visit_record_comment_notification(
+                    db_session,
+                    recipient_user_id=recipient_user_id,
+                    message_text=text,
+                )
                 logger.info(
-                    "visit_record_comment notify skipped: record_id=%s, reason=%s",
+                    "visit_record_comment notify sent: record_id=%s, kind=%s, recipient_user_id=%s, author_name=%s",
                     record_id,
-                    "invalid_recipient_or_self_notification",
+                    notify_kind,
+                    recipient_user_id,
+                    author_name,
                 )
         except Exception as e:
             logger.warning(f"发送拜访记录评论提醒失败（不影响保存评论）：{e}")

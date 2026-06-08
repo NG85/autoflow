@@ -51,6 +51,7 @@ from app.utils.crm_account_tags import (
     resolve_followup_object_id,
     resolve_followup_object_name,
 )
+from app.utils.crm_comments import CRMCommentValidationError, merge_append_crm_comments
 from app.utils.crm_followup_object_type import resolve_customer_attribute_display_label
 
 logger = logging.getLogger(__name__)
@@ -129,6 +130,8 @@ def _to_comments(v: object) -> list[CRMComment]:
                 created_at = datetime.fromisoformat(str(created_at_raw))
             out.append(
                 CRMComment(
+                    id=str(item.get("id") or "") or None,
+                    reply_to_id=str(item.get("reply_to_id") or "") or None,
                     author_id=str(item.get("author_id") or ""),
                     author=str(item.get("author") or ""),
                     content=str(item.get("content") or ""),
@@ -873,7 +876,8 @@ def save_weekly_followup_comments(
     """
     追加保存周跟进实体评论（comments，JSON 数组）；请求体只需传本次新增条目。
     - 每条评论的 author_id 须与当前登录用户一致，否则返回 400
-    - 保存成功后：若本次追加条目含 type=comment，则向负责人推送评论提醒（type=task 不推送）
+    - 支持 reply_to_id 回复已有评论；无效 reply_to_id 返回 400
+    - 保存成功后：type=comment 的顶层评论向负责人推送提醒；带 reply_to_id 的回复向被回复评论作者推送提醒（type=task 不推送）
     """
     # can_edit, is_company_admin, user_dept_id, user_dept_name = _can_edit_weekly_followup_comments(db_session, user)
     # if not can_edit:
@@ -897,49 +901,25 @@ def save_weekly_followup_comments(
     #     if not user_dept_id and user_dept_name and entity.department_name != user_dept_name:
     #         raise HTTPException(status_code=403, detail="权限不足：只能编辑本团队记录")
 
-    # 安全保护：不得改动他人评论；payload 只追加当前用户的新评论/任务
     now_bj = datetime.now(ZoneInfo("Asia/Shanghai"))
 
-    existing_raw = entity.comments if isinstance(entity.comments, list) else []
-    kept_others: list[dict] = []
-    existing_my: list[dict] = []
-    for item in existing_raw:
-        if not isinstance(item, dict):
-            continue
-        if str(item.get("author_id") or "") != current_user_id:
-            kept_others.append(item)
-        else:
-            existing_my.append(item)
-
-    appended: list[dict] = []
-    for c in (payload.comments or []):
-        if str(c.author_id or "").strip() != current_user_id:
-            continue
-        created_at = c.created_at or now_bj
-        if isinstance(created_at, datetime):
-            created_at_str = created_at.isoformat()
-        else:
-            created_at_str = str(created_at)
-        appended.append(
-            {
-                "author_id": current_user_id,
-                "author": c.author or "",
-                "content": c.content,
-                "type": c.type or "comment",
-                "created_at": created_at_str,
-            }
+    try:
+        merged, appended = merge_append_crm_comments(
+            entity.comments,
+            [
+                {
+                    **c.model_dump(),
+                    "author": c.author or "",
+                    "type": c.type or "comment",
+                }
+                for c in (payload.comments or [])
+            ],
+            current_user_id,
+            now=now_bj,
         )
+    except CRMCommentValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
-    merged = kept_others + existing_my + appended
-
-    def _sort_key(x: dict) -> tuple[int, str]:
-        v = str(x.get("created_at") or "")
-        try:
-            return (0, datetime.fromisoformat(v).isoformat())
-        except Exception:
-            return (1, v)
-
-    merged.sort(key=_sort_key)
     entity.comments = merged
     db_session.add(entity)
     db_session.commit()
@@ -979,48 +959,70 @@ def save_weekly_followup_comments(
     except Exception as e:
         logger.warning(f"记录周跟进 leader 评论参与度失败（不影响保存评论）：{e}")
 
-    # 保存评论成功后：推送提醒给负责销售（不影响主流程，失败仅记录日志）
+    # 保存评论成功后推送提醒（不影响主流程，失败仅记录日志）
     try:
+        from app.core.config import settings
+        from app.services.platform_notification_service import platform_notification_service
+
         owner_user_id = str(getattr(entity, "owner_user_id", "") or "")
-        if owner_user_id and owner_user_id != current_user_id:
-            notify_comment = None
-            for item in payload.comments or []:
-                item_type = str(item.type or "comment").strip().lower()
-                if item_type == "comment":
-                    notify_comment = item
+        saved_comments = entity.comments if isinstance(entity.comments, list) else []
+        comment_by_id: dict[str, dict] = {}
+        for raw in saved_comments:
+            if not isinstance(raw, dict):
+                continue
+            cid = str(raw.get("id") or "").strip()
+            if cid:
+                comment_by_id[cid] = raw
 
-            if notify_comment is not None:
-                from app.core.config import settings
-                from urllib.parse import quote_plus
+        week_part = f"{entity.week_start.isoformat()}~{entity.week_end.isoformat()}"
+        dept_name = (entity.department_name or "").strip()
+        jump_url = (
+            f"{settings.REVIEW_REPORT_HOST}/review/opportunitySummary"
+            f"?department_name={quote_plus(dept_name)}"
+            f"&week_start={entity.week_start.isoformat()}&week_end={entity.week_end.isoformat()}"
+        )
+        link_text = f"{entity.account_name or entity.partner_name}  {entity.opportunity_name}".strip()
 
-                comment_preview = str(notify_comment.content or "").strip()
-                if len(comment_preview) > 200:
-                    comment_preview = comment_preview[:197] + "..."
+        for item in payload.comments or []:
+            item_type = str(item.type or "comment").strip().lower()
+            if item_type != "comment":
+                continue
 
-                week_part = f"{entity.week_start.isoformat()}~{entity.week_end.isoformat()}"
-                dept_name = (entity.department_name or "").strip()
-                jump_url = (
-                    f"{settings.REVIEW_REPORT_HOST}/review/opportunitySummary"
-                    f"?department_name={quote_plus(dept_name)}"
-                    f"&week_start={entity.week_start.isoformat()}&week_end={entity.week_end.isoformat()}"
+            comment_preview = str(item.content or "").strip()
+            if len(comment_preview) > 200:
+                comment_preview = comment_preview[:197] + "..."
+
+            author_name = str(item.author or "").strip()
+            author_name = author_name or str(getattr(user, "name", "") or "").strip()
+            author_name = author_name or "有人"
+
+            reply_to_id = str(item.reply_to_id or "").strip()
+            if reply_to_id:
+                parent = comment_by_id.get(reply_to_id)
+                recipient_user_id = str((parent or {}).get("author_id") or "").strip()
+                if not recipient_user_id or recipient_user_id == current_user_id:
+                    continue
+                text = (
+                    f"{author_name}回复了你的评论\n"
+                    f"[{link_text}]({jump_url})\n"
+                    f"周总结（{week_part}）\n"
+                    f"回复：{comment_preview or '--'}\n"
                 )
-
-                author_name = str(notify_comment.author or "").strip()
-                author_name = author_name or str(getattr(user, "name", "") or "").strip()
-                author_name = author_name or "有人"
-
+            else:
+                recipient_user_id = owner_user_id
+                if not recipient_user_id or recipient_user_id == current_user_id:
+                    continue
                 text = (
                     f"{author_name}评论了你的周跟进总结（{week_part}）\n"
-                    f"[{entity.account_name or entity.partner_name}  {entity.opportunity_name}]({jump_url})\n"
+                    f"[{link_text}]({jump_url})\n"
                     f"评论：{comment_preview or '--'}\n"
                 )
 
-                from app.services.platform_notification_service import platform_notification_service
-                platform_notification_service.send_weekly_followup_comment_notification(
-                    db_session,
-                    recipient_user_id=owner_user_id,
-                    message_text=text,
-                )
+            platform_notification_service.send_weekly_followup_comment_notification(
+                db_session,
+                recipient_user_id=recipient_user_id,
+                message_text=text,
+            )
     except Exception as e:
         logger.warning(f"发送周跟进评论提醒失败（不影响保存评论）：{e}")
 
