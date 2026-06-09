@@ -1431,7 +1431,30 @@ class ReviewSessionInsightDetailBasicOut(BaseModel):
     opportunities: List[ReviewSessionInsightRiskOpportunityOut] = Field(default_factory=list)
 
 
+class ReviewSessionInsightRiskPartOut(BaseModel):
+    insight_unique_id: str
+    parent_id: str
+    display_order: Optional[int] = None
+    record_type: Literal["RISK_PART"] = "RISK_PART"
+    type_code: str
+    type_name: str
+    category: Optional[str] = None
+    judgment_rule: Optional[str] = None
+    summary: Optional[str] = None
+    gap_description: Optional[str] = None
+    detail_description: Optional[str] = None
+    opportunities: List[ReviewSessionInsightRiskOpportunityOut] = Field(default_factory=list)
+    severity: Optional[str] = None
+    source: Optional[str] = None
+    metric_name: Optional[str] = None
+    solution: Optional[str] = None
+    status: Optional[str] = None
+    detected_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
 class ReviewSessionInsightDetailOut(ReviewSessionInsightDetailBasicOut):
+    risk_parts: List[ReviewSessionInsightRiskPartOut] = Field(default_factory=list)
     severity: Optional[str] = None
     source: Optional[str] = None
     metric_name: Optional[str] = None

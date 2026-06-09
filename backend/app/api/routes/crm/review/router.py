@@ -33,6 +33,7 @@ from app.api.routes.crm.models import (
     ReviewSessionInsightItemBaseOut,
     ReviewSessionInsightItemOut,
     ReviewSessionInsightRiskOpportunityOut,
+    ReviewSessionInsightRiskPartOut,
     ReviewSessionInsightsBasicOut,
     ReviewSessionInsightsOut,
     ReviewSessionKpiMetricOut,
@@ -1027,6 +1028,63 @@ def query_review_session_insights(
     )
 
 
+def _map_risk_opportunity_relations(
+    rel_rows: List[CRMReviewRiskOpportunityRelation],
+) -> List[ReviewSessionInsightRiskOpportunityOut]:
+    return [
+        ReviewSessionInsightRiskOpportunityOut(
+            relation_unique_id=str(rel.unique_id),
+            risk_unique_id=str(rel.risk_unique_id),
+            opportunity_id=str(rel.opportunity_id),
+            owner_id=rel.owner_id,
+            department_id=rel.department_id,
+            snapshot_period=str(rel.snapshot_period),
+            calc_phase=str(rel.calc_phase),
+            relation_reason=rel.relation_reason,
+            relation_rank=rel.relation_rank,
+            relation_weight=float(rel.relation_weight)
+            if rel.relation_weight is not None
+            else None,
+        )
+        for rel in rel_rows
+    ]
+
+
+def _group_risk_opportunity_relations_by_risk_id(
+    rel_rows: List[CRMReviewRiskOpportunityRelation],
+) -> Dict[str, List[CRMReviewRiskOpportunityRelation]]:
+    grouped: Dict[str, List[CRMReviewRiskOpportunityRelation]] = {}
+    for rel in rel_rows:
+        grouped.setdefault(str(rel.risk_unique_id), []).append(rel)
+    return grouped
+
+
+def _build_review_session_insight_risk_part_out(
+    part: CRMReviewOppRiskProgress,
+    opportunities: List[ReviewSessionInsightRiskOpportunityOut],
+) -> ReviewSessionInsightRiskPartOut:
+    return ReviewSessionInsightRiskPartOut(
+        insight_unique_id=str(part.unique_id),
+        parent_id=str(part.parent_id or ""),
+        display_order=part.display_order,
+        type_code=str(part.type_code),
+        type_name=str(part.type_name),
+        category=part.category,
+        judgment_rule=part.judgment_rule,
+        summary=part.summary,
+        gap_description=part.gap_description,
+        detail_description=part.detail_description,
+        opportunities=opportunities,
+        severity=part.severity,
+        source=part.source,
+        metric_name=part.metric_name,
+        solution=part.solution,
+        status=part.status,
+        detected_at=part.detected_at,
+        updated_at=part.updated_at,
+    )
+
+
 @router.post(
     "/crm/review/sessions/{session_id}/insights/risk/{risk_id}/opportunities",
     response_model_exclude_none=True,
@@ -1038,9 +1096,10 @@ def query_review_session_insight_risk_opportunities(
     user: CurrentUserDep,
 ) -> ReviewSessionInsightDetailOut:
     """
-    某条风险洞察关联的商机列表（返回关系信息，不直接展开主表 baseline 字段）。
+    某条风险洞察及其 RISK_PART 子记录关联的商机列表（返回关系信息，不直接展开主表 baseline 字段）。
     - 负责人或有 ``review_session:all:view`` 权限的用户可调。
     - ``risk_id`` 与 insights 风险项的 ``insight_unique_id`` 一致。
+    - 同时返回 ``record_type=RISK_PART`` 且 ``parent_id`` 指向该风险的子记录及其商机。
     - 前端二段式调用：先从本接口拿 ``opportunity_id``，再调用 ``POST .../baseline-opp-branch-snapshots``，并传
       ``{"snapshot_filters": {"opportunity_ids": [...]}}`` 获取主表 T2 baseline 字段。
     """
@@ -1070,40 +1129,51 @@ def query_review_session_insight_risk_opportunities(
     ).first()
     if not insight:
         raise HTTPException(status_code=404, detail="insight not found")
+    insight_unique_id = str(insight.unique_id)
     detail_description = insight.detail_description
 
-    opportunities: List[ReviewSessionInsightRiskOpportunityOut] = []
+    risk_part_rows = db_session.exec(
+        select(CRMReviewOppRiskProgress)
+        .where(
+            CRMReviewOppRiskProgress.session_id == session_id,
+            CRMReviewOppRiskProgress.scope_type == "department",
+            CRMReviewOppRiskProgress.record_type == "RISK_PART",
+            CRMReviewOppRiskProgress.parent_id == insight_unique_id,
+        )
+        .order_by(
+            CRMReviewOppRiskProgress.display_order.asc(),
+            CRMReviewOppRiskProgress.id.asc(),
+        )
+    ).all()
+
+    risk_unique_ids = [risk_id] + [str(part.unique_id) for part in risk_part_rows]
     rel_rows = db_session.exec(
         select(CRMReviewRiskOpportunityRelation)
         .where(
             CRMReviewRiskOpportunityRelation.session_id == session_id,
-            CRMReviewRiskOpportunityRelation.risk_unique_id == risk_id,
+            CRMReviewRiskOpportunityRelation.risk_unique_id.in_(risk_unique_ids),
         )
         .order_by(
             CRMReviewRiskOpportunityRelation.updated_at.desc(),
         )
     ).all()
+    rels_by_risk_id = _group_risk_opportunity_relations_by_risk_id(rel_rows)
 
-    for rel in rel_rows:
-        opportunities.append(
-            ReviewSessionInsightRiskOpportunityOut(
-                relation_unique_id=str(rel.unique_id),
-                risk_unique_id=str(rel.risk_unique_id),
-                opportunity_id=str(rel.opportunity_id),
-                owner_id=rel.owner_id,
-                department_id=rel.department_id,
-                snapshot_period=str(rel.snapshot_period),
-                calc_phase=str(rel.calc_phase),
-                relation_reason=rel.relation_reason,
-                relation_rank=rel.relation_rank,
-                relation_weight=float(rel.relation_weight)
-                if rel.relation_weight is not None
-                else None,
-            )
+    opportunities = _map_risk_opportunity_relations(
+        rels_by_risk_id.get(risk_id, [])
+    )
+    risk_parts = [
+        _build_review_session_insight_risk_part_out(
+            part,
+            _map_risk_opportunity_relations(
+                rels_by_risk_id.get(str(part.unique_id), [])
+            ),
         )
+        for part in risk_part_rows
+    ]
 
     return ReviewSessionInsightDetailOut(
-        insight_unique_id=str(insight.unique_id),
+        insight_unique_id=insight_unique_id,
         session_id=session_id,
         scope_type="department",
         record_type="RISK",
@@ -1115,6 +1185,7 @@ def query_review_session_insight_risk_opportunities(
         gap_description=insight.gap_description,
         detail_description=detail_description,
         opportunities=opportunities,
+        risk_parts=risk_parts,
         severity=insight.severity,
         source=insight.source,
         metric_name=insight.metric_name,
