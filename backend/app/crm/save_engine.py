@@ -11,7 +11,6 @@ from app.api.routes.crm.models import SimpleVisitRecordCreate, CompleteVisitReco
 from app.api.deps import CurrentUserDep, SessionDep
 from app.repositories.document_content import DocumentContentRepo
 from app.services.platform_notification_service import platform_notification_service
-from app.tasks.document_qa import extract_and_save_document_qa
 from app.utils.ark_llm import call_ark_llm
 from app.utils.uuid6 import uuid6
 logger = logging.getLogger(__name__)
@@ -1276,6 +1275,8 @@ def enrich_visit_record_with_document_content(
     
     # ========== 异步触发文档问答对抽取任务（不影响主流程） ==========
     try:
+        from app.tasks.document_qa import extract_and_save_document_qa
+
         extract_and_save_document_qa.delay(document_content.id)
         logger.info(f"已异步触发文档问答对抽取任务，文档ID: {document_content.id}")
     except Exception as e:

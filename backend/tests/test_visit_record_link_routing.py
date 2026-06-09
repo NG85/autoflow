@@ -54,8 +54,8 @@ def test_handle_dingtalk_transcribe_still_sync_full_chain_for_other_callers():
     poll.assert_called_once_with(notable_record_id="n1", transcribe_id="t1")
 
 
-@patch("app.tasks.dingtalk_transcribe.notify_aldebaran_visit_record_saved")
-@patch("app.tasks.dingtalk_transcribe.enrich_visit_record_with_document_content")
+@patch("app.crm.save_engine.notify_aldebaran_visit_record_saved")
+@patch("app.crm.save_engine.enrich_visit_record_with_document_content")
 @patch("app.tasks.dingtalk_transcribe.update_visit_record_card_push_status")
 @patch("app.tasks.dingtalk_transcribe.document_processing_service")
 def test_celery_task_polls_only_not_write_table(

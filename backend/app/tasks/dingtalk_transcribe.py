@@ -10,10 +10,6 @@ from app.api.routes.crm.models import CompleteVisitRecordCreate, SimpleVisitReco
 from app.celery import app as celery_app
 from app.core.config import settings
 from app.core.db import engine_transactional
-from app.crm.save_engine import (
-    enrich_visit_record_with_document_content,
-    notify_aldebaran_visit_record_saved,
-)
 from app.services.document_processing_service import document_processing_service
 from app.services.visit_record_card_push_status import (
     VisitRecordCardPushStatus,
@@ -50,6 +46,11 @@ def process_dingtalk_transcribe_visit_record(
     """
     operator_user_id = UUID(user_id)
     record = _parse_visit_record_snapshot(record_snapshot)
+
+    from app.crm.save_engine import (
+        enrich_visit_record_with_document_content,
+        notify_aldebaran_visit_record_saved,
+    )
 
     try:
         result = document_processing_service.poll_dingtalk_transcribe_summary(
