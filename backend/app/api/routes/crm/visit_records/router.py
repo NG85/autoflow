@@ -902,6 +902,7 @@ def update_visit_record_comments(
     - 每条评论的 author_id 须与当前登录用户一致，否则返回 400
     - 复用拜访记录的权限控制逻辑：无权限/不存在返回 404
     - 支持 reply_to_id 回复已有评论；无效 reply_to_id 返回 400
+    - type=task 时 id 须由前端传入（已创建任务的 id）；type=comment 时 id 由服务端生成
     - 保存成功后：type=comment 的顶层评论向记录人推送提醒；带 reply_to_id 的回复向被回复评论作者推送提醒（type=task 不推送）
     """
     try:

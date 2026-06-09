@@ -11,8 +11,12 @@ class CRMCommentValidationError(ValueError):
 
 
 def ensure_comment_id(item: Dict[str, Any]) -> Dict[str, Any]:
+    """为历史 comment 懒补 id；历史 task 无 id 时保持原样（不写入）。"""
     out = dict(item)
-    if not str(out.get("id") or "").strip():
+    if str(out.get("id") or "").strip():
+        return out
+    item_type = str(out.get("type") or "comment").strip().lower()
+    if item_type != "task":
         out["id"] = str(uuid4())
     return out
 
@@ -25,7 +29,7 @@ def merge_append_crm_comments(
     now: Optional[datetime] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
-    在既有评论后追加当前用户的新评论；为历史条目懒补 id。
+    在既有评论后追加当前用户的新评论；为历史 comment 懒补 id（历史 task 无 id 时不填充）。
     返回 (merged_sorted, appended)。
     """
     current_user_id_str = str(current_user_id or "")
@@ -63,12 +67,21 @@ def merge_append_crm_comments(
             parent_type = str(parent.get("type") or "comment").strip().lower()
             if parent_type != "comment":
                 raise CRMCommentValidationError("仅支持回复 type=comment 的评论，不能回复任务条目")
+        item_type = str(c.get("type") or "comment").strip().lower()
+        if item_type == "task":
+            new_id = str(c.get("id") or "").strip()
+            if not new_id:
+                raise CRMCommentValidationError("type=task 的条目须由前端传入 id（已创建任务的 id）")
+            if new_id in comment_by_id:
+                raise CRMCommentValidationError(f"任务 id 已存在：id={new_id}")
+        else:
+            new_id = str(uuid4())
+
         created_at = c.get("created_at") or now_bj
         if isinstance(created_at, datetime):
             created_at_str = created_at.isoformat()
         else:
             created_at_str = str(created_at)
-        new_id = str(uuid4())
         new_comment: Dict[str, Any] = {
             "id": new_id,
             "author_id": current_user_id_str,
