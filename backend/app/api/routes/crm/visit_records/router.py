@@ -34,7 +34,13 @@ from app.repositories.document_content import DocumentContentRepo
 from app.repositories.user_profile import UserProfileRepo
 from app.repositories.visit_record import VisitRecordCommentError, visit_record_repo
 from app.services.crm_config_service import get_resolved_field_mapping
+from app.platforms.utils.url_parser import parse_dingtalk_transcribe_url
 from app.services.document_processing_service import document_processing_service
+from app.services.visit_record_card_push_status import (
+    VisitRecordCardPushStatus,
+    update_visit_record_card_push_status,
+)
+from app.tasks.dingtalk_transcribe import process_dingtalk_transcribe_visit_record
 from app.services.feishu_billing_facade import check_billing_quota
 
 logger = logging.getLogger(__name__)
@@ -125,6 +131,46 @@ def create_visit_record(
         if record.visit_type == "link":
             if not record.visit_url:
                 return {"code": 400, "message": "visit_url is required", "data": {}}
+
+            # 钉钉听记：同步写 AI 表格（失败可立即重试），轮询与 enrichment 下沉 Celery
+            if parse_dingtalk_transcribe_url(record.visit_url):
+                write_result = document_processing_service.start_dingtalk_transcribe(
+                    record.visit_url
+                )
+                if not write_result.get("success"):
+                    return {
+                        "code": 400,
+                        "message": write_result.get("message", "写入听记链接失败"),
+                        "data": {},
+                    }
+                try:
+                    record_id, _saved_time = save_visit_record_to_crm_table(record, db_session)
+                    update_visit_record_card_push_status(
+                        db_session,
+                        record_id,
+                        VisitRecordCardPushStatus.CONTENT_PROCESSING,
+                        commit=False,
+                    )
+                    db_session.commit()
+                    process_dingtalk_transcribe_visit_record.delay(
+                        record_id=record_id,
+                        notable_record_id=write_result["notable_record_id"],
+                        transcribe_id=write_result["transcribe_id"],
+                        user_id=str(user.id),
+                        record_snapshot=record.model_dump(),
+                    )
+                    return {
+                        "code": 0,
+                        "message": "success",
+                        "data": {
+                            "record_id": record_id,
+                            "link_content_status": "processing",
+                        },
+                    }
+                except Exception as e:
+                    db_session.rollback()
+                    logger.error("Failed to enqueue dingtalk transcribe visit record: %s", e)
+                    return {"code": 400, "message": "保存拜访记录失败，请重试", "data": {}}
             
             # 使用通用文档处理服务
             result = document_processing_service.process_document_url(

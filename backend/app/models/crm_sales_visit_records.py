@@ -83,7 +83,7 @@ class CRMSalesVisitRecord(SQLModel, table=True):
         default=None,
         nullable=True,
         max_length=32,
-        description="拜访卡片推送状态：pending/awaiting_callback/pushed/failed",
+        description="拜访卡片推送状态：content_processing/pending/awaiting_callback/pushed/failed",
     )
 
     __table_args__ = (

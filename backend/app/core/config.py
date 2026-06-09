@@ -352,7 +352,7 @@ class Settings(BaseSettings):
     DINGTALK_APP_ID: str = ""
     DINGTALK_APP_SECRET: str = ""
     DINGTALK_COPR_ID: str = ""
-    # 钉钉听记：写入预建 AI 表格后读取转录内容（operatorId 为表格创建人 unionId，保证写权限）
+    # 钉钉听记：写入预建 AI 表格后轮询读取「听记总结」（非逐字稿）
     DINGTALK_TRANSCRIBE_NOTABLE_URL: str | None = None
     DINGTALK_NOTABLE_OPERATOR_UNION_ID: str | None = None
     DINGTALK_TRANSCRIBE_LINK_FIELD: str = "链接"
@@ -388,7 +388,7 @@ class Settings(BaseSettings):
     
     # Ark LLM API
     ARK_API_KEY: str = "b1529268-82ea-407a-bd79-d01514a2ed60"
-    ARK_MODEL: str = "ep-20260602171323-nlzp8"
+    ARK_MODEL: str = "ep-20260108150839-t2z4c"
     ARK_API_URL: str = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
     ARK_HTTP_CONNECT_TIMEOUT: float = 10.0
     ARK_HTTP_READ_TIMEOUT: float = 180.0

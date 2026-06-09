@@ -1133,6 +1133,157 @@ def extract_visit_method_from_content(content: str, db_session: SessionDep) -> s
         return ""
 
 
+def enrich_visit_record_with_document_content(
+    record_id: str,
+    record: SimpleVisitRecordCreate | CompleteVisitRecordCreate,
+    content: str,
+    document_type: str,
+    user_id: UUID,
+    db_session: SessionDep,
+    title: Optional[str] = None,
+) -> int:
+    """
+    为已落库的拜访记录写入文档内容并执行 LLM  enrichment（风险、纪要、问答对任务）。
+
+    Returns:
+        document_content.id
+    """
+    document_content_repo = DocumentContentRepo()
+    document_content = document_content_repo.create_document_content(
+        session=db_session,
+        raw_content=content,
+        document_type=document_type,
+        source_url=record.visit_url,
+        user_id=user_id,
+        visit_record_id=record_id,
+        title=title,
+        auto_commit=False,
+    )
+
+    # ========== 并行 LLM 提取风险信息与生成会议纪要 ==========
+    # 钉钉听记：AI 表格回填为听记总结（非逐字稿），仍走纪要 LLM 生成卡片用 meeting_summary
+    contact_name, contact_position = _extract_contact_info_from_record(record)
+    llm_context = {
+        "content": content,
+        "title": title,
+        "sales_name": record.recorder,
+        "account_name": record.account_name,
+        "contact_name": contact_name,
+        "contact_position": contact_position,
+        "visit_date": record.visit_communication_date,
+        "opportunity_name": record.opportunity_name,
+        "is_first_visit": record.is_first_visit,
+        "is_call_high": record.is_call_high,
+        "remarks": record.remarks,
+    }
+
+    def _run_risk_extraction() -> str:
+        return extract_risk_info_from_content(**llm_context)
+
+    def _run_meeting_summary() -> dict:
+        from app.services.meeting_summary_service import MeetingSummaryService
+
+        return MeetingSummaryService().generate_meeting_summary(**llm_context)
+
+    risk_info: Optional[str] = None
+    summary_result: Optional[dict] = None
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        risk_future = executor.submit(_run_risk_extraction)
+        summary_future = executor.submit(_run_meeting_summary)
+        try:
+            risk_info = risk_future.result()
+        except Exception as e:
+            logger.error(f"并行提取风险信息时出错: {e}")
+        try:
+            summary_result = summary_future.result()
+        except Exception as e:
+            logger.error(f"并行生成会议纪要总结时出错: {e}")
+
+    try:
+        if risk_info:
+            document_content_repo.update_risk_info(
+                session=db_session,
+                document_content_id=document_content.id,
+                risk_info=risk_info,
+                risk_status="success",
+                auto_commit=False,
+            )
+            logger.info(f"成功提取并保存风险信息到document_contents，文档ID: {document_content.id}")
+        else:
+            document_content_repo.update_risk_info(
+                session=db_session,
+                document_content_id=document_content.id,
+                risk_info="",
+                risk_status="success" if risk_info is not None else "failed",
+                auto_commit=False,
+            )
+            if risk_info is not None:
+                logger.debug(f"未从文档内容中提取到风险信息，文档ID: {document_content.id}")
+    except Exception as e:
+        logger.error(f"保存风险信息时出错: {e}")
+        try:
+            document_content_repo.update_risk_info(
+                session=db_session,
+                document_content_id=document_content.id,
+                risk_info="",
+                risk_status="failed",
+                auto_commit=False,
+            )
+        except Exception as update_error:
+            logger.error(f"更新风险信息失败状态到数据库失败: {update_error}")
+
+    try:
+        if summary_result and summary_result.get("success"):
+            meeting_summary = summary_result["summary"]
+            try:
+                document_content_repo.update_meeting_summary(
+                    session=db_session,
+                    document_content_id=document_content.id,
+                    meeting_summary=meeting_summary,
+                    summary_status="success",
+                    auto_commit=False,
+                )
+                logger.info(f"成功生成并保存会议纪要总结，文档ID: {document_content.id}")
+            except Exception as update_error:
+                logger.error(f"保存会议纪要到数据库失败: {update_error}")
+        else:
+            error_msg = (summary_result or {}).get("error")
+            try:
+                document_content_repo.update_meeting_summary(
+                    session=db_session,
+                    document_content_id=document_content.id,
+                    meeting_summary="",
+                    summary_status="failed",
+                    auto_commit=False,
+                )
+                logger.warning(
+                    f"生成会议纪要总结失败，文档ID: {document_content.id}, 错误: {error_msg}"
+                )
+            except Exception as update_error:
+                logger.error(f"更新会议纪要失败状态到数据库失败: {update_error}")
+    except Exception as e:
+        logger.error(f"生成会议纪要总结时出错: {e}")
+        try:
+            document_content_repo.update_meeting_summary(
+                session=db_session,
+                document_content_id=document_content.id,
+                meeting_summary="",
+                summary_status="failed",
+                auto_commit=False,
+            )
+        except Exception as update_error:
+            logger.error(f"更新会议纪要失败状态到数据库失败: {update_error}")
+    
+    # ========== 异步触发文档问答对抽取任务（不影响主流程） ==========
+    try:
+        extract_and_save_document_qa.delay(document_content.id)
+        logger.info(f"已异步触发文档问答对抽取任务，文档ID: {document_content.id}")
+    except Exception as e:
+        logger.error(f"触发文档问答对抽取异步任务失败: {e}")
+
+    return document_content.id
+
+
 def save_visit_record_with_content(
     record: SimpleVisitRecordCreate | CompleteVisitRecordCreate,
     content: str,
@@ -1158,159 +1309,16 @@ def save_visit_record_with_content(
     Raises:
         Exception: 当核心数据保存失败时抛出异常，由调用方处理事务回滚
     """
-    # ========== 第一阶段：核心数据库事务操作 ==========
-    # 先保存拜访记录以获取 record_id
-    record_id, saved_time = save_visit_record_to_crm_table(record, db_session)
-    
-    # 保存文档内容
-    document_content_repo = DocumentContentRepo()
-    document_content = document_content_repo.create_document_content(
-        session=db_session,
-        raw_content=content,
+    record_id, _saved_time = save_visit_record_to_crm_table(record, db_session)
+    enrich_visit_record_with_document_content(
+        record_id=record_id,
+        record=record,
+        content=content,
         document_type=document_type,
-        source_url=record.visit_url,
         user_id=user.id,
-        visit_record_id=record_id,
+        db_session=db_session,
         title=title,
-        auto_commit=False
     )
-    
-    # 注意：不在这里commit，由调用方控制事务
-    # db_session.commit()
-    
-    # ========== 第二阶段：提取风险信息并保存到document_contents表（不影响主流程） ==========
-    try:
-        # 提取联系人信息（使用公共函数）
-        contact_name, contact_position = _extract_contact_info_from_record(record)
-        
-        # 提取风险信息（使用完整的背景信息和remarks作为上下文，但不修改remarks）
-        risk_info = extract_risk_info_from_content(
-            content=content,
-            title=title,
-            sales_name=record.recorder,
-            account_name=record.account_name,
-            contact_name=contact_name,
-            contact_position=contact_position,
-            visit_date=record.visit_communication_date,
-            opportunity_name=record.opportunity_name,
-            is_first_visit=record.is_first_visit,
-            is_call_high=record.is_call_high,
-            remarks=record.remarks
-        )
-        
-        if risk_info:
-            # 保存风险信息到document_contents表
-            document_content_repo.update_risk_info(
-                session=db_session,
-                document_content_id=document_content.id,
-                risk_info=risk_info,
-                risk_status="success",
-                auto_commit=False  # 不立即提交，等待主事务提交
-            )
-            logger.info(f"成功提取并保存风险信息到document_contents，文档ID: {document_content.id}")
-        else:
-            # 记录未提取到风险信息的状态
-            document_content_repo.update_risk_info(
-                session=db_session,
-                document_content_id=document_content.id,
-                risk_info="",
-                risk_status="success",  # 虽然没有风险信息，但提取过程成功
-                auto_commit=False
-            )
-            logger.debug(f"未从文档内容中提取到风险信息，文档ID: {document_content.id}")
-    except Exception as e:
-        logger.error(f"提取或保存风险信息时出错: {e}")
-        # 记录失败状态（如果失败不影响主流程）
-        try:
-            document_content_repo.update_risk_info(
-                session=db_session,
-                document_content_id=document_content.id,
-                risk_info="",
-                risk_status="failed",
-                auto_commit=False
-            )
-        except Exception as update_error:
-            logger.error(f"更新风险信息失败状态到数据库失败: {update_error}")
-        # 不影响主流程，继续执行
-    
-    # ========== 第三阶段：生成会议纪要总结（不影响主流程） ==========
-    meeting_summary = None
-    
-    try:
-        from app.services.meeting_summary_service import MeetingSummaryService
-        meeting_summary_service = MeetingSummaryService()
-        
-        # 抽取联系人信息
-        contact_name, contact_position = _extract_contact_info_from_record(record)
-        
-        summary_result = meeting_summary_service.generate_meeting_summary(
-            content=content,
-            title=title,
-            sales_name=record.recorder,
-            account_name=record.account_name,
-            contact_name=contact_name,
-            contact_position=contact_position,
-            visit_date=record.visit_communication_date,
-            opportunity_name=record.opportunity_name,
-            is_first_visit=record.is_first_visit,
-            is_call_high=record.is_call_high,
-            remarks=record.remarks
-        )
-        
-        if summary_result["success"]:
-            meeting_summary = summary_result["summary"]
-            
-            # 更新会议纪要到数据库（如果失败不影响主流程）
-            try:
-                document_content_repo.update_meeting_summary(
-                    session=db_session,
-                    document_content_id=document_content.id,
-                    meeting_summary=meeting_summary,
-                    summary_status="success",
-                    auto_commit=False  # 不立即提交，等待主事务提交
-                )
-                logger.info(f"成功生成并保存会议纪要总结，文档ID: {document_content.id}")
-            except Exception as update_error:
-                logger.error(f"保存会议纪要到数据库失败: {update_error}")
-                # 不影响主流程，继续执行
-        else:
-            # 记录失败状态（如果失败不影响主流程）
-            try:
-                document_content_repo.update_meeting_summary(
-                    session=db_session,
-                    document_content_id=document_content.id,
-                    meeting_summary="",
-                    summary_status="failed",
-                    auto_commit=False  # 不立即提交，等待主事务提交
-                )
-                logger.warning(f"生成会议纪要总结失败，文档ID: {document_content.id}, 错误: {summary_result.get('error')}")
-            except Exception as update_error:
-                logger.error(f"更新会议纪要失败状态到数据库失败: {update_error}")
-                # 不影响主流程，继续执行
-                
-    except Exception as e:
-        logger.error(f"生成会议纪要总结时出错: {e}")
-        # 记录失败状态（如果失败不影响主流程）
-        try:
-            document_content_repo.update_meeting_summary(
-                session=db_session,
-                document_content_id=document_content.id,
-                meeting_summary="",
-                summary_status="failed",
-                auto_commit=False
-            )
-        except Exception as update_error:
-            logger.error(f"更新会议纪要失败状态到数据库失败: {update_error}")
-        # 不影响主流程，继续执行
-    
-    # ========== 第四阶段：异步触发文档问答对抽取任务（不影响主流程） ==========
-    try:
-        extract_and_save_document_qa.delay(document_content.id)
-        logger.info(f"已异步触发文档问答对抽取任务，文档ID: {document_content.id}")
-    except Exception as e:
-        logger.error(f"触发文档问答对抽取异步任务失败: {e}")
-        # 不影响主流程，继续执行
-    
     return {
         "code": 0,
         "message": "success",

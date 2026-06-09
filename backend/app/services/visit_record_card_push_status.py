@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 class VisitRecordCardPushStatus:
     """卡片推送状态枚举值（存库为字符串）。"""
 
+    CONTENT_PROCESSING = "content_processing"
     PENDING = "pending"
     AWAITING_CALLBACK = "awaiting_callback"
     PUSHED = "pushed"
