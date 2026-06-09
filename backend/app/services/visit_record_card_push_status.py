@@ -22,6 +22,24 @@ class VisitRecordCardPushStatus:
     FAILED = "failed"
 
 
+def link_content_status_from_card_push(card_push_status: Optional[str]) -> str:
+    """
+    供前端展示的 link 拜访内容/卡片处理状态。
+    卡片本就走 Aldebaran 异步链路，pending/awaiting_callback 仍视为处理中。
+    """
+    if card_push_status == VisitRecordCardPushStatus.FAILED:
+        return "failed"
+    if card_push_status == VisitRecordCardPushStatus.PUSHED:
+        return "completed"
+    if card_push_status in {
+        VisitRecordCardPushStatus.CONTENT_PROCESSING,
+        VisitRecordCardPushStatus.PENDING,
+        VisitRecordCardPushStatus.AWAITING_CALLBACK,
+    }:
+        return "processing"
+    return "processing"
+
+
 def update_visit_record_card_push_status(
     session: Session,
     record_id: str,

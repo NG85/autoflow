@@ -1132,35 +1132,25 @@ def extract_visit_method_from_content(content: str, db_session: SessionDep) -> s
         return ""
 
 
-def enrich_visit_record_with_document_content(
-    record_id: str,
+def _trigger_document_qa_extraction(document_content_id: int) -> None:
+    try:
+        from app.tasks.document_qa import extract_and_save_document_qa
+
+        extract_and_save_document_qa.delay(document_content_id)
+        logger.info(f"已异步触发文档问答对抽取任务，文档ID: {document_content_id}")
+    except Exception as e:
+        logger.error(f"触发文档问答对抽取异步任务失败: {e}")
+
+
+def _apply_visit_record_document_llm_enrichment(
+    document_content: Any,
     record: SimpleVisitRecordCreate | CompleteVisitRecordCreate,
     content: str,
-    document_type: str,
-    user_id: UUID,
     db_session: SessionDep,
     title: Optional[str] = None,
-) -> int:
-    """
-    为已落库的拜访记录写入文档内容并执行 LLM  enrichment（风险、纪要、问答对任务）。
-
-    Returns:
-        document_content.id
-    """
+) -> None:
+    """对已落库的 document_content 并行执行风险抽取与会议纪要 LLM。"""
     document_content_repo = DocumentContentRepo()
-    document_content = document_content_repo.create_document_content(
-        session=db_session,
-        raw_content=content,
-        document_type=document_type,
-        source_url=record.visit_url,
-        user_id=user_id,
-        visit_record_id=record_id,
-        title=title,
-        auto_commit=False,
-    )
-
-    # ========== 并行 LLM 提取风险信息与生成会议纪要 ==========
-    # 钉钉听记：AI 表格回填为听记总结（非逐字稿），仍走纪要 LLM 生成卡片用 meeting_summary
     contact_name, contact_position = _extract_contact_info_from_record(record)
     llm_context = {
         "content": content,
@@ -1272,17 +1262,194 @@ def enrich_visit_record_with_document_content(
             )
         except Exception as update_error:
             logger.error(f"更新会议纪要失败状态到数据库失败: {update_error}")
-    
-    # ========== 异步触发文档问答对抽取任务（不影响主流程） ==========
-    try:
-        from app.tasks.document_qa import extract_and_save_document_qa
 
-        extract_and_save_document_qa.delay(document_content.id)
-        logger.info(f"已异步触发文档问答对抽取任务，文档ID: {document_content.id}")
-    except Exception as e:
-        logger.error(f"触发文档问答对抽取异步任务失败: {e}")
 
+def create_visit_record_document_content(
+    record_id: str,
+    record: SimpleVisitRecordCreate | CompleteVisitRecordCreate,
+    content: str,
+    document_type: str,
+    user_id: UUID,
+    db_session: SessionDep,
+    title: Optional[str] = None,
+) -> int:
+    """为已落库拜访记录写入原始文档内容（不含 LLM enrichment）。"""
+    document_content_repo = DocumentContentRepo()
+    document_content = document_content_repo.create_document_content(
+        session=db_session,
+        raw_content=content,
+        document_type=document_type,
+        source_url=record.visit_url,
+        user_id=user_id,
+        visit_record_id=record_id,
+        title=title,
+        auto_commit=False,
+    )
     return document_content.id
+
+
+def enrich_existing_visit_record_document_content(
+    record: SimpleVisitRecordCreate | CompleteVisitRecordCreate,
+    document_content_id: int,
+    db_session: SessionDep,
+) -> int:
+    """对已写入 raw content 的拜访文档执行 LLM enrichment 并触发问答对任务。"""
+    from app.models.document_contents import DocumentContent
+
+    document_content = db_session.get(DocumentContent, document_content_id)
+    if not document_content:
+        raise ValueError(f"document_content not found: {document_content_id}")
+    content = document_content.raw_content or ""
+    title = document_content.title
+    _apply_visit_record_document_llm_enrichment(
+        document_content,
+        record,
+        content,
+        db_session,
+        title=title,
+    )
+    _trigger_document_qa_extraction(document_content_id)
+    return document_content_id
+
+
+def enrich_visit_record_with_document_content(
+    record_id: str,
+    record: SimpleVisitRecordCreate | CompleteVisitRecordCreate,
+    content: str,
+    document_type: str,
+    user_id: UUID,
+    db_session: SessionDep,
+    title: Optional[str] = None,
+) -> int:
+    """
+    为已落库的拜访记录写入文档内容并执行 LLM enrichment（风险、纪要、问答对任务）。
+
+    Returns:
+        document_content.id
+    """
+    document_content_id = create_visit_record_document_content(
+        record_id=record_id,
+        record=record,
+        content=content,
+        document_type=document_type,
+        user_id=user_id,
+        db_session=db_session,
+        title=title,
+    )
+    from app.models.document_contents import DocumentContent
+
+    document_content = db_session.get(DocumentContent, document_content_id)
+    _apply_visit_record_document_llm_enrichment(
+        document_content,
+        record,
+        content,
+        db_session,
+        title=title,
+    )
+    _trigger_document_qa_extraction(document_content_id)
+    return document_content_id
+
+
+def save_visit_record_with_raw_content(
+    record: SimpleVisitRecordCreate | CompleteVisitRecordCreate,
+    content: str,
+    document_type: str,
+    user: CurrentUserDep,
+    db_session: SessionDep,
+    title: Optional[str] = None,
+) -> tuple[str, int]:
+    """落库拜访记录并写入原始文档内容，LLM enrichment 由 Celery 异步完成。"""
+    record_id, _saved_time = save_visit_record_to_crm_table(record, db_session)
+    document_content_id = create_visit_record_document_content(
+        record_id=record_id,
+        record=record,
+        content=content,
+        document_type=document_type,
+        user_id=user.id,
+        db_session=db_session,
+        title=title,
+    )
+    return record_id, document_content_id
+
+
+def run_link_visit_enrichment_and_notify(
+    record_id: str,
+    record: SimpleVisitRecordCreate | CompleteVisitRecordCreate,
+    record_snapshot: dict,
+    operator_user_id: UUID,
+    db_session: SessionDep,
+    *,
+    content: Optional[str] = None,
+    document_type: Optional[str] = None,
+    title: Optional[str] = None,
+    document_content_id: Optional[int] = None,
+) -> int:
+    """
+    link 拜访 Celery 收尾：文档 LLM enrichment → 通知 Aldebaran 推卡。
+    听记路径传入 content/document_type；其他 link 传入 document_content_id。
+    """
+    from app.models.document_contents import DocumentContent
+    from app.services.visit_record_card_push_status import (
+        VisitRecordCardPushStatus,
+        get_visit_record_card_push_status,
+    )
+
+    document_content_repo = DocumentContentRepo()
+
+    def _is_llm_enrichment_done(doc: DocumentContent) -> bool:
+        risk_done = (doc.risk_extract_status or "") in {"success", "failed"}
+        summary_done = (doc.summary_status or "") in {"success", "failed"}
+        return risk_done and summary_done
+
+    doc_id: int
+    if document_content_id is not None:
+        document_content = db_session.get(DocumentContent, document_content_id)
+        if document_content and _is_llm_enrichment_done(document_content):
+            doc_id = document_content_id
+        else:
+            doc_id = enrich_existing_visit_record_document_content(
+                record=record,
+                document_content_id=document_content_id,
+                db_session=db_session,
+            )
+    else:
+        if content is None or document_type is None:
+            raise ValueError("content and document_type required when document_content_id is omitted")
+        existing = document_content_repo.get_by_visit_record_id(db_session, record_id)
+        if existing and _is_llm_enrichment_done(existing):
+            doc_id = existing.id
+        else:
+            doc_id = enrich_visit_record_with_document_content(
+                record_id=record_id,
+                record=record,
+                content=content,
+                document_type=document_type,
+                user_id=operator_user_id,
+                db_session=db_session,
+                title=title,
+            )
+
+    card_status = get_visit_record_card_push_status(db_session, record_id)
+    if card_status in {
+        VisitRecordCardPushStatus.PENDING,
+        VisitRecordCardPushStatus.AWAITING_CALLBACK,
+        VisitRecordCardPushStatus.PUSHED,
+    }:
+        logger.info(
+            "Skip duplicate Aldebaran notify, record_id=%s status=%s",
+            record_id,
+            card_status,
+        )
+        return doc_id
+
+    notify_aldebaran_visit_record_saved(
+        record_id=record_id,
+        visit_snapshot=record_snapshot,
+        db_session=db_session,
+        operator_user_id=operator_user_id,
+        visit_type=record.visit_type or "link",
+    )
+    return doc_id
 
 
 def save_visit_record_with_content(

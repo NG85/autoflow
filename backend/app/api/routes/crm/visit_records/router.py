@@ -25,7 +25,7 @@ from app.core.config import settings
 from app.crm.save_engine import (
     notify_aldebaran_visit_record_saved,
     save_visit_record_to_crm_table,
-    save_visit_record_with_content,
+    save_visit_record_with_raw_content,
 )
 from app.exceptions import InternalServerError
 from app.repositories.crm_account import crm_account_repo
@@ -38,9 +38,11 @@ from app.platforms.utils.url_parser import parse_dingtalk_transcribe_url
 from app.services.document_processing_service import document_processing_service
 from app.services.visit_record_card_push_status import (
     VisitRecordCardPushStatus,
+    link_content_status_from_card_push,
     update_visit_record_card_push_status,
 )
 from app.tasks.dingtalk_transcribe import process_dingtalk_transcribe_visit_record
+from app.tasks.link_visit_enrichment import process_link_visit_enrichment
 from app.services.feishu_billing_facade import check_billing_quota
 
 logger = logging.getLogger(__name__)
@@ -50,6 +52,32 @@ router = APIRouter(tags=["crm", "crm/visit-records"])
 
 def _is_non_empty(value: Optional[str]) -> bool:
     return bool(str(value or "").strip())
+
+
+def _commit_async_link_visit(
+    db_session: SessionDep,
+    record_id: str,
+    enqueue_task,
+    **task_kwargs,
+) -> dict:
+    """落库后入队 Celery；入队成功再 commit，避免 content_processing 卡住无 worker。"""
+    update_visit_record_card_push_status(
+        db_session,
+        record_id,
+        VisitRecordCardPushStatus.CONTENT_PROCESSING,
+        commit=False,
+    )
+    enqueue_task(**task_kwargs)
+    db_session.commit()
+    return {
+        "code": 0,
+        "message": "拜访记录已保存，正在生成卡片",
+        "data": {
+            "record_id": record_id,
+            "link_content_status": "processing",
+            "card_push_status": VisitRecordCardPushStatus.CONTENT_PROCESSING,
+        },
+    }
 
 
 def _validate_visit_record_first_stage(record: VisitRecordCreate) -> Optional[str]:
@@ -145,28 +173,16 @@ def create_visit_record(
                     }
                 try:
                     record_id, _saved_time = save_visit_record_to_crm_table(record, db_session)
-                    update_visit_record_card_push_status(
+                    return _commit_async_link_visit(
                         db_session,
                         record_id,
-                        VisitRecordCardPushStatus.CONTENT_PROCESSING,
-                        commit=False,
-                    )
-                    db_session.commit()
-                    process_dingtalk_transcribe_visit_record.delay(
+                        process_dingtalk_transcribe_visit_record.delay,
                         record_id=record_id,
                         notable_record_id=write_result["notable_record_id"],
                         transcribe_id=write_result["transcribe_id"],
                         user_id=str(user.id),
                         record_snapshot=record.model_dump(),
                     )
-                    return {
-                        "code": 0,
-                        "message": "success",
-                        "data": {
-                            "record_id": record_id,
-                            "link_content_status": "processing",
-                        },
-                    }
                 except Exception as e:
                     db_session.rollback()
                     logger.error("Failed to enqueue dingtalk transcribe visit record: %s", e)
@@ -196,41 +212,28 @@ def create_visit_record(
                         "data": result.get("data", {})
                     }
             
-            # 处理成功，保存拜访记录和文档内容
+            # 处理成功：落库 + raw content，LLM enrichment 与推卡下沉 Celery
             try:
-                result_data = save_visit_record_with_content(
+                record_id, document_content_id = save_visit_record_with_raw_content(
                     record=record,
                     content=result["content"],
                     document_type=result["document_type"],
                     user=user,
                     db_session=db_session,
-                    title=result.get("title")
+                    title=result.get("title"),
                 )
-                
-                db_session.commit()
-                result_payload = (result_data.get("data") or {}) if isinstance(result_data, dict) else {}
-                result_record_id = result_payload.get("record_id")
-                if result_record_id:
-                    try:
-                        notify_aldebaran_visit_record_saved(
-                            record_id=result_record_id,
-                            visit_snapshot=record.model_dump(),
-                            db_session=db_session,
-                            operator_user_id=user.id,
-                            visit_type=record.visit_type,
-                        )
-                    except Exception as exc:
-                        logger.error(
-                            "Notify Aldebaran after link visit save failed, record_id=%s: %s",
-                            result_record_id,
-                            exc,
-                            exc_info=True,
-                        )
-                return result_data
+                return _commit_async_link_visit(
+                    db_session,
+                    record_id,
+                    process_link_visit_enrichment.delay,
+                    record_id=record_id,
+                    document_content_id=document_content_id,
+                    user_id=str(user.id),
+                    record_snapshot=record.model_dump(),
+                )
             except Exception as e:
-                # 如果保存失败，回滚事务
                 db_session.rollback()
-                logger.error(f"Failed to save visit record: {e}")
+                logger.error("Failed to enqueue link visit enrichment: %s", e)
                 return {"code": 400, "message": "保存拜访记录失败，请重试", "data": {}}
         
         # 处理 form 类型的拜访记录（包括 force 和普通保存）
@@ -848,6 +851,11 @@ def get_visit_record_by_id(
         # 基础数据
         data = record.model_dump()
 
+        if getattr(record, "visit_type", None) == "link":
+            data["link_content_status"] = link_content_status_from_card_push(
+                getattr(record, "card_push_status", None)
+            )
+
         # 如果是 link 类型的拜访记录，尝试返回从文档中抽取的问答对和风险信息
         try:
             if getattr(record, "visit_type", None) == "link":
@@ -864,6 +872,8 @@ def get_visit_record_by_id(
                         data["document_qa_extract_status"] = document_content.qa_extract_status or ""
                         data["document_risk_info"] = document_content.risk_info or ""
                         data["document_risk_extract_status"] = document_content.risk_extract_status or ""
+                        data["document_meeting_summary"] = document_content.meeting_summary or ""
+                        data["document_summary_status"] = document_content.summary_status or ""
         except Exception as e:
             # 文档信息加载失败不影响主流程，只记录日志
             logger.warning(f"加载文档信息（问答对和风险信息）失败: record_id={record_id}, error={e}")
