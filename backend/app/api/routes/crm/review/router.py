@@ -42,6 +42,7 @@ from app.api.routes.crm.models import (
     ReviewSessionProgressCategoryGroupOut,
     ReviewSessionRiskInsightItemBasicOut,
     ReviewSubmitButtonClickAuditOut,
+    ReviewOppAuditLogListOut,
     ReviewSnapshotFilterEnumsOut,
     ReviewSnapshotGroupDataQueryIn,
     ReviewSnapshotGroupsOut,
@@ -426,6 +427,66 @@ def query_review_opportunity_risk_progress_details(
         user_id=str(user.id),
         opportunity_id=opportunity_id,
     )
+
+
+@router.get(
+    "/crm/review/sessions/{session_id}/opportunities/{opportunity_id}/audit-logs",
+    response_model=ReviewOppAuditLogListOut,
+)
+def query_review_opportunity_audit_logs(
+    session_id: str,
+    opportunity_id: str,
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=20, ge=1, le=100),
+):
+    """
+    查询指定商机在本次 review 中的变更审计记录。
+
+    通过 ``session_id`` 得到 ``snapshot_period``，再按 ``(opportunity_id, snapshot_period)``
+    唯一索引定位快照行，解析出 ``snapshot_unique_id`` 后匹配 audit。
+    """
+    data = crm_review_service.get_opportunity_audit_logs(
+        db_session,
+        session_id=session_id,
+        user_id=str(user.id),
+        opportunity_id=opportunity_id,
+        page=page,
+        size=size,
+    )
+    return ReviewOppAuditLogListOut.model_validate(data)
+
+
+@router.get(
+    "/crm/review/sessions/{session_id}/branch-snapshots/{snapshot_unique_id}/audit-logs",
+    response_model=ReviewOppAuditLogListOut,
+)
+def query_review_snapshot_audit_logs(
+    session_id: str,
+    snapshot_unique_id: str,
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=20, ge=1, le=100),
+):
+    """
+    查询指定分支快照（``snapshot_unique_id``）在本次 review 中的变更审计记录。
+
+    audit 表以 ``snapshot_unique_id`` 为粒度记录变更（``attempted_updates`` /
+    ``changed_snapshot_unique_ids`` / merge ``ops`` 中的 ``main_unique_id``、``cache_unique_id``，与主表一致）。
+    每条记录包含：变更时间、操作人、变更类型，以及字段级修改前后值。
+    仅当该快照行在本次 review 对你可见时返回，否则 404。
+    """
+    data = crm_review_service.get_snapshot_audit_logs(
+        db_session,
+        session_id=session_id,
+        user_id=str(user.id),
+        snapshot_unique_id=snapshot_unique_id,
+        page=page,
+        size=size,
+    )
+    return ReviewOppAuditLogListOut.model_validate(data)
 
 
 @router.get("/crm/opportunities/{opportunity_id}/detail")

@@ -1126,6 +1126,50 @@ class ReviewSubmitButtonClickAuditOut(BaseModel):
     recorded: bool = True
 
 
+class ReviewOppAuditFieldChangeOut(BaseModel):
+    field: str
+    old_value: Any = None
+    new_value: Any = None
+
+
+class ReviewOppAuditChangeOut(BaseModel):
+    snapshot_unique_id: Optional[str] = Field(
+        default=None,
+        description="分支快照 unique_id；负责人合并场景可能为空",
+    )
+    fields: List[ReviewOppAuditFieldChangeOut] = Field(default_factory=list)
+
+
+class ReviewOppAuditLogItemOut(BaseModel):
+    audit_id: UUID
+    changed_at: datetime
+    updated_by: str
+    updated_by_id: str
+    change_scope: str
+    edit_phase: Optional[str] = None
+    changes: List[ReviewOppAuditChangeOut] = Field(default_factory=list)
+
+
+class ReviewOppAuditLogListOut(BaseModel):
+    session_id: str
+    opportunity_id: Optional[str] = Field(
+        default=None,
+        description="按商机查询时返回；``(opportunity_id, snapshot_period)`` 唯一确定一条快照",
+    )
+    snapshot_period: Optional[str] = Field(
+        default=None,
+        description="按商机查询时返回，来自 review session.period",
+    )
+    snapshot_unique_id: Optional[str] = Field(
+        default=None,
+        description="快照 unique_id；主表与 cache 一致，按商机查询时会解析后返回",
+    )
+    page: int
+    size: int
+    total: int
+    items: List[ReviewOppAuditLogItemOut] = Field(default_factory=list)
+
+
 class ReviewBranchSnapshotSubmitIn(BaseModel):
     updates: List[ReviewBranchSnapshotUpdateIn] = Field(default_factory=list)
 
