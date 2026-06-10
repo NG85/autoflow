@@ -877,7 +877,7 @@ def save_weekly_followup_comments(
     追加保存周跟进实体评论（comments，JSON 数组）；请求体只需传本次新增条目。
     - 每条评论的 author_id 须与当前登录用户一致，否则返回 400
     - 支持 reply_to_id 回复已有评论；无效 reply_to_id 返回 400
-    - type=task 时 id 须由前端传入（已创建任务的 id）；type=comment 时 id 由服务端生成
+    - type=task 时 id 可选由前端传入，未传则保持为空（不生成）；type=comment 时 id 由服务端生成
     - 保存成功后：type=comment 的顶层评论向负责人推送提醒；带 reply_to_id 的回复向被回复评论作者推送提醒（type=task 不推送）
     """
     # can_edit, is_company_admin, user_dept_id, user_dept_name = _can_edit_weekly_followup_comments(db_session, user)

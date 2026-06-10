@@ -70,9 +70,7 @@ def merge_append_crm_comments(
         item_type = str(c.get("type") or "comment").strip().lower()
         if item_type == "task":
             new_id = str(c.get("id") or "").strip()
-            if not new_id:
-                raise CRMCommentValidationError("type=task 的条目须由前端传入 id（已创建任务的 id）")
-            if new_id in comment_by_id:
+            if new_id and new_id in comment_by_id:
                 raise CRMCommentValidationError(f"任务 id 已存在：id={new_id}")
         else:
             new_id = str(uuid4())
@@ -83,17 +81,19 @@ def merge_append_crm_comments(
         else:
             created_at_str = str(created_at)
         new_comment: Dict[str, Any] = {
-            "id": new_id,
             "author_id": current_user_id_str,
             "author": c.get("author"),
             "content": c.get("content"),
             "type": c.get("type"),
             "created_at": created_at_str,
         }
+        if new_id:
+            new_comment["id"] = new_id
         if reply_to_id:
             new_comment["reply_to_id"] = reply_to_id
         appended.append(new_comment)
-        comment_by_id[new_id] = new_comment
+        if new_id:
+            comment_by_id[new_id] = new_comment
 
     merged: List[Dict[str, Any]] = kept_others + existing_my + appended
 

@@ -627,7 +627,7 @@ class CRMComment(BaseModel):
 
     id: Optional[str] = Field(
         default=None,
-        description="条目唯一标识：type=comment 时由服务端生成；type=task 时须由前端传入已创建任务的 id",
+        description="条目唯一标识：type=comment 时由服务端生成；type=task 时可选由前端传入，未传则保持为空",
     )
     reply_to_id: Optional[str] = Field(default=None, description="被回复评论的 id；为空表示顶层评论")
     author_id: str = ""
