@@ -469,6 +469,9 @@ class DocumentProcessingService:
         poll_timeout = settings.DINGTALK_TRANSCRIBE_POLL_TIMEOUT_SEC
         deadline = time.monotonic() + poll_timeout
         text_content = ""
+        record_fetched = False
+        last_field_keys: list[str] = []
+        last_raw_content_value: Any = None
 
         while time.monotonic() < deadline:
             record = self.dingtalk_client.get_notable_record(
@@ -479,13 +482,34 @@ class DocumentProcessingService:
                 access_token=access_token,
             )
             if record:
+                record_fetched = True
                 fields = record.get("fields") or {}
-                text_content = self._extract_notable_field_text(fields.get(content_field))
+                last_field_keys = list(fields.keys())
+                last_raw_content_value = fields.get(content_field)
+                text_content = self._extract_notable_field_text(last_raw_content_value)
                 if text_content:
                     break
             time.sleep(poll_interval)
 
         if not text_content:
+            if record_fetched:
+                logger.warning(
+                    "听记总结轮询失败: transcribe_id=%s, notable_record_id=%s, "
+                    "content_field=%s, field_keys=%s, raw_content_value=%s",
+                    transcribe_id,
+                    notable_record_id,
+                    content_field,
+                    last_field_keys,
+                    last_raw_content_value,
+                )
+            else:
+                logger.warning(
+                    "听记总结轮询超时(未获取到记录): transcribe_id=%s, "
+                    "notable_record_id=%s, timeout_sec=%s",
+                    transcribe_id,
+                    notable_record_id,
+                    poll_timeout,
+                )
             return {
                 "success": False,
                 "message": "听记总结获取超时，请稍后重试",

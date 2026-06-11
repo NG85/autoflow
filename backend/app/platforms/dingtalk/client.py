@@ -700,7 +700,13 @@ class DingTalkClient(BaseClient):
         try:
             resp = requests.get(api_url, headers=headers, params=params)
             resp.raise_for_status()
-            return resp.json()
+            body = resp.json()
+            logger.info(
+                "获取 AI 表格记录响应: record_id=%s, field_keys=%s",
+                record_id,
+                list((body.get("fields") or {}).keys()) if isinstance(body, dict) else None,
+            )
+            return body
         except Exception as e:
             logger.error("获取 AI 表格记录异常: record_id=%s, error=%s", record_id, e)
             return None
