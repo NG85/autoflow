@@ -1,7 +1,7 @@
 """archive user_sessions to user_sessions_archive_20260522
 
 Revision ID: f8e2a1b0c9d4
-Revises: e7a3c1d92b40
+Revises: f8a2c6e1b904
 Create Date: 2026-05-22 10:00:00.000000
 
 Move historical user_sessions rows to archive table; leave empty user_sessions for ORM.
@@ -13,7 +13,7 @@ import sqlmodel.sql.sqltypes
 
 
 revision = "f8e2a1b0c9d4"
-down_revision = "e7a3c1d92b40"
+down_revision = "f8a2c6e1b904"
 branch_labels = None
 depends_on = None
 
