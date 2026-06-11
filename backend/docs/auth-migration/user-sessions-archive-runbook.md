@@ -34,7 +34,7 @@ RUN=1 BASE_URL=... EMAIL=... PASSWORD=... ./scripts/auth_migration_smoke.sh
 ## 回滚（DB）
 
 ```bash
-alembic downgrade e7a3c1d92b40
+alembic downgrade f8a2c6e1b904
 ```
 
 将恢复：删除空 `user_sessions`，把归档表改回 `user_sessions`。
