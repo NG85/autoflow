@@ -67,7 +67,7 @@ def _commit_async_link_visit(
         VisitRecordCardPushStatus.CONTENT_PROCESSING,
         commit=False,
     )
-    enqueue_task(**task_kwargs)
+    enqueue_task(record_id=record_id, **task_kwargs)
     db_session.commit()
     return {
         "code": 0,
@@ -177,7 +177,6 @@ def create_visit_record(
                         db_session,
                         record_id,
                         process_dingtalk_transcribe_visit_record.delay,
-                        record_id=record_id,
                         notable_record_id=write_result["notable_record_id"],
                         transcribe_id=write_result["transcribe_id"],
                         user_id=str(user.id),
@@ -226,7 +225,6 @@ def create_visit_record(
                     db_session,
                     record_id,
                     process_link_visit_enrichment.delay,
-                    record_id=record_id,
                     document_content_id=document_content_id,
                     user_id=str(user.id),
                     record_snapshot=record.model_dump(),
