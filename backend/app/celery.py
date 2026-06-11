@@ -35,6 +35,8 @@ app.conf.update(
         {"app.tasks.cron_jobs.send_sales_task_summary": {"queue": "cron"}},
         {"app.tasks.bitable_import.*": {"queue": "cron"}},
         {"app.tasks.document_qa.*": {"queue": "llm"}},
+        {"app.tasks.dingtalk_transcribe.*": {"queue": "llm"}},
+        {"app.tasks.link_visit_enrichment.*": {"queue": "llm"}},
         {"*": {"queue": "default"}},
     ],
     broker_connection_retry_on_startup=True,

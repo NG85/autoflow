@@ -20,6 +20,8 @@ from .build_crm_index import (
 from .cron_jobs import create_crm_daily_datasource
 from .bitable_import import sync_bitable_visit_records
 from .document_qa import extract_and_save_document_qa
+from .dingtalk_transcribe import process_dingtalk_transcribe_visit_record
+from .link_visit_enrichment import process_link_visit_enrichment
 
 
 __all__ = [
@@ -37,4 +39,6 @@ __all__ = [
     "create_crm_daily_datasource",
     "sync_bitable_visit_records",
     "extract_and_save_document_qa",
+    "process_dingtalk_transcribe_visit_record",
+    "process_link_visit_enrichment",
 ]

@@ -164,6 +164,39 @@ def is_lark_url(url: str) -> bool:
     return 'larksuite.com' in parsed_url.netloc
 
 
+def parse_dingtalk_transcribe_url(url: str) -> Optional[str]:
+    """
+    解析钉钉听记 URL，返回听记 ID。
+    例: https://shanji.dingtalk.com/app/transcribes/XXXX
+    """
+    if not url:
+        return None
+    match = re.search(
+        r'https?://shanji\.dingtalk\.com/app/transcribes/([a-zA-Z0-9_-]+)',
+        url.strip(),
+    )
+    return match.group(1) if match else None
+
+
+def parse_dingtalk_notable_url(url: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    解析钉钉 AI 表格 URL，返回 (base_id, sheet_id_or_name)。
+    base_id 从 /i/nodes/{baseId} 提取；sheet 从 query 参数 sheetId 读取。
+    """
+    if not url:
+        return None, None
+    parsed = urlparse(url.strip())
+    path_parts = parsed.path.strip('/').split('/')
+    base_id = None
+    for i, part in enumerate(path_parts):
+        if part == 'nodes' and i + 1 < len(path_parts):
+            base_id = path_parts[i + 1]
+            break
+    qs = parse_qs(parsed.query)
+    sheet_id_or_name = qs.get('sheetId', [None])[0]
+    return base_id, sheet_id_or_name
+
+
 def get_platform_from_url(url: str) -> Optional[str]:
     """
     从URL获取平台名称

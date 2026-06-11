@@ -25,10 +25,14 @@ from app.repositories.department_mirror import department_mirror_repo
 from app.services.crm_config_service import get_resolved_field_mapping
 from app.services.oauth_service import oauth_client
 from app.utils.crm_account_tags import parse_account_tags
+from app.utils.crm_comments import CRMCommentValidationError, merge_append_crm_comments
 from app.utils.crm_followup_object_type import resolve_customer_attribute_display_label
 from app.utils.date_utils import convert_beijing_date_to_utc_range
 
 logger = logging.getLogger(__name__)
+
+
+VisitRecordCommentError = CRMCommentValidationError
 
 _VISIT_RECORD_FILTER_OPTION_SEP = "\x1e"
 
@@ -910,53 +914,13 @@ class VisitRecordRepo(BaseRepo):
         ):
             return None
 
-        # 安全保护：不得改动他人评论；payload 只追加当前用户的新评论
         current_user_id_str = str(current_user_id or "")
-        now_bj = datetime.now(ZoneInfo("Asia/Shanghai"))
-
-        existing_raw = record.comments if isinstance(record.comments, list) else []
-        kept_others: List[Dict[str, Any]] = []
-        existing_my: List[Dict[str, Any]] = []
-        for item in existing_raw:
-            if not isinstance(item, dict):
-                continue
-            if str(item.get("author_id") or "") != current_user_id_str:
-                kept_others.append(item)
-            else:
-                existing_my.append(item)
-
-        # 仅采纳 payload 中 author_id=当前用户 的评论并追加；created_at 为空则用北京时间补齐
-        appended: List[Dict[str, Any]] = []
-        for c in (comments or []):
-            if not isinstance(c, dict):
-                continue
-            if str(c.get("author_id") or "") != current_user_id_str:
-                continue
-            created_at = c.get("created_at") or now_bj
-            if isinstance(created_at, datetime):
-                created_at_str = created_at.isoformat()
-            else:
-                created_at_str = str(created_at)
-            appended.append(
-                {
-                    "author_id": current_user_id_str,
-                    "author": c.get("author"),
-                    "content": c.get("content"),
-                    "type": c.get("type"),
-                    "created_at": created_at_str,
-                }
-            )
-
-        merged: List[Dict[str, Any]] = kept_others + existing_my + appended
-
-        def _sort_key(x: Dict[str, Any]) -> tuple[int, str]:
-            v = str(x.get("created_at") or "")
-            try:
-                return (0, datetime.fromisoformat(v).isoformat())
-            except Exception:
-                return (1, v)
-
-        merged.sort(key=_sort_key)
+        merged, _appended = merge_append_crm_comments(
+            record.comments,
+            comments,
+            current_user_id_str,
+            now=datetime.now(ZoneInfo("Asia/Shanghai")),
+        )
         record.comments = merged
         session.add(record)
         session.commit()

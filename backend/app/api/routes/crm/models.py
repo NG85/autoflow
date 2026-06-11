@@ -625,6 +625,11 @@ class VisitRecordResponse(BaseModel):
 class CRMComment(BaseModel):
     """通用评论结构（拜访记录/周总结复用）"""
 
+    id: Optional[str] = Field(
+        default=None,
+        description="条目唯一标识：type=comment 时由服务端生成；type=task 时可选由前端传入，未传则保持为空",
+    )
+    reply_to_id: Optional[str] = Field(default=None, description="被回复评论的 id；为空表示顶层评论")
     author_id: str = ""
     author: str = ""
     content: str
@@ -1124,6 +1129,50 @@ class ReviewSubmitButtonClickAuditOut(BaseModel):
     recorded: bool = True
 
 
+class ReviewOppAuditFieldChangeOut(BaseModel):
+    field: str
+    old_value: Any = None
+    new_value: Any = None
+
+
+class ReviewOppAuditChangeOut(BaseModel):
+    snapshot_unique_id: Optional[str] = Field(
+        default=None,
+        description="分支快照 unique_id；负责人合并场景可能为空",
+    )
+    fields: List[ReviewOppAuditFieldChangeOut] = Field(default_factory=list)
+
+
+class ReviewOppAuditLogItemOut(BaseModel):
+    audit_id: UUID
+    changed_at: datetime
+    updated_by: str
+    updated_by_id: str
+    change_scope: str
+    edit_phase: Optional[str] = None
+    changes: List[ReviewOppAuditChangeOut] = Field(default_factory=list)
+
+
+class ReviewOppAuditLogListOut(BaseModel):
+    session_id: str
+    opportunity_id: Optional[str] = Field(
+        default=None,
+        description="按商机查询时返回；``(opportunity_id, snapshot_period)`` 唯一确定一条快照",
+    )
+    snapshot_period: Optional[str] = Field(
+        default=None,
+        description="按商机查询时返回，来自 review session.period",
+    )
+    snapshot_unique_id: Optional[str] = Field(
+        default=None,
+        description="快照 unique_id；主表与 cache 一致，按商机查询时会解析后返回",
+    )
+    page: int
+    size: int
+    total: int
+    items: List[ReviewOppAuditLogItemOut] = Field(default_factory=list)
+
+
 class ReviewBranchSnapshotSubmitIn(BaseModel):
     updates: List[ReviewBranchSnapshotUpdateIn] = Field(default_factory=list)
 
@@ -1385,7 +1434,30 @@ class ReviewSessionInsightDetailBasicOut(BaseModel):
     opportunities: List[ReviewSessionInsightRiskOpportunityOut] = Field(default_factory=list)
 
 
+class ReviewSessionInsightRiskPartOut(BaseModel):
+    insight_unique_id: str
+    parent_id: str
+    display_order: Optional[int] = None
+    record_type: Literal["RISK_PART"] = "RISK_PART"
+    type_code: str
+    type_name: str
+    category: Optional[str] = None
+    judgment_rule: Optional[str] = None
+    summary: Optional[str] = None
+    gap_description: Optional[str] = None
+    detail_description: Optional[str] = None
+    opportunities: List[ReviewSessionInsightRiskOpportunityOut] = Field(default_factory=list)
+    severity: Optional[str] = None
+    source: Optional[str] = None
+    metric_name: Optional[str] = None
+    solution: Optional[str] = None
+    status: Optional[str] = None
+    detected_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
 class ReviewSessionInsightDetailOut(ReviewSessionInsightDetailBasicOut):
+    risk_parts: List[ReviewSessionInsightRiskPartOut] = Field(default_factory=list)
     severity: Optional[str] = None
     source: Optional[str] = None
     metric_name: Optional[str] = None

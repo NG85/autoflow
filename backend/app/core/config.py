@@ -352,10 +352,13 @@ class Settings(BaseSettings):
     DINGTALK_APP_ID: str = ""
     DINGTALK_APP_SECRET: str = ""
     DINGTALK_COPR_ID: str = ""
-    DINGTALK_COMPANY_WEEKLY_REPORT_TEMPLATE_ID: str = 'daa13a1a-f064-4512-968c-0a1f101d3222.schema'  # 钉钉公司周报卡片模板ID
-    DINGTALK_DEPT_WEEKLY_REPORT_TEMPLATE_ID: str = '349394d8-33ad-4be5-9f7e-bac33494ee42.schema'  # 钉钉团队周报卡片模板ID
-    FEISHU_COMPANY_WEEKLY_REPORT_TEMPLATE_ID: str = 'AAqvMFGD8n8bZ'  # 飞书公司周报卡片模板ID
-    FEISHU_DEPT_WEEKLY_REPORT_TEMPLATE_ID: str = 'AAqX5j2jPq2Cn'  # 飞书部门周报卡片模板ID
+    # 钉钉听记：写入预建 AI 表格后轮询读取「听记总结」（非逐字稿）
+    DINGTALK_TRANSCRIBE_NOTABLE_URL: str | None = None
+    DINGTALK_NOTABLE_OPERATOR_UNION_ID: str | None = None
+    DINGTALK_TRANSCRIBE_LINK_FIELD: str = "链接"
+    DINGTALK_TRANSCRIBE_CONTENT_FIELD: str = "听记总结"
+    DINGTALK_TRANSCRIBE_POLL_INTERVAL_SEC: float = 3.0
+    DINGTALK_TRANSCRIBE_POLL_TIMEOUT_SEC: float = 120.0
     CUSTOM_FONT_SIZE_TOKEN: str | None = None
     
     # Feishu send message configuration
@@ -387,7 +390,7 @@ class Settings(BaseSettings):
     
     # Ark LLM API
     ARK_API_KEY: str = "b1529268-82ea-407a-bd79-d01514a2ed60"
-    ARK_MODEL: str = "ep-20260602171323-nlzp8"
+    ARK_MODEL: str = "ep-20260108150839-t2z4c"
     ARK_API_URL: str = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
     ARK_HTTP_CONNECT_TIMEOUT: float = 10.0
     ARK_HTTP_READ_TIMEOUT: float = 180.0

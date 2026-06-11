@@ -43,6 +43,118 @@ logger = logging.getLogger(__name__)
 MERGE_CACHE_BATCH_SIZE = 500
 
 
+_OPP_AUDIT_BATCH_SAVE_SCOPES: frozenset[str] = frozenset(
+    {
+        "batch_save_partial_changes",
+        "batch_save_all_changed",
+        "batch_save_no_field_changes",
+    }
+)
+
+
+def _parse_audit_json_payload(raw: Optional[str]) -> Dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _diff_field_changes(
+    before_fields: Dict[str, Any],
+    after_fields: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    all_keys = set(before_fields) | set(after_fields)
+    changes: List[Dict[str, Any]] = []
+    for field_name in sorted(all_keys):
+        old_value = before_fields.get(field_name)
+        new_value = after_fields.get(field_name)
+        if old_value != new_value:
+            changes.append(
+                {
+                    "field": field_name,
+                    "old_value": old_value,
+                    "new_value": new_value,
+                }
+            )
+    return changes
+
+
+def _extract_snapshot_changes_from_audit_row(
+    *,
+    change_scope: str,
+    old_payload: Dict[str, Any],
+    new_payload: Dict[str, Any],
+    snapshot_unique_id: str,
+) -> List[Dict[str, Any]]:
+    snapshot_unique_id = str(snapshot_unique_id or "").strip()
+    if not snapshot_unique_id:
+        return []
+
+    if change_scope in _OPP_AUDIT_BATCH_SAVE_SCOPES:
+        old_updates = old_payload.get("attempted_updates") or {}
+        new_updates = new_payload.get("attempted_updates") or {}
+        if not isinstance(old_updates, dict):
+            old_updates = {}
+        if not isinstance(new_updates, dict):
+            new_updates = {}
+        changed_ids = {
+            str(x).strip()
+            for x in (
+                list(old_payload.get("changed_snapshot_unique_ids") or [])
+                + list(new_payload.get("changed_snapshot_unique_ids") or [])
+            )
+            if str(x or "").strip()
+        }
+        if (
+            snapshot_unique_id not in old_updates
+            and snapshot_unique_id not in new_updates
+            and snapshot_unique_id not in changed_ids
+        ):
+            return []
+        field_changes = _diff_field_changes(
+            old_updates.get(snapshot_unique_id) or {},
+            new_updates.get(snapshot_unique_id) or {},
+        )
+        if not field_changes:
+            return []
+        return [
+            {
+                "snapshot_unique_id": snapshot_unique_id,
+                "fields": field_changes,
+            }
+        ]
+
+    if change_scope == "leader_merge_cache_to_main":
+        ops = new_payload.get("ops") or []
+        if not isinstance(ops, list):
+            return []
+        changes = []
+        for op in ops:
+            if not isinstance(op, dict):
+                continue
+            main_unique_id = str(op.get("main_unique_id") or "").strip()
+            cache_unique_id = str(op.get("cache_unique_id") or "").strip()
+            if snapshot_unique_id not in {main_unique_id, cache_unique_id}:
+                continue
+            field_changes = _diff_field_changes(
+                op.get("before_editable") or {},
+                op.get("after_editable") or {},
+            )
+            if field_changes:
+                changes.append(
+                    {
+                        "snapshot_unique_id": snapshot_unique_id,
+                        "fields": field_changes,
+                    }
+                )
+        return changes
+
+    return []
+
+
 def _audit_json_default(obj: Any) -> str:
     """Best-effort JSON fallback for audit payloads.
 
@@ -1659,6 +1771,150 @@ class CRMReviewService:
             snapshot_period=snapshot_period,
             opportunity_id=opportunity_id,
         )
+
+    def _resolve_snapshot_unique_id_for_opportunity(
+        self,
+        db_session: Session,
+        *,
+        snapshot_period: str,
+        opportunity_id: str,
+        owner_ids: List[str],
+    ) -> Optional[str]:
+        unique_id = db_session.exec(
+            select(CRMReviewOppBranchSnapshot.unique_id)
+            .where(
+                CRMReviewOppBranchSnapshot.owner_id.in_(owner_ids),
+                CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
+                CRMReviewOppBranchSnapshot.opportunity_id == opportunity_id,
+            )
+            .limit(1)
+        ).first()
+        snapshot_unique_id = str(unique_id or "").strip()
+        return snapshot_unique_id or None
+
+    def _query_audit_logs_for_snapshot_unique_id(
+        self,
+        db_session: Session,
+        *,
+        session_id: str,
+        snapshot_unique_id: str,
+        page: int = 1,
+        size: int = 20,
+    ) -> dict:
+        matched_items: List[Dict[str, Any]] = []
+        for audit_row in crm_review_opp_audit_log_repo.list_by_session_id(db_session, session_id=session_id):
+            changes = _extract_snapshot_changes_from_audit_row(
+                change_scope=str(audit_row.change_scope or ""),
+                old_payload=_parse_audit_json_payload(audit_row.old_value),
+                new_payload=_parse_audit_json_payload(audit_row.new_value),
+                snapshot_unique_id=snapshot_unique_id,
+            )
+            if not changes:
+                continue
+            matched_items.append(
+                {
+                    "audit_id": audit_row.id,
+                    "changed_at": audit_row.updated_at or audit_row.created_at,
+                    "updated_by": str(audit_row.updated_by or ""),
+                    "updated_by_id": str(audit_row.updated_by_id or ""),
+                    "change_scope": str(audit_row.change_scope or ""),
+                    "edit_phase": audit_row.edit_phase,
+                    "changes": changes,
+                }
+            )
+
+        total = len(matched_items)
+        page = max(int(page or 1), 1)
+        size = max(min(int(size or 20), 100), 1)
+        start = (page - 1) * size
+        end = start + size
+        return {
+            "page": page,
+            "size": size,
+            "total": total,
+            "items": matched_items[start:end],
+        }
+
+    def get_opportunity_audit_logs(
+        self,
+        db_session: Session,
+        *,
+        session_id: str,
+        user_id: str,
+        opportunity_id: str,
+        page: int = 1,
+        size: int = 20,
+    ) -> dict:
+        scope = self._resolve_session_scope(db_session, session_id=session_id, user_id=user_id)
+        snapshot_period = scope["snapshot_period"]
+        opportunity_id = str(opportunity_id or "").strip()
+        if not opportunity_id:
+            raise HTTPException(status_code=422, detail="opportunity_id is required")
+
+        snapshot_unique_id = self._resolve_snapshot_unique_id_for_opportunity(
+            db_session,
+            snapshot_period=snapshot_period,
+            opportunity_id=opportunity_id,
+            owner_ids=scope["owner_ids"],
+        )
+        if not snapshot_unique_id:
+            raise HTTPException(status_code=404, detail="opportunity not found in current review scope")
+
+        result = self._query_audit_logs_for_snapshot_unique_id(
+            db_session,
+            session_id=session_id,
+            snapshot_unique_id=snapshot_unique_id,
+            page=page,
+            size=size,
+        )
+        return {
+            "session_id": session_id,
+            "opportunity_id": opportunity_id,
+            "snapshot_period": snapshot_period,
+            "snapshot_unique_id": snapshot_unique_id,
+            **result,
+        }
+
+    def get_snapshot_audit_logs(
+        self,
+        db_session: Session,
+        *,
+        session_id: str,
+        user_id: str,
+        snapshot_unique_id: str,
+        page: int = 1,
+        size: int = 20,
+    ) -> dict:
+        scope = self._resolve_session_scope(db_session, session_id=session_id, user_id=user_id)
+        snapshot_period = scope["snapshot_period"]
+        snapshot_unique_id = str(snapshot_unique_id or "").strip()
+        if not snapshot_unique_id:
+            raise HTTPException(status_code=422, detail="snapshot_unique_id is required")
+
+        visible = db_session.exec(
+            select(CRMReviewOppBranchSnapshot.unique_id)
+            .where(
+                CRMReviewOppBranchSnapshot.owner_id.in_(scope["owner_ids"]),
+                CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
+                CRMReviewOppBranchSnapshot.unique_id == snapshot_unique_id,
+            )
+            .limit(1)
+        ).first()
+        if not visible:
+            raise HTTPException(status_code=404, detail="branch snapshot not found in current review scope")
+
+        result = self._query_audit_logs_for_snapshot_unique_id(
+            db_session,
+            session_id=session_id,
+            snapshot_unique_id=snapshot_unique_id,
+            page=page,
+            size=size,
+        )
+        return {
+            "session_id": session_id,
+            "snapshot_unique_id": snapshot_unique_id,
+            **result,
+        }
 
     def _build_opportunity_risk_progress_details(
         self,

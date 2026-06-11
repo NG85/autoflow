@@ -630,6 +630,81 @@ class DingTalkClient(BaseClient):
             logger.error(f"通过会议号获取会议信息异常: {e}")
             return None
     
+    def create_notable_records(
+        self,
+        base_id: str,
+        sheet_id_or_name: str,
+        operator_id: str,
+        records: list[Dict[str, Any]],
+        access_token: str,
+    ) -> Optional[list[str]]:
+        """
+        在 AI 表格中新增记录。
+
+        API: POST /v1.0/notable/bases/{baseId}/sheets/{sheetIdOrName}/records
+        """
+        api_url = (
+            f"{self.base_url}/v1.0/notable/bases/{base_id}/sheets/{sheet_id_or_name}/records"
+        )
+        headers = {
+            "x-acs-dingtalk-access-token": access_token,
+            "Content-Type": "application/json",
+        }
+        params = {"operatorId": operator_id}
+        payload = {"records": records}
+
+        try:
+            resp = requests.post(api_url, headers=headers, params=params, json=payload)
+            logger.info("创建 AI 表格记录响应: %s", resp.text)
+            resp.raise_for_status()
+            result = resp.json()
+            value = result.get("value") or result.get("records") or []
+            record_ids = []
+            for item in value:
+                if isinstance(item, dict):
+                    record_id = item.get("id")
+                    if record_id:
+                        record_ids.append(record_id)
+            if record_ids:
+                logger.info("成功创建 AI 表格记录: %s", record_ids)
+                return record_ids
+            logger.error("创建 AI 表格记录响应中缺少 record id: %s", result)
+            return None
+        except Exception as e:
+            logger.error("创建 AI 表格记录异常: %s", e)
+            return None
+
+    def get_notable_record(
+        self,
+        base_id: str,
+        sheet_id_or_name: str,
+        record_id: str,
+        operator_id: str,
+        access_token: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        获取 AI 表格中的一行记录。
+
+        API: GET /v1.0/notable/bases/{baseId}/sheets/{sheetIdOrName}/records/{recordId}
+        """
+        api_url = (
+            f"{self.base_url}/v1.0/notable/bases/{base_id}/sheets/{sheet_id_or_name}"
+            f"/records/{record_id}"
+        )
+        headers = {
+            "x-acs-dingtalk-access-token": access_token,
+            "Content-Type": "application/json",
+        }
+        params = {"operatorId": operator_id}
+
+        try:
+            resp = requests.get(api_url, headers=headers, params=params)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            logger.error("获取 AI 表格记录异常: record_id=%s, error=%s", record_id, e)
+            return None
+
     def query_cloud_recording_text(
         self,
         conference_id: str,

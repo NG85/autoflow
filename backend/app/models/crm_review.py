@@ -6,6 +6,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Integer,
+    SmallInteger,
     JSON,
     UniqueConstraint,
 )
@@ -1266,6 +1267,16 @@ class CRMReviewOppRiskProgress(SQLModel, table=True):
         sa_column=Column(String(255), nullable=False),
         description="FK to crm_review_session.unique_id",
     )
+    parent_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+        description="FK to parent crm_review_opp_risk_progress.unique_id (RISK_PART only)",
+    )
+    display_order: Optional[int] = Field(
+        default=None,
+        sa_column=Column(SmallInteger),
+        description="Sibling display order (ascending)",
+    )
     scope_type: str = Field(
         sa_column=Column(String(32), nullable=False),
         description="opportunity/owner/department/company",
@@ -1297,7 +1308,7 @@ class CRMReviewOppRiskProgress(SQLModel, table=True):
     )
     record_type: str = Field(
         sa_column=Column(String(32), nullable=False),
-        description="RISK, PROGRESS, OPP_SUMMARY, or OPP_REQS_INSIGHT",
+        description="RISK, RISK_PART, PROGRESS, OPP_SUMMARY, or OPP_REQS_INSIGHT",
     )
     type_code: str = Field(
         sa_column=Column(String(64), nullable=False),
@@ -1469,6 +1480,7 @@ class CRMReviewOppRiskProgress(SQLModel, table=True):
         Index("idx_detected_at", "detected_at"),
         Index("idx_opportunity", "opportunity_id"),
         Index("idx_owner", "owner_id"),
+        Index("idx_parent_id", "parent_id"),
         Index("idx_record_type", "record_type"),
         Index("idx_session_scope", "session_id", "scope_type", "scope_id"),
         Index("idx_snapshot_period", "snapshot_period"),
