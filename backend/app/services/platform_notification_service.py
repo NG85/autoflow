@@ -1287,6 +1287,13 @@ class PlatformNotificationService:
             return platform_tpl.get(key)
         return None
 
+    _VISIT_RECORD_RECIPIENT_TYPE_PRIORITY = {
+        "recorder": 0,
+        "leader": 1,
+        "executive_admin": 2,
+        "collaborative_participant": 3,
+    }
+
     def _send_visit_record_to_individual_recipients(
         self,
         recipients_by_platform: Dict[str, List[Dict[str, Any]]],
@@ -1314,13 +1321,30 @@ class PlatformNotificationService:
                 continue
 
             token = platform_tokens[platform]
-            for recipient in platform_recipients:
+            sorted_recipients = sorted(
+                platform_recipients,
+                key=lambda r: self._VISIT_RECORD_RECIPIENT_TYPE_PRIORITY.get(r.get("type"), 99),
+            )
+            sent_recipient_keys: set[tuple[str, str]] = set()
+            for recipient in sorted_recipients:
                 template_id = self._get_visit_record_template_id(recipient["type"], platform, visit_type, form_type)
                 if not template_id:
                     failed_recipients.append(
                         self._create_failed_recipient_record(recipient, platform, "No template available for platform")
                     )
                     continue
+                dedup_key = (platform, recipient["open_id"])
+                if dedup_key in sent_recipient_keys:
+                    logger.info(
+                        "Skip duplicate visit record push to %s (%s) on %s, "
+                        "higher-priority card already sent to open_id=%s",
+                        recipient.get("name"),
+                        recipient.get("type"),
+                        platform,
+                        recipient["open_id"],
+                    )
+                    continue
+                sent_recipient_keys.add(dedup_key)
                 card_content = {"type": "template", "data": {"template_id": template_id, "template_variable": base_template_vars}}
                 try:
                     self._send_message(
