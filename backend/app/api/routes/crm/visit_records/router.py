@@ -71,7 +71,7 @@ def _commit_async_link_visit(
     db_session.commit()
     return {
         "code": 0,
-        "message": "拜访记录已保存，正在生成卡片",
+        "message": "跟进记录已保存，稍后将推送卡片通知",
         "data": {
             "record_id": record_id,
             "link_content_status": "processing",
