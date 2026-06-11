@@ -1,4 +1,4 @@
-"""CRM 拜访记录与日客户跟进 HTTP 路由。"""
+"""CRM 跟进记录与日客户跟进 HTTP 路由。"""
 
 import hashlib
 import io
@@ -110,7 +110,7 @@ def create_visit_record(
     feishu_auth_code: Optional[str] = Body(None, description="飞书授权码，用于换取访问令牌")
 ):
     """
-    创建拜访记录
+    创建跟进记录
     支持简易版和完整版表单
     """
     try:
@@ -185,7 +185,7 @@ def create_visit_record(
                 except Exception as e:
                     db_session.rollback()
                     logger.error("Failed to enqueue dingtalk transcribe visit record: %s", e)
-                    return {"code": 400, "message": "保存拜访记录失败，请重试", "data": {}}
+                    return {"code": 400, "message": "保存跟进记录失败，请重试", "data": {}}
             
             # 使用通用文档处理服务
             result = document_processing_service.process_document_url(
@@ -196,7 +196,7 @@ def create_visit_record(
             
             # 如果处理失败，直接返回结果
             if not result.get("success"):
-                # 转换响应格式以匹配拜访记录的API格式
+                # 转换响应格式以匹配跟进记录的API格式
                 if result.get("data", {}).get("auth_required"):
                     data = result["data"]
                     return {
@@ -232,9 +232,9 @@ def create_visit_record(
             except Exception as e:
                 db_session.rollback()
                 logger.error("Failed to enqueue link visit enrichment: %s", e)
-                return {"code": 400, "message": "保存拜访记录失败，请重试", "data": {}}
+                return {"code": 400, "message": "保存跟进记录失败，请重试", "data": {}}
         
-        # 处理 form 类型的拜访记录（包括 force 和普通保存）
+        # 处理 form 类型的跟进记录（包括 force 和普通保存）
         if force:
             # 直接保存，不做AI判断
             try:
@@ -252,7 +252,7 @@ def create_visit_record(
             except Exception as e:
                 db_session.rollback()
                 logger.error(f"Failed to save visit record with force: {e}")
-                return {"code": 400, "message": "保存拜访记录失败，请重试", "data": {}}
+                return {"code": 400, "message": "保存跟进记录失败，请重试", "data": {}}
         
         # 根据表单类型处理数据
         form_type = record.form_type or settings.CRM_VISIT_RECORD_FORM_TYPE.value
@@ -329,7 +329,7 @@ def create_visit_record(
         except Exception as e:
             db_session.rollback()
             logger.error(f"Failed to save visit record after quality check: {e}")
-            return {"code": 400, "message": "保存拜访记录失败，请重试", "data": {}}
+            return {"code": 400, "message": "保存跟进记录失败，请重试", "data": {}}
     except HTTPException:
         raise
     except Exception as e:
@@ -384,7 +384,7 @@ def verify_visit_record(
                 risk_future = executor.submit(
                     extract_risk_info_from_content,
                     content=risk_content,
-                    title="销售拜访记录",
+                    title="销售跟进记录",
                     remarks=None,
                 )
             visit_method_future = None
@@ -440,7 +440,7 @@ def query_visit_records(
     request: VisitRecordQueryRequest,
 ):
     """
-    查询CRM拜访记录
+    查询CRM跟进记录
     支持条件查询和分页（含 tag_ids：按跟进对象关联客户的 extra.tags 筛选，多选 OR）
     根据当前用户的汇报关系限制数据访问权限
     """
@@ -505,7 +505,7 @@ def export_visit_records_to_xlsx(
     request: VisitRecordQueryRequest,
 ):
     """
-    导出CRM拜访记录到 XLSX 文件
+    导出CRM跟进记录到 XLSX 文件
     支持条件查询和分页
     根据当前用户的汇报关系限制数据访问权限
     支持中英文版本导出
@@ -783,7 +783,7 @@ def get_visit_record_filter_options(
     form_type: Optional[Literal["simple", "complete"]] = None,
 ):
     """
-    获取拜访记录查询的过滤选项
+    获取跟进记录查询的过滤选项
     用于前端下拉选择框等
     根据表单类型配置返回相应的字段
     """
@@ -799,7 +799,7 @@ def get_visit_record_filter_options(
 
         customer_levels = crm_account_repo.get_distinct_customer_levels(db_session)
         field_mapping = get_resolved_field_mapping(
-            db_session, report_type="拜访记录过滤选项"
+            db_session, report_type="跟进记录过滤选项"
         )
         customer_attributes = {
             key: label
@@ -833,7 +833,7 @@ def get_visit_record_by_id(
     record_id: str,
 ):
     """
-    根据ID获取单个拜访记录详情
+    根据ID获取单个跟进记录详情
     根据当前用户的汇报关系限制数据访问权限
     """
     try:
@@ -844,7 +844,7 @@ def get_visit_record_by_id(
         )
         
         if not record:
-            raise HTTPException(status_code=404, detail="拜访记录不存在或无权限访问")
+            raise HTTPException(status_code=404, detail="跟进记录不存在或无权限访问")
         
         # 基础数据
         data = record.model_dump()
@@ -854,7 +854,7 @@ def get_visit_record_by_id(
                 getattr(record, "card_push_status", None)
             )
 
-        # 如果是 link 类型的拜访记录，尝试返回从文档中抽取的问答对和风险信息
+        # 如果是 link 类型的跟进记录，尝试返回从文档中抽取的问答对和风险信息
         try:
             if getattr(record, "visit_type", None) == "link":
                 document_content_repo = DocumentContentRepo()
@@ -896,9 +896,9 @@ def update_visit_record_comments(
     payload: VisitRecordCommentsUpdate,
 ):
     """
-    追加保存指定拜访记录的评论（comments，JSON数组）；请求体只需传本次新增条目。
+    追加保存指定跟进记录的评论（comments，JSON数组）；请求体只需传本次新增条目。
     - 每条评论的 author_id 须与当前登录用户一致，否则返回 400
-    - 复用拜访记录的权限控制逻辑：无权限/不存在返回 404
+    - 复用跟进记录的权限控制逻辑：无权限/不存在返回 404
     - 支持 reply_to_id 回复已有评论；无效 reply_to_id 返回 400
     - type=task 时 id 可选由前端传入，未传则保持为空（不生成）；type=comment 时 id 由服务端生成
     - 保存成功后：type=comment 的顶层评论向记录人推送提醒；带 reply_to_id 的回复向被回复评论作者推送提醒（type=task 不推送）
@@ -928,7 +928,7 @@ def update_visit_record_comments(
             raise HTTPException(status_code=400, detail=str(e)) from e
 
         if updated_record is None:
-            raise HTTPException(status_code=404, detail="拜访记录不存在或无权限访问")
+            raise HTTPException(status_code=404, detail="跟进记录不存在或无权限访问")
 
         # 保存评论成功后推送提醒（不影响主流程，失败仅记录日志）
         try:
@@ -957,7 +957,7 @@ def update_visit_record_comments(
             jump_url = f"{settings.REVIEW_REPORT_HOST}/registerVisitRecord/detail?record_id={record_id}"
             title = (getattr(record, "account_name", None) or getattr(record, "partner_name", None) or "") or ""
             opp = (getattr(record, "opportunity_name", None) or "") or ""
-            link_text = f"{title}  {opp}".strip() or "拜访记录"
+            link_text = f"{title}  {opp}".strip() or "跟进记录"
 
             for item in payload.comments or []:
                 item_type = str(item.type or "comment").strip().lower()
@@ -1001,7 +1001,7 @@ def update_visit_record_comments(
                         )
                         continue
                     text = (
-                        f"{author_name}评论了你的拜访记录\n"
+                        f"{author_name}评论了你的跟进记录\n"
                         f"[{link_text}]({jump_url})\n"
                         f"评论：{comment_preview or '--'}\n"
                     )
@@ -1019,7 +1019,7 @@ def update_visit_record_comments(
                     author_name,
                 )
         except Exception as e:
-            logger.warning(f"发送拜访记录评论提醒失败（不影响保存评论）：{e}")
+            logger.warning(f"发送跟进记录评论提醒失败（不影响保存评论）：{e}")
 
         return {"code": 0, "message": "success", "data": {"comments": updated_record.comments or []}}
     except HTTPException:
