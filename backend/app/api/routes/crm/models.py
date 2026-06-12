@@ -1098,6 +1098,10 @@ class ReviewBranchSnapshotUpdateIn(BaseModel):
         default=None,
         description="原因描述（仅透传 CRM 回写）",
     )
+    lostOrderCompetitors: Optional[str] = Field(
+        default=None,
+        description="丢单竞争对手 id（company_competitor.id，仅透传 CRM 回写）",
+    )
 
 
 class ReviewSessionSubmitStatsOut(BaseModel):
@@ -1525,10 +1529,19 @@ class ReviewSnapshotReasonOptionOut(BaseModel):
     label: str
 
 
+class ReviewSnapshotCompanyCompetitorOut(BaseModel):
+    id: str
+    name: Optional[str] = None
+
+
 class ReviewSnapshotReasonOptionsOut(BaseModel):
     reason_options_by_stage: dict[str, List[ReviewSnapshotReasonOptionOut]] = Field(
         default_factory=dict,
         description="按商机阶段名称分组的原因选项（例如：丢单/取消）",
+    )
+    company_competitors: List[ReviewSnapshotCompanyCompetitorOut] = Field(
+        default_factory=list,
+        description="竞争对手列表（id + name）",
     )
 
 
