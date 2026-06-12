@@ -44,3 +44,4 @@ from .crm_weekly_followup_leader_engagement import CRMWeeklyFollowupLeaderEngage
 from .feishu_billing_usage_report import FeishuBillingUsageReport
 from .crm_visit_metrics_facts import CRMVisitMetricsFacts
 from .crm_todo_metrics_facts import CRMTodoMetricsFacts
+from .company_competitor import CompanyCompetitor

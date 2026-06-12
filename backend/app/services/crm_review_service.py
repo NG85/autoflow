@@ -171,7 +171,7 @@ def _audit_json_default(obj: Any) -> str:
 
 
 EDITABLE_FIELDS = REVIEW_BRANCH_SNAPSHOT_EDITABLE_FIELDS
-WRITEBACK_ONLY_FIELDS: tuple[str, ...] = ("reason", "reasonDesc")
+WRITEBACK_ONLY_FIELDS: tuple[str, ...] = ("reason", "reasonDesc", "lostOrderCompetitors")
 
 # submit 写入 cache 的元数据；leader merge 回主表时可能与主表不一致，需一并按 cache 覆盖。
 _MERGE_SUBMIT_SYNC_FIELD_NAMES: tuple[str, ...] = tuple(

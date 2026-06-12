@@ -9,8 +9,9 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from llama_index.core.base.llms.types import ChatMessage, MessageRole
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import text
-from sqlmodel import distinct, func, select
+from sqlalchemy import inspect as sa_inspect, text
+from sqlalchemy.exc import OperationalError, ProgrammingError
+from sqlmodel import Session, distinct, func, select
 
 from app.api.routes.chat import (
     _build_chat_review_detail,
@@ -56,6 +57,7 @@ from app.models.crm_review import (
     CRMReviewRiskOpportunityRelation,
     CRMReviewSession,
 )
+from app.models.company_competitor import CompanyCompetitor
 from app.models.crm_system_configurations import CRMSystemConfiguration
 from app.rag.chat.chat_flow import ChatFlow
 from app.rag.chat.chat_service import get_final_chat_result
@@ -75,31 +77,107 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["crm", "crm/review"])
 
-_SPECIAL_REASON_OPTIONS_BY_TENANT: dict[str, dict[str, Any]] = {
-    "up-pharma": {
-        "reason_options_by_stage": {
-            "丢单": [
-                {"value": 1, "label": "价格高"},
-                {"value": 2, "label": "技术困难"},
-                {"value": 3, "label": "仪器缺乏"},
-                {"value": 4, "label": "经验不足"},
-                {"value": 5, "label": "申办方指定CRO"},
-                {"value": 7, "label": "竞标失败"},
-                {"value": 8, "label": "其他事项"},
-            ],
-            "取消": [
-                {"value": 101, "label": "客户预算取消/缩减"},
-                {"value": 102, "label": "客户项目暂停/终止"},
-                {"value": 103, "label": "客户需求变更不再匹配"},
-                {"value": 104, "label": "客户失联/无法推进"},
-                {"value": 105, "label": "重复或无效商机"},
-                {"value": 106, "label": "信息录入错误"},
-                {"value": 107, "label": "客户已倒闭/注销"},
-                {"value": 108, "label": "不符合我司业务方向"},
-            ],
-        },
-    },
+_SPECIAL_REASON_TENANT_KEYS = ("up-pharma",)
+
+_REASON_OPTIONS_CONFIG_TYPE_TO_STAGE = {
+    "LostOrderReason": "丢单",
+    "CancellationReason": "取消",
 }
+
+
+def _rollback_db_session_on_query_error(db_session: Session, exc: Exception, context: str) -> None:
+    logger.warning("%s, skip and continue: %s", context, exc)
+    try:
+        db_session.rollback()
+    except Exception:
+        logger.exception("Failed to rollback db session after query error: %s", context)
+
+
+def _db_table_exists(db_session: Session, table_name: str) -> bool:
+    try:
+        return bool(sa_inspect(db_session.get_bind()).has_table(table_name))
+    except Exception as exc:
+        logger.warning("Failed to check table existence for %s: %s", table_name, exc)
+        return False
+
+
+def _load_reason_options_by_stage(db_session: Session) -> dict[str, list[dict[str, Any]]]:
+    if not _db_table_exists(db_session, CRMSystemConfiguration.__tablename__):
+        return {}
+    try:
+        rows = db_session.exec(
+            select(
+                CRMSystemConfiguration.config_type,
+                CRMSystemConfiguration.config_key,
+                CRMSystemConfiguration.config_value,
+            )
+            .where(
+                CRMSystemConfiguration.config_type.in_(
+                    list(_REASON_OPTIONS_CONFIG_TYPE_TO_STAGE.keys())
+                ),
+                CRMSystemConfiguration.is_active.is_(True),
+            )
+            .order_by(CRMSystemConfiguration.config_type, CRMSystemConfiguration.config_value)
+        ).all()
+    except (ProgrammingError, OperationalError) as exc:
+        _rollback_db_session_on_query_error(
+            db_session,
+            exc,
+            "Failed to load lost/cancellation reason options from crm_system_configurations",
+        )
+        return {}
+    reason_options_by_stage: dict[str, list[dict[str, Any]]] = {}
+    for config_type, config_key, config_value in rows:
+        stage = _REASON_OPTIONS_CONFIG_TYPE_TO_STAGE.get(str(config_type or "").strip())
+        if not stage:
+            continue
+        label = str(config_key or "").strip()
+        if not label:
+            continue
+        try:
+            value = int(str(config_value or "").strip())
+        except (TypeError, ValueError):
+            continue
+        reason_options_by_stage.setdefault(stage, []).append({"value": value, "label": label})
+    for stage_options in reason_options_by_stage.values():
+        stage_options.sort(key=lambda item: item["value"])
+    return reason_options_by_stage
+
+
+def _load_company_competitors(db_session: Session) -> list[dict[str, Any]]:
+    if not _db_table_exists(db_session, CompanyCompetitor.__tablename__):
+        return []
+    try:
+        competitor_rows = db_session.exec(
+            select(CompanyCompetitor.id, CompanyCompetitor.name).order_by(CompanyCompetitor.name)
+        ).all()
+    except (ProgrammingError, OperationalError) as exc:
+        _rollback_db_session_on_query_error(
+            db_session,
+            exc,
+            "Failed to load company competitors",
+        )
+        return []
+    return [
+        {"id": str(row_id), "name": row_name}
+        for row_id, row_name in competitor_rows
+        if row_id
+    ]
+
+
+def _build_special_reason_options_by_tenant(db_session: Session) -> dict[str, dict[str, Any]]:
+    reason_options_by_stage = _load_reason_options_by_stage(db_session)
+    # 无丢单/取消配置即非 up-pharma 环境，无需再查 company_competitor 表
+    if not reason_options_by_stage:
+        return {}
+    company_competitors = _load_company_competitors(db_session)
+    return {
+        tenant: {
+            "reason_options_by_stage": reason_options_by_stage,
+            "company_competitors": company_competitors,
+        }
+        for tenant in _SPECIAL_REASON_TENANT_KEYS
+    }
 
 
 def _check_sia_quota_or_raise() -> None:
@@ -718,7 +796,7 @@ def query_review_snapshot_filter_enums(
             "forecast_types": forecast_types,
             "opportunity_stages": opportunity_stages,
             "ai_forecast_types": ["NonCommit", "Commit"],
-            "special_reason_options_by_tenant": _SPECIAL_REASON_OPTIONS_BY_TENANT,
+            "special_reason_options_by_tenant": _build_special_reason_options_by_tenant(db_session),
         }
     )
 

@@ -130,8 +130,8 @@ def review_op_to_gateway_update_json(op: ReviewOpportunityWritebackOp) -> Dict[s
             payload["reason"] = reason_code
     if "reasonDesc" in after or "reason_desc" in after:
         payload["reasonDesc"] = _str_or_none(after.get("reasonDesc", after.get("reason_desc")))
-    # 暂为固定值，后续再扩展为按业务输入
-    payload["lostOrderCompetitors"] = "未知"
+    competitor_id = _str_or_none(after.get("lostOrderCompetitors", after.get("competitor_id")))
+    payload["lostOrderCompetitors"] = competitor_id if competitor_id is not None else "未知"
 
     return payload
 
