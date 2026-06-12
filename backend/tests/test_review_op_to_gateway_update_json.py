@@ -26,7 +26,7 @@ def test_only_id_when_editable_fields_unchanged_and_no_writeback_fields():
             after={"forecast_type": "Commit", "forecast_amount": 100.0},
         )
     )
-    assert payload == {"id": "opp-001", "lostOrderCompetitors": "未知"}
+    assert payload == {"id": "opp-001"}
 
 
 def test_maps_changed_editable_fields_to_camel_case():
@@ -52,7 +52,6 @@ def test_maps_changed_editable_fields_to_camel_case():
         "predictionType": "Commit",
         "expectedSignMonth": "2026-06-15",
         "money": 2000.0,
-        "lostOrderCompetitors": "未知",
     }
 
 
@@ -103,21 +102,21 @@ def test_up_pharma_lost_order_submit_includes_stage_reason_and_competitor():
     }
 
 
-def test_reason_desc_snake_case_alias():
+def test_reason_desc_only_without_reason_not_emitted():
     payload = review_op_to_gateway_update_json(
         _op(after={"reason_desc": "  备注  "}),
     )
-    assert payload == {"id": "opp-001", "reasonDesc": "备注", "lostOrderCompetitors": "未知"}
+    assert payload == {"id": "opp-001"}
 
 
-def test_competitor_id_snake_case_alias():
+def test_competitor_id_only_without_reason_not_emitted():
     payload = review_op_to_gateway_update_json(
         _op(after={"competitor_id": "cc-snake"}),
     )
-    assert payload == {"id": "opp-001", "lostOrderCompetitors": "cc-snake"}
+    assert payload == {"id": "opp-001"}
 
 
-def test_skips_invalid_reason_and_empty_competitor():
+def test_lost_cancel_defaults_competitor_to_unknown_when_reason_present():
     payload = review_op_to_gateway_update_json(
         _op(
             after={
@@ -129,12 +128,25 @@ def test_skips_invalid_reason_and_empty_competitor():
     assert payload == {"id": "opp-001", "lostOrderCompetitors": "未知"}
 
 
-def test_defaults_lost_order_competitors_to_unknown_when_not_provided():
+def test_lost_cancel_includes_reason_desc_snake_case_alias():
+    payload = review_op_to_gateway_update_json(
+        _op(after={"reason": 101, "reason_desc": "  备注  "}),
+    )
+    assert payload == {
+        "id": "opp-001",
+        "reason": 101,
+        "reasonDesc": "备注",
+        "lostOrderCompetitors": "未知",
+    }
+
+
+def test_does_not_emit_lost_cancel_fields_for_normal_stage_change():
     payload = review_op_to_gateway_update_json(
         _op(
             before={"forecast_amount": 1},
             after={"forecast_amount": 2},
         )
     )
-    assert payload["lostOrderCompetitors"] == "未知"
+    assert "lostOrderCompetitors" not in payload
+    assert "reason" not in payload
     assert payload["money"] == 2.0
