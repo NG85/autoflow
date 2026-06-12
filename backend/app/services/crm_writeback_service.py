@@ -123,15 +123,15 @@ def review_op_to_gateway_update_json(op: ReviewOpportunityWritebackOp) -> Dict[s
     if _money_compare_value(before.get("forecast_amount")) != _money_compare_value(after.get("forecast_amount")):
         payload["money"] = _coerce_money(after.get("forecast_amount"))
 
-    # 业务补充字段：由 review 提交透传到 CRM（不参与本地快照持久化）
+    # 丢单/取消补充字段：仅在前端随阶段变更一并提交时透传（前端保证此场景下 reason 必传）
     if "reason" in after:
         reason_code = _coerce_reason_code(after.get("reason"))
         if reason_code is not None:
             payload["reason"] = reason_code
-    if "reasonDesc" in after or "reason_desc" in after:
-        payload["reasonDesc"] = _str_or_none(after.get("reasonDesc", after.get("reason_desc")))
-    competitor_id = _str_or_none(after.get("lostOrderCompetitors", after.get("competitor_id")))
-    payload["lostOrderCompetitors"] = competitor_id if competitor_id is not None else "未知"
+        if "reasonDesc" in after or "reason_desc" in after:
+            payload["reasonDesc"] = _str_or_none(after.get("reasonDesc", after.get("reason_desc")))
+        competitor_id = _str_or_none(after.get("lostOrderCompetitors", after.get("competitor_id")))
+        payload["lostOrderCompetitors"] = competitor_id if competitor_id is not None else "未知"
 
     return payload
 
