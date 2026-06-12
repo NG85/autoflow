@@ -66,10 +66,15 @@ website:
     default:
       version: 1
       menus:
-        - audience: null
+        - audience:
+            department_ids_any: []
+            mode: all
+            permissions_any: []
+            roles_any: []
+            user_ids_any: []
           enabled: true
           has_studio: false
-          icon: "SalesAnalysisIcon"
+          icon: ""
           key: business
           order: 10
           parent_key: null
@@ -78,10 +83,15 @@ website:
           unenabled_page: null
           visible: true
 
-        - audience: null
+        - audience:
+            department_ids_any: []
+            mode: all
+            permissions_any: []
+            roles_any: []
+            user_ids_any: []
           enabled: true
           has_studio: true
-          icon: ""
+          icon: "LayoutDashboard"
           key: business.weekly_insight
           order: 11
           parent_key: business
@@ -92,10 +102,15 @@ website:
           unenabled_page: null
           visible: true
 
-        - audience: null
+        - audience:
+            department_ids_any: []
+            mode: all
+            permissions_any: []
+            roles_any: []
+            user_ids_any: []
           enabled: true
           has_studio: false
-          icon: ""
+          icon: "History"
           key: business.history
           order: 12
           parent_key: business
@@ -106,10 +121,15 @@ website:
           unenabled_page: null
           visible: true
 
-        - audience: null
+        - audience:
+            department_ids_any: []
+            mode: all
+            permissions_any: []
+            roles_any: []
+            user_ids_any: []
           enabled: true
           has_studio: false
-          icon: "ChartBarSidebarIcon"
+          icon: ""
           key: account
           order: 20
           parent_key: null
@@ -118,10 +138,15 @@ website:
           unenabled_page: null
           visible: true
 
-        - audience: null
+        - audience:
+            department_ids_any: []
+            mode: all
+            permissions_any: []
+            roles_any: []
+            user_ids_any: []
           enabled: true
           has_studio: false
-          icon: ""
+          icon: "Users"
           key: account.list
           order: 21
           parent_key: account
@@ -132,10 +157,15 @@ website:
           unenabled_page: null
           visible: true
 
-        - audience: null
+        - audience:
+            department_ids_any: []
+            mode: all
+            permissions_any: []
+            roles_any: []
+            user_ids_any: []
           enabled: true
           has_studio: true
-          icon: "ChartArcsSidebarIcon"
+          icon: ""
           key: opportunity
           order: 30
           parent_key: null
@@ -144,10 +174,15 @@ website:
           unenabled_page: null
           visible: true
 
-        - audience: null
+        - audience:
+            department_ids_any: []
+            mode: all
+            permissions_any: []
+            roles_any: []
+            user_ids_any: []
           enabled: true
           has_studio: false
-          icon: ""
+          icon: "Target"
           key: opportunity.list
           order: 31
           parent_key: opportunity
@@ -158,10 +193,15 @@ website:
           unenabled_page: null
           visible: true
 
-        - audience: null
+        - audience:
+            department_ids_any: []
+            mode: all
+            permissions_any: []
+            roles_any: []
+            user_ids_any: []
           enabled: true
           has_studio: false
-          icon: "ChartBarSidebarIcon"
+          icon: ""
           key: task
           order: 40
           parent_key: null
@@ -170,10 +210,15 @@ website:
           unenabled_page: null
           visible: true
 
-        - audience: null
+        - audience:
+            department_ids_any: []
+            mode: all
+            permissions_any: []
+            roles_any: []
+            user_ids_any: []
           enabled: true
-          has_studio: false
-          icon: ""
+          has_studio: true
+          icon: "ListTodo"
           key: task.query
           order: 41
           parent_key: task
@@ -184,10 +229,15 @@ website:
           unenabled_page: null
           visible: true
 
-        - audience: null
+        - audience:
+            department_ids_any: []
+            mode: all
+            permissions_any: []
+            roles_any: []
+            user_ids_any: []
           enabled: true
           has_studio: false
-          icon: "ChartArcsSidebarIcon"
+          icon: ""
           key: behavior
           order: 50
           parent_key: null
@@ -196,10 +246,15 @@ website:
           unenabled_page: null
           visible: true
 
-        - audience: null
+        - audience:
+            department_ids_any: []
+            mode: all
+            permissions_any: []
+            roles_any: []
+            user_ids_any: []
           enabled: true
           has_studio: false
-          icon: ""
+          icon: "Search"
           key: behavior.query
           order: 51
           parent_key: behavior
@@ -210,10 +265,15 @@ website:
           unenabled_page: null
           visible: true
 
-        - audience: null
+        - audience:
+            department_ids_any: []
+            mode: all
+            permissions_any: []
+            roles_any: []
+            user_ids_any: []
           enabled: true
           has_studio: false
-          icon: ""
+          icon: "PenLine"
           key: behavior-entry
           order: 53
           parent_key: behavior
@@ -224,9 +284,14 @@ website:
           unenabled_page: null
           visible: true
 
-        - audience: null
+        - audience:
+            department_ids_any: []
+            mode: all
+            permissions_any: []
+            roles_any: []
+            user_ids_any: []
           enabled: true
-          has_studio: true
+          has_studio: false
           icon: ""
           key: playbook
           order: 60
