@@ -1,9 +1,9 @@
 import logging
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, time
 from zoneinfo import ZoneInfo
 import requests
 import json
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from app.platforms.feishu.client import feishu_client
 from app.platforms.lark.client import lark_client
 from app.platforms.utils.url_parser import parse_bitable_url, resolve_bitable_app_token, get_platform_from_url
@@ -86,6 +86,7 @@ DISPLAY_FIELD_MAP = {
     '创建时间': 'last_modified_time',
     '附件': 'attachment',
 }
+BITABLE_UNIQUE_ID_FIELD_NAME = "唯一ID"
 # 额外字段映射字典
 EXTRA_FIELD_MAP = {
     '客户ID': 'account_id',
@@ -399,6 +400,101 @@ def _bitable_base_url(platform: str | None) -> str:
         return "https://open.larksuite.com/open-apis"
     return "https://open.feishu.cn/open-apis"
 
+
+def _bitable_request_headers(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+
+def _extract_bitable_unique_id_field_value(value) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or None
+    if isinstance(value, list) and value and isinstance(value[0], dict):
+        text = value[0].get("text", "")
+        if isinstance(text, str):
+            stripped = text.strip()
+            return stripped or None
+    text = str(value).strip()
+    return text or None
+
+
+def search_bitable_records_by_unique_ids(
+    token: str,
+    app_token: str,
+    table_id: str,
+    unique_ids: list[str],
+    platform: str | None = None,
+) -> dict[str, str]:
+    """
+    按多维表格「唯一ID」字段查询已有行，返回 {唯一ID: bitable_record_id}。
+    若存在重复唯一ID，保留首次命中的行并记录 warning。
+    """
+    ids = [uid for uid in dict.fromkeys(unique_ids) if uid]
+    if not ids:
+        return {}
+
+    base_url = _bitable_base_url(platform)
+    url = f"{base_url}/bitable/v1/apps/{app_token}/tables/{table_id}/records/search"
+    headers = _bitable_request_headers(token)
+    found: dict[str, str] = {}
+    chunk_size = 20
+
+    for i in range(0, len(ids), chunk_size):
+        chunk = ids[i : i + chunk_size]
+        conditions = [
+            {
+                "field_name": BITABLE_UNIQUE_ID_FIELD_NAME,
+                "operator": "is",
+                "value": [uid],
+            }
+            for uid in chunk
+        ]
+        body: dict = {
+            "filter": {"conjunction": "or", "conditions": conditions},
+            "field_names": [BITABLE_UNIQUE_ID_FIELD_NAME],
+            "page_size": 500,
+        }
+        page_token: str | None = None
+        while True:
+            req_body = dict(body)
+            if page_token:
+                req_body["page_token"] = page_token
+            resp = requests.post(url, headers=headers, json=req_body)
+            logger.info("按唯一ID查询多维表格记录响应: status=%s", resp.status_code)
+            resp.raise_for_status()
+            resp_json = resp.json()
+            if resp_json.get("code") != 0:
+                logger.error("按唯一ID查询多维表格记录失败: %s", resp_json.get("msg"))
+                break
+            data = resp_json.get("data") or {}
+            for item in data.get("items") or []:
+                bitable_rid = item.get("record_id") or item.get("id")
+                if not bitable_rid:
+                    continue
+                fields = item.get("fields") or {}
+                uid_val = _extract_bitable_unique_id_field_value(
+                    fields.get(BITABLE_UNIQUE_ID_FIELD_NAME)
+                )
+                if not uid_val:
+                    continue
+                if uid_val in found and found[uid_val] != bitable_rid:
+                    logger.warning(
+                        "多维表格存在重复唯一ID %s，保留 record_id=%s，忽略 %s",
+                        uid_val,
+                        found[uid_val],
+                        bitable_rid,
+                    )
+                    continue
+                found.setdefault(uid_val, bitable_rid)
+            if not data.get("has_more"):
+                break
+            page_token = data.get("page_token")
+
+    return found
+
+
 def batch_create_bitable_records(token: str, app_token: str, table_id: str, records_fields: list[dict], platform: str | None = None) -> list[str]:
     """
     批量在多维表格中创建记录，返回创建后的record_id列表。
@@ -408,7 +504,7 @@ def batch_create_bitable_records(token: str, app_token: str, table_id: str, reco
         return []
     base_url = _bitable_base_url(platform)
     url = f"{base_url}/bitable/v1/apps/{app_token}/tables/{table_id}/records/batch_create"
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    headers = _bitable_request_headers(token)
 
     created_ids: list[str] = []
     batch_size = 20
@@ -431,6 +527,302 @@ def batch_create_bitable_records(token: str, app_token: str, table_id: str, reco
                 created_ids.append(rid)
     return created_ids
 
+
+def batch_update_bitable_records(
+    token: str,
+    app_token: str,
+    table_id: str,
+    records: list[tuple[str, dict]],
+    platform: str | None = None,
+) -> list[str]:
+    """
+    批量更新多维表格记录。records 为 [(bitable_record_id, fields), ...]。
+    """
+    if not records:
+        return []
+    base_url = _bitable_base_url(platform)
+    url = f"{base_url}/bitable/v1/apps/{app_token}/tables/{table_id}/records/batch_update"
+    headers = _bitable_request_headers(token)
+
+    updated_ids: list[str] = []
+    batch_size = 20
+    for i in range(0, len(records), batch_size):
+        chunk = records[i : i + batch_size]
+        body = {
+            "records": [
+                {"record_id": bitable_record_id, "fields": fields}
+                for bitable_record_id, fields in chunk
+            ]
+        }
+        logger.info("批量更新多维表格拜访记录: %s 条", len(chunk))
+        resp = requests.post(url, headers=headers, json=body)
+        logger.info("批量更新多维表格拜访记录响应: %s", resp.text)
+        resp.raise_for_status()
+        resp_json = resp.json()
+        if resp_json.get("code") != 0:
+            logger.error("批量更新多维表格拜访记录失败: %s", resp_json.get("msg"))
+            return updated_ids
+        data = resp_json.get("data", {})
+        items = data.get("records") or []
+        for item in items:
+            rid = item.get("record_id") or item.get("id")
+            if rid:
+                updated_ids.append(rid)
+    return updated_ids
+
+
+def split_bitable_upsert_records(
+    records_with_uid: list[tuple[str, dict]],
+    existing_map: dict[str, str],
+) -> tuple[list[dict], list[tuple[str, dict]]]:
+    """将待写入记录拆分为 create / update 两路。"""
+    to_create: list[dict] = []
+    to_update: list[tuple[str, dict]] = []
+    for uid, fields in records_with_uid:
+        bitable_record_id = existing_map.get(uid)
+        if bitable_record_id:
+            to_update.append((bitable_record_id, fields))
+        else:
+            to_create.append(fields)
+    return to_create, to_update
+
+
+def build_bitable_records_with_unique_id(rows) -> list[tuple[str, dict]]:
+    records_with_uid: list[tuple[str, dict]] = []
+    for r in rows:
+        row_dict = dict(r._mapping) if hasattr(r, "_mapping") else dict(r)
+        fields = build_bitable_fields_from_crm_row(row_dict)
+        if not fields:
+            continue
+        uid = _extract_bitable_unique_id_field_value(
+            fields.get(BITABLE_UNIQUE_ID_FIELD_NAME)
+        ) or (str(row_dict.get("record_id")).strip() if row_dict.get("record_id") else None)
+        if uid:
+            records_with_uid.append((uid, fields))
+    return records_with_uid
+
+
+def parse_bitable_sync_cron_hour_minute(cron_expr: str) -> tuple[int, int] | None:
+    """
+    解析标准 5 段 crontab 的「分 时」；仅支持纯数字（如 ``30 20 * * *``）。
+    返回 (hour, minute)，无法解析时返回 None。
+    """
+    fields = cron_expr.strip().split()
+    if len(fields) != 5:
+        return None
+    minute_s, hour_s = fields[0], fields[1]
+    if not minute_s.isdigit() or not hour_s.isdigit():
+        return None
+    minute, hour = int(minute_s), int(hour_s)
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return hour, minute
+
+
+def compute_daily_bitable_window(
+    writeback_tz,
+    *,
+    cron_expr: str | None = None,
+    buffer_minutes: int | None = None,
+    reference: datetime | None = None,
+) -> tuple[datetime, datetime]:
+    """
+    DAILY 模式下的半开区间 [start, end)：
+    end = FEISHU_BTABLE_SYNC_CRON 配置的执行时刻（当天）往前推 buffer 分钟；
+    start = end - 1 天。
+    cron 无法解析时，以 reference（默认当前时刻）作为执行时刻推算。
+    """
+    cron_expr = cron_expr if cron_expr is not None else settings.FEISHU_BTABLE_SYNC_CRON
+    buffer_minutes = (
+        buffer_minutes
+        if buffer_minutes is not None
+        else settings.FEISHU_BTABLE_SYNC_WINDOW_BUFFER_MINUTES
+    )
+    ref = reference or datetime.now(writeback_tz)
+    if ref.tzinfo is None:
+        ref = writeback_tz.localize(ref)
+    else:
+        ref = ref.astimezone(writeback_tz)
+
+    parsed = parse_bitable_sync_cron_hour_minute(cron_expr)
+    if parsed:
+        hour, minute = parsed
+        scheduled = writeback_tz.localize(datetime.combine(ref.date(), time(hour, minute)))
+    else:
+        scheduled = ref
+        logger.warning(
+            "无法从 FEISHU_BTABLE_SYNC_CRON 解析执行时刻 (%s)，使用任务实际触发时刻推算窗口",
+            cron_expr,
+        )
+
+    end_local = scheduled - timedelta(minutes=buffer_minutes)
+    start_local = end_local - timedelta(days=1)
+    return start_local, end_local
+
+
+def normalize_bitable_record_ids(record_ids: list[str] | None) -> list[str]:
+    """去重、去空白后的 CRM record_id 列表（如 form_xxx / link_xxx）。"""
+    if not record_ids:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in record_ids:
+        rid = str(raw).strip()
+        if rid and rid not in seen:
+            seen.add(rid)
+            out.append(rid)
+    return out
+
+
+def _bitable_crm_select_sql(where_clause: str) -> str:
+    cols_list = [f"{CRM_TABLE}.{col}" for col in DISPLAY_FIELD_MAP.values()]
+    cols_list.append(f"{CRM_TABLE}.contacts")
+    cols_list.append(f"{CRM_TABLE}.external_collaboration_partner_name")
+    cols_list.append(f"{CRM_TABLE}.external_collaboration_partner_id")
+    cols = ", ".join(cols_list)
+    return f"""
+        SELECT {cols}, up.department AS recorder_department, up.open_id AS recorder_open_id
+        FROM {CRM_TABLE}
+        LEFT JOIN user_profiles up ON up.user_id = {CRM_TABLE}.recorder_id
+        WHERE {where_clause}
+    """
+
+
+def fetch_crm_rows_for_bitable_by_record_ids(session: Session, record_ids: list[str]):
+    ids = normalize_bitable_record_ids(record_ids)
+    if not ids:
+        return ids, []
+    sql = text(_bitable_crm_select_sql(f"{CRM_TABLE}.record_id IN :record_ids")).bindparams(
+        bindparam("record_ids", expanding=True)
+    )
+    logger.info("按 record_id 查询 CRM 拜访记录: %s", ids)
+    rows = session.exec(sql, params={"record_ids": ids}).fetchall()
+    return ids, rows
+
+
+def fetch_crm_rows_for_bitable_by_time_range(
+    session: Session,
+    start_dt: datetime,
+    end_dt: datetime,
+    *,
+    using_datetime_window: bool,
+):
+    time_predicate = (
+        f"{CRM_TABLE}.last_modified_time >= :start AND {CRM_TABLE}.last_modified_time < :end"
+        if using_datetime_window
+        else f"{CRM_TABLE}.last_modified_time BETWEEN :start AND :end"
+    )
+    sql = text(_bitable_crm_select_sql(time_predicate))
+    logger.info("查询指定时间范围内的 CRM 拜访记录: %s", sql)
+    rows = session.exec(sql, params={"start": start_dt, "end": end_dt}).fetchall()
+    return rows
+
+
+def push_crm_rows_to_bitable(
+    rows,
+    *,
+    platform: str,
+    url_type: str,
+    url_token: str,
+    table_id: str,
+    client,
+    range_desc: str,
+) -> list[str]:
+    if not rows:
+        logger.info("没有需要写入的 CRM 拜访记录")
+        return []
+
+    token = client.get_tenant_access_token()
+    app_token = resolve_bitable_app_token(token, url_type, url_token)
+
+    records_fields = []
+    for r in rows:
+        row_dict = dict(r._mapping) if hasattr(r, "_mapping") else dict(r)
+        fields = build_bitable_fields_from_crm_row(row_dict)
+        if fields:
+            records_fields.append(fields)
+    del rows
+
+    if not records_fields:
+        logger.warning("没有可写入的字段，跳过批量创建 bitable 记录")
+        return []
+
+    created_ids = batch_create_bitable_records(
+        token=token,
+        app_token=app_token,
+        table_id=table_id,
+        records_fields=records_fields,
+        platform=platform,
+    )
+    logger.info(
+        "已在 %s 多维表格批量创建记录: %s 条，范围 %s",
+        platform,
+        len(created_ids),
+        range_desc,
+    )
+    return created_ids
+
+
+def push_crm_rows_to_bitable_upsert(
+    rows,
+    *,
+    platform: str,
+    url_type: str,
+    url_token: str,
+    table_id: str,
+    client,
+    range_desc: str,
+) -> list[str]:
+    """按 record_id 补偿：唯一ID 已存在则 update，否则 create。"""
+    if not rows:
+        logger.info("没有需要写入的 CRM 拜访记录")
+        return []
+
+    token = client.get_tenant_access_token()
+    app_token = resolve_bitable_app_token(token, url_type, url_token)
+
+    records_with_uid = build_bitable_records_with_unique_id(rows)
+    del rows
+
+    if not records_with_uid:
+        logger.warning("没有可写入的字段，跳过多维表格 upsert")
+        return []
+
+    unique_ids = [uid for uid, _ in records_with_uid]
+    existing_map = search_bitable_records_by_unique_ids(
+        token=token,
+        app_token=app_token,
+        table_id=table_id,
+        unique_ids=unique_ids,
+        platform=platform,
+    )
+    to_create, to_update = split_bitable_upsert_records(records_with_uid, existing_map)
+
+    updated_ids = batch_update_bitable_records(
+        token=token,
+        app_token=app_token,
+        table_id=table_id,
+        records=to_update,
+        platform=platform,
+    )
+    created_ids = batch_create_bitable_records(
+        token=token,
+        app_token=app_token,
+        table_id=table_id,
+        records_fields=to_create,
+        platform=platform,
+    )
+    result_ids = updated_ids + created_ids
+    logger.info(
+        "已在 %s 多维表格 upsert 记录: 更新 %s 条，新增 %s 条，范围 %s",
+        platform,
+        len(updated_ids),
+        len(created_ids),
+        range_desc,
+    )
+    return result_ids
+
+
 @app.task(
     bind=True,
     soft_time_limit=settings.CELERY_HEAVY_TASK_SOFT_TIME_LIMIT,
@@ -444,16 +836,20 @@ def sync_bitable_visit_records(
     # 例如：2026-03-19 20:00:00 / 2026-03-19T20:00:00+08:00
     start_datetime_str: str | None = None,
     end_datetime_str: str | None = None,
+    record_ids: list[str] | None = None,
 ):
     """
     批量写入拜访记录到多维表格（飞书/Lark）。
     时间范围与CRM回写任务一致：
       - 当未传入起止日期时，按 settings.CRM_WRITEBACK_FREQUENCY 计算：
-          - DAILY：按“滚动窗口”回写（例如每天20:00跑，则回写前一天20:00到今天20:00）
+          - DAILY：半开区间 [start, end)，end 为 FEISHU_BTABLE_SYNC_CRON 配置时刻
+            往前推 FEISHU_BTABLE_SYNC_WINDOW_BUFFER_MINUTES（默认 30 分钟），
+            例如 cron=30 20 * * * → [昨天20:00, 今天20:00)
           - WEEKLY：上周日到本周六（保持原逻辑）
       - 可手动指定 start_date_str/end_date_str（YYYY-MM-DD）来按“日历天口径”回补
       - 也可手动指定 start_datetime_str/end_datetime_str 来按“任意执行窗口口径”回补
-    返回创建后的 bitable record_id 列表。
+      - 可指定 record_ids（CRM 表 record_id，如 link_xxx / form_xxx）按条补偿（upsert），与时间参数互斥
+    返回写入后的 bitable record_id 列表（含新增与更新）。
     """
     try:
         # 获取URL配置信息
@@ -468,6 +864,35 @@ def sync_bitable_visit_records(
         if not client:
             logger.error("无法获取平台client，无法批量写入")
             return []
+
+        by_record_ids = normalize_bitable_record_ids(record_ids)
+        if by_record_ids and any(
+            v for v in (start_date_str, end_date_str, start_datetime_str, end_datetime_str) if v
+        ):
+            logger.error("record_ids 与时间范围参数互斥，请只传其中一种")
+            return []
+
+        if by_record_ids:
+            with Session(engine) as session:
+                requested_ids, rows = fetch_crm_rows_for_bitable_by_record_ids(session, by_record_ids)
+            found_ids = {
+                (dict(r._mapping) if hasattr(r, "_mapping") else dict(r)).get("record_id")
+                for r in rows
+            }
+            found_ids.discard(None)
+            missing_ids = [rid for rid in requested_ids if rid not in found_ids]
+            if missing_ids:
+                logger.warning("以下 record_id 在 CRM 中未找到: %s", missing_ids)
+            range_desc = f"record_id: {', '.join(requested_ids)}"
+            return push_crm_rows_to_bitable_upsert(
+                rows,
+                platform=platform,
+                url_type=url_type,
+                url_token=url_token,
+                table_id=table_id,
+                client=client,
+                range_desc=range_desc,
+            )
 
         writeback_tz = pytz.timezone(settings.CRM_WRITEBACK_TIMEZONE)
 
@@ -526,13 +951,15 @@ def sync_bitable_visit_records(
             frequency = settings.CRM_WRITEBACK_FREQUENCY
             from app.core.config import WritebackFrequency
             if frequency == WritebackFrequency.DAILY:
-                # DAILY：按“滚动窗口”回写（以任务实际执行时刻为 end）
-                end_local = datetime.now(writeback_tz)
-                start_local = end_local - timedelta(days=1)
+                start_local, end_local = compute_daily_bitable_window(writeback_tz)
                 using_datetime_window = True
                 range_desc = f"{start_local.isoformat()} 到 {end_local.isoformat()}"
                 logger.info(
-                    f"Bitable写入任务，按天模式（滚动窗口），处理区间: {range_desc}（时区: {settings.CRM_WRITEBACK_TIMEZONE}）"
+                    "Bitable写入任务，按天模式，处理区间: %s（时区: %s；cron=%s，buffer=%s分钟）",
+                    range_desc,
+                    settings.CRM_WRITEBACK_TIMEZONE,
+                    settings.FEISHU_BTABLE_SYNC_CRON,
+                    settings.FEISHU_BTABLE_SYNC_WINDOW_BUFFER_MINUTES,
                 )
             else:
                 # WEEKLY: 上周日到本周六
@@ -563,54 +990,21 @@ def sync_bitable_visit_records(
 
         # 查询指定时间范围内的CRM拜访记录
         with Session(engine) as session:
-            # 构建字段列表（需要通过JOIN获取）
-            cols_list = [f"{CRM_TABLE}.{col}" for col in DISPLAY_FIELD_MAP.values()]
-            # 写回联系人姓名/职位需要优先使用 contacts（即使多维表格没有“联系人列表”字段，也需要从DB取出来做拼接）
-            # 注意：contacts 不再出现在 DISPLAY_FIELD_MAP（避免写回不存在的多维字段），这里只是用于 SELECT
-            cols_list.append(f"{CRM_TABLE}.contacts")
-            cols_list.append(f"{CRM_TABLE}.external_collaboration_partner_name")
-            cols_list.append(f"{CRM_TABLE}.external_collaboration_partner_id")
-            cols = ", ".join(cols_list)
-            # 添加部门字段和open_id（通过JOIN获取）
-            sql = text(f"""
-                SELECT {cols}, up.department AS recorder_department, up.open_id AS recorder_open_id
-                FROM {CRM_TABLE}
-                LEFT JOIN user_profiles up ON up.user_id = {CRM_TABLE}.recorder_id
-                WHERE {CRM_TABLE}.last_modified_time {"BETWEEN :start AND :end" if not using_datetime_window else f">= :start AND {CRM_TABLE}.last_modified_time < :end"}
-            """)
-            logger.info(f"查询指定时间范围内的CRM拜访记录: {sql}")
-            rows = session.exec(sql, params={"start": start_dt, "end": end_dt}).fetchall()
+            rows = fetch_crm_rows_for_bitable_by_time_range(
+                session,
+                start_dt,
+                end_dt,
+                using_datetime_window=using_datetime_window,
+            )
 
-        if not rows:
-            logger.info("指定时间范围内没有需要写入的CRM拜访记录")
-            return []
-
-        token = client.get_tenant_access_token()
-        app_token = resolve_bitable_app_token(token, url_type, url_token)
-
-        # 单次遍历：直接从 rows 构造写入字段，避免中间 list 拷贝
-        records_fields = []
-        for r in rows:
-            row_dict = dict(r._mapping) if hasattr(r, "_mapping") else dict(r)
-            fields = build_bitable_fields_from_crm_row(row_dict)
-            if fields:
-                records_fields.append(fields)
-        del rows  # 及时释放原始行内存
-
-        if not records_fields:
-            logger.warning("没有可写入的字段，跳过批量创建bitable记录")
-            return []
-
-        record_ids = batch_create_bitable_records(
-            token=token,
-            app_token=app_token,
-            table_id=table_id,
-            records_fields=records_fields,
+        return push_crm_rows_to_bitable(
+            rows,
             platform=platform,
+            url_type=url_type,
+            url_token=url_token,
+            table_id=table_id,
+            client=client,
+            range_desc=range_desc,
         )
-        logger.info(
-            f"已在{platform}多维表格批量创建记录: {len(record_ids)} 条，范围 {range_desc}"
-        )
-        return record_ids
     except Exception as e:
         logger.error(f"批量写入多维表格拜访记录失败: {e}")

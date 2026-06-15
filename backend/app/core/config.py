@@ -339,6 +339,9 @@ class Settings(BaseSettings):
     # Feishu Btable sync configuration
     ENABLE_FEISHU_BTABLE_SYNC: bool = False
     FEISHU_BTABLE_SYNC_CRON: str = '0 13 * * 0'  # 每周日中午1点执行
+    # DAILY 模式下统计窗口截止时刻 = FEISHU_BTABLE_SYNC_CRON 中的时刻往前推该分钟数
+    # 例如 cron 为 30 20 * * * 且 buffer=30 → 窗口 [昨天20:00, 今天20:00)
+    FEISHU_BTABLE_SYNC_WINDOW_BUFFER_MINUTES: int = 30
     FEISHU_BTABLE_URL: str | None = None
     # 飞书 / Lark / 钉钉：不在代码库中写默认凭据，由部署环境（ConfigMap / Secret / .env）注入
     FEISHU_APP_ID: str = ""
