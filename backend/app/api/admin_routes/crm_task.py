@@ -567,7 +567,8 @@ def trigger_bitable_writeback_task(
     - 如果同时提供start_datetime和end_datetime，则使用指定的时间窗口（半开区间 [start, end)，与任务内逻辑一致）
     - 上述两组参数互斥，且每组须成对出现
     - 如果都不提供，则根据settings.CRM_WRITEBACK_FREQUENCY配置自动计算：
-      - DAILY：按“滚动窗口”处理（回写前1天到当前任务执行时刻）
+      - DAILY：半开区间 [start, end)，end 为 FEISHU_BTABLE_SYNC_CRON 时刻往前推
+        FEISHU_BTABLE_SYNC_WINDOW_BUFFER_MINUTES（默认 30 分钟）
       - WEEKLY：处理上周日到本周六的数据
     
     工作流程：
@@ -705,6 +706,59 @@ def trigger_bitable_writeback_task(
             "code": 500,
             "message": f"触发任务失败: {str(e)}",
             "data": {}
+        }
+
+
+@router.post("/crm/bitable-writeback/by-record-ids")
+def trigger_bitable_writeback_by_record_ids(
+    user: CurrentSuperuserDep,
+    record_ids: List[str] = Body(
+        ...,
+        description="CRM 拜访记录 record_id 列表（如 link_20260615_123456_abc / form_...），用于手工补偿",
+    ),
+):
+    """
+    按 record_id 手工补偿：将指定拜访记录 upsert 到飞书/Lark 多维表格。
+
+    若「唯一ID」已存在则更新该行，否则新增。与时间范围触发互斥；
+    异步提交 Celery 任务，可通过 /crm/task-status/{task_id} 查询结果。
+    """
+    if not user.is_superuser:
+        return {
+            "code": 403,
+            "message": "权限不足，只有超级管理员可以触发此任务",
+            "data": {},
+        }
+
+    from app.tasks.bitable_import import normalize_bitable_record_ids, sync_bitable_visit_records
+
+    ids = normalize_bitable_record_ids(record_ids)
+    if not ids:
+        return {
+            "code": 400,
+            "message": "record_ids 不能为空",
+            "data": {},
+        }
+
+    try:
+        logger.info("用户 %s 按 record_id 触发多维表格补偿回写: %s", user.id, ids)
+        task = sync_bitable_visit_records.delay(record_ids=ids)
+        return {
+            "code": 0,
+            "message": "多维表格补偿回写任务已触发",
+            "data": {
+                "task_id": task.id,
+                "record_ids": ids,
+                "status": "PENDING",
+                "description": f"已提交 {len(ids)} 条 record_id 的多维表格回写任务，任务ID: {task.id}",
+            },
+        }
+    except Exception as e:
+        logger.exception("按 record_id 触发多维表格回写失败: %s", e)
+        return {
+            "code": 500,
+            "message": f"触发任务失败: {str(e)}",
+            "data": {},
         }
 
 
