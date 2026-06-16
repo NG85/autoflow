@@ -85,6 +85,11 @@ class CRMSalesVisitRecord(SQLModel, table=True):
         max_length=32,
         description="拜访卡片推送状态：content_processing/pending/awaiting_callback/pushed/failed",
     )
+    revision_count: int = Field(
+        default=0,
+        nullable=False,
+        description="拜访记录修订次数",
+    )
 
     __table_args__ = (
         Index("idx_account_name", "account_name"),

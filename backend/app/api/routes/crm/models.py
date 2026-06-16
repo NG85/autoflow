@@ -614,6 +614,7 @@ class VisitRecordResponse(BaseModel):
     
     # 关联字段 - 来自user_profiles表
     department: Optional[str] = Field(default=None, description="拜访人所在部门")
+    revision_count: int = Field(default=0, description="拜访记录修订次数")
 
 
     model_config = {
@@ -643,6 +644,45 @@ class VisitRecordCommentsUpdate(BaseModel):
         default=None,
         description="本次新增的评论条目（服务端在既有 comments 后追加）；每条 author_id 须为当前登录用户",
     )
+
+
+class VisitRecordSupervisedUpdate(BaseModel):
+    """修改拜访记录（需 sales:follow_up:edit）：仅跟进日期、跟进方式。"""
+
+    visit_communication_date: Optional[str] = Field(
+        default=None,
+        description="拜访及沟通日期 YYYY-MM-DD",
+    )
+    visit_communication_method: Optional[str] = Field(
+        default=None,
+        description="拜访及沟通方式（选填；传空字符串可清空）",
+    )
+
+
+class VisitRecordRevisionChange(BaseModel):
+    field: str
+    old: Optional[str] = None
+    new: Optional[str] = None
+
+
+class VisitRecordRevisionResponse(BaseModel):
+    id: str
+    record_id: str
+    revision_seq: int
+    revised_by_id: str
+    revised_by_name: Optional[str] = None
+    changes: List[VisitRecordRevisionChange]
+    aldebaran_message_type: str
+    card_push_status: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class VisitRecordSupervisedUpdateResponse(BaseModel):
+    record: VisitRecordResponse
+    revision: VisitRecordRevisionResponse
+    aldebaran_triggered: bool
 
 # 拜访记录查询响应
 class VisitRecordQueryResponse(BaseModel):

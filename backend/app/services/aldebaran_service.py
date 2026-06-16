@@ -324,23 +324,30 @@ class AldebaranClient:
         *,
         record_id: str,
         event_time: Optional[datetime] = None,
+        message_type: Optional[str] = None,
+        dedupe_key: Optional[str] = None,
+        payload: Optional[dict[str, Any]] = None,
+        trace_id: Optional[str] = None,
         timeout_seconds: int = 30,
     ) -> dict[str, Any]:
         """
-        拜访记录保存后向 Aldebaran 消息队列投递 ``crm.visit_record.saved`` 事件。
+        拜访记录事件入队 Aldebaran（POST /api/v1/messages/incoming）。
+        创建默认 ``crm.visit_record.saved``；拜访记录修订可传入 ``crm.visit_record.revised`` 等参数。
         处理完成后由 Aldebaran 回调本服务 ``POST /notification/push``（type=visit_record_card）。
         """
-        message_type = settings.ALDEBARAN_VISIT_RECORD_MESSAGE_TYPE
-        dedupe_key = f"{message_type}:{record_id}:v1"
+        resolved_message_type = message_type or settings.ALDEBARAN_VISIT_RECORD_MESSAGE_TYPE
+        resolved_dedupe_key = dedupe_key or f"{resolved_message_type}:{record_id}:v1"
+        resolved_payload = payload if payload is not None else {"record_id": record_id}
+        resolved_trace_id = trace_id or record_id
 
         return self.submit_incoming_message(
-            message_type=message_type,
+            message_type=resolved_message_type,
             source_unique_id=record_id,
             source_table="crm_sales_visit_records",
-            payload={"record_id": record_id},
+            payload=resolved_payload,
             event_time=event_time or datetime.now(timezone.utc),
-            dedupe_key=dedupe_key,
-            trace_id=record_id,
+            dedupe_key=resolved_dedupe_key,
+            trace_id=resolved_trace_id,
             timeout_seconds=timeout_seconds,
         )
 

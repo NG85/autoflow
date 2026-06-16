@@ -248,6 +248,7 @@ class Settings(BaseSettings):
     ALDEBARAN_MESSAGE_WEBHOOK_SECRET: str = ""
     ALDEBARAN_MESSAGE_SOURCE_SYSTEM: str = "crm"
     ALDEBARAN_VISIT_RECORD_MESSAGE_TYPE: str = "crm.visit_record.saved"
+    ALDEBARAN_VISIT_RECORD_REVISED_MESSAGE_TYPE: str = "crm.visit_record.revised"
     ALDEBARAN_MESSAGE_RETRY_ATTEMPTS: int = 3
     ALDEBARAN_MESSAGE_RETRY_BASE_SECONDS: float = 0.5
     # 关闭时走本地空任务推卡降级（便于本地/联调）
@@ -273,6 +274,12 @@ class Settings(BaseSettings):
     # Target languages for multilingual generation, e.g. "zh,en".
     # This is reserved for future extension; current implementation supports zh/en pair.
     CRM_VISIT_RECORD_MULTILINGUAL_LANGS: Annotated[list[str] | str | None, BeforeValidator(parse_str_list)] = None
+    # 拜访记录修改：按录入时间（last_modified_time 折算北京时间日期）限制可改范围
+    # 0 = 仅当日录入（默认）；>0 = 录入日起连续 N 个自然日内可改（含录入当天）；<0 = 不限制
+    CRM_VISIT_RECORD_REVISE_ENTRY_WINDOW_DAYS: int = 0
+    # 拜访记录修改：每日截止时间（北京时间 HH:MM），到达该时刻起当日不可再修改；空表示不限制
+    # 可与 FEISHU_BTABLE_SYNC_CRON 对齐（如多维表格 20:20 回写可设为 20:00）
+    CRM_VISIT_RECORD_REVISE_DAILY_CUTOFF_TIME: str = ""
     
     # CRM daily report task configuration
     CRM_DAILY_REPORT_ENABLED: bool = False

@@ -86,6 +86,14 @@ class VisitRecordCardPushRequest(BaseModel):
             "未传或空则 task_count=0"
         ),
     )
+    is_revised: bool = Field(
+        default=False,
+        description="修改后的重推卡片",
+    )
+    revision_seq: Optional[int] = Field(
+        default=None,
+        description="修订序号，与 crm_sales_visit_records_revisions.revision_seq 对应",
+    )
 
 
 PushNotificationRequest = Annotated[
