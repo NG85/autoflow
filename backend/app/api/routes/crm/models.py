@@ -1408,13 +1408,13 @@ class ReviewSessionInsightItemBaseOut(BaseModel):
     type_name: str
     record_type: str
     summary: Optional[str] = None
+    gap_description: Optional[str] = None
     detail_description: Optional[str] = None
 
 
 class ReviewSessionRiskInsightItemBasicOut(ReviewSessionInsightItemBaseOut):
     judgment_rule: Optional[str] = None
     category: Optional[str] = None
-    gap_description: Optional[str] = None
 
 
 class ReviewSessionInsightItemOut(ReviewSessionRiskInsightItemBasicOut):
@@ -1467,7 +1467,9 @@ class ReviewSessionInsightDetailBasicOut(BaseModel):
     insight_unique_id: str
     session_id: str
     scope_type: Literal["department"] = "department"
-    record_type: Literal["RISK", "PROGRESS"]
+    record_type: Literal[
+        "RISK", "RISK_PART", "PROGRESS", "OPP_SUMMARY", "OPP_REQS_INSIGHT"
+    ]
     type_code: str
     type_name: str
     category: Optional[str] = None

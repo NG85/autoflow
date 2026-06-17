@@ -1065,6 +1065,7 @@ def query_review_session_insights(
                     type_name=str(row.type_name),
                     record_type=str(row.record_type),
                     summary=row.summary,
+                    gap_description=row.gap_description,
                 )
         if record_type == "RISK":
             risk_items.append(item)
@@ -1174,10 +1175,10 @@ def query_review_session_insight_risk_opportunities(
     user: CurrentUserDep,
 ) -> ReviewSessionInsightDetailOut:
     """
-    某条风险洞察及其 RISK_PART 子记录关联的商机列表（返回关系信息，不直接展开主表 baseline 字段）。
+    某条洞察（按 ``unique_id`` 定位，不限 ``record_type``）及其关联商机列表（返回关系信息，不直接展开主表 baseline 字段）。
     - 负责人或有 ``review_session:all:view`` 权限的用户可调。
-    - ``risk_id`` 与 insights 风险项的 ``insight_unique_id`` 一致。
-    - 同时返回 ``record_type=RISK_PART`` 且 ``parent_id`` 指向该风险的子记录及其商机。
+    - ``risk_id`` 与 insights 列表项的 ``insight_unique_id`` 一致（RISK / PROGRESS / OPP_SUMMARY / OPP_REQS_INSIGHT 等）。
+    - 若主记录为 ``record_type=RISK``，同时返回 ``RISK_PART`` 子记录（``parent_id`` 指向该风险）及其商机。
     - 前端二段式调用：先从本接口拿 ``opportunity_id``，再调用 ``POST .../baseline-opp-branch-snapshots``，并传
       ``{"snapshot_filters": {"opportunity_ids": [...]}}`` 获取主表 T2 baseline 字段。
     """
@@ -1201,28 +1202,32 @@ def query_review_session_insight_risk_opportunities(
         select(CRMReviewOppRiskProgress).where(
             CRMReviewOppRiskProgress.session_id == session_id,
             CRMReviewOppRiskProgress.scope_type == "department",
-            CRMReviewOppRiskProgress.record_type == "RISK",
             CRMReviewOppRiskProgress.unique_id == risk_id,
         )
     ).first()
     if not insight:
         raise HTTPException(status_code=404, detail="insight not found")
     insight_unique_id = str(insight.unique_id)
+    insight_record_type = str(insight.record_type or "").strip().upper()
     detail_description = insight.detail_description
 
-    risk_part_rows = db_session.exec(
-        select(CRMReviewOppRiskProgress)
-        .where(
-            CRMReviewOppRiskProgress.session_id == session_id,
-            CRMReviewOppRiskProgress.scope_type == "department",
-            CRMReviewOppRiskProgress.record_type == "RISK_PART",
-            CRMReviewOppRiskProgress.parent_id == insight_unique_id,
+    risk_part_rows: List[CRMReviewOppRiskProgress] = []
+    if insight_record_type == "RISK":
+        risk_part_rows = list(
+            db_session.exec(
+                select(CRMReviewOppRiskProgress)
+                .where(
+                    CRMReviewOppRiskProgress.session_id == session_id,
+                    CRMReviewOppRiskProgress.scope_type == "department",
+                    CRMReviewOppRiskProgress.record_type == "RISK_PART",
+                    CRMReviewOppRiskProgress.parent_id == insight_unique_id,
+                )
+                .order_by(
+                    CRMReviewOppRiskProgress.display_order.asc(),
+                    CRMReviewOppRiskProgress.id.asc(),
+                )
+            ).all()
         )
-        .order_by(
-            CRMReviewOppRiskProgress.display_order.asc(),
-            CRMReviewOppRiskProgress.id.asc(),
-        )
-    ).all()
 
     risk_unique_ids = [risk_id] + [str(part.unique_id) for part in risk_part_rows]
     rel_rows = db_session.exec(
@@ -1254,7 +1259,7 @@ def query_review_session_insight_risk_opportunities(
         insight_unique_id=insight_unique_id,
         session_id=session_id,
         scope_type="department",
-        record_type="RISK",
+        record_type=insight_record_type,
         type_code=str(insight.type_code),
         type_name=str(insight.type_name),
         category=insight.category,
