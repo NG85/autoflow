@@ -111,10 +111,14 @@ class VisitRecordAccessPolicy:
         return recorder_id in self.my_subordinate_user_ids
 
     def can_edit_visit_record(self, recorder_id: Optional[UUID]) -> bool:
-        """修改权限：具备 sales:follow_up:edit 且对该记录人有查看权限（与读范围一致）。"""
+        """修改权限：OAuth /permission/check sales:follow_up:edit + 对该记录人有查看权限。"""
         if not self.current_user_id or not recorder_id:
             return False
-        if VISIT_RECORD_EDIT_PERMISSION not in self.permissions:
+        check = oauth_client.check_function_permission(
+            user_id=self.current_user_id,
+            permission=VISIT_RECORD_EDIT_PERMISSION,
+        )
+        if not check.get("allowed"):
             return False
         return self.can_access_single_recorder(recorder_id)
 

@@ -918,7 +918,8 @@ def supervised_revise_visit_record(
     payload: VisitRecordSupervisedUpdate,
 ):
     """
-    修改拜访记录（需 sales:follow_up:edit，且在可查看范围内；仅跟进日期、跟进方式；
+    修改拜访记录（OAuth ``POST /permission/check`` → ``sales:follow_up:edit``；
+    且在可查看范围内；仅跟进日期、跟进方式；
     录入自然日窗口见 CRM_VISIT_RECORD_REVISE_ENTRY_WINDOW_DAYS（默认仅当日录入），
     每日截止时间见 CRM_VISIT_RECORD_REVISE_DAILY_CUTOFF_TIME（默认无限制））。
     修改后触发 Aldebaran ``crm.visit_record.revised``，由回调重推卡片。
