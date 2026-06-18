@@ -33,9 +33,13 @@ from app.repositories.crm_review_attendee import crm_review_attendee_repo
 from app.repositories.crm_review_audit import crm_review_opp_audit_log_repo
 from app.repositories.crm_review_branch_snapshot import crm_review_opp_branch_snapshot_cache_repo
 from app.repositories.crm_review_session import crm_review_session_repo
+from app.policies.review_session_access import (
+    apply_review_session_list_filter,
+    resolve_review_session_view_scope,
+    user_can_access_review_session,
+)
 from app.services.aldebaran_service import aldebaran_client
 from app.services.crm_writeback_service import crm_writeback_service
-from app.services.oauth_service import oauth_client
 
 logger = logging.getLogger(__name__)
 
@@ -957,20 +961,33 @@ class CRMReviewService:
         attendee = crm_review_attendee_repo.get_by_session_and_user_id(
             db_session, session_id=session_id, user_id=user_id
         )
-        is_viewer = False
         try:
-            is_viewer = oauth_client.check_user_has_permission(
-                user_id=uuid.UUID(str(user_id)),
-                permission="review_session:all:view",
-            )
+            user_uuid = uuid.UUID(str(user_id))
         except (ValueError, TypeError, AttributeError):
-            # Fallback to non-viewer when user_id cannot be parsed as UUID.
-            is_viewer = False
-        if not attendee and not is_viewer:
+            user_uuid = None
+        scope = (
+            resolve_review_session_view_scope(db_session, user_uuid)
+            if user_uuid is not None
+            else None
+        )
+        if user_uuid is None:
+            if not attendee:
+                raise HTTPException(status_code=403, detail="user is not attendee of this review session")
+        elif not user_can_access_review_session(
+            db_session,
+            user_id=user_uuid,
+            session=session,
+            scope=scope,
+        ):
             raise HTTPException(status_code=403, detail="user is not attendee of this review session")
 
         is_leader = bool(getattr(attendee, "is_leader", False)) if attendee else False
-        if is_leader or is_viewer:
+        elevated_view = (
+            scope.has_elevated_session_view(session.department_id, is_leader=is_leader)
+            if scope is not None
+            else is_leader
+        )
+        if elevated_view:
             owner_ids = crm_review_attendee_repo.get_crm_user_ids_by_session(
                 db_session, session_id=session_id
             )
@@ -1983,20 +2000,42 @@ class CRMReviewService:
         *,
         opportunity_id: str,
         session_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> dict:
         opportunity_id = str(opportunity_id or "").strip()
         if not opportunity_id:
             raise HTTPException(status_code=422, detail="opportunity_id is required")
+
+        user_uuid: Optional[uuid.UUID] = None
+        if user_id:
+            try:
+                user_uuid = uuid.UUID(str(user_id))
+            except (ValueError, TypeError, AttributeError):
+                user_uuid = None
+
+        view_scope = (
+            resolve_review_session_view_scope(db_session, user_uuid)
+            if user_uuid is not None
+            else None
+        )
 
         sid = str(session_id or "").strip()
         resolved_session: Optional[CRMReviewSession] = None
         latest_risk: Optional[CRMReviewOppRiskProgress] = None
         if sid:
             resolved_session = crm_review_session_repo.get_by_unique_id(db_session, sid)
+            if resolved_session and user_uuid is not None:
+                if not user_can_access_review_session(
+                    db_session,
+                    user_id=user_uuid,
+                    session=resolved_session,
+                    scope=view_scope,
+                ):
+                    raise HTTPException(status_code=403, detail="user cannot access this review session")
         else:
             # Period-wide snapshot includes many opps; only sessions where the owner is a participant
             # get opp-level risk rows. Resolve the latest session from crm_review_opp_risk_progress.
-            latest_risk = db_session.exec(
+            latest_risk_stmt = (
                 select(CRMReviewOppRiskProgress)
                 .where(
                     CRMReviewOppRiskProgress.opportunity_id == opportunity_id,
@@ -2008,7 +2047,18 @@ class CRMReviewService:
                     CRMReviewOppRiskProgress.created_at.desc(),
                 )
                 .limit(1)
-            ).first()
+            )
+            if user_uuid is not None and view_scope is not None:
+                latest_risk_stmt = latest_risk_stmt.where(
+                    CRMReviewOppRiskProgress.session_id.in_(
+                        apply_review_session_list_filter(
+                            select(CRMReviewSession.unique_id),
+                            view_scope,
+                            str(user_uuid),
+                        )
+                    )
+                )
+            latest_risk = db_session.exec(latest_risk_stmt).first()
         if (sid and not resolved_session) or (not sid and not latest_risk):
             # TODO：暂时查询商机表，后续改为查询表4最新报告
             opp = db_session.exec(
@@ -2803,8 +2853,9 @@ class CRMReviewService:
     ) -> dict:
         """
         forecast 聚合仅以 Aldebaran ``POST .../review/performance/query`` 返回为准。
-        - 负责人或有 ``review_session:all:view`` 权限：请求仅 ``session_id``（全量）。
-        - 普通参会人：``session_id`` + ``owner_id``（crm_user_id）。
+        - 负责人或在可见部门范围内的 viewer：请求仅 ``session_id``（全场重算）。
+        - 普通参会人：``session_id`` + ``owner_id``（crm_user_id，仅本人）。
+        session 访问与可见部门范围规则同 ``/crm/review/my/latest-session``。
         """
         session = crm_review_session_repo.get_by_unique_id(db_session, session_id)
         if not session:
@@ -2813,21 +2864,35 @@ class CRMReviewService:
         attendee = crm_review_attendee_repo.get_by_session_and_user_id(
             db_session, session_id=session_id, user_id=user_id
         )
-        is_viewer = False
         try:
-            is_viewer = oauth_client.check_user_has_permission(
-                user_id=uuid.UUID(str(user_id)),
-                permission="review_session:all:view",
-            )
+            user_uuid = uuid.UUID(str(user_id))
         except (ValueError, TypeError, AttributeError):
-            is_viewer = False
-        if not attendee and not is_viewer:
+            user_uuid = None
+        scope = (
+            resolve_review_session_view_scope(db_session, user_uuid)
+            if user_uuid is not None
+            else None
+        )
+        if user_uuid is None:
+            if not attendee:
+                raise HTTPException(status_code=403, detail="user is not attendee of this review session")
+        elif not user_can_access_review_session(
+            db_session,
+            user_id=user_uuid,
+            session=session,
+            scope=scope,
+        ):
             raise HTTPException(status_code=403, detail="user is not attendee of this review session")
 
         is_leader = bool(getattr(attendee, "is_leader", False)) if attendee else False
         owner_id_arg: Optional[str] = None
 
-        if is_leader or is_viewer:
+        elevated_view = (
+            scope.has_elevated_session_view(session.department_id, is_leader=is_leader)
+            if scope is not None
+            else is_leader
+        )
+        if elevated_view:
             attendees = db_session.exec(
                 select(CRMReviewAttendee).where(CRMReviewAttendee.session_id == session_id)
             ).all()
