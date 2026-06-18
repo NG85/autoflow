@@ -20,9 +20,13 @@ from app.api.routes.crm.models import (
     VisitRecordCommentsUpdate,
     VisitRecordCreate,
     VisitRecordQueryRequest,
+    VisitRecordRevisionResponse,
+    VisitRecordSupervisedUpdate,
+    VisitRecordSupervisedUpdateResponse,
 )
 from app.core.config import settings
 from app.crm.save_engine import (
+    notify_aldebaran_visit_record_revised,
     notify_aldebaran_visit_record_saved,
     save_visit_record_to_crm_table,
     save_visit_record_with_raw_content,
@@ -32,7 +36,11 @@ from app.repositories.crm_account import crm_account_repo
 from app.repositories.crm_account_opportunity_assessment import crm_account_opportunity_assessment_repo
 from app.repositories.document_content import DocumentContentRepo
 from app.repositories.user_profile import UserProfileRepo
-from app.repositories.visit_record import VisitRecordCommentError, visit_record_repo
+from app.repositories.visit_record import (
+    VisitRecordCommentError,
+    VisitRecordRevisionError,
+    visit_record_repo,
+)
 from app.services.crm_config_service import get_resolved_field_mapping
 from app.platforms.utils.url_parser import parse_dingtalk_transcribe_url
 from app.services.document_processing_service import document_processing_service
@@ -99,6 +107,20 @@ def _validate_visit_record_first_stage(record: VisitRecordCreate) -> Optional[st
         return "外部协同合作伙伴名称与ID需同时填写"
 
     return None
+
+
+def _revision_to_response(revision) -> VisitRecordRevisionResponse:
+    return VisitRecordRevisionResponse(
+        id=str(revision.id),
+        record_id=revision.record_id,
+        revision_seq=revision.revision_seq,
+        revised_by_id=revision.revised_by_id,
+        revised_by_name=revision.revised_by_name,
+        changes=revision.changes or [],
+        aldebaran_message_type=revision.aldebaran_message_type,
+        card_push_status=revision.card_push_status,
+        created_at=revision.created_at,
+    )
 
 
 @router.post("/crm/visit_record")
@@ -880,6 +902,95 @@ def get_visit_record_by_id(
             "code": 0,
             "message": "success",
             "data": data,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(e)
+        raise InternalServerError()
+
+
+@router.patch("/crm/visit_records/{record_id}")
+def supervised_revise_visit_record(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    record_id: str,
+    payload: VisitRecordSupervisedUpdate,
+):
+    """
+    修改拜访记录（OAuth ``POST /permission/check`` → ``sales:follow_up:edit``；
+    且在可查看范围内；仅跟进日期、跟进方式；
+    录入自然日窗口见 CRM_VISIT_RECORD_REVISE_ENTRY_WINDOW_DAYS（默认仅当日录入），
+    每日截止时间见 CRM_VISIT_RECORD_REVISE_DAILY_CUTOFF_TIME（默认无限制））。
+    修改后触发 Aldebaran ``crm.visit_record.revised``，由回调重推卡片。
+    """
+    try:
+        reviser_profile = UserProfileRepo().get_by_user_id(db_session, user.id)
+        reviser_name = reviser_profile.name if reviser_profile else None
+
+        try:
+            record, revision = visit_record_repo.supervised_revise_visit_record(
+                db_session,
+                record_id=record_id,
+                current_user_id=user.id,
+                revised_by_name=reviser_name,
+                visit_communication_date=payload.visit_communication_date,
+                visit_communication_method=payload.visit_communication_method,
+            )
+        except VisitRecordRevisionError as exc:
+            if exc.code == "not_found":
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            if exc.code == "forbidden":
+                raise HTTPException(status_code=403, detail=str(exc)) from exc
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        aldebaran_triggered = notify_aldebaran_visit_record_revised(
+            record_id=record_id,
+            revision_seq=revision.revision_seq,
+            revised_by_user_id=user.id,
+            changes=revision.changes or [],
+            db_session=db_session,
+            operator_user_id=user.id,
+            visit_type=record.visit_type,
+        )
+
+        return {
+            "code": 0,
+            "message": "success",
+            "data": VisitRecordSupervisedUpdateResponse(
+                record=record,
+                revision=_revision_to_response(revision),
+                aldebaran_triggered=aldebaran_triggered,
+            ).model_dump(),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(e)
+        raise InternalServerError()
+
+
+@router.get("/crm/visit_records/{record_id}/revisions")
+def list_visit_record_revisions(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    record_id: str,
+):
+    """查询指定拜访记录的修订历史。"""
+    try:
+        revisions = visit_record_repo.list_visit_record_revisions(
+            db_session,
+            record_id=record_id,
+            current_user_id=user.id,
+        )
+        if revisions is None:
+            raise HTTPException(status_code=404, detail="跟进记录不存在或无权限访问")
+        return {
+            "code": 0,
+            "message": "success",
+            "data": {
+                "items": [_revision_to_response(item).model_dump() for item in revisions],
+            },
         }
     except HTTPException:
         raise

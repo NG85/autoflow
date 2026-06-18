@@ -411,6 +411,88 @@ class OAuthClient:
             "raw": result,
         }
 
+    def check_function_permission(
+        self,
+        *,
+        user_id: UUID,
+        permission: str,
+        timeout_seconds: int = 30,
+    ) -> Dict[str, Any]:
+        """
+        POST /permission/check — W1 功能层鉴权（矩阵 RBAC）。
+
+        返回 OAuth PermissionCheckVO 字段（camelCase 已由 post_json 层处理为 snake 或保持原样）。
+        失败时 allowed=false。
+        """
+        denied = {
+            "allowed": False,
+            "function_allowed": False,
+            "data_allowed": False,
+            "effect": "DENY",
+            "grant_sources": [],
+            "field_mask": [],
+            "requires_audit": False,
+        }
+        target_permission = str(permission or "").strip()
+        if not target_permission:
+            logger.info("OAuth permission/check skipped: empty permission, user_id=%s", user_id)
+            return denied
+
+        data = post_json(
+            self._session,
+            base_url=self._base_url,
+            operation="permission_check",
+            path="/permission/check",
+            json_body={"user_id": str(user_id), "permission": target_permission},
+            timeout_seconds=timeout_seconds,
+        )
+        if data is None:
+            logger.error(
+                "OAuth permission/check transport failed, user_id=%s, permission=%s",
+                user_id,
+                target_permission,
+            )
+            return denied
+
+        if data.get("code") != 0:
+            logger.error(
+                "OAuth permission/check returned error: user_id=%s, permission=%s, body=%s",
+                user_id,
+                target_permission,
+                data,
+            )
+            return denied
+
+        raw = data.get("result") if isinstance(data, dict) else {}
+        if not isinstance(raw, dict):
+            return denied
+
+        def _bool(key: str, alt: str) -> bool:
+            if key in raw:
+                return bool(raw[key])
+            if alt in raw:
+                return bool(raw[alt])
+            return False
+
+        allowed = _bool("allowed", "allowed")
+        result = {
+            "allowed": allowed,
+            "function_allowed": _bool("function_allowed", "functionAllowed") or allowed,
+            "data_allowed": _bool("data_allowed", "dataAllowed"),
+            "effect": str(raw.get("effect") or ("ALLOW" if allowed else "DENY")),
+            "grant_sources": raw.get("grant_sources") or raw.get("grantSources") or [],
+            "field_mask": raw.get("field_mask") or raw.get("fieldMask") or [],
+            "requires_audit": _bool("requires_audit", "requiresAudit"),
+        }
+        logger.info(
+            "OAuth permission/check user_id=%s permission=%s allowed=%s effect=%s",
+            user_id,
+            target_permission,
+            result["allowed"],
+            result["effect"],
+        )
+        return result
+
     def check_user_has_permission(self, *, user_id: UUID, permission: str) -> bool:
         """
         检查用户是否具有指定权限

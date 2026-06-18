@@ -226,7 +226,9 @@ def _handle_visit_record_card_push(
         raise HTTPException(status_code=404, detail=f"visit record not found: {record_id}")
 
     current_status = get_visit_record_card_push_status(db_session, record_id)
-    if current_status == VisitRecordCardPushStatus.PUSHED:
+    is_revised = bool(getattr(payload, "is_revised", False))
+    revision_seq = getattr(payload, "revision_seq", None)
+    if current_status == VisitRecordCardPushStatus.PUSHED and not is_revised:
         logger.info(
             "Visit record card already pushed, skip duplicate callback, record_id=%s",
             record_id,
@@ -240,6 +242,9 @@ def _handle_visit_record_card_push(
             "success_count": 0,
             "failed_recipients": [],
         }
+
+    if is_revised and revision_seq is None:
+        revision_seq = int(getattr(row, "revision_count", 0) or 0) or None
 
     visit_type = (row.visit_type or "form").strip() or "form"
     meeting_notes: Optional[str] = None
@@ -262,6 +267,7 @@ def _handle_visit_record_card_push(
         saved_time=row.last_modified_time,
         tasks=tasks,
         task_count=task_count,
+        is_revised=is_revised,
     )
 
     push_status = (
@@ -272,6 +278,16 @@ def _handle_visit_record_card_push(
     update_visit_record_card_push_status(
         db_session, record_id, push_status, commit=True
     )
+    if is_revised and revision_seq is not None:
+        from app.repositories.visit_record_revisions import visit_record_revisions_repo
+
+        visit_record_revisions_repo.update_card_push_status(
+            db_session,
+            record_id=record_id,
+            revision_seq=int(revision_seq),
+            card_push_status=push_status,
+            commit=True,
+        )
 
     operator_user_id = str(row.recorder_id) if row.recorder_id else None
     if push_ok and operator_user_id:

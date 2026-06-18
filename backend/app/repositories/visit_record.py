@@ -1,5 +1,5 @@
 from typing import Any, Dict, Optional, List
-from datetime import datetime
+from datetime import date, datetime
 import logging
 from sqlalchemy import and_, or_, text
 from sqlalchemy.orm import aliased
@@ -10,6 +10,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
+from app.models.crm_system_configurations import CRMSystemConfiguration
 from app.models.crm_accounts import CRMAccount
 from app.api.routes.crm.models import (
     VisitAttachment,
@@ -27,12 +28,26 @@ from app.services.oauth_service import oauth_client
 from app.utils.crm_account_tags import parse_account_tags
 from app.utils.crm_comments import CRMCommentValidationError, merge_append_crm_comments
 from app.utils.crm_followup_object_type import resolve_customer_attribute_display_label
-from app.utils.date_utils import convert_beijing_date_to_utc_range
+from app.repositories.visit_record_revisions import visit_record_revisions_repo
+from app.utils.date_utils import (
+    convert_beijing_date_to_utc_range,
+    get_visit_record_revise_entry_denial_reason,
+    utc_datetime_to_beijing_date,
+)
 
 logger = logging.getLogger(__name__)
 
 
 VisitRecordCommentError = CRMCommentValidationError
+
+
+class VisitRecordRevisionError(ValueError):
+    """拜访记录修订时的业务错误。"""
+
+    def __init__(self, message: str, code: str = "bad_request"):
+        super().__init__(message)
+        self.code = code
+
 
 _VISIT_RECORD_FILTER_OPTION_SEP = "\x1e"
 
@@ -504,6 +519,169 @@ class VisitRecordRepo(BaseRepo):
             is_admin_user_fn=self._is_admin_user,
         )
         return policy.can_access_single_recorder(recorder_id)
+
+    def _can_edit_visit_record(
+        self,
+        session: Session,
+        current_user_id: Optional[UUID],
+        recorder_id: Optional[UUID],
+    ) -> bool:
+        policy = VisitRecordAccessPolicy(
+            session=session,
+            current_user_id=current_user_id,
+            roles_and_permissions_provider=lambda user_id: oauth_client.query_user_roles_and_permissions(user_id=user_id),
+            is_admin_user_fn=self._is_admin_user,
+        )
+        return policy.can_edit_visit_record(recorder_id)
+
+    def _load_allowed_communication_methods(self, session: Session) -> set[str]:
+        stmt = select(CRMSystemConfiguration.config_key).where(
+            CRMSystemConfiguration.config_type == "CommunicationMediumCategory",
+            CRMSystemConfiguration.is_active == True,
+        )
+        return {str(x).strip() for x in session.exec(stmt).all() if str(x).strip()}
+
+    def _format_field_value_for_revision(self, field_name: str, value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if field_name == "visit_communication_date":
+            if isinstance(value, date):
+                return value.isoformat()
+            return str(value).strip() or None
+        return str(value).strip() or None
+
+    def supervised_revise_visit_record(
+        self,
+        session: Session,
+        *,
+        record_id: str,
+        current_user_id: UUID,
+        revised_by_name: Optional[str],
+        visit_communication_date: Optional[str] = None,
+        visit_communication_method: Optional[str] = None,
+    ):
+        """
+        修改拜访记录：需 sales:follow_up:edit 且在可查看范围内；
+        仅允许改跟进日期、跟进方式；录入自然日窗口见 CRM_VISIT_RECORD_REVISE_ENTRY_WINDOW_DAYS，
+        每日截止时间见 CRM_VISIT_RECORD_REVISE_DAILY_CUTOFF_TIME。
+        返回 (VisitRecordResponse, CRMSalesVisitRecordRevision)。
+        """
+        from app.core.config import settings
+
+        if visit_communication_date is None and visit_communication_method is None:
+            raise VisitRecordRevisionError("请至少提供一个待修改字段")
+
+        record = session.exec(
+            select(CRMSalesVisitRecord).where(CRMSalesVisitRecord.record_id == record_id)
+        ).first()
+        if not record:
+            raise VisitRecordRevisionError("跟进记录不存在", "not_found")
+
+        recorder_id = getattr(record, "recorder_id", None)
+        if not self._can_edit_visit_record(session, current_user_id, recorder_id):
+            raise VisitRecordRevisionError("无权限修改该跟进记录", "forbidden")
+
+        created_beijing_date = utc_datetime_to_beijing_date(record.last_modified_time)
+        denial = get_visit_record_revise_entry_denial_reason(created_beijing_date)
+        if denial:
+            raise VisitRecordRevisionError(denial)
+
+        allowed_methods = self._load_allowed_communication_methods(session)
+        changes: list[dict[str, Any]] = []
+
+        if visit_communication_date is not None:
+            raw_date = str(visit_communication_date).strip()
+            if not raw_date:
+                raise VisitRecordRevisionError("跟进日期不能为空")
+            try:
+                new_date = datetime.strptime(raw_date, "%Y-%m-%d").date()
+            except ValueError as exc:
+                raise VisitRecordRevisionError("跟进日期格式无效，应为 YYYY-MM-DD") from exc
+            old_date_str = self._format_field_value_for_revision(
+                "visit_communication_date", record.visit_communication_date
+            )
+            new_date_str = new_date.isoformat()
+            if old_date_str != new_date_str:
+                changes.append(
+                    {
+                        "field": "visit_communication_date",
+                        "old": old_date_str,
+                        "new": new_date_str,
+                    }
+                )
+                record.visit_communication_date = new_date
+
+        if visit_communication_method is not None:
+            new_method = str(visit_communication_method).strip() or None
+            if new_method and allowed_methods and new_method not in allowed_methods:
+                raise VisitRecordRevisionError("跟进方式不在系统配置允许范围内")
+            old_method = self._format_field_value_for_revision(
+                "visit_communication_method", record.visit_communication_method
+            )
+            if old_method != new_method:
+                changes.append(
+                    {
+                        "field": "visit_communication_method",
+                        "old": old_method,
+                        "new": new_method,
+                    }
+                )
+                record.visit_communication_method = new_method
+
+        if not changes:
+            raise VisitRecordRevisionError("提交内容与当前记录一致，无需修改")
+
+        revision_seq = int(getattr(record, "revision_count", 0) or 0) + 1
+        record.revision_count = revision_seq
+
+        message_type = settings.ALDEBARAN_VISIT_RECORD_REVISED_MESSAGE_TYPE
+        dedupe_key = f"{message_type}:{record_id}:rev:{revision_seq}"
+        revised_by_id = str(current_user_id)
+
+        revision = visit_record_revisions_repo.create(
+            session,
+            record_id=record_id,
+            revision_seq=revision_seq,
+            revised_by_id=revised_by_id,
+            revised_by_name=(revised_by_name or "").strip() or None,
+            changes=changes,
+            aldebaran_message_type=message_type,
+            aldebaran_dedupe_key=dedupe_key,
+            card_push_status="pending",
+        )
+
+        session.add(record)
+        session.commit()
+        session.refresh(record)
+        session.refresh(revision)
+
+        response = self.get_visit_record_by_id(
+            session=session,
+            record_id=record_id,
+            current_user_id=current_user_id,
+        )
+        if response is None:
+            raise VisitRecordRevisionError("跟进记录不存在", "not_found")
+        return response, revision
+
+    def list_visit_record_revisions(
+        self,
+        session: Session,
+        record_id: str,
+        current_user_id: Optional[UUID] = None,
+    ):
+        record = session.exec(
+            select(CRMSalesVisitRecord).where(CRMSalesVisitRecord.record_id == record_id)
+        ).first()
+        if not record:
+            return None
+        if not self._can_access_visit_record_by_recorder_id(
+            session=session,
+            current_user_id=current_user_id,
+            recorder_id=getattr(record, "recorder_id", None),
+        ):
+            return None
+        return visit_record_revisions_repo.list_by_record_id(session, record_id)
 
     def query_visit_records(
         self,

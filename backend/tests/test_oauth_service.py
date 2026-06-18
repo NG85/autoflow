@@ -77,6 +77,45 @@ def test_subordinate_chain_transport_failure_returns_empty_dict():
         assert client.get_subordinate_chain(user_id=USER_ID) == {}
 
 
+def test_check_function_permission_allowed():
+    client = _client()
+    mock_data = {
+        "code": 0,
+        "result": {
+            "allowed": True,
+            "functionAllowed": True,
+            "dataAllowed": True,
+            "effect": "ALLOW",
+            "requiresAudit": True,
+        },
+    }
+    with patch("app.services.oauth_service.post_json", return_value=mock_data) as post:
+        result = client.check_function_permission(
+            user_id=USER_ID,
+            permission="sales:follow_up:edit",
+        )
+
+    assert result["allowed"] is True
+    assert result["requires_audit"] is True
+    post.assert_called_once()
+    assert post.call_args.kwargs["path"] == "/permission/check"
+    assert post.call_args.kwargs["json_body"] == {
+        "user_id": str(USER_ID),
+        "permission": "sales:follow_up:edit",
+    }
+
+
+def test_check_function_permission_denied_on_transport_failure():
+    client = _client()
+    with patch("app.services.oauth_service.post_json", return_value=None):
+        result = client.check_function_permission(
+            user_id=USER_ID,
+            permission="sales:follow_up:edit",
+        )
+    assert result["allowed"] is False
+    assert result["effect"] == "DENY"
+
+
 def test_post_json_retries_on_transport_error():
     from app.services.oauth_http import post_json
 

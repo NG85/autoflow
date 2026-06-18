@@ -13,6 +13,9 @@ from app.services.oauth_service import oauth_client
 RolesAndPermissionsProvider = Callable[[UUID], Dict[str, Any]]
 IsAdminUserFn = Callable[[UUID, Session, Optional[List[str]]], bool]
 
+# OAuth 权限：具备该权限且在可查看范围内即可修改拜访记录（含本人记录）
+VISIT_RECORD_EDIT_PERMISSION = "sales:follow_up:edit"
+
 
 @dataclass
 class VisitRecordAccessPolicy:
@@ -106,6 +109,18 @@ class VisitRecordAccessPolicy:
         if self.current_user_id == recorder_id:
             return True
         return recorder_id in self.my_subordinate_user_ids
+
+    def can_edit_visit_record(self, recorder_id: Optional[UUID]) -> bool:
+        """修改权限：OAuth /permission/check sales:follow_up:edit + 对该记录人有查看权限。"""
+        if not self.current_user_id or not recorder_id:
+            return False
+        check = oauth_client.check_function_permission(
+            user_id=self.current_user_id,
+            permission=VISIT_RECORD_EDIT_PERMISSION,
+        )
+        if not check.get("allowed"):
+            return False
+        return self.can_access_single_recorder(recorder_id)
 
     def list_access_predicate(self, record_model) -> Optional[Any]:
         """

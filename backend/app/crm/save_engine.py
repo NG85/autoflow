@@ -568,6 +568,37 @@ def _load_visit_record_push_snapshot(
     return snapshot, visit_type, recorder_id, saved_time
 
 
+VISIT_RECORD_REVISED_NOTICE = "【修改后】"
+
+
+def _update_revision_card_push_status(
+    db_session: Any,
+    *,
+    record_id: str,
+    revision_seq: Optional[int],
+    status: str,
+) -> None:
+    if revision_seq is None:
+        return
+    try:
+        from app.repositories.visit_record_revisions import visit_record_revisions_repo
+
+        visit_record_revisions_repo.update_card_push_status(
+            db_session,
+            record_id=record_id,
+            revision_seq=revision_seq,
+            card_push_status=status,
+            commit=True,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to update revision card_push_status, record_id=%s rev=%s: %s",
+            record_id,
+            revision_seq,
+            exc,
+        )
+
+
 def fallback_push_visit_record_card(
     record_id: str,
     *,
@@ -578,6 +609,8 @@ def fallback_push_visit_record_card(
     risk_info: Optional[str] = None,
     saved_time: Optional[datetime] = None,
     operator_user_id: Optional[UUID] = None,
+    is_revised: bool = False,
+    revision_seq: Optional[int] = None,
 ) -> bool:
     """
     Aldebaran 不可用或通知失败时，使用空任务列表本地推送拜访卡片。
@@ -625,6 +658,7 @@ def fallback_push_visit_record_card(
         saved_time=saved_time,
         tasks=[],
         task_count=0,
+        is_revised=is_revised,
     )
     status = (
         VisitRecordCardPushStatus.PUSHED
@@ -633,6 +667,12 @@ def fallback_push_visit_record_card(
     )
     update_visit_record_card_push_status(
         db_session, record_id, status, commit=True
+    )
+    _update_revision_card_push_status(
+        db_session,
+        record_id=record_id,
+        revision_seq=revision_seq,
+        status=status,
     )
     if push_ok and billing_user_id:
         try:
@@ -652,7 +692,7 @@ def fallback_push_visit_record_card(
     return push_ok
 
 
-def _notify_aldebaran_visit_record_saved_impl(
+def _notify_aldebaran_visit_record_post_process_impl(
     record_id: str,
     visit_snapshot: Optional[dict],
     db_session: Any,
@@ -662,6 +702,12 @@ def _notify_aldebaran_visit_record_saved_impl(
     meeting_notes: Optional[str] = None,
     risk_info: Optional[str] = None,
     saved_time: Optional[datetime] = None,
+    message_type: Optional[str] = None,
+    dedupe_key: Optional[str] = None,
+    payload: Optional[dict] = None,
+    trace_id: Optional[str] = None,
+    is_revised: bool = False,
+    revision_seq: Optional[int] = None,
 ) -> bool:
     from app.services.visit_record_card_push_status import (
         VisitRecordCardPushStatus,
@@ -674,11 +720,19 @@ def _notify_aldebaran_visit_record_saved_impl(
         VisitRecordCardPushStatus.PENDING,
         commit=True,
     )
+    if is_revised and revision_seq is not None:
+        _update_revision_card_push_status(
+            db_session,
+            record_id=record_id,
+            revision_seq=revision_seq,
+            status=VisitRecordCardPushStatus.PENDING,
+        )
 
     if not settings.ALDEBARAN_VISIT_RECORD_POST_PROCESS_ENABLED:
         logger.info(
-            "Aldebaran post-process disabled, fallback local card push, record_id=%s",
+            "Aldebaran post-process disabled, fallback local card push, record_id=%s revised=%s",
             record_id,
+            is_revised,
         )
         return fallback_push_visit_record_card(
             record_id,
@@ -689,6 +743,8 @@ def _notify_aldebaran_visit_record_saved_impl(
             risk_info=risk_info,
             saved_time=saved_time,
             operator_user_id=operator_user_id,
+            is_revised=is_revised,
+            revision_seq=revision_seq,
         )
 
     try:
@@ -697,6 +753,10 @@ def _notify_aldebaran_visit_record_saved_impl(
         aldebaran_client.trigger_visit_record_post_process(
             record_id=record_id,
             event_time=saved_time,
+            message_type=message_type,
+            dedupe_key=dedupe_key,
+            payload=payload,
+            trace_id=trace_id,
         )
         update_visit_record_card_push_status(
             db_session,
@@ -704,7 +764,18 @@ def _notify_aldebaran_visit_record_saved_impl(
             VisitRecordCardPushStatus.AWAITING_CALLBACK,
             commit=True,
         )
-        logger.info("Triggered Aldebaran visit post-process, record_id=%s", record_id)
+        if is_revised and revision_seq is not None:
+            _update_revision_card_push_status(
+                db_session,
+                record_id=record_id,
+                revision_seq=revision_seq,
+                status=VisitRecordCardPushStatus.AWAITING_CALLBACK,
+            )
+        logger.info(
+            "Triggered Aldebaran visit post-process, record_id=%s message_type=%s",
+            record_id,
+            message_type or settings.ALDEBARAN_VISIT_RECORD_MESSAGE_TYPE,
+        )
         return True
     except Exception as exc:
         logger.error(
@@ -723,7 +794,107 @@ def _notify_aldebaran_visit_record_saved_impl(
         risk_info=risk_info,
         saved_time=saved_time,
         operator_user_id=operator_user_id,
+        is_revised=is_revised,
+        revision_seq=revision_seq,
     )
+
+
+def _notify_aldebaran_visit_record_saved_impl(
+    record_id: str,
+    visit_snapshot: Optional[dict],
+    db_session: Any,
+    *,
+    operator_user_id: Optional[UUID] = None,
+    visit_type: Optional[str] = None,
+    meeting_notes: Optional[str] = None,
+    risk_info: Optional[str] = None,
+    saved_time: Optional[datetime] = None,
+) -> bool:
+    return _notify_aldebaran_visit_record_post_process_impl(
+        record_id,
+        visit_snapshot,
+        db_session,
+        operator_user_id=operator_user_id,
+        visit_type=visit_type,
+        meeting_notes=meeting_notes,
+        risk_info=risk_info,
+        saved_time=saved_time,
+    )
+
+
+def _notify_aldebaran_visit_record_revised_impl(
+    record_id: str,
+    db_session: Any,
+    *,
+    revision_seq: int,
+    revised_by_user_id: UUID,
+    changes: list[dict],
+    operator_user_id: Optional[UUID] = None,
+    visit_type: Optional[str] = None,
+    saved_time: Optional[datetime] = None,
+) -> bool:
+    message_type = settings.ALDEBARAN_VISIT_RECORD_REVISED_MESSAGE_TYPE
+    dedupe_key = f"{message_type}:{record_id}:rev:{revision_seq}"
+    payload = {
+        "record_id": record_id,
+        "revision_seq": revision_seq,
+        "revised_by_user_id": str(revised_by_user_id),
+        "changes": changes,
+    }
+    return _notify_aldebaran_visit_record_post_process_impl(
+        record_id,
+        None,
+        db_session,
+        operator_user_id=operator_user_id or revised_by_user_id,
+        visit_type=visit_type,
+        saved_time=saved_time,
+        message_type=message_type,
+        dedupe_key=dedupe_key,
+        payload=payload,
+        trace_id=f"{record_id}:rev:{revision_seq}",
+        is_revised=True,
+        revision_seq=revision_seq,
+        )
+
+
+def notify_aldebaran_visit_record_revised(
+    record_id: str,
+    *,
+    revision_seq: int,
+    revised_by_user_id: UUID,
+    changes: list[dict],
+    db_session: Any = None,
+    operator_user_id: Optional[UUID] = None,
+    visit_type: Optional[str] = None,
+    saved_time: Optional[datetime] = None,
+) -> bool:
+    """拜访记录修订后通知 Aldebaran（crm.visit_record.revised），等待回调推卡。"""
+    if db_session is not None:
+        return _notify_aldebaran_visit_record_revised_impl(
+            record_id,
+            db_session,
+            revision_seq=revision_seq,
+            revised_by_user_id=revised_by_user_id,
+            changes=changes,
+            operator_user_id=operator_user_id,
+            visit_type=visit_type,
+            saved_time=saved_time,
+        )
+
+    from sqlmodel import Session
+    from app.core.db import engine_transactional
+
+    with Session(engine_transactional, expire_on_commit=False) as session:
+        return _notify_aldebaran_visit_record_revised_impl(
+            record_id,
+            session,
+            revision_seq=revision_seq,
+            revised_by_user_id=revised_by_user_id,
+            changes=changes,
+            operator_user_id=operator_user_id,
+            visit_type=visit_type,
+            saved_time=saved_time,
+        )
 
 
 def notify_aldebaran_visit_record_saved(
@@ -792,6 +963,7 @@ def push_visit_record_message(
     saved_time=None,
     tasks=None,
     task_count=None,
+    is_revised: bool = False,
 ):
     try:
         # 如果没有传入db_session，则创建一个新的
@@ -873,6 +1045,7 @@ def push_visit_record_message(
             risk_info=risk_info,
             tasks=tasks,
             task_count=task_count,
+            is_revised=is_revised,
         )
         
         if result["success"]:

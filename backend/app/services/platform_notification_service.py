@@ -538,6 +538,8 @@ class PlatformNotificationService:
         self,
         recorder_name: Optional[str],
         visit_record: Optional[Dict[str, Any]],
+        *,
+        is_revised: bool = False,
     ) -> str:
         """
         格式化拜访记录群推送的文本消息。
@@ -549,8 +551,13 @@ class PlatformNotificationService:
         # 记录质量来自跟进记录质量 followup_quality，计划质量来自 next_steps_quality
         followup_quality = (rec.get("followup_quality_level_zh") or "").strip() or "--"
         next_step_quality = (rec.get("next_steps_quality_level_zh") or "").strip() or "--"
+        prefix = ""
+        if is_revised:
+            from app.crm.save_engine import VISIT_RECORD_REVISED_NOTICE
+
+            prefix = f"{VISIT_RECORD_REVISED_NOTICE}"
         return (
-            f"{sales_name}完成了一次{method}的客户跟进，并提交了跟进记录，AI质检结果为【记录质量：{followup_quality}｜计划质量：{next_step_quality}】。"
+            f"{prefix}{sales_name}完成了一次{method}的客户跟进，并提交了跟进记录，AI质检结果为【记录质量：{followup_quality}｜计划质量：{next_step_quality}】。"
         )
     
     def _get_tenant_access_token(self, platform: str = PLATFORM_FEISHU, external: bool = False) -> str:
@@ -1231,6 +1238,7 @@ class PlatformNotificationService:
         risk_info: Optional[str],
         tasks: Optional[List[Dict[str, Any]]] = None,
         task_count: Optional[int] = None,
+        is_revised: bool = False,
     ) -> Dict[str, Any]:
         """
         准备拜访记录卡片/文案的公共模板变量；会原地格式化 visit_record 中的协同人、动态字段等。
@@ -1247,6 +1255,11 @@ class PlatformNotificationService:
             dynamic_fields = generate_dynamic_fields_for_visit_record(visit_record)
 
         task_list = tasks if tasks is not None else []
+        revision_notice = ""
+        if is_revised:
+            from app.crm.save_engine import VISIT_RECORD_REVISED_NOTICE
+
+            revision_notice = VISIT_RECORD_REVISED_NOTICE
         return {
             "visit_date": (visit_record or {}).get("last_modified_time", "--"),
             "recorder": recorder_name or "--",
@@ -1258,6 +1271,8 @@ class PlatformNotificationService:
             "comment_page_url": f"{settings.REVIEW_REPORT_HOST}/registerVisitRecord/addComment?record_id={record_id}",
             "tasks": task_list,
             "task_count": task_count if task_count is not None else len(task_list),
+            "is_revised": is_revised,
+            "revision_notice": revision_notice,
         }
 
     def _get_visit_record_template_id(
@@ -1402,6 +1417,8 @@ class PlatformNotificationService:
         department_groups_brief: List[Dict[str, Any]],
         recorder_name: Optional[str],
         visit_record: Optional[Dict[str, Any]],
+        *,
+        is_revised: bool = False,
     ) -> None:
         """向部门简报群发送拜访记录文本。"""
         if not department_groups_brief:
@@ -1411,7 +1428,9 @@ class PlatformNotificationService:
             p = g.get("platform")
             if p:
                 by_platform[p].append(g)
-        message_text = self._format_visit_record_group_message(recorder_name, visit_record)
+        message_text = self._format_visit_record_group_message(
+            recorder_name, visit_record, is_revised=is_revised
+        )
         for platform, group_chats in by_platform.items():
             if not self._validate_platform_support(platform):
                 continue
@@ -1432,6 +1451,7 @@ class PlatformNotificationService:
         risk_info: str = None,
         tasks: Optional[List[Dict[str, Any]]] = None,
         task_count: Optional[int] = None,
+        is_revised: bool = False,
     ) -> Dict[str, Any]:
         """
         发送拜访记录通知。
@@ -1450,6 +1470,7 @@ class PlatformNotificationService:
             risk_info,
             tasks=tasks,
             task_count=task_count,
+            is_revised=is_revised,
         )
 
         if not recipients_by_platform and not department_groups_review and not department_groups_brief:
@@ -1471,7 +1492,7 @@ class PlatformNotificationService:
             department_groups_review, base_template_vars, visit_type, visit_record
         )
         self._send_visit_record_to_brief_groups(
-            department_groups_brief, recorder_name, visit_record
+            department_groups_brief, recorder_name, visit_record, is_revised=is_revised
         )
 
         platforms_used = [str(p) for p in recipients_by_platform.keys() if p]
