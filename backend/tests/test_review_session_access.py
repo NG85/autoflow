@@ -14,6 +14,14 @@ DEPT_ID = "dept-sales"
 OTHER_DEPT_ID = "dept-hr"
 
 
+def _allow_view_check() -> dict:
+    return {"allowed": True, "function_allowed": True}
+
+
+def _deny_view_check() -> dict:
+    return {"allowed": False, "function_allowed": False}
+
+
 def _scope(
     *,
     has_viewer: bool = False,
@@ -78,9 +86,7 @@ def test_resolve_review_session_view_scope_viewer_without_department(
     mock_dept_mirror_repo,
 ):
     db_session = MagicMock()
-    mock_oauth.query_user_roles_and_permissions.return_value = {
-        "permissions": [REVIEW_SESSION_VIEW_PERMISSION],
-    }
+    mock_oauth.check_function_permission.return_value = _allow_view_check()
     mock_visit_repo.can_access_all_crm_data.return_value = False
     mock_user_dept_repo.get_primary_department_by_user_ids.return_value = {}
 
@@ -89,6 +95,10 @@ def test_resolve_review_session_view_scope_viewer_without_department(
     assert scope.list_filter_mode == "company"
     assert scope.subtree_department_ids == ()
     mock_dept_mirror_repo.get_subtree_department_ids.assert_not_called()
+    mock_oauth.check_function_permission.assert_called_once_with(
+        user_id=USER_ID,
+        permission=REVIEW_SESSION_VIEW_PERMISSION,
+    )
 
 
 @patch("app.policies.review_session_access.department_mirror_repo")
@@ -102,9 +112,7 @@ def test_resolve_review_session_view_scope_department_viewer(
     mock_dept_mirror_repo,
 ):
     db_session = MagicMock()
-    mock_oauth.query_user_roles_and_permissions.return_value = {
-        "permissions": [REVIEW_SESSION_VIEW_PERMISSION],
-    }
+    mock_oauth.check_function_permission.return_value = _allow_view_check()
     mock_visit_repo.can_access_all_crm_data.return_value = False
     mock_user_dept_repo.get_primary_department_by_user_ids.return_value = {
         str(USER_ID): DEPT_ID,
@@ -118,3 +126,24 @@ def test_resolve_review_session_view_scope_department_viewer(
     assert scope.user_department_id == DEPT_ID
     assert scope.subtree_department_ids == (DEPT_ID, "dept-sales-east")
     assert scope.list_filter_mode == "department"
+
+
+@patch("app.policies.review_session_access.user_department_relation_repo")
+@patch("app.policies.review_session_access.visit_record_repo")
+@patch("app.policies.review_session_access.oauth_client")
+def test_resolve_review_session_view_scope_denied_viewer(
+    mock_oauth,
+    mock_visit_repo,
+    mock_user_dept_repo,
+):
+    db_session = MagicMock()
+    mock_oauth.check_function_permission.return_value = _deny_view_check()
+    mock_visit_repo.can_access_all_crm_data.return_value = False
+    mock_user_dept_repo.get_primary_department_by_user_ids.return_value = {
+        str(USER_ID): DEPT_ID,
+    }
+
+    scope = resolve_review_session_view_scope(db_session, USER_ID)
+
+    assert scope.has_viewer_permission is False
+    assert scope.list_filter_mode == "attendee"
