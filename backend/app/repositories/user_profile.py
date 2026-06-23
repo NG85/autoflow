@@ -16,6 +16,20 @@ class UserProfileRepo(BaseRepo):
         query = select(UserProfile).options(selectinload(UserProfile.oauth_users)).where(UserProfile.user_id == user_id)
         return db_session.exec(query).first()
 
+    def get_by_user_ids(self, db_session: Session, user_ids: List[UUID]) -> List[UserProfile]:
+        """批量根据 users.id 获取档案。"""
+        if not user_ids:
+            return []
+        query = (
+            select(UserProfile)
+            .options(selectinload(UserProfile.oauth_users))
+            .where(
+                UserProfile.user_id.in_(user_ids),
+                UserProfile.is_active == True,  # noqa: E712
+            )
+        )
+        return list(db_session.exec(query).all())
+
     def get_crm_user_id_by_user_id(self, db_session: Session, user_id: UUID) -> Optional[str]:
         """根据系统 user_id(UUID) 获取 CRM user id（user_profiles.crm_user_id）"""
         row = db_session.exec(
@@ -60,6 +74,23 @@ class UserProfileRepo(BaseRepo):
         crm_user_id, role, position = row
         normalized_role = "admin" if (role == "admin" or position == "admin") else role
         return (str(crm_user_id) if crm_user_id else None), (str(normalized_role) if normalized_role else None)
+
+    def get_by_oauth_user_ids(self, db_session: Session, oauth_user_ids: List[str]) -> List[UserProfile]:
+        """批量根据 oauth_user_id（user_profiles.oauth_user_id）获取档案。"""
+        if not oauth_user_ids:
+            return []
+        unique_ids = list(dict.fromkeys(str(oauth_user_id) for oauth_user_id in oauth_user_ids if oauth_user_id))
+        if not unique_ids:
+            return []
+        query = (
+            select(UserProfile)
+            .options(selectinload(UserProfile.oauth_users))
+            .where(
+                UserProfile.oauth_user_id.in_(unique_ids),
+                UserProfile.is_active == True,  # noqa: E712
+            )
+        )
+        return list(db_session.exec(query).all())
 
     def get_by_oauth_user_id(self, db_session: Session, oauth_user_id: str) -> Optional[UserProfile]:
         """根据OAuth用户ID获取档案"""

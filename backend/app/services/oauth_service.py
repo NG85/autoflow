@@ -247,6 +247,8 @@ class OAuthClient:
         """
         POST /permission/reporting-chain/query
 
+        max_levels=1：OAuth 优先返回主部门 leader；主部门无 leader 时 fallback 上级部门主管。
+
         返回值保持与 platform_notification_service 历史逻辑一致：已做简化后的 leaders 列表。
         """
         if not base_user_id:

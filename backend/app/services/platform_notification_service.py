@@ -24,6 +24,7 @@ from app.platforms.lark.client import lark_client
 from app.platforms.dingtalk.client import dingtalk_client
 from app.core.config import settings
 from app.services.oauth_service import oauth_client
+from app.services.visit_record_cc_resolver import resolve_visit_record_cc_recipients
 
 logger = logging.getLogger(__name__)
 
@@ -918,11 +919,14 @@ class PlatformNotificationService:
     def _get_reporting_chain_leaders(
         self,
         base_user_id: str,
-        max_levels: int = 2,
+        max_levels: int = 1,
         include_leader_identity: bool = True,
     ) -> List[Dict[str, Any]]:
         """
-        调用 OAuth 服务查询用户的汇报链，并返回精简后的领导信息列表
+        调用 OAuth 服务查询用户的汇报链，并返回精简后的领导信息列表。
+
+        max_levels=1（拜访卡片等场景）：优先主部门 leader；主部门无 leader 时
+        OAuth 会 fallback 到上级部门主管（仅上探一级），不会在有本部门 leader 时再推上级。
         """
         if not base_user_id:
             return []
@@ -955,27 +959,22 @@ class PlatformNotificationService:
         self, 
         db_session: Session, 
         recorder_name: str = None,
-        recorder_id: str = None
+        recorder_id: str = None,
+        recorder_profile=None,
     ) -> Dict[str, List[Dict[str, Any]]]:
         """
         获取记录人相关的推送接收者，按平台分组
-        包括：记录人本人 + OAuth 汇报链中的所有上级（汇报链已含直属上级）
-        
-        支持通过recorder_name或recorder_id查找
+        包括：记录人本人 + OAuth 汇报链返回的管理层 leader（max_levels=1，含无本部门 leader 时上级 fallback）
+        抄送（配置表 / OAuth 全局权限）由 visit_record_cc_resolver 独立解析。
         返回按平台分组的接收者字典
         """
         recipients_by_platform: Dict[str, List[Dict[str, Any]]] = {}
         
-        # 1. 查找记录人的档案
-        recorder_profile = None
-        
-        if recorder_id:
-            # 优先使用recorder_id查找
-            recorder_profile = user_profile_repo.get_by_recorder_id(db_session, recorder_id)
-        
-        if not recorder_profile and recorder_name:
-            # 如果recorder_id没找到，再尝试通过姓名查找
-            recorder_profile = user_profile_repo.get_by_name(db_session, recorder_name)
+        # 1. 查找记录人的档案（调用方已解析时可传入 recorder_profile，避免重复查询）
+        if recorder_profile is None:
+            recorder_profile = self._resolve_recorder_profile(
+                db_session, recorder_name=recorder_name, recorder_id=recorder_id
+            )
         
         if not recorder_profile:
             logger.warning(f"No profile found for recorder: name={recorder_name}, id={recorder_id}")
@@ -1016,7 +1015,7 @@ class PlatformNotificationService:
                     }
                 )
         
-        # 4. 调用 OAuth 服务查询汇报链领导（汇报链已含直属上级）
+        # 4. 调用 OAuth 查询管理层 leader（max_levels=1：本部门 leader；无则 fallback 上级部门主管）
         # 使用系统用户ID（user_id），而不是OAuth平台的用户ID
         base_user_id = None
         if recorder_profile.user_id:
@@ -1031,85 +1030,49 @@ class PlatformNotificationService:
                 f"Recorder {recorder_name} (profile: {recorder_profile.name}) "
                 f"has no system user_id for reporting-chain query"
             )
-            return recipients_by_platform
-        
-        leaders = self._get_reporting_chain_leaders(base_user_id)
-        if not leaders:
-            logger.info(
-                f"No leaders found from reporting chain for recorder: "
-                f"name={recorder_name}, id={recorder_id}, base_user_id={base_user_id}"
-            )
-            return recipients_by_platform
-        
-        # 5. 将汇报链领导加入接收者列表，按平台分组并去重
-        for leader in leaders:
-            platform = leader.get("platform")
-            if not platform:
-                continue
-            
-            if not self._validate_platform_support(platform):
-                logger.warning(f"Leader platform {platform} not supported, skipping")
-                continue
-            
-            open_id = leader.get("open_id")
-            if not open_id:
-                logger.warning(f"Leader missing open_id after normalization: {leader}")
-                continue
-            
-            if platform not in recipients_by_platform:
-                recipients_by_platform[platform] = []
-            
-            existing_open_ids = {r["open_id"] for r in recipients_by_platform[platform]}
-            if open_id in existing_open_ids:
-                # 避免重复推送（例如某些领导已在其他逻辑中添加）
-                continue
-            
-            recipients_by_platform[platform].append(
-                {
-                    "open_id": open_id,
-                    "name": leader.get("name") or "Unknown",
-                    "type": "leader",
-                    "department": leader.get("department") or "部门团队",
-                    "receive_id_type": "open_id",
-                    "platform": platform,
-                }
-            )
-        
-        # 6. 添加单独配置了“卡片接收权限”的用户（通常为公司高层或管理员），并与现有集合去重
-        card_receivers = self._get_card_permission_receivers("visit_record:card:receive")
-        for user in card_receivers:
-            platform = user.get("platform")
-            if not platform:
-                continue
+        else:
+            # max_levels=1：有本部门 leader 时仅返回本部门；无 leader 时 OAuth fallback 上级部门主管
+            leaders = self._get_reporting_chain_leaders(base_user_id, max_levels=1)
+            if not leaders:
+                logger.info(
+                    f"No leaders found from reporting chain for recorder: "
+                    f"name={recorder_name}, id={recorder_id}, base_user_id={base_user_id}"
+                )
+            else:
+                # 5. 将汇报链领导加入接收者列表，按平台分组并去重
+                for leader in leaders:
+                    platform = leader.get("platform")
+                    if not platform:
+                        continue
 
-            if not self._validate_platform_support(platform):
-                logger.warning(f"Card-permission user platform {platform} not supported, skipping")
-                continue
+                    if not self._validate_platform_support(platform):
+                        logger.warning(f"Leader platform {platform} not supported, skipping")
+                        continue
 
-            open_id = user.get("open_id")
-            if not open_id:
-                logger.warning(f"Card-permission user missing open_id: {user}")
-                continue
+                    open_id = leader.get("open_id")
+                    if not open_id:
+                        logger.warning(f"Leader missing open_id after normalization: {leader}")
+                        continue
 
-            if platform not in recipients_by_platform:
-                recipients_by_platform[platform] = []
+                    if platform not in recipients_by_platform:
+                        recipients_by_platform[platform] = []
 
-            existing_open_ids = {r["open_id"] for r in recipients_by_platform[platform]}
-            if open_id in existing_open_ids:
-                # 已经在记录人或汇报链中，避免重复推送
-                continue
+                    existing_open_ids = {r["open_id"] for r in recipients_by_platform[platform]}
+                    if open_id in existing_open_ids:
+                        # 避免重复推送（例如某些领导已在其他逻辑中添加）
+                        continue
 
-            recipients_by_platform[platform].append(
-                {
-                    "open_id": open_id,
-                    "name": user.get("name") or "Unknown",
-                    "type": "executive_admin",
-                    "department": user.get("department") or "公司",
-                    "receive_id_type": "open_id",
-                    "platform": platform,
-                }
-            )
-        
+                    recipients_by_platform[platform].append(
+                        {
+                            "open_id": open_id,
+                            "name": leader.get("name") or "Unknown",
+                            "type": "leader",
+                            "department": leader.get("department") or "部门团队",
+                            "receive_id_type": "open_id",
+                            "platform": platform,
+                        }
+                    )
+
         return recipients_by_platform
     
     def get_recipients_for_sales_daily_report(
@@ -1179,6 +1142,54 @@ class PlatformNotificationService:
         
         return recipients
 
+    def _resolve_recorder_profile(
+        self,
+        db_session: Session,
+        recorder_name: Optional[str],
+        recorder_id: Optional[str],
+    ):
+        recorder_profile = None
+        if recorder_id:
+            recorder_profile = user_profile_repo.get_by_recorder_id(db_session, recorder_id)
+        if not recorder_profile and recorder_name:
+            recorder_profile = user_profile_repo.get_by_name(db_session, recorder_name)
+        return recorder_profile
+
+    def _merge_visit_record_cc_recipients(
+        self,
+        recipients_by_platform: Dict[str, List[Dict[str, Any]]],
+        cc_recipients_by_platform: Dict[str, List[Dict[str, Any]]],
+    ) -> None:
+        for platform, cc_recipients in (cc_recipients_by_platform or {}).items():
+            if not self._validate_platform_support(platform):
+                for recipient in cc_recipients:
+                    logger.warning(
+                        "Visit record CC platform %s not supported, skipping %s",
+                        platform,
+                        recipient.get("name"),
+                    )
+                continue
+            if platform not in recipients_by_platform:
+                recipients_by_platform[platform] = []
+            existing_open_ids = {r["open_id"] for r in recipients_by_platform[platform]}
+            for recipient in cc_recipients:
+                open_id = recipient.get("open_id")
+                if not open_id or open_id in existing_open_ids:
+                    continue
+                recipients_by_platform[platform].append(recipient)
+                existing_open_ids.add(open_id)
+
+    def _keep_visit_record_individual_recipient_when_review_group(
+        self, recipient: Dict[str, Any]
+    ) -> bool:
+        """department_review 群存在时，判断是否仍对个人推送。"""
+        recipient_type = recipient.get("type")
+        if recipient_type in ("recorder", "collaborative_participant"):
+            return True
+        if recipient_type == "configured_cc" and recipient.get("cc_scope") == "user":
+            return True
+        return False
+
     def _collect_visit_record_recipients_and_groups(
         self,
         db_session: Session,
@@ -1188,12 +1199,20 @@ class PlatformNotificationService:
     ) -> Tuple[Dict[str, List[Dict[str, Any]]], List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
         汇总拜访记录推送的接收者与部门群配置。
-        若配置了会收拜访卡片的 department_review 群，则从个人接收者中移除 leader/管理层，仅保留记录人与协同人。
+        若配置了会收拜访卡片的 department_review 群，则从个人接收者中移除 leader 与 global 抄送
+        （executive_admin、cc_scope=global 的 configured_cc）；按销售配置的 personal 抄送
+        （cc_scope=user 的 configured_cc）仍推送给个人。管理层与 global 抄送改由 review 群接收 leader 版卡片。
         department_review_reports 群不参与拜访推送，也不影响个人接收者中的 leader。
         返回 (recipients_by_platform, department_groups_review, department_groups_brief)。
         """
-        recipients_by_platform = self.get_recipients_for_recorder(
+        recorder_profile = self._resolve_recorder_profile(
             db_session, recorder_name=recorder_name, recorder_id=recorder_id
+        )
+        recipients_by_platform = self.get_recipients_for_recorder(
+            db_session,
+            recorder_name=recorder_name,
+            recorder_id=recorder_id,
+            recorder_profile=recorder_profile,
         )
         collaborative = self._get_collaborative_participants_recipients(db_session, visit_record)
         if collaborative:
@@ -1202,6 +1221,14 @@ class PlatformNotificationService:
                     recipients_by_platform[platform].extend(recipients)
                 else:
                     recipients_by_platform[platform] = recipients
+
+        recorder_user_id = recorder_profile.user_id if recorder_profile and recorder_profile.user_id else None
+        cc_recipients_by_platform = resolve_visit_record_cc_recipients(
+            db_session,
+            recorder_user_id=recorder_user_id,
+            get_card_permission_receivers=self._get_card_permission_receivers,
+        )
+        self._merge_visit_record_cc_recipients(recipients_by_platform, cc_recipients_by_platform)
 
         recorder_dept_id = (visit_record or {}).get("recorder_department_id")
         recorder_dept_name = (visit_record or {}).get("recorder_department_name")
@@ -1223,7 +1250,7 @@ class PlatformNotificationService:
             for platform in list(recipients_by_platform.keys()):
                 recipients_by_platform[platform] = [
                     r for r in recipients_by_platform[platform]
-                    if r.get("type") in ("recorder", "collaborative_participant")
+                    if self._keep_visit_record_individual_recipient_when_review_group(r)
                 ]
             recipients_by_platform = {p: rs for p, rs in recipients_by_platform.items() if rs}
 
@@ -1305,8 +1332,9 @@ class PlatformNotificationService:
     _VISIT_RECORD_RECIPIENT_TYPE_PRIORITY = {
         "recorder": 0,
         "leader": 1,
-        "executive_admin": 2,
-        "collaborative_participant": 3,
+        "configured_cc": 2,
+        "executive_admin": 3,
+        "collaborative_participant": 4,
     }
 
     def _send_visit_record_to_individual_recipients(
@@ -2170,56 +2198,68 @@ class PlatformNotificationService:
         if not collaborative_participants:
             return {}
         
-        recipients_by_platform = {}
-        
+        ask_ids: List[str] = []
+        participants_by_ask_id: Dict[str, Dict[str, Any]] = {}
         for participant in collaborative_participants:
+            if not isinstance(participant, dict):
+                logger.warning(f"Invalid participant format: {participant}")
+                continue
+            name = participant.get("name")
+            ask_id = participant.get("ask_id")
+            if not name:
+                logger.warning(f"Missing name field in participant: {participant}")
+                continue
+            if not ask_id:
+                logger.info(f"Skipping external participant (no ask_id): {name}")
+                continue
+            ask_id = str(ask_id)
+            ask_ids.append(ask_id)
+            participants_by_ask_id[ask_id] = participant
+
+        if not ask_ids:
+            return {}
+
+        profiles = user_profile_repo.get_by_oauth_user_ids(db_session, ask_ids)
+        profile_by_ask_id = {
+            str(profile.oauth_user_id): profile
+            for profile in profiles
+            if profile.oauth_user_id
+        }
+
+        recipients_by_platform = {}
+        for ask_id in dict.fromkeys(ask_ids):
+            participant = participants_by_ask_id.get(ask_id) or {}
+            name = participant.get("name")
             try:
-                # 验证协同参与人数据结构
-                if not isinstance(participant, dict):
-                    logger.warning(f"Invalid participant format: {participant}")
-                    continue
-                
-                name = participant.get("name")
-                ask_id = participant.get("ask_id")
-                
-                if not name:
-                    logger.warning(f"Missing name field in participant: {participant}")
-                    continue
-                
-                # 如果ask_id为空，表示非系统注册人员，不需要推送
-                if not ask_id:
-                    logger.info(f"Skipping external participant (no ask_id): {name}")
-                    continue
-                
-                # 通过ask_id从user profile表查询用户信息
-                user_profile = user_profile_repo.get_by_oauth_user_id(db_session, ask_id)
+                user_profile = profile_by_ask_id.get(ask_id)
                 if not user_profile:
                     logger.warning(f"No user profile found for ask_id: {ask_id}, name: {name}")
                     continue
                 
-                # 获取用户的平台和open_id信息
-                platform = user_profile.oauth_user.provider
-                open_id = user_profile.oauth_user.open_id
+                oauth_user = user_profile.oauth_user
+                if not oauth_user:
+                    logger.warning(f"User profile missing oauth_user for ask_id: {ask_id}, name: {name}")
+                    continue
+
+                platform = oauth_user.provider
+                open_id = oauth_user.open_id
                 
                 if not all([platform, open_id]):
                     logger.warning(f"User profile missing platform or open_id for ask_id: {ask_id}, name: {name}")
                     continue
                 
-                # 验证平台支持
                 if platform not in [PLATFORM_FEISHU, PLATFORM_LARK, PLATFORM_DINGTALK]:
                     logger.warning(f"Unsupported platform for collaborative participant: {platform}")
                     continue
                 
-                # 构建接收者信息
                 recipient = {
                     "name": name,
                     "open_id": open_id,
-                    "type": "collaborative_participant",  # 新增接收者类型
+                    "type": "collaborative_participant",
                     "platform": platform,
                     "receive_id_type": "open_id"
                 }
                 
-                # 按平台分组
                 if platform not in recipients_by_platform:
                     recipients_by_platform[platform] = []
                 recipients_by_platform[platform].append(recipient)

@@ -82,6 +82,45 @@ def test_visit_record_dedupes_different_templates_same_person():
     assert card_content["data"]["template_id"] == "tpl_leader"
 
 
+def test_visit_record_dedupes_configured_cc_over_executive_admin():
+    svc = PlatformNotificationService()
+
+    def template_for_role(recipient_type, platform, visit_type, form_type):
+        if recipient_type in ("recorder", "collaborative_participant"):
+            return "tpl_recorder"
+        return "tpl_leader"
+
+    recipients = {
+        "feishu": [
+            {
+                "open_id": "ou_456",
+                "name": "王芳",
+                "type": "executive_admin",
+                "receive_id_type": "open_id",
+            },
+            {
+                "open_id": "ou_456",
+                "name": "王芳",
+                "type": "configured_cc",
+                "receive_id_type": "open_id",
+            },
+        ]
+    }
+    validate_patch, tokens_patch = _patch_send_deps(svc)
+    with validate_patch, tokens_patch, patch.object(
+        svc, "_get_visit_record_template_id", side_effect=template_for_role
+    ), patch.object(svc, "_send_message") as mock_send:
+        count, failed = svc._send_visit_record_to_individual_recipients(
+            recipients, {}, "form", {"form_type": "complete"}
+        )
+
+    assert count == 1
+    assert failed == []
+    assert mock_send.call_count == 1
+    card_content = mock_send.call_args[0][2]
+    assert card_content["data"]["template_id"] == "tpl_leader"
+
+
 def test_visit_record_keeps_highest_priority_role():
     svc = PlatformNotificationService()
     recipients = {
