@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, List, Literal, Optional
+from typing import Any, Literal, Optional
 from uuid import UUID
 
 from sqlmodel import Session, distinct, func, select
@@ -12,7 +12,16 @@ from app.repositories.user_department_relation import user_department_relation_r
 from app.repositories.visit_record import visit_record_repo
 from app.services.oauth_service import oauth_client
 
-REVIEW_SESSION_VIEW_PERMISSION = "review_session:all:view"
+REVIEW_SESSION_VIEW_PERMISSION = "biz:weekly_decision:view"
+
+
+def _user_has_review_session_view_permission(user_id: UUID) -> bool:
+    """OAuth POST /permission/check — 周决策/review session 跨团队查看权限。"""
+    check = oauth_client.check_function_permission(
+        user_id=user_id,
+        permission=REVIEW_SESSION_VIEW_PERMISSION,
+    )
+    return bool(check.get("allowed"))
 
 
 @dataclass(frozen=True)
@@ -20,7 +29,7 @@ class ReviewSessionViewScope:
     """
     Review session 列表/详情可见范围：
     - 普通成员：仅本人参与的 session
-    - 有 review_session:all:view + 主部门：本部门及所有下属部门的 session
+    - 有 biz:weekly_decision:view + 主部门：本部门及所有下属部门的 session
     - 公司管理员，或有 viewer 权限但无部门信息：全公司 session
     """
 
@@ -81,18 +90,8 @@ def user_can_access_review_session(
 def resolve_review_session_view_scope(
     db_session: Session,
     user_id: UUID,
-    *,
-    permissions: Optional[List[str]] = None,
 ) -> ReviewSessionViewScope:
-    if permissions is None:
-        roles_and_permissions = oauth_client.query_user_roles_and_permissions(user_id=user_id)
-        permissions = (
-            roles_and_permissions.get("permissions", [])
-            if isinstance(roles_and_permissions, dict)
-            else []
-        )
-
-    has_viewer_permission = REVIEW_SESSION_VIEW_PERMISSION in (permissions or [])
+    has_viewer_permission = _user_has_review_session_view_permission(user_id)
     is_company_admin = visit_record_repo.can_access_all_crm_data(user_id, db_session)
 
     user_department_id = user_department_relation_repo.get_primary_department_by_user_ids(
