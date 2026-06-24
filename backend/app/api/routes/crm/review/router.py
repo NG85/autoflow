@@ -58,6 +58,7 @@ from app.models.crm_review import (
     CRMReviewSession,
 )
 from app.models.company_competitor import CompanyCompetitor
+from app.models.crm_forecast_type_mappings import CRMForecastTypeMapping
 from app.models.crm_system_configurations import CRMSystemConfiguration
 from app.rag.chat.chat_flow import ChatFlow
 from app.rag.chat.chat_service import get_final_chat_result
@@ -672,14 +673,14 @@ def query_review_snapshot_filter_enums(
     _ = user
 
     forecast_rows = db_session.exec(
-        select(CRMSystemConfiguration.config_key, CRMSystemConfiguration.config_value)
-        .where(CRMSystemConfiguration.config_type == "ForecastTypeMapping")
-        .order_by(CRMSystemConfiguration.config_key)
+        select(CRMForecastTypeMapping)
+        .where(CRMForecastTypeMapping.is_active.is_(True))
+        .order_by(CRMForecastTypeMapping.display_order)
     ).all()
     forecast_types: list[str] = []
-    for _config_key, config_value in forecast_rows:
+    for row in forecast_rows:
         first = ""
-        raw = str(config_value or "").strip()
+        raw = str(row.customer_values or "").strip()
         if raw:
             try:
                 parsed = json.loads(raw)
