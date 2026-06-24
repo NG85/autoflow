@@ -1144,10 +1144,23 @@ class ReviewBranchSnapshotUpdateIn(BaseModel):
     )
 
 
+class ReviewSessionSubmitAttendeeOut(BaseModel):
+    user_id: str
+    crm_user_id: str
+    user_name: Optional[str] = None
+    department_id: Optional[str] = None
+    department_name: Optional[str] = None
+    is_leader: bool = False
+    has_submitted: bool = False
+    submitted_at: Optional[datetime] = None
+
+
 class ReviewSessionSubmitStatsOut(BaseModel):
     total: int
     submitted: int
     not_submitted: int
+    submitted_attendees: List[ReviewSessionSubmitAttendeeOut] = Field(default_factory=list)
+    not_submitted_attendees: List[ReviewSessionSubmitAttendeeOut] = Field(default_factory=list)
 
 
 class ReviewBranchSnapshotSubmitOut(BaseModel):
