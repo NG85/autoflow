@@ -3,7 +3,6 @@ import logging
 import io
 from datetime import datetime
 from typing import List, Optional
-from urllib.parse import quote_plus
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -962,7 +961,6 @@ def save_weekly_followup_comments(
 
     # 保存评论成功后推送提醒（不影响主流程，失败仅记录日志）
     try:
-        from app.core.config import settings
         from app.services.platform_notification_service import platform_notification_service
 
         owner_user_id = str(getattr(entity, "owner_user_id", "") or "")
@@ -975,12 +973,14 @@ def save_weekly_followup_comments(
             if cid:
                 comment_by_id[cid] = raw
 
+        from app.utils.push_page_urls import build_weekly_followup_summary_page_url
+
         week_part = f"{entity.week_start.isoformat()}~{entity.week_end.isoformat()}"
         dept_name = (entity.department_name or "").strip()
-        jump_url = (
-            f"{settings.REVIEW_REPORT_HOST}/review/opportunitySummary"
-            f"?department_name={quote_plus(dept_name)}"
-            f"&week_start={entity.week_start.isoformat()}&week_end={entity.week_end.isoformat()}"
+        jump_url = build_weekly_followup_summary_page_url(
+            week_start=entity.week_start.isoformat(),
+            week_end=entity.week_end.isoformat(),
+            department_name=dept_name or None,
         )
         link_text = f"{entity.account_name or entity.partner_name}  {entity.opportunity_name}".strip()
 
