@@ -90,34 +90,13 @@ website:
             roles_any: []
             user_ids_any: []
           enabled: true
-          has_studio: true
+          has_studio: false
           icon: "LayoutDashboard"
           key: business.weekly_insight
           order: 11
           parent_key: business
-          target:
-            type: route
-            value: "/v2/business/weekly-insight"
+          target: null
           title: 周度经营决策
-          unenabled_page: null
-          visible: true
-
-        - audience:
-            department_ids_any: []
-            mode: all
-            permissions_any: []
-            roles_any: []
-            user_ids_any: []
-          enabled: true
-          has_studio: false
-          icon: "History"
-          key: business.history
-          order: 12
-          parent_key: business
-          target:
-            type: route
-            value: "/v2/business/history"
-          title: 历史报告
           unenabled_page: null
           visible: true
 
@@ -164,7 +143,7 @@ website:
             roles_any: []
             user_ids_any: []
           enabled: true
-          has_studio: true
+          has_studio: false
           icon: ""
           key: opportunity
           order: 30
@@ -273,14 +252,14 @@ website:
             user_ids_any: []
           enabled: true
           has_studio: false
-          icon: "PenLine"
-          key: behavior-entry
-          order: 53
-          parent_key: behavior
+          icon: ""
+          key: playbook
+          order: 60
+          parent_key: null
           target:
             type: route
-            value: "/v2/behavior-entry"
-          title: 行为录入
+            value: "/v2/playbook"
+          title: 销售打法
           unenabled_page: null
           visible: true
 
@@ -293,29 +272,222 @@ website:
           enabled: true
           has_studio: false
           icon: ""
-          key: playbook
-          order: 60
+          key: chat
+          order: 9
           parent_key: null
           target:
             type: route
-            value: "/v2/playbook"
-          title: 销售打法
+            value: "/v2/chat"
+          title: 智能问答
           unenabled_page: null
           visible: true
 
-        - audience: null
-          enabled: false
+        - audience:
+            department_ids_any: []
+            mode: all
+            permissions_any: []
+            roles_any: []
+            user_ids_any: []
+          enabled: true
           has_studio: false
-          icon: "MessageNavIcon"
-          key: ask
-          order: 70
-          parent_key: null
+          icon: "PenLine"
+          key: behavior-entry
+          order: 53
+          parent_key: behavior
           target:
             type: route
-            value: "/v2/ask"
-          title: 智能问答
+            value: "/v2/behavior-entry"
+          title: 行为录入
           unenabled_page: null
           visible: false
+
+        - audience:
+            department_ids_any: []
+            mode: all
+            permissions_any: []
+            roles_any: []
+            user_ids_any: []
+          enabled: true
+          has_studio: true
+          icon: ""
+          key: business.weekly_insight1
+          order: 150
+          parent_key: business.weekly_insight
+          target:
+            type: route
+            value: "/v2/business/weekly-insight"
+          title: 周度经营决策
+          unenabled_page: null
+          visible: true
+
+        - audience:
+            department_ids_any: []
+            mode: all
+            permissions_any: []
+            roles_any: []
+            user_ids_any: []
+          enabled: true
+          has_studio: false
+          icon: ""
+          key: business.weekly_insight.history
+          order: 160
+          parent_key: business.weekly_insight
+          target:
+            type: route
+            value: "/v2/business/history"
+          title: 历史报告
+          unenabled_page: null
+          visible: true
+
+        - audience:
+            department_ids_any: []
+            mode: all
+            permissions_any: []
+            roles_any: []
+            user_ids_any: []
+          enabled: true
+          has_studio: false
+          icon: "TrendingUp"
+          key: business.behavior-analysis
+          order: 160
+          parent_key: business
+          target:
+            type: route
+            value: "/v2/business/behavior-analysis"
+          title: 销售行为分析
+          unenabled_page: null
+          visible: true
+
+        - audience:
+            department_ids_any: []
+            mode: all
+            permissions_any: []
+            roles_any: []
+            user_ids_any: []
+          enabled: true
+          has_studio: false
+          icon: "NotepadText"
+          key: v2.visit-guide
+          order: 170
+          parent_key: business
+          target: null
+          title: 客户拜访攻略
+          unenabled_page: null
+          visible: true
+
+        - audience:
+            department_ids_any: []
+            mode: all
+            permissions_any: []
+            roles_any: []
+            user_ids_any: []
+          enabled: true
+          has_studio: false
+          icon: ""
+          key: "/v2/visit-guide"
+          order: 180
+          parent_key: v2.visit-guide
+          target:
+            type: route
+            value: "/v2/business/visit-guide"
+          title: 客户拜访攻略
+          unenabled_page: null
+          visible: true
+
+        - audience:
+            department_ids_any: []
+            mode: all
+            permissions_any: []
+            roles_any: []
+            user_ids_any: []
+          enabled: true
+          has_studio: false
+          icon: ""
+          key: "/v2/visit-guide/history"
+          order: 190
+          parent_key: v2.visit-guide
+          target:
+            type: route
+            value: "/v2/business/visit-guide/history"
+          title: 客户拜访攻略记录
+          unenabled_page: null
+          visible: true
+
+        - audience:
+            department_ids_any: []
+            mode: all
+            permissions_any: []
+            roles_any: []
+            user_ids_any: []
+          enabled: true
+          has_studio: false
+          icon: "CalendarCheck"
+          key: "/v2/business/weekly-review"
+          order: 200
+          parent_key: business
+          target:
+            type: route
+            value: "/v2/business/weekly-review"
+          title: 业绩达成
+          unenabled_page: null
+          visible: true
+
+        - audience:
+            department_ids_any: []
+            mode: all
+            permissions_any: []
+            roles_any: []
+            user_ids_any: []
+          enabled: true
+          has_studio: false
+          icon: "ClipboardCheck"
+          key: "/v2/business/followup-summary"
+          order: 210
+          parent_key: business
+          target:
+            type: route
+            value: "/v2/business/followup-summary"
+          title: 周跟进总结
+          unenabled_page: null
+          visible: true
+
+        - audience:
+            department_ids_any: []
+            mode: all
+            permissions_any: []
+            roles_any: []
+            user_ids_any: []
+          enabled: true
+          has_studio: true
+          icon: ""
+          key: "/v2/opportunity/[id]"
+          order: 220
+          parent_key: opportunity
+          target:
+            type: route
+            value: "/v2/opportunity/[id]"
+          title: 商机详情
+          unenabled_page: null
+          visible: true
+
+        - audience:
+            department_ids_any: []
+            mode: all
+            permissions_any: []
+            roles_any: []
+            user_ids_any: []
+          enabled: true
+          has_studio: true
+          icon: ""
+          key: "/v2/account/[id]"
+          order: 230
+          parent_key: account
+          target:
+            type: route
+            value: "/v2/account/[id]"
+          title: 客户详情
+          unenabled_page: null
+          visible: true
     data_type: dict
     description: "Frontend menu configuration. Includes menu visibility, enablement, audience filtering rules, and optional custom unenabled page."
     client: true

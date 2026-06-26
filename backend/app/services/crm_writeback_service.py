@@ -755,7 +755,7 @@ class CrmWritebackService:
             # 是否新客户：1=是, 2=否
             custom_item6 = 1 if record.is_first_visit else 2
             
-            # 所有人ID和部门ID（从user_profiles表查询crm_user_id，再从crm_user_olm表查询departId）
+            # 所有人ID和部门ID（从user_profiles表查询crm_user_id，再从crm_user表查询department_id）
             owner_id = None
             dim_depart = None
             if record.recorder_id:
@@ -764,11 +764,11 @@ class CrmWritebackService:
                     # recorder_id是UUID对象，转成字符串会自动变成36位格式
                     ask_id_str = str(record.recorder_id)
                     
-                    # 使用原生SQL查询，一次性获取crm_user_id和departId
+                    # 使用原生SQL查询，一次性获取crm_user_id和department_id
                     sql_query = text("""
-                        SELECT u.crm_user_id, o.departId
+                        SELECT u.crm_user_id, cu.department_id
                         FROM user_profiles u
-                        LEFT JOIN olm.crm_user_olm o ON u.crm_user_id = o.id
+                        LEFT JOIN crm_user cu ON u.crm_user_id = cu.unique_id
                         WHERE u.oauth_user_id = :ask_id
                     """)
                     

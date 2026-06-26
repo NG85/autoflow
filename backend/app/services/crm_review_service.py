@@ -27,7 +27,7 @@ from app.models.crm_review import (
     REVIEW_BRANCH_SNAPSHOT_EDITABLE_FIELDS,
 )
 from app.models.crm_opportunities import CRMOpportunity
-from app.models.crm_system_configurations import CRMSystemConfiguration
+from app.models.crm_forecast_type_mappings import CRMForecastTypeMapping
 from app.core.config import settings
 from app.repositories.crm_review_attendee import crm_review_attendee_repo
 from app.repositories.crm_review_audit import crm_review_opp_audit_log_repo
@@ -218,15 +218,11 @@ _MERGE_MAIN_LOAD_COLUMNS: tuple[Any, ...] = (
     *(getattr(CRMReviewOppBranchSnapshot, name) for name in _MERGE_SUBMIT_SYNC_FIELD_NAMES),
 )
 
-_FORECAST_TYPE_RANK_BY_CONFIG_KEY: Dict[str, int] = {
-    "commit": 0,
-    "upside": 1,
-    "closed_won": 2,
-}
+ForecastTypeRankEntry = Tuple[int, Tuple[str, ...]]
 
 
-def _parse_forecast_type_aliases_from_config_value(raw: Optional[str]) -> List[str]:
-    """Parse ForecastTypeMapping.config_value (JSON array or plain string) into display aliases."""
+def _parse_forecast_type_customer_values(raw: Optional[str]) -> List[str]:
+    """Parse customer_values (JSON array or plain string) into display aliases."""
     raw = str(raw or "").strip()
     if not raw:
         return []
@@ -242,58 +238,53 @@ def _parse_forecast_type_aliases_from_config_value(raw: Optional[str]) -> List[s
     return [raw]
 
 
-# ForecastTypeMapping 变更极少：短时缓存避免每条列表请求都打配置表（仅影响排序 CASE 的 IN 列表）。
-_FORECAST_RANK_ALIASES_CACHE_TTL_SEC = 120.0
-_forecast_rank_aliases_cache_lock = threading.Lock()
-_forecast_rank_aliases_cache: Optional[Tuple[float, Tuple[Tuple[str, ...], Tuple[str, ...], Tuple[str, ...]]]] = None
+# Forecast type 映射变更极少：短时缓存避免每条列表请求都打配置表。
+_FORECAST_RANK_ENTRIES_CACHE_TTL_SEC = 120.0
+_forecast_rank_entries_cache_lock = threading.Lock()
+_forecast_rank_entries_cache: Optional[Tuple[float, Tuple[ForecastTypeRankEntry, ...]]] = None
 
 
-def _load_forecast_type_rank_alias_tuples(db_session: Session) -> Tuple[Tuple[str, ...], Tuple[str, ...], Tuple[str, ...]]:
+def _load_forecast_type_rank_entries(db_session: Session) -> Tuple[ForecastTypeRankEntry, ...]:
     rows = db_session.exec(
-        select(CRMSystemConfiguration.config_key, CRMSystemConfiguration.config_value).where(
-            CRMSystemConfiguration.config_type == "ForecastTypeMapping",
-            CRMSystemConfiguration.is_active.is_(True),
-        )
+        select(CRMForecastTypeMapping)
+        .where(CRMForecastTypeMapping.is_active.is_(True))
+        .order_by(CRMForecastTypeMapping.display_order)
     ).all()
-    rank_to_aliases: Dict[int, List[str]] = {0: [], 1: [], 2: []}
-    for config_key, config_value in rows:
-        ck = str(config_key or "").strip().lower()
-        rank = _FORECAST_TYPE_RANK_BY_CONFIG_KEY.get(ck)
-        if rank is None:
-            continue
-        seen = set(rank_to_aliases[rank])
-        for alias in _parse_forecast_type_aliases_from_config_value(config_value):
-            if alias not in seen:
-                seen.add(alias)
-                rank_to_aliases[rank].append(alias)
-    return (
-        tuple(rank_to_aliases[0]),
-        tuple(rank_to_aliases[1]),
-        tuple(rank_to_aliases[2]),
-    )
+    entries: List[ForecastTypeRankEntry] = []
+    for row in rows:
+        aliases = tuple(_parse_forecast_type_customer_values(row.customer_values))
+        if aliases:
+            entries.append((int(row.display_order), aliases))
+    return tuple(entries)
 
 
 def _forecast_type_sort_rank(
     forecast_type: str,
-    a0: Tuple[str, ...],
-    a1: Tuple[str, ...],
-    a2: Tuple[str, ...],
+    entries: Tuple[ForecastTypeRankEntry, ...],
 ) -> int:
     ft = str(forecast_type or "")
-    if a0 and ft in a0:
-        return 0
-    if a1 and ft in a1:
-        return 1
-    if a2 and ft in a2:
-        return 2
     ft_lower = ft.lower()
-    if ft_lower == "commit":
-        return 0
-    if ft_lower == "upside":
-        return 1
-    if ft_lower == "closed_won":
-        return 2
+    for display_order, aliases in entries:
+        if ft in aliases:
+            return display_order
+        if any(alias.lower() == ft_lower for alias in aliases):
+            return display_order
     return 99
+
+
+def _get_forecast_type_rank_entries_cached(
+    db_session: Session,
+) -> Tuple[ForecastTypeRankEntry, ...]:
+    global _forecast_rank_entries_cache
+    now = time.monotonic()
+    with _forecast_rank_entries_cache_lock:
+        if _forecast_rank_entries_cache is not None:
+            deadline, entries = _forecast_rank_entries_cache
+            if now < deadline:
+                return entries
+        entries = _load_forecast_type_rank_entries(db_session)
+        _forecast_rank_entries_cache = (now + _FORECAST_RANK_ENTRIES_CACHE_TTL_SEC, entries)
+        return entries
 
 
 def _load_closed_won_stages(db_session: Session) -> List[str]:
@@ -312,21 +303,6 @@ def _load_closed_won_stages(db_session: Session) -> List[str]:
         seen.add(stage)
         out.append(stage)
     return out
-
-
-def _get_forecast_type_rank_alias_tuples_cached(
-    db_session: Session,
-) -> Tuple[Tuple[str, ...], Tuple[str, ...], Tuple[str, ...]]:
-    global _forecast_rank_aliases_cache
-    now = time.monotonic()
-    with _forecast_rank_aliases_cache_lock:
-        if _forecast_rank_aliases_cache is not None:
-            deadline, triple = _forecast_rank_aliases_cache
-            if now < deadline:
-                return triple
-        triple = _load_forecast_type_rank_alias_tuples(db_session)
-        _forecast_rank_aliases_cache = (now + _FORECAST_RANK_ALIASES_CACHE_TTL_SEC, triple)
-        return triple
 
 
 def _aldebaran_performance_payload_root(body: Dict[str, Any]) -> Dict[str, Any]:
@@ -617,47 +593,28 @@ class CRMReviewService:
         forecast_type_column: Any = None,
     ):
         """
-        Sort key for forecast_type: commit (0) > upside (1) > closed_won (2).
-        Aliases come from crm_system_configurations ForecastTypeMapping (config_value JSON arrays).
-        snapshot.forecast_type matches one of those strings (e.g. 确定成单 -> commit).
+        Sort key for forecast_type from crm_forecast_type_mappings.display_order.
+        snapshot.forecast_type matches customer_values aliases (case-insensitive).
         """
-        a0, a1, a2 = _get_forecast_type_rank_alias_tuples_cached(db_session)
+        entries = _get_forecast_type_rank_entries_cached(db_session)
         ft_col = forecast_type_column if forecast_type_column is not None else snapshot_cls.forecast_type
         whens: List[Any] = []
-        if a0:
-            whens.append((ft_col.in_(a0), 0))
-        if a1:
-            whens.append((ft_col.in_(a1), 1))
-        if a2:
-            whens.append((ft_col.in_(a2), 2))
+        for display_order, aliases in entries:
+            if aliases:
+                whens.append((ft_col.in_(aliases), display_order))
         if not whens:
-            ft_lower = func.lower(func.coalesce(ft_col, ""))
-            return case(
-                (ft_lower == "commit", 0),
-                (ft_lower == "upside", 1),
-                (ft_lower == "closed_won", 2),
-                else_=99,
-            )
+            return case(else_=99)
         return case(*whens, else_=99)
 
     @staticmethod
     def _build_forecast_rank_case_for_col(db_session: Session, col: Any):
-        a0, a1, a2 = _get_forecast_type_rank_alias_tuples_cached(db_session)
+        entries = _get_forecast_type_rank_entries_cached(db_session)
         whens: List[Any] = []
-        if a0:
-            whens.append((col.in_(a0), 0))
-        if a1:
-            whens.append((col.in_(a1), 1))
-        if a2:
-            whens.append((col.in_(a2), 2))
+        for display_order, aliases in entries:
+            if aliases:
+                whens.append((col.in_(aliases), display_order))
         if not whens:
-            c_lower = func.lower(func.coalesce(col, ""))
-            return case(
-                (c_lower == "commit", 0),
-                (c_lower == "upside", 1),
-                (c_lower == "closed_won", 2),
-                else_=99,
-            )
+            return case(else_=99)
         return case(*whens, else_=99)
 
     @staticmethod
@@ -906,7 +863,7 @@ class CRMReviewService:
             .group_by(group_key_expr)
         )
         rows = db_session.exec(stmt).all()
-        a0, a1, a2 = _get_forecast_type_rank_alias_tuples_cached(db_session)
+        entries = _get_forecast_type_rank_entries_cached(db_session)
         out: List[Dict[str, Any]] = []
         for ft, amount in rows:
             try:
@@ -916,7 +873,7 @@ class CRMReviewService:
             out.append({"forecast_type": str(ft or ""), "amount": amt})
         out.sort(
             key=lambda row: (
-                _forecast_type_sort_rank(row["forecast_type"], a0, a1, a2),
+                _forecast_type_sort_rank(row["forecast_type"], entries),
                 row["forecast_type"],
             )
         )
@@ -982,12 +939,16 @@ class CRMReviewService:
             raise HTTPException(status_code=403, detail="user is not attendee of this review session")
 
         is_leader = bool(getattr(attendee, "is_leader", False)) if attendee else False
-        elevated_view = (
-            scope.has_elevated_session_view(session.department_id, is_leader=is_leader)
+        full_data_view = (
+            scope.has_full_session_data_view(
+                session.department_id,
+                is_leader=is_leader,
+                is_attendee=attendee is not None,
+            )
             if scope is not None
             else is_leader
         )
-        if elevated_view:
+        if full_data_view:
             owner_ids = crm_review_attendee_repo.get_crm_user_ids_by_session(
                 db_session, session_id=session_id
             )
@@ -1002,6 +963,13 @@ class CRMReviewService:
             raise HTTPException(status_code=500, detail="review session period is empty")
 
         submit_stats = crm_review_attendee_repo.get_submit_stats(db_session, session_id=session_id)
+        if not full_data_view and attendee is not None:
+            has_submitted = bool(getattr(attendee, "has_submitted", False))
+            submit_stats = {
+                "total": 1,
+                "submitted": 1 if has_submitted else 0,
+                "not_submitted": 0 if has_submitted else 1,
+            }
         editable = bool(
             session.stage == "initial_edit"
             or (session.stage == "lead_review" and session.review_phase == "edit")
@@ -2118,17 +2086,12 @@ class CRMReviewService:
         if not resolved_session_id:
             raise HTTPException(status_code=500, detail="review session id is empty")
 
-        if sid and not db_session.exec(
-            select(CRMReviewOppBranchSnapshot.unique_id)
-            .where(
-                CRMReviewOppBranchSnapshot.opportunity_id == opportunity_id,
-                CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
-            )
-            .limit(1)
-        ).first():
-            raise HTTPException(
-                status_code=404,
-                detail="opportunity not found in specified review session",
+        if user_id:
+            return self.get_opportunity_risk_progress_details(
+                db_session,
+                session_id=resolved_session_id,
+                user_id=user_id,
+                opportunity_id=opportunity_id,
             )
 
         return self._build_opportunity_risk_progress_details(
@@ -2853,8 +2816,8 @@ class CRMReviewService:
     ) -> dict:
         """
         forecast 聚合仅以 Aldebaran ``POST .../review/performance/query`` 返回为准。
-        - 负责人或在可见部门范围内的 viewer：请求仅 ``session_id``（全场重算）。
-        - 普通参会人：``session_id`` + ``owner_id``（crm_user_id，仅本人）。
+        - 负责人或非参会人 viewer（在可见部门范围内）：请求仅 ``session_id``（全场重算）。
+        - 普通参会成员（含非 leader）：``session_id`` + ``owner_id``（crm_user_id，仅本人）。
         session 访问与可见部门范围规则同 ``/crm/review/my/latest-session``。
         """
         session = crm_review_session_repo.get_by_unique_id(db_session, session_id)
@@ -2887,12 +2850,16 @@ class CRMReviewService:
         is_leader = bool(getattr(attendee, "is_leader", False)) if attendee else False
         owner_id_arg: Optional[str] = None
 
-        elevated_view = (
-            scope.has_elevated_session_view(session.department_id, is_leader=is_leader)
+        full_data_view = (
+            scope.has_full_session_data_view(
+                session.department_id,
+                is_leader=is_leader,
+                is_attendee=attendee is not None,
+            )
             if scope is not None
             else is_leader
         )
-        if elevated_view:
+        if full_data_view:
             attendees = db_session.exec(
                 select(CRMReviewAttendee).where(CRMReviewAttendee.session_id == session_id)
             ).all()

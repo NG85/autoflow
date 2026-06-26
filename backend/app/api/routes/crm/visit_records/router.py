@@ -1065,7 +1065,9 @@ def update_visit_record_comments(
                 len(saved_comments),
             )
 
-            jump_url = f"{settings.REVIEW_REPORT_HOST}/registerVisitRecord/detail?record_id={record_id}"
+            from app.utils.push_page_urls import build_visit_record_page_url
+
+            jump_url = build_visit_record_page_url(record_id)
             title = (getattr(record, "account_name", None) or getattr(record, "partner_name", None) or "") or ""
             opp = (getattr(record, "opportunity_name", None) or "") or ""
             link_text = f"{title}  {opp}".strip() or "跟进记录"

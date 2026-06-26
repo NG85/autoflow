@@ -12,11 +12,11 @@ from app.repositories.user_department_relation import user_department_relation_r
 from app.repositories.visit_record import visit_record_repo
 from app.services.oauth_service import oauth_client
 
-REVIEW_SESSION_VIEW_PERMISSION = "biz:weekly_decision:view"
+REVIEW_SESSION_VIEW_PERMISSION = "review_session:all:view"
 
 
 def _user_has_review_session_view_permission(user_id: UUID) -> bool:
-    """OAuth POST /permission/check — 周决策/review session 跨团队查看权限。"""
+    """OAuth POST /permission/check — review session 跨团队/全量查看权限。"""
     check = oauth_client.check_function_permission(
         user_id=user_id,
         permission=REVIEW_SESSION_VIEW_PERMISSION,
@@ -29,8 +29,10 @@ class ReviewSessionViewScope:
     """
     Review session 列表/详情可见范围：
     - 普通成员：仅本人参与的 session
-    - 有 biz:weekly_decision:view + 主部门：本部门及所有下属部门的 session
+    - 有 review_session:all:view + 主部门：本部门及所有下属部门的 session
     - 公司管理员，或有 viewer 权限但无部门信息：全公司 session
+
+    注意：biz:weekly_decision:view 为周决策模块入口权限，与本 viewer 权限不等价。
     """
 
     has_viewer_permission: bool
@@ -64,6 +66,25 @@ class ReviewSessionViewScope:
     ) -> bool:
         if is_leader:
             return True
+        return self.can_access_session_as_viewer(session_department_id)
+
+    def has_full_session_data_view(
+        self,
+        session_department_id: Optional[str],
+        *,
+        is_leader: bool,
+        is_attendee: bool,
+    ) -> bool:
+        """
+        Session 内快照/分组等业务数据是否覆盖全部参会成员。
+        - 负责人：全员
+        - 普通参会人（非 leader）：仅本人，不因 viewer 权限放大
+        - 非参会人 viewer：在可见部门范围内看全员
+        """
+        if is_leader:
+            return True
+        if is_attendee:
+            return False
         return self.can_access_session_as_viewer(session_department_id)
 
 

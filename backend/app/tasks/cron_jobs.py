@@ -580,6 +580,11 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                 company_weekly_followup_summary = company_summary.summary_content or ""
 
             # 2) 逐部门获取周报：即使接口失败/无数据，也要推送空周报（有负责人或配置了 review 群的部门均处理）
+            from app.utils.push_page_urls import (
+                build_task_list_page_url,
+                build_weekly_followup_summary_page_url,
+            )
+
             if not report_type or report_type == "department":
                 for department_name in dept_names:
                     try:
@@ -613,13 +618,11 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                         if report_info_5 and report_info_5.get("execution_id")
                         else f"{settings.REVIEW_REPORT_HOST}"
                     )
-                    dept_report["weekly_tasks_page"] = (
-                        f"{settings.CRM_SALES_TASK_PAGE_URL}"
-                    )
-                    dept_report["weekly_followup_page"] = (
-                        f"{settings.REVIEW_REPORT_HOST}/review/opportunitySummary"
-                        f"?department_name={quote_plus(department_name)}"
-                        f"&week_start={start_date.isoformat()}&week_end={end_date.isoformat()}"
+                    dept_report["weekly_tasks_page"] = build_task_list_page_url()
+                    dept_report["weekly_followup_page"] = build_weekly_followup_summary_page_url(
+                        week_start=start_date.isoformat(),
+                        week_end=end_date.isoformat(),
+                        department_name=department_name,
                     )
                     dept_report["weekly_followup_summary"] = dept_weekly_followup_summary_by_dept.get(department_name, "")
 
@@ -647,12 +650,10 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                         if report_info_5 and report_info_5.get("execution_id")
                         else f"{settings.REVIEW_REPORT_HOST}"
                     )
-                    company_weekly_report["weekly_tasks_page"] = (
-                        f"{settings.CRM_SALES_TASK_PAGE_URL}"
-                    )
-                    company_weekly_report["weekly_followup_page"] = (
-                        f"{settings.REVIEW_REPORT_HOST}/review/opportunitySummary"
-                        f"?week_start={start_date.isoformat()}&week_end={end_date.isoformat()}"
+                    company_weekly_report["weekly_tasks_page"] = build_task_list_page_url()
+                    company_weekly_report["weekly_followup_page"] = build_weekly_followup_summary_page_url(
+                        week_start=start_date.isoformat(),
+                        week_end=end_date.isoformat(),
                     )
                     company_weekly_report["weekly_followup_summary"] = company_weekly_followup_summary
                 except Exception as e:
@@ -943,15 +944,14 @@ def generate_crm_weekly_followup_summary(
                             continue
                         # review_detail：与周报卡片 weekly_followup_page 一致，便于对账定位页面产出；幂等见 trace_key
                         ws, we = start_date.isoformat(), end_date.isoformat()
-                        host = settings.REVIEW_REPORT_HOST.rstrip("/")
                         dept_nm = str(row.get("department_name") or "").strip()
-                        if dept_nm:
-                            review_url = (
-                                f"{host}/review/opportunitySummary"
-                                f"?department_name={quote_plus(dept_nm)}&week_start={ws}&week_end={we}"
-                            )
-                        else:
-                            review_url = f"{host}/review/opportunitySummary?week_start={ws}&week_end={we}"
+                        from app.utils.push_page_urls import build_weekly_followup_summary_page_url
+
+                        review_url = build_weekly_followup_summary_page_url(
+                            week_start=ws,
+                            week_end=we,
+                            department_name=dept_nm or None,
+                        )
                         _report_task_usage_once(
                             BillingScenario.CRM_WEEKLY_FOLLOWUP_SUMMARY,
                             f"weekly-followup-department:{start_date.isoformat()}:{end_date.isoformat()}:{dept_key}",
@@ -964,20 +964,28 @@ def generate_crm_weekly_followup_summary(
                         else []
                     )
                     ws, we = start_date.isoformat(), end_date.isoformat()
-                    host = settings.REVIEW_REPORT_HOST.rstrip("/")
+                    from app.utils.push_page_urls import build_weekly_followup_summary_page_url
+
                     for dept_key in billable_department_keys:
-                        review_url = f"{host}/review/opportunitySummary?week_start={ws}&week_end={we}"
+                        review_url = build_weekly_followup_summary_page_url(
+                            week_start=ws,
+                            week_end=we,
+                        )
                         _report_task_usage_once(
                             BillingScenario.CRM_WEEKLY_FOLLOWUP_SUMMARY,
                             f"weekly-followup-department:{start_date.isoformat()}:{end_date.isoformat()}:{dept_key}",
                             review_url,
                         )
                 if bill_company:
-                    host = settings.REVIEW_REPORT_HOST.rstrip("/")
+                    from app.utils.push_page_urls import build_weekly_followup_summary_page_url
+
                     _report_task_usage_once(
                         BillingScenario.CRM_WEEKLY_FOLLOWUP_SUMMARY,
                         f"weekly-followup-company:{start_date.isoformat()}:{end_date.isoformat()}",
-                        f"{host}/review/opportunitySummary?week_start={start_date.isoformat()}&week_end={end_date.isoformat()}",
+                        build_weekly_followup_summary_page_url(
+                            week_start=start_date.isoformat(),
+                            week_end=end_date.isoformat(),
+                        ),
                     )
             else:
                 logger.info(
@@ -1662,6 +1670,8 @@ def send_sales_task_summary(self, start_date_str=None, end_date_str=None):
                 if not assignee_keys:
                     logger.info("统计周期内没有任何 todo 负责人（含取消/无截止日期），无需推送 0 指标卡片")
                 else:
+                    from app.utils.push_page_urls import build_task_list_page_url
+
                     start_date_str2 = start_date.isoformat()
                     end_date_str2 = end_date.isoformat()
                     next_week_start_date_str2 = next_week_start_date.isoformat()
@@ -1691,7 +1701,12 @@ def send_sales_task_summary(self, start_date_str=None, end_date_str=None):
                             "completed_src2": "0",
                             "completed_src3": "0",
                             "others": str(no_due_cnt),
-                            "cancelled_query_url": f"{settings.CRM_SALES_TASK_PAGE_URL}?owner_name={assignee_name}&due_date__gte={start_date_str2}&due_date__lte={end_date_str2}&ai_status=CANCELLED",
+                            "cancelled_query_url": build_task_list_page_url(
+                                owner_name=assignee_name,
+                                due_date__gte=start_date_str2,
+                                due_date__lte=end_date_str2,
+                                ai_status__in=["CANCELLED"],
+                            ),
                         }
 
                         analyze_results.append(
@@ -1708,8 +1723,17 @@ def send_sales_task_summary(self, start_date_str=None, end_date_str=None):
                                 "next_week_by_source": {},
                                 "cancelled_count": cancelled_cnt,
                                 "no_due_date_count": no_due_cnt,
-                                "due_task_query_url": f"{settings.CRM_SALES_TASK_PAGE_URL}?owner_name={assignee_name}&due_date__lte={end_date_str2}&is_overdue=True",
-                                "next_week_query_url": f"{settings.CRM_SALES_TASK_PAGE_URL}?owner_name={assignee_name}&due_date__gte={next_week_start_date_str2}&due_date__lte={next_week_end_date_str2}&ai_status=PENDING&ai_status=IN_PROGRESS",
+                                "due_task_query_url": build_task_list_page_url(
+                                    owner_name=assignee_name,
+                                    due_date__lte=end_date_str2,
+                                    is_overdue=True,
+                                ),
+                                "next_week_query_url": build_task_list_page_url(
+                                    owner_name=assignee_name,
+                                    due_date__gte=next_week_start_date_str2,
+                                    due_date__lte=next_week_end_date_str2,
+                                    ai_status__in=["PENDING", "IN_PROGRESS"],
+                                ),
                             }
                         )
             logger.info(f"分析结果: {len(analyze_results)} 个负责人的任务统计")
@@ -2048,6 +2072,7 @@ def _analyze_crm_todos(
     - "下周待完成" 判定：下周ai_status为PENDING或IN_PROGRESS的任务
     """
     from datetime import datetime
+    from app.utils.push_page_urls import build_task_list_page_url
     
     # 按负责人分组
     by_assignee: dict[str, dict] = {}
@@ -2230,7 +2255,12 @@ def _analyze_crm_todos(
             "completed_src2": str(completed_by_source.get(TodoDataSourceType.AI_EXTRACTION.value, 0)),
             "completed_src3": str(completed_by_source.get(TodoDataSourceType.MANUAL.value, 0)),
             "others": str(overdue_others),
-            "cancelled_query_url": f"{settings.CRM_SALES_TASK_PAGE_URL}?owner_name={assignee_data['assignee_name']}&due_date__gte={start_date_str}&due_date__lte={end_date_str}&ai_status=CANCELLED"
+            "cancelled_query_url": build_task_list_page_url(
+                owner_name=assignee_data["assignee_name"],
+                due_date__gte=start_date_str,
+                due_date__lte=end_date_str,
+                ai_status__in=["CANCELLED"],
+            )
         }
         
         # 格式化任务明细的日期
@@ -2291,8 +2321,17 @@ def _analyze_crm_todos(
             "next_week_by_source": next_week_by_source,
             "cancelled_count": cancelled_count,
             "no_due_date_count": overdue_others,
-            "due_task_query_url": f"{settings.CRM_SALES_TASK_PAGE_URL}?owner_name={assignee_data['assignee_name']}&due_date__lte={end_date_str}&is_overdue=True",
-            "next_week_query_url": f"{settings.CRM_SALES_TASK_PAGE_URL}?owner_name={assignee_data['assignee_name']}&due_date__gte={next_week_start_date_str}&due_date__lte={next_week_end_date_str}&ai_status=PENDING&ai_status=IN_PROGRESS",
+            "due_task_query_url": build_task_list_page_url(
+                owner_name=assignee_data["assignee_name"],
+                due_date__lte=end_date_str,
+                is_overdue=True,
+            ),
+            "next_week_query_url": build_task_list_page_url(
+                owner_name=assignee_data["assignee_name"],
+                due_date__gte=next_week_start_date_str,
+                due_date__lte=next_week_end_date_str,
+                ai_status__in=["PENDING", "IN_PROGRESS"],
+            ),
         }
         
         result_list.append(result_item)

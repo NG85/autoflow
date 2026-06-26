@@ -75,6 +75,23 @@ def test_has_elevated_session_view_leader_wins():
     assert scope.has_elevated_session_view(OTHER_DEPT_ID, is_leader=True) is True
 
 
+def test_has_full_session_data_view_leader_sees_all():
+    scope = _scope(has_viewer=False)
+    assert scope.has_full_session_data_view(DEPT_ID, is_leader=True, is_attendee=True) is True
+
+
+def test_has_full_session_data_view_non_leader_attendee_self_only_even_with_viewer():
+    scope = _scope(has_viewer=True, is_admin=False)
+    assert scope.has_elevated_session_view(DEPT_ID, is_leader=False) is True
+    assert scope.has_full_session_data_view(DEPT_ID, is_leader=False, is_attendee=True) is False
+
+
+def test_has_full_session_data_view_non_attendee_viewer_sees_all():
+    scope = _scope(has_viewer=True, is_admin=False)
+    assert scope.has_full_session_data_view(DEPT_ID, is_leader=False, is_attendee=False) is True
+    assert scope.has_full_session_data_view(OTHER_DEPT_ID, is_leader=False, is_attendee=False) is False
+
+
 @patch("app.policies.review_session_access.department_mirror_repo")
 @patch("app.policies.review_session_access.user_department_relation_repo")
 @patch("app.policies.review_session_access.visit_record_repo")

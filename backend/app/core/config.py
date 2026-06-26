@@ -328,7 +328,7 @@ class Settings(BaseSettings):
     CRM_SALES_TASK_ENABLED: bool = False
     CRM_SALES_TASK_CRON: str = '0 10 * * 0'  # 每周日上午10点执行
     CRM_SALES_TASK_FEISHU_ENABLED: bool = True  # 是否启用飞书推送
-    CRM_SALES_TASK_PAGE_URL: str = "https://test.zhizhenzhihe.com/task/query"
+    CRM_SALES_TASK_PAGE_URL: str = "/v2/task"
 
     # CRM visit metrics (固化指标) configuration
     CRM_VISIT_METRICS_ENABLED: bool = False
@@ -389,14 +389,11 @@ class Settings(BaseSettings):
     OPS_CC_DINGTALK_CHAT_IDS: Annotated[list[str] | str | None, BeforeValidator(parse_str_list)] = None
     
     # Visit detail page URL configuration
-    VISIT_DETAIL_PAGE_URL: str = "https://test.zhizhenzhihe.com/registerVisitRecord/list"
+    VISIT_DETAIL_PAGE_URL: str = "/v2/behavior"
     # 当日无跟进提醒：「立即录入跟进」路径，与 REVIEW_REPORT_HOST 拼接为完整 URL
     CRM_VISIT_FOLLOWUP_ENTRY_PAGE_URL: str = "/registerVisitRecord/register"
     # 当日无跟进提醒：「立即录入跟进」路径，与 REVIEW_REPORT_HOST 拼接为完整 URL
     CRM_VISIT_FOLLOWUP_ENTRY_PAGE_URL: str = "/registerVisitRecord/register"
-    
-    # Account list page URL configuration
-    ACCOUNT_LIST_PAGE_URL: str = "https://test.zhizhenzhihe.com/review/list/account"
     
     # Ark LLM API
     ARK_API_KEY: str = "b1529268-82ea-407a-bd79-d01514a2ed60"

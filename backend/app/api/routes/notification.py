@@ -1,7 +1,7 @@
 import logging
 from datetime import date, datetime
 from typing import Any, Callable, Dict, List, Optional, Set
-from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
@@ -168,9 +168,9 @@ def _build_sales_task_created_message(payload: SalesTaskCreatedPushRequest) -> s
 
     jump_url = (payload.jump_url or "").strip()
     if not jump_url:
-        base_url = (settings.CRM_SALES_TASK_PAGE_URL or "").strip().rstrip("/")
-        task_id = payload.task_id.strip()
-        jump_url = f"{base_url}/{quote(task_id, safe='')}" if base_url and task_id else (base_url or "")
+        from app.utils.push_page_urls import build_task_detail_page_url
+
+        jump_url = build_task_detail_page_url(payload.task_id.strip())
 
     lines: List[str] = [f"{creator}在{created_at}帮你创建了{task_count}个任务："]
     if link_text:

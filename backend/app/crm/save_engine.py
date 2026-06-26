@@ -511,13 +511,9 @@ def generate_dynamic_fields_for_visit_record(sales_visit_record):
 
 
 def _build_visit_record_detail_url(record_id: Optional[str]) -> str:
-    base = (settings.VISIT_DETAIL_PAGE_URL or settings.REVIEW_REPORT_HOST or "").strip()
-    if not base:
-        return "about:blank"
-    if not record_id:
-        return base
-    sep = "&" if "?" in base else "?"
-    return f"{base}{sep}record_id={record_id}"
+    from app.utils.push_page_urls import build_visit_record_billing_page_url
+
+    return build_visit_record_billing_page_url(str(record_id or "").strip())
 
 
 def report_visit_record_billing(operator_user_id: UUID, record_id: Optional[str]) -> None:

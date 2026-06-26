@@ -62,7 +62,7 @@ class SalesTaskCreatedPushRequest(BaseModel):
     link_text: Optional[str] = Field(default=None, description="客户/商机文案，可选")
     jump_url: Optional[str] = Field(
         default=None,
-        description="未传时兜底 CRM_SALES_TASK_PAGE_URL/{task_id}",
+        description="未传时兜底 {REVIEW_REPORT_HOST}{CRM_SALES_TASK_PAGE_URL}/{task_id}",
     )
     task_count: int = Field(default=1, ge=1)
 

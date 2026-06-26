@@ -614,6 +614,7 @@ class CRMStatisticsService:
     ) -> Dict[str, str]:
         """团队日报：跟进列表页与任务列表页链接（统计日～执行日）。"""
         from app.utils.date_utils import beijing_today_date
+        from app.utils.push_page_urls import build_task_list_page_url, build_visit_list_page_url
 
         if exec_date is None:
             exec_date = beijing_today_date()
@@ -622,15 +623,16 @@ class CRMStatisticsService:
         exec_date_str = exec_date.isoformat()
         dept = (department_name or "").strip()
 
-        visit_query = f"start_date={stat_date_str}&end_date={stat_date_str}"
-        if dept:
-            visit_query = f"{visit_query}&department_name={dept}"
-        visit_detail_page = f"{settings.VISIT_DETAIL_PAGE_URL}?{visit_query}"
-
-        task_query = f"due_date__gte={stat_date_str}&due_date__lte={exec_date_str}"
-        if dept:
-            task_query = f"department_name={dept}&{task_query}"
-        task_detail_page = f"{settings.CRM_SALES_TASK_PAGE_URL}?{task_query}"
+        visit_detail_page = build_visit_list_page_url(
+            start_date=stat_date_str,
+            end_date=stat_date_str,
+            department_name=dept or None,
+        )
+        task_detail_page = build_task_list_page_url(
+            department_name=dept or None,
+            due_date__gte=stat_date_str,
+            due_date__lte=exec_date_str,
+        )
 
         return {
             "visit_detail_page": visit_detail_page,
@@ -694,9 +696,11 @@ class CRMStatisticsService:
                 partners=partners,
             )
             
-            base_visit_url = (
-                f"{settings.VISIT_DETAIL_PAGE_URL}"
-                f"?start_date={target_date}&end_date={target_date}"
+            from app.utils.push_page_urls import build_task_list_page_url, build_visit_list_page_url
+
+            base_visit_url = build_visit_list_page_url(
+                start_date=target_date.isoformat(),
+                end_date=target_date.isoformat(),
             )
             
             # for assessment in assessment_details['first']:
@@ -731,12 +735,11 @@ class CRMStatisticsService:
             recorder_name = str(stats.get("recorder") or "").strip()
             stat_date_str = target_date.isoformat()
             exec_date_str = incomplete_due_date.isoformat()
-            task_query = (
-                f"due_date__gte={stat_date_str}&due_date__lte={exec_date_str}"
+            task_detail_page = build_task_list_page_url(
+                owner_name=recorder_name or None,
+                due_date__gte=stat_date_str,
+                due_date__lte=exec_date_str,
             )
-            if recorder_name:
-                task_query = f"owner_name={recorder_name}&{task_query}"
-            task_detail_page = f"{settings.CRM_SALES_TASK_PAGE_URL}?{task_query}"
 
             # 对评估明细按红黄绿灯分组后排序（团队名称-销售名称）
             sorted_red_assessments = self._sort_assessments(assessment_details['red'])
@@ -1645,9 +1648,11 @@ class CRMStatisticsService:
             summary_yellow = record.summary_yellow or ""
             summary_green = record.summary_green or ""
 
-        visit_detail_page = (
-            f"{settings.VISIT_DETAIL_PAGE_URL}"
-            f"?start_date={target_date}&end_date={target_date}"
+        from app.utils.push_page_urls import build_visit_list_page_url
+
+        visit_detail_page = build_visit_list_page_url(
+            start_date=target_date.isoformat(),
+            end_date=target_date.isoformat(),
         )
 
         # 公司日报结构与部门日报保持一致：
@@ -1716,21 +1721,25 @@ class CRMStatisticsService:
             str: 报告链接
         """
         try:
+            from app.utils.push_page_urls import (
+                build_weekly_review_1_page_url,
+                build_weekly_review_5_page_url,
+            )
+
+            if report_type in ("review1s", "review1"):
+                return build_weekly_review_1_page_url(execution_id)
+            if report_type == "review5":
+                return build_weekly_review_5_page_url(execution_id)
+
+            logger.warning(f"未知的报告类型: {report_type}，使用默认链接")
             from app.core.config import settings
-            
-            # 根据报告类型构建不同的URL
-            if report_type == 'review1s' or report_type == 'review1':
-                return f"{settings.REVIEW_REPORT_HOST}/review/weeklyDetail/{execution_id}"
-            elif report_type == 'review5':
-                return f"{settings.REVIEW_REPORT_HOST}/review/muban5Detail/{execution_id}"
-            else:
-                # 未知报告类型，使用默认URL
-                logger.warning(f"未知的报告类型: {report_type}，使用默认链接")
-                return f"{settings.REVIEW_REPORT_HOST}"
+
+            return f"{settings.REVIEW_REPORT_HOST}"
                 
         except Exception as e:
             logger.error(f"构建周报报告链接失败: {e}")
-            # 出错时使用默认URL
+            from app.core.config import settings
+
             return f"{settings.REVIEW_REPORT_HOST}"
 
     def _get_weekly_report_info(self, session: Session, report_type: str, report_date: str, department_name: str = None) -> Optional[Dict]:
