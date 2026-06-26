@@ -1287,7 +1287,7 @@ class PlatformNotificationService:
             from app.crm.save_engine import VISIT_RECORD_REVISED_NOTICE
 
             revision_notice = VISIT_RECORD_REVISED_NOTICE
-        from app.utils.push_page_urls import build_visit_record_page_url
+        from app.utils.push_page_urls import build_visit_record_add_comment_page_url
 
         return {
             "visit_date": (visit_record or {}).get("last_modified_time", "--"),
@@ -1297,7 +1297,7 @@ class PlatformNotificationService:
             "meeting_notes": meeting_notes,
             "risk_info": risk_info or "--",
             "dynamic_fields": dynamic_fields,
-            "comment_page_url": build_visit_record_page_url(record_id),
+            "comment_page_url": build_visit_record_add_comment_page_url(record_id),
             "tasks": task_list,
             "task_count": task_count if task_count is not None else len(task_list),
             "is_revised": is_revised,

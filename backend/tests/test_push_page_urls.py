@@ -34,6 +34,10 @@ def test_build_visit_record_page_and_billing_url(monkeypatch):
     monkeypatch.setattr(urls.settings, "VISIT_DETAIL_PAGE_URL", "/v2/behavior")
 
     assert urls.build_visit_record_page_url("form_abc") == "https://example.com/v2/behavior/form_abc"
+    assert (
+        urls.build_visit_record_add_comment_page_url("form_20260618_080952_666_1f16aed1")
+        == "https://example.com/v2/behavior/form_20260618_080952_666_1f16aed1/add-comment"
+    )
     assert urls.build_visit_record_billing_page_url("form_abc") == "https://example.com/v2/behavior?form_abc"
 
 
