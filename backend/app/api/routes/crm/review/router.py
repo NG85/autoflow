@@ -260,7 +260,7 @@ def query_my_review_opp_branch_snapshots(
     商机快照分页列表（不分组）。
     - 返回结构与 ``snapshot-group-data`` 一致，只是没有 ``group_by`` / ``group_key``；另含 ``forecast_type_amount_totals``、``forecast_amount_total``、``closed_won_amount``（当前筛选条件下全量金额、已成单金额，以及排除已成单后的按预测类型拆分）。
     - session 访问：须为参会人，或有 ``review_session:all:view`` 且该 session 落于可见部门范围（公司管理员或无部门→全公司；有主部门→本部门及下属）。
-    - session 内数据：普通成员仅本人；负责人或在可见范围内的 viewer 看全部参会成员。支持筛选、排序、字段级别；``snapshot_filters`` 支持按客户筛选（``account_ids``/``account_names``，或别名 ``customer_ids``/``customer_names``）；``sorts`` 未传或空时默认：负责人 → 预测类型 → 金额（降序）。
+    - session 内数据：普通参会成员（非 leader）仅本人；负责人看全部；非参会人以 viewer 身份进入且在可见范围内时看全部参会成员。支持筛选、排序、字段级别；``snapshot_filters`` 支持按客户筛选（``account_ids``/``account_names``，或别名 ``customer_ids``/``customer_names``）；``sorts`` 未传或空时默认：负责人 → 预测类型 → 金额（降序）。
     - 当 ``snapshot_filters.opportunity_ids`` 非空时，自动切到主表 + T2 baseline 口径查询；否则保持原 cache 可编辑口径。
     - 排序：请求体 ``sorts`` 为按优先级排列的多字段排序。
     - 需要 session 信息、提交统计时请先调 ``snapshot-groups``。
@@ -421,7 +421,7 @@ def query_review_snapshot_groups(
     """
     分组汇总：各分组的 key、名称、数量，以及本次 review 的信息、提交统计、是否可编辑等（不含明细行）。
     - session 访问：须为参会人，或有 ``review_session:all:view`` 且该 session 落于可见部门范围（规则同 ``/crm/review/my/latest-session``）。
-    - session 内数据：普通成员仅本人；负责人或在可见范围内的 viewer 看全部参会成员。
+    - session 内数据：普通参会成员（含非 leader）仅本人；负责人看全部；非参会人以 viewer 身份进入且在可见范围内时看全部参会成员。
     - ``group_by``：owner / forecast_type / opportunity_stage。
     - 可先筛选再分组；``sorts`` 仅第一项用于分组行顺序，未传或空则按分组键升序。
     """
@@ -1255,7 +1255,7 @@ def recalculate_review_session_forecast_aggregates(
 ) -> ReviewSessionForecastRecalcOut:
     """
     触发本次 review 的预测/业绩聚合重算（结果来自外部服务）。session 访问须为参会人，或在 ``review_session:all:view`` 可见部门范围内。
-    session 内重算范围：负责人或在可见范围内的 viewer 拉全场，普通成员仅本人。具体字段见响应模型。
+    session 内重算范围：负责人或非参会人 viewer（在可见部门范围内）拉全场；普通参会成员（非 leader）仅本人。具体字段见响应模型。
     """
     data = crm_review_service.recalculate_forecast_aggregates(
         db_session,
@@ -1305,8 +1305,8 @@ def review_session_chat(
     Session access: attendees, or users with ``review_session:all:view`` when the session falls
     within their visible department scope (company-wide for admins or users without a department;
     own department subtree otherwise — same rules as ``/crm/review/my/latest-session``).
-    Within-session data: leaders and in-scope viewers query the full session; other attendees are
-    limited to their own ``crm_user_id``.
+    Within-session data: non-leader attendees are limited to their own ``crm_user_id``;
+    leaders and non-attendee viewers in scope query the full session.
     """
     session = crm_review_session_repo.get_by_unique_id(db_session, session_id)
     if not session:
@@ -1323,12 +1323,11 @@ def review_session_chat(
         )
 
     is_attendee_leader = bool(getattr(attendee, "is_leader", False)) if attendee else False
-    is_viewer_in_scope = scope.can_access_session_as_viewer(session.department_id)
     origin = request.headers.get("Origin") or request.headers.get("Referer")
     browser_id = getattr(request.state, "browser_id", "")
 
     context: Dict[str, Any] = {"review_session_id": session_id}
-    if attendee and not is_attendee_leader and not is_viewer_in_scope:
+    if attendee and not is_attendee_leader:
         owner_id = str(getattr(attendee, "crm_user_id", "") or "").strip()
         if not owner_id:
             raise HTTPException(status_code=422, detail="attendee has no crm_user_id")

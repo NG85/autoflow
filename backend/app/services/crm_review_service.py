@@ -939,12 +939,16 @@ class CRMReviewService:
             raise HTTPException(status_code=403, detail="user is not attendee of this review session")
 
         is_leader = bool(getattr(attendee, "is_leader", False)) if attendee else False
-        elevated_view = (
-            scope.has_elevated_session_view(session.department_id, is_leader=is_leader)
+        full_data_view = (
+            scope.has_full_session_data_view(
+                session.department_id,
+                is_leader=is_leader,
+                is_attendee=attendee is not None,
+            )
             if scope is not None
             else is_leader
         )
-        if elevated_view:
+        if full_data_view:
             owner_ids = crm_review_attendee_repo.get_crm_user_ids_by_session(
                 db_session, session_id=session_id
             )
@@ -959,6 +963,13 @@ class CRMReviewService:
             raise HTTPException(status_code=500, detail="review session period is empty")
 
         submit_stats = crm_review_attendee_repo.get_submit_stats(db_session, session_id=session_id)
+        if not full_data_view and attendee is not None:
+            has_submitted = bool(getattr(attendee, "has_submitted", False))
+            submit_stats = {
+                "total": 1,
+                "submitted": 1 if has_submitted else 0,
+                "not_submitted": 0 if has_submitted else 1,
+            }
         editable = bool(
             session.stage == "initial_edit"
             or (session.stage == "lead_review" and session.review_phase == "edit")
@@ -2075,17 +2086,12 @@ class CRMReviewService:
         if not resolved_session_id:
             raise HTTPException(status_code=500, detail="review session id is empty")
 
-        if sid and not db_session.exec(
-            select(CRMReviewOppBranchSnapshot.unique_id)
-            .where(
-                CRMReviewOppBranchSnapshot.opportunity_id == opportunity_id,
-                CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
-            )
-            .limit(1)
-        ).first():
-            raise HTTPException(
-                status_code=404,
-                detail="opportunity not found in specified review session",
+        if user_id:
+            return self.get_opportunity_risk_progress_details(
+                db_session,
+                session_id=resolved_session_id,
+                user_id=user_id,
+                opportunity_id=opportunity_id,
             )
 
         return self._build_opportunity_risk_progress_details(
@@ -2810,8 +2816,8 @@ class CRMReviewService:
     ) -> dict:
         """
         forecast 聚合仅以 Aldebaran ``POST .../review/performance/query`` 返回为准。
-        - 负责人或在可见部门范围内的 viewer：请求仅 ``session_id``（全场重算）。
-        - 普通参会人：``session_id`` + ``owner_id``（crm_user_id，仅本人）。
+        - 负责人或非参会人 viewer（在可见部门范围内）：请求仅 ``session_id``（全场重算）。
+        - 普通参会成员（含非 leader）：``session_id`` + ``owner_id``（crm_user_id，仅本人）。
         session 访问与可见部门范围规则同 ``/crm/review/my/latest-session``。
         """
         session = crm_review_session_repo.get_by_unique_id(db_session, session_id)
@@ -2844,12 +2850,16 @@ class CRMReviewService:
         is_leader = bool(getattr(attendee, "is_leader", False)) if attendee else False
         owner_id_arg: Optional[str] = None
 
-        elevated_view = (
-            scope.has_elevated_session_view(session.department_id, is_leader=is_leader)
+        full_data_view = (
+            scope.has_full_session_data_view(
+                session.department_id,
+                is_leader=is_leader,
+                is_attendee=attendee is not None,
+            )
             if scope is not None
             else is_leader
         )
-        if elevated_view:
+        if full_data_view:
             attendees = db_session.exec(
                 select(CRMReviewAttendee).where(CRMReviewAttendee.session_id == session_id)
             ).all()
