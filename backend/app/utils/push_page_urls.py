@@ -59,12 +59,21 @@ def build_visit_list_page_url(
 
 
 def build_visit_record_page_url(record_id: str) -> str:
-    """拜访详情 / 评论页（路径参数形式）。"""
+    """拜访详情页（路径参数形式）。"""
     host = _host()
     rid = (record_id or "").strip()
     if not host or not rid:
         return ""
     return f"{host}/v2/behavior/{quote(rid, safe='')}"
+
+
+def build_visit_record_add_comment_page_url(record_id: str) -> str:
+    """拜访卡片内「添加评论/任务」页。"""
+    host = _host()
+    rid = (record_id or "").strip()
+    if not host or not rid:
+        return ""
+    return f"{host}/v2/behavior/{quote(rid, safe='')}/add-comment"
 
 
 def build_visit_record_billing_page_url(record_id: str) -> str:
