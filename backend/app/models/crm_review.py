@@ -541,6 +541,16 @@ class CRMReviewOppBranchSnapshotBasicOut(SQLModel):
         sa_column=Column(Integer, default=0),
     )
 
+    # Visit record
+    last_visit_date: Optional[date] = Field(
+        default=None,
+        sa_column=Column(Date),
+    )
+    last_visit_record_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+
 
 class CRMReviewOppBranchSnapshot(CRMReviewOppBranchSnapshotBasicOut, table=True):
     """Owner-based branch snapshot (shared across sessions via owner_id)"""
@@ -955,6 +965,16 @@ class CRMReviewOppBranchSnapshotCache(SQLModel, table=True):
         sa_column=Column(Boolean, default=False),
     )
     customer_type: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+    
+    # Visit record
+    last_visit_date: Optional[date] = Field(
+        default=None,
+        sa_column=Column(Date),
+    )    
+    last_visit_record_id: Optional[str] = Field(
         default=None,
         sa_column=Column(String(255)),
     )
