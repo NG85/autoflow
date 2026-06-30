@@ -548,11 +548,34 @@ class CRMReviewService:
         row["opportunity_stage"] = row.get("baseline_opportunity_stage")
         row["expected_closing_date"] = row.get("baseline_expected_closing_date")
 
+    @staticmethod
+    def _compute_last_visit_days(
+        last_visit_date: Any,
+        period_end: Optional[date],
+    ) -> Optional[int]:
+        """距 session period_end 的自然日天数（含截止日当天，当天拜访为 1）。"""
+        if period_end is None or last_visit_date is None or last_visit_date == "":
+            return None
+        visit_date = last_visit_date
+        if isinstance(visit_date, str):
+            try:
+                visit_date = datetime.strptime(visit_date[:10], "%Y-%m-%d").date()
+            except ValueError:
+                return None
+        elif isinstance(visit_date, datetime):
+            visit_date = visit_date.date()
+        if not isinstance(visit_date, date):
+            return None
+        if visit_date > period_end:
+            return None
+        return (period_end - visit_date).days + 1
+
     def _project_snapshot_items(
         self,
         *,
         items: List[Dict[str, Any]],
         fields_level: str,
+        period_end: Optional[date] = None,
         use_baseline_business_fields: bool = False,
     ) -> List[Dict[str, Any]]:
         level = str(fields_level or "basic").strip().lower()
@@ -572,6 +595,9 @@ class CRMReviewService:
                 item["progress_count"] = int(row.get("progress_count") or 0)
                 item["opp_summary_count"] = int(row.get("opp_summary_count") or 0)
                 item["opp_reqs_insight_count"] = int(row.get("opp_reqs_insight_count") or 0)
+                item["last_visit_days"] = self._compute_last_visit_days(
+                    row.get("last_visit_date"), period_end
+                )
                 projected_full.append(item)
             return projected_full
 
@@ -583,6 +609,9 @@ class CRMReviewService:
             item["progress_count"] = int(row.get("progress_count") or 0)
             item["opp_summary_count"] = int(row.get("opp_summary_count") or 0)
             item["opp_reqs_insight_count"] = int(row.get("opp_reqs_insight_count") or 0)
+            item["last_visit_days"] = self._compute_last_visit_days(
+                row.get("last_visit_date"), period_end
+            )
             projected.append(item)
         return projected
 
@@ -1466,6 +1495,7 @@ class CRMReviewService:
         output_items = self._project_snapshot_items(
             items=enriched_items,
             fields_level=fields_level,
+            period_end=scope["session"].period_end,
             use_baseline_business_fields=use_baseline_business_fields,
         )
 
@@ -1840,6 +1870,7 @@ class CRMReviewService:
         output_items = self._project_snapshot_items(
             items=enriched_items,
             fields_level=fields_level,
+            period_end=scope["session"].period_end,
             use_baseline_business_fields=use_baseline_business_fields,
         )
 
