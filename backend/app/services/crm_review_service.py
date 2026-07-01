@@ -290,7 +290,7 @@ def _get_forecast_type_rank_entries_cached(
 def _load_closed_won_stages(db_session: Session) -> List[str]:
     rows = db_session.exec(
         text(
-            "select sales_stage from diagnostic_playbook "
+            "select sales_stage from crm_playbook_stages "
             "where status = 'active' and stage_category = 'closed_won'"
         )
     ).all()
