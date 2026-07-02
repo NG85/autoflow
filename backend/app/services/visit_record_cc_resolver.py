@@ -12,6 +12,7 @@ from app.models.notification_cc_rule import EVENT_TYPE_VISIT_RECORD_CARD
 from app.platforms.constants import PLATFORM_DINGTALK, PLATFORM_FEISHU, PLATFORM_LARK
 from app.repositories.notification_cc_rule import notification_cc_rule_repo
 from app.repositories.user_profile import user_profile_repo
+from app.services.visit_record_push_recipients import filter_recipient_list_by_active_open_ids
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,8 @@ def _profile_to_recipient(
     recipient_type: str,
     cc_scope: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
+    if not profile or not getattr(profile, "is_active", True):
+        return None
     oauth_account = profile.oauth_user
     if not oauth_account:
         return None
@@ -150,6 +153,17 @@ def resolve_visit_record_cc_recipients(
                 "receive_id_type": "open_id",
                 "platform": platform,
             }
+        )
+
+    if oauth_recipients:
+        active_oauth_open_ids = user_profile_repo.get_active_open_ids(
+            db_session,
+            [str(recipient["open_id"]) for recipient in oauth_recipients],
+        )
+        oauth_recipients = filter_recipient_list_by_active_open_ids(
+            oauth_recipients,
+            active_oauth_open_ids,
+            recipient_type="executive_admin",
         )
 
     _merge_recipients_into_platform_map(recipients_by_platform, configured_recipients)

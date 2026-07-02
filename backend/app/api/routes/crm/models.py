@@ -1283,7 +1283,11 @@ class ReviewOppBranchSnapshotsQueryIn(BaseModel):
             "forecast_amount_min/max: number；"
             "ai_commits/ai_stages: string[]；"
             "ai_expected_closing_date_start/end: YYYY-MM-DD；"
-            "has_risk/has_progress: boolean。"
+            "has_risk/has_progress: boolean；"
+            "last_visit_date_start/end: YYYY-MM-DD；"
+            "last_visit_within_days: number（以 session.period_end 为截止日，向前 N 个自然日，含截止日当天）；"
+            "has_recent_visit: boolean（与 last_visit_date_start/end 或 last_visit_within_days 联用，"
+            "true=窗口内有拜访默认，false=窗口内无拜访含从未拜访）。"
             "主表 T2 baseline 列表见 ``POST .../baseline-opp-branch-snapshots``，常用 ``opportunity_ids`` 收窄集合。"
         ),
     )
@@ -1310,7 +1314,11 @@ class ReviewSnapshotGroupsQueryIn(BaseModel):
             "forecast_amount_min/max: number；"
             "ai_commits/ai_stages: string[]；"
             "ai_expected_closing_date_start/end: YYYY-MM-DD；"
-            "has_risk/has_progress: boolean"
+            "has_risk/has_progress: boolean；"
+            "last_visit_date_start/end: YYYY-MM-DD；"
+            "last_visit_within_days: number（以 session.period_end 为截止日，向前 N 个自然日，含截止日当天）；"
+            "has_recent_visit: boolean（与 last_visit_date_start/end 或 last_visit_within_days 联用，"
+            "true=窗口内有拜访默认，false=窗口内无拜访含从未拜访）"
         ),
     )
 
@@ -1380,7 +1388,11 @@ class ReviewSnapshotGroupDataQueryIn(BaseModel):
             "forecast_amount_min/max: number；"
             "ai_commits/ai_stages: string[]；"
             "ai_expected_closing_date_start/end: YYYY-MM-DD；"
-            "has_risk/has_progress: boolean"
+            "has_risk/has_progress: boolean；"
+            "last_visit_date_start/end: YYYY-MM-DD；"
+            "last_visit_within_days: number（以 session.period_end 为截止日，向前 N 个自然日，含截止日当天）；"
+            "has_recent_visit: boolean（与 last_visit_date_start/end 或 last_visit_within_days 联用，"
+            "true=窗口内有拜访默认，false=窗口内无拜访含从未拜访）"
         ),
     )
 

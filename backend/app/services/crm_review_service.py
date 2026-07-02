@@ -6,11 +6,11 @@ import threading
 import time
 import uuid
 from decimal import Decimal
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
-from sqlalchemy import case, false, text
+from sqlalchemy import and_, case, false, or_, text
 from sqlalchemy.orm import load_only
 from sqlmodel import Session, select, func
 
@@ -290,7 +290,7 @@ def _get_forecast_type_rank_entries_cached(
 def _load_closed_won_stages(db_session: Session) -> List[str]:
     rows = db_session.exec(
         text(
-            "select sales_stage from diagnostic_playbook "
+            "select sales_stage from crm_playbook_stages "
             "where status = 'active' and stage_category = 'closed_won'"
         )
     ).all()
@@ -548,11 +548,34 @@ class CRMReviewService:
         row["opportunity_stage"] = row.get("baseline_opportunity_stage")
         row["expected_closing_date"] = row.get("baseline_expected_closing_date")
 
+    @staticmethod
+    def _compute_last_visit_days(
+        last_visit_date: Any,
+        period_end: Optional[date],
+    ) -> Optional[int]:
+        """距 session period_end 的自然日天数（含截止日当天，当天拜访为 1）。"""
+        if period_end is None or last_visit_date is None or last_visit_date == "":
+            return None
+        visit_date = last_visit_date
+        if isinstance(visit_date, str):
+            try:
+                visit_date = datetime.strptime(visit_date[:10], "%Y-%m-%d").date()
+            except ValueError:
+                return None
+        elif isinstance(visit_date, datetime):
+            visit_date = visit_date.date()
+        if not isinstance(visit_date, date):
+            return None
+        if visit_date > period_end:
+            return None
+        return (period_end - visit_date).days + 1
+
     def _project_snapshot_items(
         self,
         *,
         items: List[Dict[str, Any]],
         fields_level: str,
+        period_end: Optional[date] = None,
         use_baseline_business_fields: bool = False,
     ) -> List[Dict[str, Any]]:
         level = str(fields_level or "basic").strip().lower()
@@ -572,6 +595,9 @@ class CRMReviewService:
                 item["progress_count"] = int(row.get("progress_count") or 0)
                 item["opp_summary_count"] = int(row.get("opp_summary_count") or 0)
                 item["opp_reqs_insight_count"] = int(row.get("opp_reqs_insight_count") or 0)
+                item["last_visit_days"] = self._compute_last_visit_days(
+                    row.get("last_visit_date"), period_end
+                )
                 projected_full.append(item)
             return projected_full
 
@@ -583,6 +609,9 @@ class CRMReviewService:
             item["progress_count"] = int(row.get("progress_count") or 0)
             item["opp_summary_count"] = int(row.get("opp_summary_count") or 0)
             item["opp_reqs_insight_count"] = int(row.get("opp_reqs_insight_count") or 0)
+            item["last_visit_days"] = self._compute_last_visit_days(
+                row.get("last_visit_date"), period_end
+            )
             projected.append(item)
         return projected
 
@@ -648,6 +677,53 @@ class CRMReviewService:
             base_where.append(parsed_col < bound)
         else:
             base_where.append(parsed_col <= bound)
+
+    @staticmethod
+    def _append_last_visit_presence_filter(
+        base_where: List[Any],
+        col: Any,
+        *,
+        has_recent_visit: bool,
+        date_start: Optional[str] = None,
+        date_end: Optional[Tuple[str, bool]] = None,
+        period_end: Optional[date] = None,
+        within_days: Optional[int] = None,
+    ) -> None:
+        """按时间窗口筛选有无拜访；窗口可由绝对日期范围、近 N 天或二者组合（AND）定义。"""
+        parsed_col = CRMReviewService._date_parse_expr(col)
+        in_window: List[Any] = []
+
+        if date_start:
+            in_window.append(parsed_col >= CRMReviewService._date_bound_expr(date_start))
+        if date_end:
+            value, exclusive = date_end
+            bound = CRMReviewService._date_bound_expr(value)
+            if exclusive:
+                in_window.append(parsed_col < bound)
+            else:
+                in_window.append(parsed_col <= bound)
+        if within_days is not None:
+            if period_end is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="last_visit_within_days requires review session period_end",
+                )
+            window_start = period_end - timedelta(days=within_days - 1)
+            in_window.append(col >= window_start)
+            in_window.append(col <= period_end)
+
+        if not in_window:
+            return
+
+        if has_recent_visit:
+            base_where.extend(in_window)
+        else:
+            base_where.append(
+                or_(
+                    col.is_(None),
+                    ~and_(*in_window),
+                )
+            )
 
     @staticmethod
     def _normalize_sorts_list(sorts: Optional[List[Tuple[str, str]]]) -> List[Tuple[str, str]]:
@@ -1007,6 +1083,11 @@ class CRMReviewService:
         - ai_expected_closing_date_end: (bound, exclusive) — date-only end uses < next-day 00:00:00
         - has_risk: bool
         - has_progress: bool
+        - last_visit_date_start: str (YYYY-MM-DD)
+        - last_visit_date_end: (bound, exclusive) — date-only end uses < next-day 00:00:00
+        - last_visit_within_days: int — 以 review session period_end 为截止日，向前 N 个自然日（含截止日当天）
+        - has_recent_visit: bool — 与 last_visit_date_start/end 或 last_visit_within_days 联用；
+          true=窗口内有拜访（默认），false=窗口内无拜访（含从未拜访）
         """
         raw = snapshot_filters if isinstance(snapshot_filters, dict) else {}
 
@@ -1030,6 +1111,10 @@ class CRMReviewService:
         forecast_amount_max_raw = raw.get("forecast_amount_max")
         has_risk_raw = raw.get("has_risk")
         has_progress_raw = raw.get("has_progress")
+        last_visit_date_start = str(raw.get("last_visit_date_start") or "").strip()
+        last_visit_date_end = str(raw.get("last_visit_date_end") or "").strip()
+        last_visit_within_days_raw = raw.get("last_visit_within_days")
+        has_recent_visit_raw = raw.get("has_recent_visit")
 
         def _normalize_start_date_or_raise(value: str, field_name: str) -> Optional[str]:
             if not value:
@@ -1100,6 +1185,23 @@ class CRMReviewService:
                 detail=f"invalid {field_name}, expected boolean",
             )
 
+        def _normalize_positive_int_or_raise(value: Any, field_name: str) -> Optional[int]:
+            if value is None or value == "":
+                return None
+            try:
+                n = int(value)
+            except (TypeError, ValueError) as e:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"invalid {field_name}, expected positive integer",
+                ) from e
+            if n < 1:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"invalid {field_name}, expected positive integer",
+                )
+            return n
+
         def _normalize_string_list_from_keys(*keys: str) -> List[str]:
             out: List[str] = []
             seen: set[str] = set()
@@ -1143,6 +1245,16 @@ class CRMReviewService:
             ),
             "has_risk": _normalize_bool_or_raise(has_risk_raw, "has_risk"),
             "has_progress": _normalize_bool_or_raise(has_progress_raw, "has_progress"),
+            "last_visit_date_start": _normalize_start_date_or_raise(
+                last_visit_date_start, "last_visit_date_start"
+            ),
+            "last_visit_date_end": _normalize_end_date_or_raise(
+                last_visit_date_end, "last_visit_date_end"
+            ),
+            "last_visit_within_days": _normalize_positive_int_or_raise(
+                last_visit_within_days_raw, "last_visit_within_days"
+            ),
+            "has_recent_visit": _normalize_bool_or_raise(has_recent_visit_raw, "has_recent_visit"),
         }
 
     @staticmethod
@@ -1152,6 +1264,7 @@ class CRMReviewService:
         *,
         session_id: str,
         snapshot_period: str,
+        period_end: Optional[date] = None,
         snapshot_cls: Any = CRMReviewOppBranchSnapshot,
         use_baseline_business_fields: bool = False,
     ) -> None:
@@ -1258,6 +1371,49 @@ class CRMReviewService:
                 base_where.append(S.opportunity_id.in_(progress_opp_subq))
             else:
                 base_where.append(S.opportunity_id.not_in(progress_opp_subq))
+        last_visit_date_start = normalized_filters.get("last_visit_date_start")
+        last_visit_date_end = normalized_filters.get("last_visit_date_end")
+        last_visit_within_days = normalized_filters.get("last_visit_within_days")
+        has_recent_visit = normalized_filters.get("has_recent_visit")
+        has_visit_window = bool(
+            last_visit_date_start or last_visit_date_end or last_visit_within_days is not None
+        )
+        if has_recent_visit is not None and not has_visit_window:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "has_recent_visit requires last_visit_date_start/end "
+                    "or last_visit_within_days"
+                ),
+            )
+        if has_recent_visit is not None:
+            CRMReviewService._append_last_visit_presence_filter(
+                base_where,
+                S.last_visit_date,
+                has_recent_visit=has_recent_visit,
+                date_start=last_visit_date_start,
+                date_end=last_visit_date_end,
+                period_end=period_end,
+                within_days=last_visit_within_days,
+            )
+        else:
+            if last_visit_date_start:
+                CRMReviewService._append_date_start_filter(
+                    base_where, S.last_visit_date, last_visit_date_start
+                )
+            if last_visit_date_end:
+                CRMReviewService._append_date_end_filter(
+                    base_where, S.last_visit_date, last_visit_date_end
+                )
+            if last_visit_within_days is not None:
+                if period_end is None:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="last_visit_within_days requires review session period_end",
+                    )
+                window_start = period_end - timedelta(days=last_visit_within_days - 1)
+                base_where.append(S.last_visit_date >= window_start)
+                base_where.append(S.last_visit_date <= period_end)
 
     def get_my_edit_page_data(
         self,
@@ -1298,6 +1454,7 @@ class CRMReviewService:
             normalized_filters,
             session_id=session_id,
             snapshot_period=snapshot_period,
+            period_end=scope["session"].period_end,
             snapshot_cls=snap,
             use_baseline_business_fields=use_baseline_business_fields,
         )
@@ -1338,6 +1495,7 @@ class CRMReviewService:
         output_items = self._project_snapshot_items(
             items=enriched_items,
             fields_level=fields_level,
+            period_end=scope["session"].period_end,
             use_baseline_business_fields=use_baseline_business_fields,
         )
 
@@ -1568,6 +1726,7 @@ class CRMReviewService:
             normalized_filters,
             session_id=session_id,
             snapshot_period=scope["snapshot_period"],
+            period_end=scope["session"].period_end,
             snapshot_cls=snap,
             use_baseline_business_fields=use_baseline_business_fields,
         )
@@ -1670,6 +1829,7 @@ class CRMReviewService:
             normalized_filters,
             session_id=session_id,
             snapshot_period=scope["snapshot_period"],
+            period_end=scope["session"].period_end,
             snapshot_cls=snap,
             use_baseline_business_fields=use_baseline_business_fields,
         )
@@ -1710,6 +1870,7 @@ class CRMReviewService:
         output_items = self._project_snapshot_items(
             items=enriched_items,
             fields_level=fields_level,
+            period_end=scope["session"].period_end,
             use_baseline_business_fields=use_baseline_business_fields,
         )
 

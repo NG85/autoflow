@@ -2,6 +2,8 @@ import logging
 from collections import defaultdict
 from typing import List, Dict, Any, Optional, Tuple
 
+import requests
+
 from uuid import UUID
 
 from app.utils.redis_client import redis_client
@@ -24,9 +26,50 @@ from app.platforms.lark.client import lark_client
 from app.platforms.dingtalk.client import dingtalk_client
 from app.core.config import settings
 from app.services.oauth_service import oauth_client
+from app.services.visit_record_push_recipients import (
+    filter_recipient_list_by_active_open_ids,
+    log_skip_inactive_visit_recipient,
+)
 from app.services.visit_record_cc_resolver import resolve_visit_record_cc_recipients
+from app.services.visit_record_card_push_status import (
+    resolve_card_push_status_after_retry,
+    resolve_card_push_status_from_notification_result,
+)
+from app.services.visit_record_push_errors import split_failed_recipients_by_retryable
 
 logger = logging.getLogger(__name__)
+
+_INVALID_TENANT_TOKEN_API_CODES = frozenset({99991663})
+_INVALID_TENANT_TOKEN_MARKERS = (
+    "invalid access token",
+    "access token is invalid",
+    "tenant_access_token is invalid",
+)
+
+
+def _is_invalid_tenant_token_error(exc: Exception) -> bool:
+    """判断平台 API 错误是否由 tenant_access_token 失效引起。"""
+    response = getattr(exc, "response", None)
+    if response is None:
+        return False
+    try:
+        body = response.text or ""
+    except Exception:
+        body = ""
+    lower_body = body.lower()
+    if any(marker in lower_body for marker in _INVALID_TENANT_TOKEN_MARKERS):
+        return True
+    try:
+        data = response.json()
+    except Exception:
+        return False
+    code = data.get("code")
+    if code in _INVALID_TENANT_TOKEN_API_CODES:
+        return True
+    err = data.get("error") or {}
+    msg = str(data.get("msg") or err.get("message") or "").lower()
+    return any(marker in msg for marker in _INVALID_TENANT_TOKEN_MARKERS)
+
 
 # department_group_chats.notification_type：部门 review 群按推送内容细分
 _DEPARTMENT_REVIEW_VISIT_TYPES = frozenset({"department_review", "all"})
@@ -469,6 +512,7 @@ class PlatformNotificationService:
         except Exception as e:
             logger.warning("_send_card_to_group_chats: get token failed for %s: %s", platform, e)
             return 0
+        platform_tokens = {platform: token}
         card_content = {
             "type": "template",
             "data": {"template_id": template_id, "template_variable": template_vars},
@@ -482,11 +526,12 @@ class PlatformNotificationService:
             try:
                 self._send_message(
                     chat_id,
-                    token,
+                    platform_tokens[platform],
                     card_content,
                     platform,
                     receive_id_type="chat_id",
                     msg_type=msg_type,
+                    platform_tokens=platform_tokens,
                 )
                 success += 1
                 logger.info("Sent card to group %s on %s", name, platform)
@@ -514,6 +559,7 @@ class PlatformNotificationService:
         except Exception as e:
             logger.warning("_send_text_to_group_chats: get token failed for %s: %s", platform, e)
             return 0
+        platform_tokens = {platform: token}
         success = 0
         for group in group_chats:
             chat_id = group.get("chat_id")
@@ -523,11 +569,12 @@ class PlatformNotificationService:
             try:
                 self._send_message(
                     chat_id,
-                    token,
+                    platform_tokens[platform],
                     text,
                     platform,
                     receive_id_type="chat_id",
                     msg_type="text",
+                    platform_tokens=platform_tokens,
                 )
                 success += 1
                 logger.info("Sent text to group %s on %s", name, platform)
@@ -561,15 +608,27 @@ class PlatformNotificationService:
             f"{prefix}{sales_name}完成了一次{method}的客户跟进，并提交了跟进记录，AI质检结果为【记录质量：{followup_quality}｜计划质量：{next_step_quality}】。"
         )
     
-    def _get_tenant_access_token(self, platform: str = PLATFORM_FEISHU, external: bool = False) -> str:
+    def _invalidate_tenant_access_token(self, platform: str) -> None:
+        redis_client.delete_tenant_access_token(platform)
+
+    def _get_tenant_access_token(
+        self,
+        platform: str = PLATFORM_FEISHU,
+        external: bool = False,
+        *,
+        force_refresh: bool = False,
+    ) -> str:
         """
         获取指定平台的租户访问令牌。
         优先从 Redis 读取（key: notification:tenant_token:{platform}，TTL 110 分钟）；
         未命中则请求平台 API 并写入 Redis，多进程/多实例共享同一 token。
         """
-        token = redis_client.get_tenant_access_token(platform)
-        if token:
-            return token
+        if force_refresh:
+            self._invalidate_tenant_access_token(platform)
+        else:
+            token = redis_client.get_tenant_access_token(platform)
+            if token:
+                return token
         if platform == PLATFORM_FEISHU:
             token = feishu_client.get_tenant_access_token()
         elif platform == PLATFORM_LARK:
@@ -580,18 +639,61 @@ class PlatformNotificationService:
             raise ValueError(f"Unsupported platform: {platform}")
         redis_client.set_tenant_access_token(platform, token, self._TOKEN_CACHE_TTL_SECONDS)
         return token
-    
-    def _send_message(self, open_id: str, token: str, content: Dict[str, Any], platform: str = PLATFORM_FEISHU, receive_id_type: str = "open_id", **kwargs) -> Dict[str, Any]:
-        """发送消息到指定平台"""
+
+    def _dispatch_platform_message(
+        self,
+        open_id: str,
+        token: str,
+        content: Dict[str, Any],
+        platform: str,
+        receive_id_type: str = "open_id",
+        **kwargs,
+    ) -> Dict[str, Any]:
         if platform == PLATFORM_FEISHU:
             return feishu_client.send_message(open_id, token, content, receive_id_type, **kwargs)
-        elif platform == PLATFORM_LARK:
+        if platform == PLATFORM_LARK:
             return lark_client.send_message(open_id, token, content, receive_id_type, **kwargs)
-        elif platform == PLATFORM_DINGTALK:
+        if platform == PLATFORM_DINGTALK:
             return dingtalk_client.send_message(open_id, token, content, receive_id_type, **kwargs)
-        else:
-            raise ValueError(f"Unsupported platform: {platform}")
-    
+        raise ValueError(f"Unsupported platform: {platform}")
+
+    def _send_message(
+        self,
+        open_id: str,
+        token: str,
+        content: Dict[str, Any],
+        platform: str = PLATFORM_FEISHU,
+        receive_id_type: str = "open_id",
+        *,
+        _allow_token_retry: bool = True,
+        platform_tokens: Optional[Dict[str, str]] = None,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """发送消息到指定平台；tenant token 失效时清缓存并自动重试一次。"""
+        try:
+            return self._dispatch_platform_message(
+                open_id, token, content, platform, receive_id_type, **kwargs
+            )
+        except Exception as exc:
+            if not _allow_token_retry or not _is_invalid_tenant_token_error(exc):
+                raise
+            logger.warning(
+                "Tenant access token invalid for %s, invalidating cache and retrying once",
+                platform,
+            )
+            self._invalidate_tenant_access_token(platform)
+            fresh_token = self._get_tenant_access_token(platform, force_refresh=True)
+            if platform_tokens is not None:
+                platform_tokens[platform] = fresh_token
+            return self._dispatch_platform_message(
+                open_id,
+                fresh_token,
+                content,
+                platform,
+                receive_id_type,
+                **kwargs,
+            )
+
     def _group_recipients_by_platform(self, recipients: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
         """将接收者列表按平台分组"""
         recipients_by_platform = {}
@@ -621,7 +723,7 @@ class PlatformNotificationService:
                 recipients_by_platform[platform] = []
             recipients_by_platform[platform].append(recipient)
         return recipients_by_platform
-    
+
     def _get_platform_tokens(self, platforms: List[str]) -> Dict[str, str]:
         """批量获取多个平台的访问令牌"""
         platform_tokens = {}
@@ -643,20 +745,30 @@ class PlatformNotificationService:
         """验证平台是否支持"""
         return platform in [PLATFORM_FEISHU, PLATFORM_LARK, PLATFORM_DINGTALK]
     
-    def _create_failed_recipient_record(self, recipient: Dict[str, Any], platform: str, error: str) -> Dict[str, Any]:
-        """创建失败接收者记录"""
+    def _create_failed_recipient_record(
+        self, recipient: Dict[str, Any], platform: str, error: str | Exception
+    ) -> Dict[str, Any]:
+        """创建失败接收者记录（含重推所需 open_id / receive_id_type / retryable）。"""
+        from app.services.visit_record_push_errors import classify_delivery_error
+
+        classified = classify_delivery_error(error)
         return {
+            "open_id": recipient.get("open_id"),
             "name": recipient["name"],
             "type": recipient["type"],
             "platform": platform,
-            "error": error
+            "receive_id_type": recipient.get("receive_id_type", "open_id"),
+            "retryable": classified["retryable"],
+            "error_code": classified.get("error_code"),
+            "skip_reason": classified.get("skip_reason"),
+            "error": classified["error"],
         }
     
     def _send_messages_to_platform(
         self,
         platform: str,
         platform_recipients: List[Dict[str, Any]],
-        token: str,
+        platform_tokens: Dict[str, str],
         card_content: Dict[str, Any],
         template_id: str = None,
         template_vars: Dict[str, Any] = None
@@ -667,7 +779,7 @@ class PlatformNotificationService:
         Args:
             platform: 平台名称
             platform_recipients: 该平台的接收者列表
-            token: 平台访问令牌
+            platform_tokens: 各平台 token 池；刷新后会原地更新，供同批后续发送复用
             card_content: 卡片内容（如果提供，直接使用）
             template_id: 模板ID（如果提供，会构建card_content）
             template_vars: 模板变量（如果提供，会构建card_content）
@@ -695,11 +807,12 @@ class PlatformNotificationService:
                 
                 self._send_message(
                     recipient["open_id"],
-                    token,
+                    platform_tokens[platform],
                     card_content,
                     platform,
                     receive_id_type=receive_id_type,
-                    msg_type="interactive"
+                    msg_type="interactive",
+                    platform_tokens=platform_tokens,
                 )
                 
                 logger.info(
@@ -711,7 +824,7 @@ class PlatformNotificationService:
             except Exception as e:
                 logger.error(f"向{recipient['name']}发送{platform}通知失败: {e}")
                 failed_recipients.append(
-                    self._create_failed_recipient_record(recipient, platform, str(e))
+                    self._create_failed_recipient_record(recipient, platform, e)
                 )
         
         return success_count, failed_recipients
@@ -806,7 +919,6 @@ class PlatformNotificationService:
                 continue
             
             # 发送消息到当前平台
-            token = platform_tokens[platform]
             platform_card_content = (
                 (card_content_by_platform or {}).get(platform) if card_content_by_platform else card_content
             )
@@ -816,7 +928,7 @@ class PlatformNotificationService:
             success_count, failed_recipients = self._send_messages_to_platform(
                 platform,
                 platform_recipients,
-                token,
+                platform_tokens,
                 platform_card_content,
                 platform_template_id,
                 template_vars,
@@ -877,8 +989,7 @@ class PlatformNotificationService:
                     )
                 continue
 
-            token = platform_tokens.get(platform)
-            if not token:
+            if platform not in platform_tokens:
                 for recipient in platform_recipients:
                     total_failed_recipients.append(
                         self._create_failed_recipient_record(recipient, platform, "Failed to get token")
@@ -890,11 +1001,12 @@ class PlatformNotificationService:
                     receive_id_type = recipient.get("receive_id_type", "open_id")
                     self._send_message(
                         recipient["open_id"],
-                        token,
+                        platform_tokens[platform],
                         message_text,
                         platform,
                         receive_id_type=receive_id_type,
                         msg_type="text",
+                        platform_tokens=platform_tokens,
                     )
                     total_success_count += 1
                 except Exception as e:
@@ -1039,7 +1151,8 @@ class PlatformNotificationService:
                     f"name={recorder_name}, id={recorder_id}, base_user_id={base_user_id}"
                 )
             else:
-                # 5. 将汇报链领导加入接收者列表，按平台分组并去重
+                # 5. 将汇报链领导加入接收者列表，仅保留 is_active 的档案
+                leader_candidates: List[Dict[str, Any]] = []
                 for leader in leaders:
                     platform = leader.get("platform")
                     if not platform:
@@ -1054,12 +1167,26 @@ class PlatformNotificationService:
                         logger.warning(f"Leader missing open_id after normalization: {leader}")
                         continue
 
+                    leader_candidates.append(leader)
+
+                active_leader_open_ids = user_profile_repo.get_active_open_ids(
+                    db_session,
+                    [str(leader["open_id"]) for leader in leader_candidates],
+                )
+                for leader in leader_candidates:
+                    platform = leader["platform"]
+                    open_id = leader["open_id"]
+                    if str(open_id) not in active_leader_open_ids:
+                        log_skip_inactive_visit_recipient(
+                            leader, recipient_type="leader"
+                        )
+                        continue
+
                     if platform not in recipients_by_platform:
                         recipients_by_platform[platform] = []
 
                     existing_open_ids = {r["open_id"] for r in recipients_by_platform[platform]}
                     if open_id in existing_open_ids:
-                        # 避免重复推送（例如某些领导已在其他逻辑中添加）
                         continue
 
                     recipients_by_platform[platform].append(
@@ -1256,6 +1383,30 @@ class PlatformNotificationService:
 
         return recipients_by_platform, department_groups_review, department_groups_brief
 
+    def _filter_recipients_by_active_profiles(
+        self,
+        db_session: Session,
+        recipients_by_platform: Dict[str, List[Dict[str, Any]]],
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """仅保留 user_profiles.is_active=true 的接收者，避免对已失效账号做无效推送。"""
+        if not recipients_by_platform:
+            return {}
+        open_ids = [
+            str(r.get("open_id"))
+            for recipients in recipients_by_platform.values()
+            for r in recipients
+            if r.get("open_id")
+        ]
+        active_open_ids = user_profile_repo.get_active_open_ids(db_session, open_ids)
+        filtered: Dict[str, List[Dict[str, Any]]] = {}
+        for platform, recipients in recipients_by_platform.items():
+            kept = filter_recipient_list_by_active_open_ids(
+                recipients, active_open_ids, platform=platform
+            )
+            if kept:
+                filtered[platform] = kept
+        return filtered
+
     def _prepare_visit_record_template_vars(
         self,
         record_id: str,
@@ -1365,7 +1516,6 @@ class PlatformNotificationService:
                     failed_recipients.append(self._create_failed_recipient_record(r, platform, "Failed to get token"))
                 continue
 
-            token = platform_tokens[platform]
             sorted_recipients = sorted(
                 platform_recipients,
                 key=lambda r: self._VISIT_RECORD_RECIPIENT_TYPE_PRIORITY.get(r.get("type"), 99),
@@ -1394,11 +1544,12 @@ class PlatformNotificationService:
                 try:
                     self._send_message(
                         recipient["open_id"],
-                        token,
+                        platform_tokens[platform],
                         card_content,
                         platform,
                         receive_id_type=recipient.get("receive_id_type", "open_id"),
                         msg_type="interactive",
+                        platform_tokens=platform_tokens,
                     )
                     success_count += 1
                     logger.info(
@@ -1406,8 +1557,23 @@ class PlatformNotificationService:
                         recipient.get("name"), recipient.get("type"), platform,
                     )
                 except Exception as e:
-                    logger.error("Failed to push visit record to %s on %s: %s", recipient.get("name"), platform, e)
-                    failed_recipients.append(self._create_failed_recipient_record(recipient, platform, str(e)))
+                    failed_record = self._create_failed_recipient_record(recipient, platform, e)
+                    if not failed_record.get("retryable", True):
+                        logger.warning(
+                            "Skip non-retryable visit record push to %s (%s) on %s: %s",
+                            recipient.get("name"),
+                            recipient.get("type"),
+                            platform,
+                            failed_record.get("error"),
+                        )
+                    else:
+                        logger.error(
+                            "Failed to push visit record to %s on %s: %s",
+                            recipient.get("name"),
+                            platform,
+                            failed_record.get("error"),
+                        )
+                    failed_recipients.append(failed_record)
 
         return success_count, failed_recipients
 
@@ -1482,16 +1648,28 @@ class PlatformNotificationService:
         tasks: Optional[List[Dict[str, Any]]] = None,
         task_count: Optional[int] = None,
         is_revised: bool = False,
+        *,
+        recipients_by_platform_override: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+        skip_group_notifications: bool = False,
+        total_recipients_count_override: Optional[int] = None,
+        previously_failed_count: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         发送拜访记录通知。
         支持通过 recorder_name 或 recorder_id 查找记录人；link 类型会包含会议纪要总结。
+        recipients_by_platform_override：仅向指定接收者推送（用于 partial_pushed 定向重推）。
         """
-        recipients_by_platform, department_groups_review, department_groups_brief = (
-            self._collect_visit_record_recipients_and_groups(
-                db_session, recorder_name, recorder_id, visit_record
+        is_retry = recipients_by_platform_override is not None
+        if is_retry:
+            recipients_by_platform = recipients_by_platform_override or {}
+            department_groups_review: List[Dict[str, Any]] = []
+            department_groups_brief: List[Dict[str, Any]] = []
+        else:
+            recipients_by_platform, department_groups_review, department_groups_brief = (
+                self._collect_visit_record_recipients_and_groups(
+                    db_session, recorder_name, recorder_id, visit_record
+                )
             )
-        )
         base_template_vars = self._prepare_visit_record_template_vars(
             record_id,
             recorder_name,
@@ -1505,35 +1683,76 @@ class PlatformNotificationService:
 
         if not recipients_by_platform and not department_groups_review and not department_groups_brief:
             logger.warning(
-                "No recipients and no department groups for recorder: name=%s, id=%s",
-                recorder_name, recorder_id,
+                "No recipients and no department groups for recorder: name=%s, id=%s retry=%s",
+                recorder_name, recorder_id, is_retry,
             )
             return {
                 "success": False,
                 "message": "No recipients found",
                 "recipients_count": 0,
                 "success_count": 0,
+                "failed_recipients": [],
+                "card_push_status": resolve_card_push_status_from_notification_result(
+                    success_count=0,
+                    recipients_count=0,
+                ),
             }
 
         total_success_count, total_failed_recipients = self._send_visit_record_to_individual_recipients(
             recipients_by_platform, base_template_vars, visit_type, visit_record
         )
-        self._send_visit_record_to_review_groups(
-            department_groups_review, base_template_vars, visit_type, visit_record
-        )
-        self._send_visit_record_to_brief_groups(
-            department_groups_brief, recorder_name, visit_record, is_revised=is_revised
-        )
+        if not skip_group_notifications:
+            self._send_visit_record_to_review_groups(
+                department_groups_review, base_template_vars, visit_type, visit_record
+            )
+            self._send_visit_record_to_brief_groups(
+                department_groups_brief, recorder_name, visit_record, is_revised=is_revised
+            )
 
         platforms_used = [str(p) for p in recipients_by_platform.keys() if p]
-        total_recipients_count = sum(len(rs) for rs in recipients_by_platform.values())
+        retry_recipient_count = sum(len(rs) for rs in recipients_by_platform.values())
+        if is_retry and total_recipients_count_override is not None:
+            total_recipients_count = total_recipients_count_override
+            prev_failed = (
+                previously_failed_count
+                if previously_failed_count is not None
+                else retry_recipient_count
+            )
+            merged_success_count = max(
+                0, total_recipients_count - prev_failed
+            ) + total_success_count
+            card_push_status = resolve_card_push_status_after_retry(
+                total_recipients=total_recipients_count,
+                previously_failed_count=prev_failed,
+                retry_success_count=total_success_count,
+                retry_failed_recipients=total_failed_recipients,
+            )
+        else:
+            total_recipients_count = sum(len(rs) for rs in recipients_by_platform.values())
+            merged_success_count = total_success_count
+            card_push_status = resolve_card_push_status_from_notification_result(
+                success_count=total_success_count,
+                recipients_count=total_recipients_count,
+                failed_recipients=total_failed_recipients,
+            )
+        retryable_failed, skipped_recipients = split_failed_recipients_by_retryable(
+            total_failed_recipients
+        )
         result = {
-            "success": total_success_count > 0,
-            "message": f"Pushed to {total_success_count}/{total_recipients_count} recipients across platforms: {', '.join(platforms_used)}",
+            "success": merged_success_count > 0,
+            "message": (
+                f"Retried {total_success_count}/{retry_recipient_count} "
+                f"failed recipients; overall {merged_success_count}/{total_recipients_count}"
+                if is_retry
+                else f"Pushed to {total_success_count}/{total_recipients_count} recipients across platforms: {', '.join(platforms_used)}"
+            ),
             "recipients_count": total_recipients_count,
-            "success_count": total_success_count,
+            "success_count": merged_success_count,
             "platforms_used": platforms_used,
-            "failed_recipients": total_failed_recipients,
+            "failed_recipients": retryable_failed,
+            "skipped_recipients": skipped_recipients,
+            "card_push_status": card_push_status,
+            "is_retry": is_retry,
         }
         logger.info("Visit record notification result: %s", result)
         return result

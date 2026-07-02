@@ -30,8 +30,10 @@ from app.models.crm_sales_visit_records import CRMSalesVisitRecord
 from app.repositories.document_content import DocumentContentRepo
 from app.services.visit_record_card_push_status import (
     VisitRecordCardPushStatus,
+    get_visit_record_card_push_delivery,
     get_visit_record_card_push_status,
-    update_visit_record_card_push_status,
+    should_skip_duplicate_card_push_callback,
+    update_visit_record_card_push_delivery,
 )
 from app.services.visit_task_eval import tasks_to_card_payload
 
@@ -228,10 +230,11 @@ def _handle_visit_record_card_push(
     current_status = get_visit_record_card_push_status(db_session, record_id)
     is_revised = bool(getattr(payload, "is_revised", False))
     revision_seq = getattr(payload, "revision_seq", None)
-    if current_status == VisitRecordCardPushStatus.PUSHED and not is_revised:
+    if should_skip_duplicate_card_push_callback(current_status) and not is_revised:
         logger.info(
-            "Visit record card already pushed, skip duplicate callback, record_id=%s",
+            "Visit record card already fully delivered, skip duplicate callback, record_id=%s status=%s",
             record_id,
+            current_status,
         )
         return {
             "success": True,
@@ -242,6 +245,24 @@ def _handle_visit_record_card_push(
             "success_count": 0,
             "failed_recipients": [],
         }
+
+    retry_failed_recipients = None
+    card_push_total_recipients = None
+    if (
+        not is_revised
+        and current_status == VisitRecordCardPushStatus.PARTIAL_PUSHED
+    ):
+        _, stored_failed, stored_total = get_visit_record_card_push_delivery(
+            db_session, record_id
+        )
+        if stored_failed:
+            retry_failed_recipients = stored_failed
+            card_push_total_recipients = stored_total
+            logger.info(
+                "Retry visit record card push for failed recipients only, record_id=%s count=%s",
+                record_id,
+                len(stored_failed),
+            )
 
     if is_revised and revision_seq is None:
         revision_seq = int(getattr(row, "revision_count", 0) or 0) or None
@@ -257,7 +278,7 @@ def _handle_visit_record_card_push(
     tasks, task_count = _resolve_visit_record_card_tasks(payload.visit_tasks)
     sales_visit_record = _crm_visit_record_row_to_push_dict(row)
 
-    push_ok = push_visit_record_message(
+    push_result = push_visit_record_message(
         record_id=record_id,
         sales_visit_record=sales_visit_record,
         visit_type=visit_type,
@@ -268,15 +289,19 @@ def _handle_visit_record_card_push(
         tasks=tasks,
         task_count=task_count,
         is_revised=is_revised,
+        retry_failed_recipients=retry_failed_recipients,
+        card_push_total_recipients=card_push_total_recipients,
     )
 
-    push_status = (
-        VisitRecordCardPushStatus.PUSHED
-        if push_ok
-        else VisitRecordCardPushStatus.FAILED
-    )
-    update_visit_record_card_push_status(
-        db_session, record_id, push_status, commit=True
+    push_status = push_result["card_push_status"]
+    push_ok = push_status != VisitRecordCardPushStatus.FAILED
+    update_visit_record_card_push_delivery(
+        db_session,
+        record_id,
+        push_status,
+        failed_recipients=push_result.get("failed_recipients"),
+        total_recipients=push_result.get("recipients_count"),
+        commit=True,
     )
     if is_revised and revision_seq is not None:
         from app.repositories.visit_record_revisions import visit_record_revisions_repo
@@ -290,7 +315,14 @@ def _handle_visit_record_card_push(
         )
 
     operator_user_id = str(row.recorder_id) if row.recorder_id else None
-    if push_ok and operator_user_id:
+    if (
+        push_status in {
+            VisitRecordCardPushStatus.PUSHED,
+            VisitRecordCardPushStatus.PARTIAL_PUSHED,
+        }
+        and operator_user_id
+        and not retry_failed_recipients
+    ):
         try:
             report_visit_record_billing(UUID(str(operator_user_id)), record_id)
         except Exception as exc:
@@ -306,9 +338,10 @@ def _handle_visit_record_card_push(
         "record_id": record_id,
         "card_push_status": push_status,
         "task_count": task_count,
-        "recipients_count": 0,
-        "success_count": 1 if push_ok else 0,
-        "failed_recipients": [] if push_ok else [{"message": "visit record card push failed"}],
+        "recipients_count": push_result.get("recipients_count", 0),
+        "success_count": push_result.get("success_count", 0),
+        "failed_recipients": push_result.get("failed_recipients", []),
+        "is_retry": bool(retry_failed_recipients),
     }
 
 

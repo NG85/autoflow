@@ -10,6 +10,10 @@ RECORDER_USER_ID = UUID("11111111-1111-1111-1111-111111111111")
 CC_USER_ID = UUID("22222222-2222-2222-2222-222222222222")
 
 
+def _echo_active_open_ids(_db_session, open_ids):
+    return {str(open_id) for open_id in open_ids if open_id}
+
+
 def _mock_profile(user_id: UUID, *, name: str, open_id: str, platform: str = "feishu"):
     oauth_account = MagicMock()
     oauth_account.provider = platform
@@ -66,6 +70,10 @@ def test_resolve_merges_multiple_rules_and_dedupes_recipients(
     }
 
 
+@patch(
+    "app.services.visit_record_cc_resolver.user_profile_repo.get_active_open_ids",
+    side_effect=_echo_active_open_ids,
+)
 @patch("app.services.visit_record_cc_resolver.user_profile_repo.get_by_user_ids")
 @patch("app.services.visit_record_cc_resolver.notification_cc_rule_repo.merge_recipient_scopes")
 @patch("app.services.visit_record_cc_resolver.notification_cc_rule_repo.list_enabled_rules_for_recorder")
@@ -73,6 +81,7 @@ def test_resolve_unions_rules_and_oauth_without_duplicate_open_id(
     mock_list_rules,
     mock_merge_scopes,
     mock_get_profiles,
+    _mock_active_open_ids,
 ):
     mock_list_rules.return_value = [_mock_rule(1, [CC_USER_ID])]
     mock_merge_scopes.return_value = [(CC_USER_ID, "user")]
@@ -106,8 +115,15 @@ def test_resolve_unions_rules_and_oauth_without_duplicate_open_id(
     assert open_ids == {"ou_shared", "ou_oauth"}
 
 
+@patch(
+    "app.services.visit_record_cc_resolver.user_profile_repo.get_active_open_ids",
+    side_effect=_echo_active_open_ids,
+)
 @patch("app.services.visit_record_cc_resolver.notification_cc_rule_repo.list_enabled_rules_for_recorder")
-def test_resolve_oauth_only_when_recorder_user_id_missing(mock_list_rules):
+def test_resolve_oauth_only_when_recorder_user_id_missing(
+    mock_list_rules,
+    _mock_active_open_ids,
+):
     result = resolve_visit_record_cc_recipients(
         MagicMock(),
         recorder_user_id=None,
