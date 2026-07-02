@@ -316,35 +316,24 @@ class CustomerDocumentService:
         db_session: Session,
         user_id: UUID,
         user_is_superuser: bool,
-        user_profile=None
+        user_profile=None,
     ) -> bool:
         """
         检查用户是否为超级管理员或管理员
-        
+
         包括：
         1. is_superuser（系统超管）
-        2. user_profiles中position=admin的人
-        
-        Args:
-            db_session: 数据库会话
-            user_id: 用户ID
-            user_is_superuser: 用户是否为系统超级管理员
-            user_profile: 用户档案（可选，如果已获取则直接使用）
-            
-        Returns:
-            是否为超级管理员或管理员
+        2. user_profiles 中 position=admin 的人
         """
-        # 1. 检查系统超级管理员
         if user_is_superuser:
             return True
-        
-        # 2. 检查user_profiles中position=admin的人
+
         if not user_profile:
             from app.repositories.user_profile import UserProfileRepo
             user_profile_repo = UserProfileRepo()
             user_profile = user_profile_repo.get_by_oauth_user_id(db_session, user_id)
-        
+
         if user_profile and user_profile.position == "admin":
             return True
-        
+
         return False

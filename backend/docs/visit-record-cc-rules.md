@@ -151,7 +151,7 @@ WHERE event_type = 'visit_record_card'
 
 对配置表抄送人：
 
-1. **批量**查 `user_profiles`（`user_id` → `open_id`、`platform`）；无 profile 或无 `open_id` 的跳过并打 warn 日志。
+1. **批量**查 `user_profiles`（`user_id`），经 `profile.oauth_user`（`oauth_accounts`）取 `open_id`、`platform`；档案不存在、未激活或无 oauth 账号的跳过并打 warn 日志。
 2. 暂不强制校验 `visit_record:card:receive` 资格（迁移迭代时可在代码内开启）。
 
 ### Step 5：构造 recipient
@@ -281,7 +281,7 @@ OAuth permission 用户（全局）：[高管-陈总]
 2. **与 OAuth 叠加**：`merge` 模式下名单为并集；`rules_only` / `oauth_only` 互斥。
 3. **open_id 去重**：同一人既是 leader 又是 configured_cc，只推一张，模板取高优先级 type。
 4. **汇报链为空**：仍有配置抄送 / OAuth 抄送（验证 early-return 修复）。
-5. **无 profile / 无 open_id**：跳过该抄送人，不影响其他人。
+5. **无 profile / 无 oauth 账号**：跳过该抄送人，不影响其他人。
 6. **department_review 群**：leader / global 抄送走群；`cc_scope=user` 的 configured_cc 仍走个人。
 
 ---

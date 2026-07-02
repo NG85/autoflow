@@ -25,12 +25,6 @@ class UserProfile(SQLModel, table=True):
     user_id: Optional[UUID] = Field(foreign_key="users.id", nullable=True, index=True, description="关联系统用户表")
     oauth_user_id: Optional[str] = Field(max_length=255, nullable=True, description="关联OAuth用户表的ask_id")
     
-    # # 飞书相关字段
-    # feishu_open_id: Optional[str] = Field(max_length=255, nullable=True, description="飞书open_id，用于消息推送")
-    
-    # # 平台用户标识 - 统一使用open_id字段，通过platform区分平台
-    # platform: Optional[str] = Field(max_length=50, nullable=True, description="平台名称 (feishu/lark/dingtalk/wecom etc.)")
-    # open_id: Optional[str] = Field(max_length=255, nullable=True, description="平台用户标识 (open_id/user_id)")
     
     # 核心组织架构信息
     name: Optional[str] = Field(max_length=255, nullable=True, description="姓名")
@@ -43,13 +37,6 @@ class UserProfile(SQLModel, table=True):
     
     # 状态信息
     is_active: bool = Field(default=True, description="档案是否有效")
-    
-    # 推送权限标签 - 字符串格式存储推送类型权限
-    notification_tags: Optional[str] = Field(
-        max_length=1000, 
-        nullable=True, 
-        description="推送权限标签，逗号分隔的字符串，如：review1,review5,weekly_report,daily_report,visit_record"
-    )
     
     # 新档案字段：更完整的个人信息（按“先兼容”策略从用户表user中迁移过来）
     en_name: Optional[str] = Field(
@@ -205,29 +192,3 @@ class UserProfile(SQLModel, table=True):
         if self.oauth_user and self.oauth_user.provider and self.oauth_user.open_id:
             return self.oauth_user.provider
         return None
-        
-    def get_notification_tags(self) -> list[str]:
-        """
-        获取用户的推送权限标签列表
-        
-        Returns:
-            推送权限标签列表
-        """
-        if not self.notification_tags:
-            return []
-        
-        # 使用逗号分隔的字符串格式
-        return [tag.strip() for tag in self.notification_tags.split(',') if tag.strip()]
-    
-    def has_notification_permission(self, notification_type: str) -> bool:
-        """
-        检查用户是否有指定类型的推送权限
-        
-        Args:
-            notification_type: 推送类型
-            
-        Returns:
-            是否有该类型的推送权限
-        """
-        tags = self.get_notification_tags()
-        return notification_type in tags
