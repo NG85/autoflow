@@ -1,15 +1,5 @@
-from typing import Optional
-from uuid import UUID
-from datetime import datetime
-
 from pydantic import EmailStr
-from sqlmodel import (
-    Field,
-    SQLModel,
-    DateTime,
-    func,
-    Relationship as SQLRelationship,
-)
+from sqlmodel import Field
 
 from app.models.base import UpdatableBaseModel, UUIDBaseModel
 
@@ -22,27 +12,3 @@ class User(UUIDBaseModel, UpdatableBaseModel, table=True):
     is_verified: bool = Field(False, nullable=False)
 
     __tablename__ = "users"
-
-
-class UserSession(SQLModel, table=True):
-    """
-    ORM for ``user_sessions`` (table retained; no runtime reads/writes in app auth).
-
-    Historical rows archived to ``user_sessions_archive_20260522``.
-    """
-
-    token: str = Field(max_length=43, primary_key=True)
-    created_at: Optional[datetime] = Field(
-        default=None,
-        sa_type=DateTime(timezone=True),
-        sa_column_kwargs={"server_default": func.now()},
-    )
-    user_id: UUID = Field(foreign_key="users.id", nullable=False)
-    user: User = SQLRelationship(
-        sa_relationship_kwargs={
-            "lazy": "joined",
-            "primaryjoin": "UserSession.user_id == User.id",
-        },
-    )
-
-    __tablename__ = "user_sessions"

@@ -49,4 +49,4 @@
 | A-3 | `Authorization: Bearer ta-...` → `GET /users/me` | **200** |
 | A-4 | `SMOKE_REGISTER=1`：`POST /users/register` | 200 + `via_oauth: true`（需 `OAUTH_REGISTER_ENABLED=true`） |
 
-应用层不读 `user_sessions`；`UserSession` ORM 与归档表仍保留。
+应用层不读 `user_sessions`；`user_sessions` 与归档表 `user_sessions_archive_20260522` 已通过迁移 `a7c3e9f1b204` 删除，`UserSession` ORM 已移除。
