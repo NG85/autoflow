@@ -83,7 +83,17 @@ class CRMSalesVisitRecord(SQLModel, table=True):
         default=None,
         nullable=True,
         max_length=32,
-        description="拜访卡片推送状态：content_processing/pending/awaiting_callback/pushed/failed",
+        description="拜访卡片推送状态：content_processing/pending/awaiting_callback/pushed/partial_pushed/failed",
+    )
+    card_push_failed_recipients: Optional[list[dict]] = Field(
+        default=None,
+        sa_column=Column(JSON, nullable=True),
+        description="卡片推送失败的个人接收者快照，供 partial_pushed 时定向重推",
+    )
+    card_push_total_recipients: Optional[int] = Field(
+        default=None,
+        nullable=True,
+        description="首次全量推送时的个人接收者总数，用于部分成功后的状态合并",
     )
     revision_count: int = Field(
         default=0,

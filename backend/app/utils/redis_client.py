@@ -136,6 +136,17 @@ class RedisClient:
             logger.warning("Redis set_tenant_access_token %s failed: %s", platform, e)
             return False
 
+    def delete_tenant_access_token(self, platform: str) -> bool:
+        """删除缓存的 tenant_access_token（token 失效时用于强制刷新）。"""
+        try:
+            key = f"notification:tenant_token:{platform}"
+            self.redis_client.delete(key)
+            logger.info("Redis delete_tenant_access_token %s", platform)
+            return True
+        except Exception as e:
+            logger.warning("Redis delete_tenant_access_token %s failed: %s", platform, e)
+            return False
+
 
 # 全局Redis客户端实例
 redis_client = RedisClient() 

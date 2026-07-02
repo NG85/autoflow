@@ -16,6 +16,21 @@ class UserProfileRepo(BaseRepo):
         query = select(UserProfile).options(selectinload(UserProfile.oauth_users)).where(UserProfile.user_id == user_id)
         return db_session.exec(query).first()
 
+    def get_active_open_ids(self, db_session: Session, open_ids: List[str]) -> set[str]:
+        """返回在 user_profiles 中为 is_active 的 open_id 集合。"""
+        unique_ids = list(dict.fromkeys(str(open_id) for open_id in open_ids if open_id))
+        if not unique_ids:
+            return set()
+        rows = db_session.exec(
+            select(UserOAuthAccount.open_id)
+            .join(UserProfile, UserProfile.user_id == UserOAuthAccount.user_id)
+            .where(
+                UserOAuthAccount.open_id.in_(unique_ids),
+                UserProfile.is_active == True,  # noqa: E712
+            )
+        ).all()
+        return {str(open_id) for open_id in rows if open_id}
+
     def get_by_user_ids(self, db_session: Session, user_ids: List[UUID]) -> List[UserProfile]:
         """批量根据 users.id 获取档案。"""
         if not user_ids:
@@ -110,17 +125,18 @@ class UserProfileRepo(BaseRepo):
 
 
     def get_by_recorder_id(self, db_session: Session, recorder_id: str) -> Optional[UserProfile]:
-        """根据记录人ID获取档案"""
+        """根据记录人ID获取档案（仅返回 is_active 的档案）。"""
         # 尝试作为OAuth用户ID查找
         profile = self.get_by_oauth_user_id(db_session, recorder_id)
         if profile:
-            return profile
-        
+            return profile if profile.is_active else None
+
         # 如果不是OAuth ID，尝试作为系统用户ID查找
         try:
             from uuid import UUID
             user_uuid = UUID(recorder_id)
-            return self.get_by_user_id(db_session, user_uuid)
+            profile = self.get_by_user_id(db_session, user_uuid)
+            return profile if profile and profile.is_active else None
         except ValueError:
             # 如果不是有效的UUID，返回None
             return None

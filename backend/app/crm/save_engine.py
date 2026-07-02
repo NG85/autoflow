@@ -613,6 +613,7 @@ def fallback_push_visit_record_card(
     """
     from app.services.visit_record_card_push_status import (
         VisitRecordCardPushStatus,
+        update_visit_record_card_push_delivery,
         update_visit_record_card_push_status,
     )
 
@@ -644,7 +645,7 @@ def fallback_push_visit_record_card(
                 exc,
             )
 
-    push_ok = push_visit_record_message(
+    push_result = push_visit_record_message(
         record_id=record_id,
         sales_visit_record=snapshot,
         visit_type=visit_type,
@@ -656,13 +657,14 @@ def fallback_push_visit_record_card(
         task_count=0,
         is_revised=is_revised,
     )
-    status = (
-        VisitRecordCardPushStatus.PUSHED
-        if push_ok
-        else VisitRecordCardPushStatus.FAILED
-    )
-    update_visit_record_card_push_status(
-        db_session, record_id, status, commit=True
+    status = push_result["card_push_status"]
+    update_visit_record_card_push_delivery(
+        db_session,
+        record_id,
+        status,
+        failed_recipients=push_result.get("failed_recipients"),
+        total_recipients=push_result.get("recipients_count"),
+        commit=True,
     )
     _update_revision_card_push_status(
         db_session,
@@ -670,7 +672,10 @@ def fallback_push_visit_record_card(
         revision_seq=revision_seq,
         status=status,
     )
-    if push_ok and billing_user_id:
+    if status in {
+        VisitRecordCardPushStatus.PUSHED,
+        VisitRecordCardPushStatus.PARTIAL_PUSHED,
+    } and billing_user_id:
         try:
             report_visit_record_billing(billing_user_id, record_id)
         except Exception as exc:
@@ -681,11 +686,11 @@ def fallback_push_visit_record_card(
                 exc_info=True,
             )
     logger.info(
-        "Fallback visit card push record_id=%s success=%s",
+        "Fallback visit card push record_id=%s status=%s",
         record_id,
-        push_ok,
+        status,
     )
-    return push_ok
+    return status != VisitRecordCardPushStatus.FAILED
 
 
 def _notify_aldebaran_visit_record_post_process_impl(
@@ -707,6 +712,7 @@ def _notify_aldebaran_visit_record_post_process_impl(
 ) -> bool:
     from app.services.visit_record_card_push_status import (
         VisitRecordCardPushStatus,
+        update_visit_record_card_push_delivery,
         update_visit_record_card_push_status,
     )
 
@@ -960,6 +966,9 @@ def push_visit_record_message(
     tasks=None,
     task_count=None,
     is_revised: bool = False,
+    *,
+    retry_failed_recipients=None,
+    card_push_total_recipients: Optional[int] = None,
 ):
     try:
         # 如果没有传入db_session，则创建一个新的
@@ -1020,7 +1029,18 @@ def push_visit_record_message(
         
         if not recorder_id and not recorder_name:
             logger.warning("No recorder_id or recorder_name found in sales visit record")
-            return False
+            from app.services.visit_record_card_push_status import (
+                VisitRecordCardPushStatus,
+            )
+
+            return {
+                "success": False,
+                "message": "No recorder found",
+                "recipients_count": 0,
+                "success_count": 0,
+                "failed_recipients": [],
+                "card_push_status": VisitRecordCardPushStatus.FAILED,
+            }
         
         # 确保会议纪要不为空
         if meeting_notes is None or meeting_notes == "":
@@ -1030,30 +1050,60 @@ def push_visit_record_message(
             meeting_notes =f"<font sizeToken={settings.CUSTOM_FONT_SIZE_TOKEN}>{meeting_notes}</font>"
 
         # 发送拜访记录通知
-        result = platform_notification_service.send_visit_record_notification(
-            db_session=db_session,
-            record_id=record_id,
-            recorder_name=recorder_name,
-            recorder_id=recorder_id,
-            visit_record=sales_visit_record,
-            visit_type=visit_type,
-            meeting_notes=meeting_notes,
-            risk_info=risk_info,
-            tasks=tasks,
-            task_count=task_count,
-            is_revised=is_revised,
-        )
+        send_kwargs: dict[str, Any] = {
+            "db_session": db_session,
+            "record_id": record_id,
+            "recorder_name": recorder_name,
+            "recorder_id": recorder_id,
+            "visit_record": sales_visit_record,
+            "visit_type": visit_type,
+            "meeting_notes": meeting_notes,
+            "risk_info": risk_info,
+            "tasks": tasks,
+            "task_count": task_count,
+            "is_revised": is_revised,
+        }
+        if retry_failed_recipients:
+            from app.services.visit_record_card_push_status import (
+                failed_recipients_to_recipients_by_platform,
+            )
+
+            recipients_override = failed_recipients_to_recipients_by_platform(
+                retry_failed_recipients
+            )
+            if db_session is not None:
+                recipients_override = platform_notification_service._filter_recipients_by_active_profiles(
+                    db_session, recipients_override
+                )
+            send_kwargs.update(
+                {
+                    "recipients_by_platform_override": recipients_override,
+                    "skip_group_notifications": True,
+                    "total_recipients_count_override": card_push_total_recipients,
+                    "previously_failed_count": len(retry_failed_recipients),
+                }
+            )
+        result = platform_notification_service.send_visit_record_notification(**send_kwargs)
         
         if result["success"]:
             logger.info(f"Successfully pushed visit record notification: {result['message']}")
         else:
             logger.warning(f"Failed to push visit record notification: {result['message']}")
-        
-        return result["success"]
-        
+
+        return result
+
     except Exception as e:
         logger.error(f"发送拜访记录通知失败: {e}")
-        return False
+        from app.services.visit_record_card_push_status import VisitRecordCardPushStatus
+
+        return {
+            "success": False,
+            "message": str(e),
+            "recipients_count": 0,
+            "success_count": 0,
+            "failed_recipients": [],
+            "card_push_status": VisitRecordCardPushStatus.FAILED,
+        }
     finally:
         # 只有当我们创建了session时才关闭它
         if should_close_session:
@@ -1606,6 +1656,7 @@ def run_link_visit_enrichment_and_notify(
         VisitRecordCardPushStatus.PENDING,
         VisitRecordCardPushStatus.AWAITING_CALLBACK,
         VisitRecordCardPushStatus.PUSHED,
+        VisitRecordCardPushStatus.PARTIAL_PUSHED,
     }:
         logger.info(
             "Skip duplicate Aldebaran notify, record_id=%s status=%s",
