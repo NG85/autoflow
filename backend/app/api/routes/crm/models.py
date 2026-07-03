@@ -520,6 +520,13 @@ class VisitRecordQueryRequest(BaseModel):
     sort_direction: str = "desc"  # 排序方向：asc/desc
     language: Optional[str] = None # 语言，只在导出时生效
 
+class VisitRecordRowPermissions(BaseModel):
+    """当前页行内按钮权限（OAuth batch-check）。"""
+
+    can_edit: bool = Field(default=False, description="是否可编辑")
+    can_delete: bool = Field(default=False, description="是否可删除")
+
+
 # 拜访记录响应模型 - 独立的API模型（不参与SQLModel映射）
 class VisitRecordResponse(BaseModel):
     id: Optional[int] = Field(default=None, description="主键ID（自增序列）")
@@ -615,6 +622,10 @@ class VisitRecordResponse(BaseModel):
     # 关联字段 - 来自user_profiles表
     department: Optional[str] = Field(default=None, description="拜访人所在部门")
     revision_count: int = Field(default=0, description="拜访记录修订次数")
+    permissions: Optional[VisitRecordRowPermissions] = Field(
+        default=None,
+        description="行内按钮权限（仅列表查询且 OAuth 权限开启时返回）",
+    )
 
 
     model_config = {

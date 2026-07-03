@@ -16,7 +16,9 @@ from app.api.routes.crm.models import (
     VisitAttachment,
     VisitRecordQueryRequest,
     VisitRecordResponse,
+    VisitRecordRowPermissions,
 )
+from app.core.config import settings
 from app.policies.visit_record_access import VisitRecordAccessPolicy
 from app.repositories.crm_account import crm_account_repo
 from app.repositories.base_repo import BaseRepo
@@ -487,7 +489,7 @@ class VisitRecordRepo(BaseRepo):
 
         return uuid_recorder_ids
 
-    def _can_access_visit_record_by_recorder_id(
+    def _legacy_can_access_visit_record_by_recorder_id(
         self,
         session: Session,
         current_user_id: Optional[UUID],
@@ -501,7 +503,7 @@ class VisitRecordRepo(BaseRepo):
         )
         return policy.can_access_single_recorder(recorder_id)
 
-    def _can_edit_visit_record(
+    def _legacy_can_edit_visit_record_by_recorder_id(
         self,
         session: Session,
         current_user_id: Optional[UUID],
@@ -514,6 +516,94 @@ class VisitRecordRepo(BaseRepo):
             is_admin_user_fn=self._is_admin_user,
         )
         return policy.can_edit_visit_record(recorder_id)
+
+    def _can_view_visit_record(
+        self,
+        session: Session,
+        current_user_id: Optional[UUID],
+        record: CRMSalesVisitRecord,
+    ) -> bool:
+        if not current_user_id:
+            return True
+        if settings.FOLLOW_UP_OAUTH_GATE_ENABLED:
+            from app.permissions.follow_up_permission_service import follow_up_permission_service
+
+            return follow_up_permission_service.check_view(session, current_user_id, record)
+        return self._legacy_can_access_visit_record_by_recorder_id(
+            session,
+            current_user_id,
+            getattr(record, "recorder_id", None),
+        )
+
+    def _can_edit_visit_record(
+        self,
+        session: Session,
+        current_user_id: Optional[UUID],
+        record: CRMSalesVisitRecord,
+    ) -> bool:
+        if not current_user_id:
+            return False
+        if settings.FOLLOW_UP_OAUTH_GATE_ENABLED:
+            from app.permissions.follow_up_permission_service import follow_up_permission_service
+
+            return follow_up_permission_service.check_edit(session, current_user_id, record)
+        return self._legacy_can_edit_visit_record_by_recorder_id(
+            session,
+            current_user_id,
+            getattr(record, "recorder_id", None),
+        )
+
+    def _apply_visit_record_list_permission(
+        self,
+        session: Session,
+        query,
+        *,
+        current_user_id: Optional[UUID],
+    ):
+        """
+        列表权限过滤：FOLLOW_UP_OAUTH_DATA_SCOPE_ENABLED 时走 OAuth data-scope；
+        否则沿用 VisitRecordAccessPolicy（本人 + 汇报下属 + report51 遗留）。
+        """
+        if not current_user_id:
+            logger.warning("No current_user_id provided, skipping visit record list permission filter")
+            return query
+
+        if settings.FOLLOW_UP_OAUTH_DATA_SCOPE_ENABLED:
+            from app.permissions.follow_up_permission_service import follow_up_permission_service
+
+            perm_where = follow_up_permission_service.list_perm_where(session, current_user_id)
+            return query.where(perm_where)
+
+        policy = VisitRecordAccessPolicy(
+            session=session,
+            current_user_id=current_user_id,
+            roles_and_permissions_provider=lambda user_id: oauth_client.query_user_roles_and_permissions(
+                user_id=user_id
+            ),
+            is_admin_user_fn=self._is_admin_user,
+        )
+        predicate = policy.list_access_predicate(CRMSalesVisitRecord)
+        if predicate is not None:
+            return query.where(predicate)
+        return query
+
+    def _resolve_row_permissions_for_page(
+        self,
+        session: Session,
+        *,
+        current_user_id: Optional[UUID],
+        records: list[CRMSalesVisitRecord],
+    ) -> dict[str, VisitRecordRowPermissions]:
+        if not settings.FOLLOW_UP_OAUTH_GATE_ENABLED or not current_user_id or not records:
+            return {}
+
+        from app.permissions.follow_up_permission_service import follow_up_permission_service
+
+        raw = follow_up_permission_service.batch_row_permissions(session, current_user_id, records)
+        return {
+            record_id: VisitRecordRowPermissions(**perms)
+            for record_id, perms in raw.items()
+        }
 
     def _load_allowed_communication_methods(self, session: Session) -> set[str]:
         stmt = select(CRMSystemConfiguration.config_key).where(
@@ -559,7 +649,7 @@ class VisitRecordRepo(BaseRepo):
             raise VisitRecordRevisionError("跟进记录不存在", "not_found")
 
         recorder_id = getattr(record, "recorder_id", None)
-        if not self._can_edit_visit_record(session, current_user_id, recorder_id):
+        if not self._can_edit_visit_record(session, current_user_id, record):
             raise VisitRecordRevisionError("无权限修改该跟进记录", "forbidden")
 
         created_beijing_date = utc_datetime_to_beijing_date(record.last_modified_time)
@@ -656,10 +746,10 @@ class VisitRecordRepo(BaseRepo):
         ).first()
         if not record:
             return None
-        if not self._can_access_visit_record_by_recorder_id(
+        if not self._can_view_visit_record(
             session=session,
             current_user_id=current_user_id,
-            recorder_id=getattr(record, "recorder_id", None),
+            record=record,
         ):
             return None
         return visit_record_revisions_repo.list_by_record_id(session, record_id)
@@ -669,6 +759,8 @@ class VisitRecordRepo(BaseRepo):
         session: Session,
         request: VisitRecordQueryRequest,
         current_user_id: Optional[UUID] = None,
+        *,
+        include_row_permissions: bool = False,
     ) -> Page[VisitRecordResponse]:
         """
         查询拜访记录，支持条件过滤和分页
@@ -681,13 +773,7 @@ class VisitRecordRepo(BaseRepo):
             request.page_size = 20
         elif request.page_size > 100:  # 限制最大页面大小为100（fastapi_pagination的限制）
             request.page_size = 100
-        policy = VisitRecordAccessPolicy(
-            session=session,
-            current_user_id=current_user_id,
-            roles_and_permissions_provider=lambda user_id: oauth_client.query_user_roles_and_permissions(user_id=user_id),
-            is_admin_user_fn=self._is_admin_user,
-        )
-            
+
         # 构建基础查询：customer_level 来自跟进对象关联的 crm_accounts
         account_crm, partner_crm, customer_level_col, _customer_attribute_col, _followup_extra_col = (
             _followup_object_crm_account_join()
@@ -703,10 +789,11 @@ class VisitRecordRepo(BaseRepo):
             .outerjoin(partner_crm, CRMSalesVisitRecord.partner_id == partner_crm.unique_id)
         )
         
-        # 应用权限控制过滤 - 在 JOIN 之前先过滤，提高性能
-        predicate = policy.list_access_predicate(CRMSalesVisitRecord)
-        if predicate is not None:
-            query = query.where(predicate)
+        query = self._apply_visit_record_list_permission(
+            session,
+            query,
+            current_user_id=current_user_id,
+        )
 
         # 应用过滤条件
         if request.record_id:
@@ -920,6 +1007,16 @@ class VisitRecordRepo(BaseRepo):
                     department_map[recorder_uuid] = name
 
         # 转换结果格式 - 复用现有模型
+        page_records = [record for record, _ in result.items]
+        row_permissions_map = (
+            self._resolve_row_permissions_for_page(
+                session,
+                current_user_id=current_user_id,
+                records=page_records,
+            )
+            if include_row_permissions
+            else {}
+        )
         items = []
         for record, customer_level in result.items:
             department = department_map.get(record.recorder_id) if record.recorder_id else None
@@ -931,15 +1028,17 @@ class VisitRecordRepo(BaseRepo):
                 record.partner_id,
                 field_mapping,
             )
-            items.append(
-                _convert_to_response(
-                    record,
-                    customer_level,
-                    customer_attribute,
-                    department,
-                    followup_extra=followup_extra,
-                )
+            response = _convert_to_response(
+                record,
+                customer_level,
+                customer_attribute,
+                department,
+                followup_extra=followup_extra,
             )
+            record_id = str(getattr(record, "record_id", "") or "").strip()
+            if record_id and record_id in row_permissions_map:
+                response.permissions = row_permissions_map[record_id]
+            items.append(response)
 
         # 返回自定义分页结果
         return Page(
@@ -1019,10 +1118,10 @@ class VisitRecordRepo(BaseRepo):
             field_mapping,
         )
 
-        if not self._can_access_visit_record_by_recorder_id(
+        if not self._can_view_visit_record(
             session=session,
             current_user_id=current_user_id,
-            recorder_id=getattr(record, "recorder_id", None),
+            record=record,
         ):
             return None
 
@@ -1066,10 +1165,10 @@ class VisitRecordRepo(BaseRepo):
             return None
 
         # 单条记录权限判断：避免生成越来越大的 IN 列表
-        if not self._can_access_visit_record_by_recorder_id(
+        if not self._can_view_visit_record(
             session=session,
             current_user_id=current_user_id,
-            recorder_id=getattr(record, "recorder_id", None),
+            record=record,
         ):
             return None
 

@@ -32,6 +32,7 @@ from app.crm.save_engine import (
     save_visit_record_with_raw_content,
 )
 from app.exceptions import InternalServerError
+from app.permissions.follow_up_permission_service import follow_up_permission_service
 from app.repositories.crm_account import crm_account_repo
 from app.repositories.crm_account_opportunity_assessment import crm_account_opportunity_assessment_repo
 from app.repositories.document_content import DocumentContentRepo
@@ -56,6 +57,22 @@ from app.services.feishu_billing_facade import check_billing_quota
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["crm", "crm/visit-records"])
+
+
+def _require_follow_up_view_gate(db_session: SessionDep, user: CurrentUserDep) -> None:
+    """W4 功能门控：无 sales:follow_up:view 时拒绝进入跟进列表/导出。"""
+    if not settings.FOLLOW_UP_OAUTH_GATE_ENABLED:
+        return
+    if not follow_up_permission_service.gate_view(db_session, user.id):
+        raise HTTPException(status_code=403, detail="无跟进记录查看权限")
+
+
+def _require_follow_up_export_permission(db_session: SessionDep, user: CurrentUserDep) -> None:
+    """W4 导出功能鉴权：sales:follow_up:export。"""
+    if not settings.FOLLOW_UP_OAUTH_GATE_ENABLED:
+        return
+    if not follow_up_permission_service.check_export(db_session, user.id):
+        raise HTTPException(status_code=403, detail="无跟进记录导出权限")
 
 
 def _is_non_empty(value: Optional[str]) -> bool:
@@ -152,7 +169,7 @@ def create_visit_record(
         if record.recorder_id:
             try:
                 recorder_id = UUID(record.recorder_id)
-                if not user.is_superuser and recorder_id != user.id:
+                if recorder_id != user.id:
                     return {"code": 400, "message": "记录人ID必须与当前用户ID一致", "data": {}}
                 # 验证通过后，确保recorder_id为标准格式的UUID字符串
                 record.recorder_id = str(recorder_id)
@@ -467,11 +484,13 @@ def query_visit_records(
     根据当前用户的汇报关系限制数据访问权限
     """
     try:
-        
+        _require_follow_up_view_gate(db_session, user)
+
         result = visit_record_repo.query_visit_records(
             session=db_session,
             request=request,
-            current_user_id=user.id
+            current_user_id=user.id,
+            include_row_permissions=False,
         )
         
         return {
@@ -533,6 +552,9 @@ def export_visit_records_to_xlsx(
     支持中英文版本导出
     """
     try:
+        _require_follow_up_view_gate(db_session, user)
+        _require_follow_up_export_permission(db_session, user)
+
         # 创建 XLSX 内容
         wb = Workbook()
         ws = wb.active

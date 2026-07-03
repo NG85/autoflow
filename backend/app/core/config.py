@@ -209,6 +209,12 @@ class Settings(BaseSettings):
     
     # OAuth base URL
     OAUTH_BASE_URL: str = "http://auth:8018"
+    # Bearer token for OAuth /permission/* service-to-service calls (empty = no header)
+    OAUTH_PERMISSION_API_TOKEN: str = ""
+    # W4 follow_up：功能门控（sales:follow_up:view）；OAuth migration 018+ 已部署，默认开启
+    FOLLOW_UP_OAUTH_GATE_ENABLED: bool = True
+    # W4 follow_up：列表 data-scope 替换遗留 report51/汇报链过滤
+    FOLLOW_UP_OAUTH_DATA_SCOPE_ENABLED: bool = True
     # OAuth service connectivity (read-only; must not break /healthz liveness)
     OAUTH_HEALTH_PROBE_ENABLED: bool = True
     OAUTH_HEALTH_PROBE_TIMEOUT_SECONDS: float = 3.0
