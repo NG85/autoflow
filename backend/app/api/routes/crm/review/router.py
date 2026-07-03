@@ -698,7 +698,7 @@ def query_review_snapshot_filter_enums(
     stage_rows = db_session.exec(
         text(
             "select handbook_id, sales_stage "
-            "from diagnostic_playbook "
+            "from crm_playbook_stages "
             "where status = 'active' and sales_stage is not null and sales_stage <> ''"
         )
     ).all()
