@@ -618,7 +618,11 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                         if report_info_5 and report_info_5.get("execution_id")
                         else f"{settings.REVIEW_REPORT_HOST}"
                     )
-                    dept_report["weekly_tasks_page"] = build_task_list_page_url()
+                    dept_report["weekly_tasks_page"] = build_task_list_page_url(
+                        department_name=department_name,
+                        due_date__gte=start_date.isoformat(),
+                        due_date__lte=end_date.isoformat(),
+                    )
                     dept_report["weekly_followup_page"] = build_weekly_followup_summary_page_url(
                         week_start=start_date.isoformat(),
                         week_end=end_date.isoformat(),
@@ -650,7 +654,10 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                         if report_info_5 and report_info_5.get("execution_id")
                         else f"{settings.REVIEW_REPORT_HOST}"
                     )
-                    company_weekly_report["weekly_tasks_page"] = build_task_list_page_url()
+                    company_weekly_report["weekly_tasks_page"] = build_task_list_page_url(
+                        due_date__gte=start_date.isoformat(),
+                        due_date__lte=end_date.isoformat(),
+                    )
                     company_weekly_report["weekly_followup_page"] = build_weekly_followup_summary_page_url(
                         week_start=start_date.isoformat(),
                         week_end=end_date.isoformat(),
