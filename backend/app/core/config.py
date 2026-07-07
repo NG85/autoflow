@@ -201,8 +201,6 @@ class Settings(BaseSettings):
     MINIO_SECURE: bool = False
     MINIO_BUCKET: str = "autoflow"
     
-    # CRM authority API
-    CRM_AUTHORITY_API_URL: str = "http://auth:8018/crm/authority"
     # Max rows to load from crm_data_authority when materializing ID sets in application memory.
     # If exceeded, the result will be truncated (safe but may reduce recall).
     CRM_AUTHORITY_MAX_ROWS: int = 50000
