@@ -17,7 +17,7 @@ class UserProfileRepo(BaseRepo):
         return db_session.exec(query).first()
 
     def get_active_open_ids(self, db_session: Session, open_ids: List[str]) -> set[str]:
-        """返回在 user_profiles 中为 is_active 的 open_id 集合。"""
+        """返回 open_id 在 oauth_accounts 中存在且对应 user_profiles.is_active 的集合。"""
         unique_ids = list(dict.fromkeys(str(open_id) for open_id in open_ids if open_id))
         if not unique_ids:
             return set()
@@ -353,32 +353,5 @@ class UserProfileRepo(BaseRepo):
                 .distinct()
             ).all()
         )
-
-    def get_users_by_notification_permission(
-        self, 
-        db_session: Session, 
-        notification_type: str
-    ) -> list[UserProfile]:
-        """根据推送权限类型获取用户列表
-        
-        在应用层精确匹配，避免子字符串匹配问题
-        例如：notification_type='visit_record' 不会匹配到 'list_visit_records'
-        """
-        # 使用 join 查询所有有 open_id 和 notification_tags 的活跃用户
-        # 由于一个用户可能有多个OAuth账号，使用 distinct 去重
-        candidates = db_session.exec(
-            select(UserProfile)
-            .options(selectinload(UserProfile.oauth_users))
-            .join(UserOAuthAccount, UserProfile.user_id == UserOAuthAccount.user_id)
-            .where(
-                UserProfile.is_active == True,
-                UserOAuthAccount.open_id.is_not(None),
-                UserProfile.notification_tags.is_not(None)
-            )
-            .distinct()
-        ).all()
-        
-        # 在应用层使用模型的 has_notification_permission 方法精确匹配
-        return [user for user in candidates if user.has_notification_permission(notification_type)]
 
 user_profile_repo = UserProfileRepo()

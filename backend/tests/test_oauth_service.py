@@ -30,6 +30,28 @@ def test_permission_query_success_and_cache():
     post.assert_called_once()
 
 
+def test_permission_requests_include_bearer_when_token_configured():
+    client = _client()
+    mock_data = {"code": 0, "result": {"roles": [], "permissions": []}}
+    with patch("app.services.oauth_service.settings") as mock_settings:
+        mock_settings.OAUTH_PERMISSION_API_TOKEN = "service-token"
+        with patch("app.services.oauth_service.post_json", return_value=mock_data) as post:
+            client.query_user_roles_and_permissions(user_id=USER_ID)
+
+    assert post.call_args.kwargs["headers"] == {"Authorization": "Bearer service-token"}
+
+
+def test_permission_requests_omit_bearer_when_token_empty():
+    client = _client()
+    mock_data = {"code": 0, "result": {"roles": [], "permissions": []}}
+    with patch("app.services.oauth_service.settings") as mock_settings:
+        mock_settings.OAUTH_PERMISSION_API_TOKEN = ""
+        with patch("app.services.oauth_service.post_json", return_value=mock_data) as post:
+            client.query_user_roles_and_permissions(user_id=USER_ID)
+
+    assert post.call_args.kwargs["headers"] is None
+
+
 def test_permission_query_transport_failure_returns_empty():
     client = _client()
     with patch("app.services.oauth_service.post_json", return_value=None):
@@ -77,6 +99,24 @@ def test_subordinate_chain_transport_failure_returns_empty_dict():
         assert client.get_subordinate_chain(user_id=USER_ID) == {}
 
 
+def test_subordinate_chain_success_and_cache():
+    client = _client()
+    mock_data = {
+        "code": 0,
+        "result": {
+            "userId": str(USER_ID),
+            "subordinates": [{"userId": "sub-1", "crmUserId": "crm-sub", "name": "Sub"}],
+        },
+    }
+    with patch("app.services.oauth_service.post_json", return_value=mock_data) as post:
+        first = client.get_subordinate_chain(user_id=USER_ID)
+        second = client.get_subordinate_chain(user_id=USER_ID)
+
+    assert len(first.get("subordinates") or []) == 1
+    assert second == first
+    post.assert_called_once()
+
+
 def test_check_function_permission_allowed():
     client = _client()
     mock_data = {
@@ -114,6 +154,110 @@ def test_check_function_permission_denied_on_transport_failure():
         )
     assert result["allowed"] is False
     assert result["effect"] == "DENY"
+
+
+def test_check_permission_with_resource_and_context():
+    client = _client()
+    mock_data = {
+        "code": 0,
+        "result": {
+            "allowed": True,
+            "functionAllowed": True,
+            "dataAllowed": True,
+            "effect": "ALLOW",
+        },
+    }
+    with patch("app.services.oauth_service.post_json", return_value=mock_data) as post:
+        result = client.check_permission(
+            user_id=USER_ID,
+            crm_user_id="crm-001",
+            permission="sales:follow_up:edit",
+            resource={"type": "follow_up", "id": "fu-001"},
+            context={"recorder_id": str(USER_ID), "is_collaborator": False},
+        )
+
+    assert result["allowed"] is True
+    assert post.call_args.kwargs["json_body"] == {
+        "user_id": str(USER_ID),
+        "crm_user_id": "crm-001",
+        "permission": "sales:follow_up:edit",
+        "resource": {"type": "follow_up", "id": "fu-001"},
+        "context": {"recorder_id": str(USER_ID), "is_collaborator": False},
+    }
+
+
+def test_get_data_scope_success_and_cache():
+    client = _client()
+    mock_data = {
+        "code": 0,
+        "result": {
+            "entity": "follow_up",
+            "merge": "OR",
+            "filters": [{"source": "self_creator"}],
+        },
+    }
+    with patch("app.services.oauth_service.post_json", return_value=mock_data) as post:
+        first = client.get_data_scope(user_id=USER_ID, entity="follow_up", crm_user_id="crm-001")
+        second = client.get_data_scope(user_id=USER_ID, entity="follow_up", crm_user_id="crm-001")
+
+    assert first["entity"] == "follow_up"
+    assert first["filters"][0]["source"] == "self_creator"
+    assert second == first
+    post.assert_called_once()
+    assert post.call_args.kwargs["path"] == "/permission/data-scope"
+
+
+def test_get_data_scope_transport_failure_returns_empty_filters():
+    client = _client()
+    with patch("app.services.oauth_service.post_json", return_value=None):
+        result = client.get_data_scope(user_id=USER_ID, entity="follow_up")
+
+    assert result == {"entity": "follow_up", "merge": "OR", "filters": []}
+
+
+def test_batch_check_permissions_success():
+    client = _client()
+    mock_data = {
+        "code": 0,
+        "result": {
+            "results": [
+                {
+                    "permission": "sales:follow_up:edit",
+                    "allowed": True,
+                    "functionAllowed": True,
+                    "dataAllowed": True,
+                    "effect": "ALLOW",
+                },
+                {
+                    "permission": "sales:follow_up:delete",
+                    "allowed": False,
+                    "functionAllowed": False,
+                    "dataAllowed": False,
+                    "effect": "DENY",
+                },
+            ]
+        },
+    }
+    checks = [
+        {"permission": "sales:follow_up:edit", "resource": {"type": "follow_up", "id": "fu-1"}},
+        {"permission": "sales:follow_up:delete", "resource": {"type": "follow_up", "id": "fu-1"}},
+    ]
+    with patch("app.services.oauth_service.post_json", return_value=mock_data) as post:
+        results = client.batch_check_permissions(user_id=USER_ID, crm_user_id="crm-001", checks=checks)
+
+    assert results[0]["allowed"] is True
+    assert results[1]["allowed"] is False
+    assert post.call_args.kwargs["path"] == "/permission/batch-check"
+
+
+def test_batch_check_permissions_transport_failure_denies_all():
+    client = _client()
+    checks = [{"permission": "sales:follow_up:edit"}]
+    with patch("app.services.oauth_service.post_json", return_value=None):
+        results = client.batch_check_permissions(user_id=USER_ID, checks=checks)
+
+    assert len(results) == 1
+    assert results[0]["allowed"] is False
 
 
 def test_post_json_retries_on_transport_error():

@@ -5,6 +5,7 @@ from datetime import datetime
 import pytz
 
 from app.tasks.bitable_import import (
+    _bitable_crm_select_sql,
     compute_daily_bitable_window,
     normalize_bitable_record_ids,
     parse_bitable_sync_cron_hour_minute,
@@ -49,3 +50,12 @@ def test_normalize_bitable_record_ids():
         "form_b",
     ]
     assert normalize_bitable_record_ids(None) == []
+
+
+def test_bitable_crm_select_sql_uses_oauth_accounts_for_recorder_open_id():
+    sql = _bitable_crm_select_sql("crm_sales_visit_records.record_id IN :record_ids")
+    assert "oauth_accounts" in sql
+    assert "oa.provider = :oauth_provider" in sql
+    assert "up.open_id" not in sql
+    assert "recorder_open_id" in sql
+    assert "up.department AS recorder_department" in sql

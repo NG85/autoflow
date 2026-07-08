@@ -89,7 +89,7 @@ def get_user_crm_authority(user_id: UUID, crm_type: Optional[CrmDataType] = None
     role = None  # 初始化 role 变量
     try:
         with Session(engine) as session:
-            # 1) 检查用户是否有权限访问所有CRM数据（包括检查 admin 角色）
+            # 1) 检查用户是否有权限访问所有 CRM 数据（含 OAuth 公司级权限/角色及 UserProfile admin 兜底）
             if visit_record_repo.can_access_all_crm_data(user_id, session):
                 logger.info("User %s can access all CRM data.", user_id)
                 role = "admin"

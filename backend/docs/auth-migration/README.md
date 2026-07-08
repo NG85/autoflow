@@ -25,6 +25,7 @@ oauth 为稳定依赖；`config.py` 默认已开启 shadow 注册。部署时 **
 ```env
 OAUTH_BASE_URL=http://auth:8018   # 按集群实际服务地址
 OAUTH_SESSION_ISSUE_SECRET=<与 oauth SESSION_ISSUE_SERVICE_SECRET 一致>
+OAUTH_PERMISSION_API_TOKEN=<服务间调用 /permission/* 的 Bearer token>
 ```
 
 本地无 oauth 时可关闭：`AUTH_LEGACY_OAUTH_SHADOW_ENABLED=false`、`OAUTH_REGISTER_ENABLED=false`。

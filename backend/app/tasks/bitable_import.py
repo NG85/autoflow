@@ -381,7 +381,7 @@ def build_bitable_fields_from_crm_row(crm_row: dict) -> dict:
                 if person_text:
                     feishu_fields[feishu_key] = person_text
             elif feishu_key == "负责销售":
-                # 处理负责销售字段，使用recorder_open_id（通过JOIN查询获取），格式化为Person类型
+                # 处理负责销售字段，使用 recorder_open_id（oauth_accounts.open_id），格式化为 Person 类型
                 recorder_open_id = crm_row.get('recorder_open_id')
                 if recorder_open_id:
                     # 飞书Person类型字段格式：[{"id": "open_id"}]
@@ -681,22 +681,36 @@ def _bitable_crm_select_sql(where_clause: str) -> str:
     cols_list.append(f"{CRM_TABLE}.external_collaboration_partner_id")
     cols = ", ".join(cols_list)
     return f"""
-        SELECT {cols}, up.department AS recorder_department, up.open_id AS recorder_open_id
+        SELECT {cols},
+               up.department AS recorder_department,
+               (
+                   SELECT oa.open_id
+                   FROM oauth_accounts oa
+                   WHERE oa.user_id = {CRM_TABLE}.recorder_id
+                     AND oa.provider = :oauth_provider
+                     AND oa.open_id IS NOT NULL
+                   LIMIT 1
+               ) AS recorder_open_id
         FROM {CRM_TABLE}
         LEFT JOIN user_profiles up ON up.user_id = {CRM_TABLE}.recorder_id
         WHERE {where_clause}
     """
 
 
-def fetch_crm_rows_for_bitable_by_record_ids(session: Session, record_ids: list[str]):
+def fetch_crm_rows_for_bitable_by_record_ids(
+    session: Session,
+    record_ids: list[str],
+    *,
+    oauth_provider: str,
+):
     ids = normalize_bitable_record_ids(record_ids)
     if not ids:
         return ids, []
-    sql = text(_bitable_crm_select_sql(f"{CRM_TABLE}.record_id IN :record_ids")).bindparams(
-        bindparam("record_ids", expanding=True)
-    )
+    sql = text(
+        _bitable_crm_select_sql(f"{CRM_TABLE}.record_id IN :record_ids")
+    ).bindparams(bindparam("record_ids", expanding=True))
     logger.info("按 record_id 查询 CRM 拜访记录: %s", ids)
-    rows = session.exec(sql, params={"record_ids": ids}).fetchall()
+    rows = session.exec(sql, params={"record_ids": ids, "oauth_provider": oauth_provider}).fetchall()
     return ids, rows
 
 
@@ -706,6 +720,7 @@ def fetch_crm_rows_for_bitable_by_time_range(
     end_dt: datetime,
     *,
     using_datetime_window: bool,
+    oauth_provider: str,
 ):
     time_predicate = (
         f"{CRM_TABLE}.last_modified_time >= :start AND {CRM_TABLE}.last_modified_time < :end"
@@ -714,7 +729,10 @@ def fetch_crm_rows_for_bitable_by_time_range(
     )
     sql = text(_bitable_crm_select_sql(time_predicate))
     logger.info("查询指定时间范围内的 CRM 拜访记录: %s", sql)
-    rows = session.exec(sql, params={"start": start_dt, "end": end_dt}).fetchall()
+    rows = session.exec(
+        sql,
+        params={"start": start_dt, "end": end_dt, "oauth_provider": oauth_provider},
+    ).fetchall()
     return rows
 
 
@@ -874,7 +892,9 @@ def sync_bitable_visit_records(
 
         if by_record_ids:
             with Session(engine) as session:
-                requested_ids, rows = fetch_crm_rows_for_bitable_by_record_ids(session, by_record_ids)
+                requested_ids, rows = fetch_crm_rows_for_bitable_by_record_ids(
+                    session, by_record_ids, oauth_provider=platform
+                )
             found_ids = {
                 (dict(r._mapping) if hasattr(r, "_mapping") else dict(r)).get("record_id")
                 for r in rows
@@ -995,6 +1015,7 @@ def sync_bitable_visit_records(
                 start_dt,
                 end_dt,
                 using_datetime_window=using_datetime_window,
+                oauth_provider=platform,
             )
 
         return push_crm_rows_to_bitable(
