@@ -247,6 +247,8 @@ class Settings(BaseSettings):
     ALDEBARAN_WEEKLY_REPORT_URL: str = "/api/v1/report/weekly"
     ALDEBARAN_TENANT_ID: str = "PINGCAP"
     ALDEBARAN_REVIEW_SESSION_RECALC_PATH: str = "/api/v1/review/performance/query"
+    # 周跟进：批量查询商机 forecast_amount / expected_closing_date
+    ALDEBARAN_OPPORTUNITY_QUERY_AMOUNT_PATH: str = "/api/v1/opportunity/query/amount"
     # Aldebaran 消息队列：拜访保存事件入队（POST /api/v1/messages/incoming）
     ALDEBARAN_MESSAGES_INCOMING_PATH: str = "/api/v1/messages/incoming"
     ALDEBARAN_MESSAGE_WEBHOOK_SECRET: str = ""

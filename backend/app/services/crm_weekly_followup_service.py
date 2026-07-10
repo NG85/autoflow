@@ -22,6 +22,7 @@ from app.models.crm_weekly_followup_entity_summary import CRMWeeklyFollowupEntit
 from app.models.crm_weekly_followup_summary import CRMWeeklyFollowupSummary
 from app.repositories.department_mirror import department_mirror_repo
 from app.repositories.user_department_relation import user_department_relation_repo
+from app.services.aldebaran_service import AldebaranOpportunityForecast, aldebaran_client
 from app.services.crm_writeback_service import crm_writeback_service
 from app.utils.ark_llm import call_ark_llm
 from app.utils.crm_weekly_followup_week_boundary import (
@@ -123,6 +124,11 @@ class CRMWeeklyFollowupService:
         return self._norm_id(record.partner_name) or self._norm_id(
             getattr(record, "external_collaboration_partner_name", None)
         )
+
+    def _forecast_opportunity_id(self, key: _EntityKey) -> Optional[str]:
+        if key.entity_type != "opportunity":
+            return None
+        return self._norm_id(key.entity_id)
 
     def _build_summary_title(self, *, week_start: date, week_end: date, summary_type: str, department_name: str) -> str:
         # 格式约定：
@@ -369,6 +375,27 @@ class CRMWeeklyFollowupService:
         except Exception:
             return None
 
+    def _merge_entity_summary_fields(
+        self,
+        existing: CRMWeeklyFollowupEntitySummary,
+        obj: CRMWeeklyFollowupEntitySummary,
+    ) -> CRMWeeklyFollowupEntitySummary:
+        """同步可重算字段；不覆盖人工评论 comments。"""
+        existing.account_id = obj.account_id
+        existing.account_name = obj.account_name
+        existing.opportunity_id = obj.opportunity_id
+        existing.opportunity_name = obj.opportunity_name
+        existing.partner_id = obj.partner_id
+        existing.partner_name = obj.partner_name
+        existing.owner_user_id = obj.owner_user_id
+        existing.owner_name = obj.owner_name
+        existing.progress = obj.progress
+        existing.risks = obj.risks
+        existing.forecast_amount = obj.forecast_amount
+        existing.expected_closing_date = obj.expected_closing_date
+        existing.evidence_record_ids = obj.evidence_record_ids
+        return existing
+
     def _upsert_entity_summary(self, session: Session, obj: CRMWeeklyFollowupEntitySummary) -> CRMWeeklyFollowupEntitySummary:
         """
         幂等键：week_start/week_end/department_name/entity_type/entity_id
@@ -384,17 +411,7 @@ class CRMWeeklyFollowupService:
             )
         ).first()
         if existing:
-            existing.account_id = obj.account_id
-            existing.account_name = obj.account_name
-            existing.opportunity_id = obj.opportunity_id
-            existing.opportunity_name = obj.opportunity_name
-            existing.partner_id = obj.partner_id
-            existing.partner_name = obj.partner_name
-            existing.owner_user_id = obj.owner_user_id
-            existing.owner_name = obj.owner_name
-            existing.progress = obj.progress
-            existing.risks = obj.risks
-            existing.evidence_record_ids = obj.evidence_record_ids
+            self._merge_entity_summary_fields(existing, obj)
             session.add(existing)
             session.commit()
             session.refresh(existing)
@@ -406,7 +423,7 @@ class CRMWeeklyFollowupService:
             session.refresh(obj)
             return obj
         except IntegrityError:
-            # 并发兜底：再查一次
+            # 并发兜底：再查一次并合并字段（含 forecast_amount / expected_closing_date）
             session.rollback()
             existing = session.exec(
                 select(CRMWeeklyFollowupEntitySummary).where(
@@ -419,6 +436,10 @@ class CRMWeeklyFollowupService:
             ).first()
             if not existing:
                 raise
+            self._merge_entity_summary_fields(existing, obj)
+            session.add(existing)
+            session.commit()
+            session.refresh(existing)
             return existing
 
     def _upsert_summary(self, session: Session, obj: CRMWeeklyFollowupSummary) -> CRMWeeklyFollowupSummary:
@@ -636,6 +657,19 @@ class CRMWeeklyFollowupService:
                     "customer_name": (str(customer_name).strip() if customer_name else None),
                     "owner_id": (str(owner_id).strip() if owner_id else None),
                 }
+
+        forecast_by_opp_id: dict[str, AldebaranOpportunityForecast] = {}
+        if opportunity_ids:
+            try:
+                forecast_by_opp_id = aldebaran_client.query_opportunity_amount(
+                    list(opportunity_ids)
+                )
+            except Exception as e:
+                logger.warning(
+                    "Aldebaran 商机预测批量查询失败，forecast 字段将留空: %s",
+                    e,
+                    exc_info=True,
+                )
 
         # 同理：客户只取必要字段
         acc_by_id: dict[str, dict[str, Optional[str]]] = {}
@@ -889,6 +923,8 @@ class CRMWeeklyFollowupService:
                 opportunity_name = last_record.opportunity_name
                 partner_id = self._legacy_partner_id(last_record)
                 partner_name = self._legacy_partner_name(last_record)
+                forecast_amount: Optional[float] = None
+                expected_closing_date: Optional[date] = None
 
                 if key.entity_type == "opportunity":
                     opp = opp_by_id.get(key.entity_id)
@@ -908,6 +944,13 @@ class CRMWeeklyFollowupService:
                         partner_id = str((partner.get("unique_id") or "") or partner_id or "")
                         partner_name = partner.get("customer_name") or partner_name
 
+                forecast_opp_id = self._forecast_opportunity_id(key)
+                if forecast_opp_id:
+                    forecast_info = forecast_by_opp_id.get(forecast_opp_id)
+                    if forecast_info is not None:
+                        forecast_amount = forecast_info.forecast_amount
+                        expected_closing_date = forecast_info.expected_closing_date
+
                 entity_obj = CRMWeeklyFollowupEntitySummary(
                     week_start=week_start,
                     week_end=week_end,
@@ -925,6 +968,8 @@ class CRMWeeklyFollowupService:
                     owner_name=owner_name,
                     progress=progress,
                     risks=risks,
+                    forecast_amount=forecast_amount,
+                    expected_closing_date=expected_closing_date,
                     evidence_record_ids=json.dumps(
                         [r.id for r in record_pairs_sorted if r.id is not None],
                         ensure_ascii=False,
