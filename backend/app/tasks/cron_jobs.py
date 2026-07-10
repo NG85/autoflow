@@ -861,6 +861,7 @@ def generate_crm_weekly_followup_summary(
     end_date_str=None,
     scopes: str = "all",
     week_range_mode: str = "completed",
+    department_id: str | None = None,
 ):
     """
     生成“周跟进总结”（公司/团队整体描述 + 明细列表），用于后台页面展示与人工评论。
@@ -871,6 +872,7 @@ def generate_crm_weekly_followup_summary(
         end_date_str: 结束日期 YYYY-MM-DD，不传则按 week_range_mode 计算
         scopes: all | department | company（默认定时：周六部门、周六公司）
         week_range_mode: completed（上一完整周）| in_progress（当前周，week_end 不超过今天）
+        department_id: 可选；指定时仅生成该部门（含子部门负责人跟进）的部门级总结
     """
     from app.services.crm_weekly_followup_service import (
         parse_weekly_followup_scopes,
@@ -895,16 +897,25 @@ def generate_crm_weekly_followup_summary(
                 "data": {},
             }
 
+        target_department_id = (department_id or "").strip() or None
+        if target_department_id and "company" in active_scopes and "department" not in active_scopes:
+            return {
+                "success": False,
+                "message": "指定 department_id 时 scopes 不能仅为 company",
+                "data": {},
+            }
+
         # 计算日期范围
         if start_date_str and end_date_str:
             try:
                 start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
                 end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
                 logger.info(
-                    "开始执行CRM周跟进总结生成任务，日期范围: %s 到 %s，scopes=%s",
+                    "开始执行CRM周跟进总结生成任务，日期范围: %s 到 %s，scopes=%s，department_id=%s",
                     start_date,
                     end_date,
                     sorted(active_scopes),
+                    target_department_id or "",
                 )
             except ValueError:
                 logger.error(f"无效的日期格式: start_date={start_date_str}, end_date={end_date_str}")
@@ -915,11 +926,12 @@ def generate_crm_weekly_followup_summary(
                 today, week_range_mode=week_range_mode  # type: ignore[arg-type]
             )
             logger.info(
-                "开始执行CRM周跟进总结生成任务，week_range_mode=%s，日期: %s 到 %s，scopes=%s",
+                "开始执行CRM周跟进总结生成任务，week_range_mode=%s，日期: %s 到 %s，scopes=%s，department_id=%s",
                 week_range_mode,
                 start_date,
                 end_date,
                 sorted(active_scopes),
+                target_department_id or "",
             )
 
         with Session(engine) as session:
@@ -928,6 +940,7 @@ def generate_crm_weekly_followup_summary(
                 week_start=start_date,
                 week_end=end_date,
                 scopes=active_scopes,
+                department_id=target_department_id,
             )
             entity_count = int(result.get("entity_count") or 0) if isinstance(result, dict) else 0
             bill_dept = "department" in active_scopes and entity_count > 0

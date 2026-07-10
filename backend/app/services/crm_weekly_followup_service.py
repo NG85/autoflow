@@ -492,6 +492,37 @@ class CRMWeeklyFollowupService:
             if did in leader_dept_ids
         ]
 
+    def _entity_owner_department_id(
+        self,
+        key: _EntityKey,
+        owner_user_id_by_key: dict[_EntityKey, Optional[str]],
+        dept_by_user_id: dict[str, str],
+    ) -> Optional[str]:
+        owner_user_id = owner_user_id_by_key.get(key)
+        if not owner_user_id:
+            return None
+        dept_id = dept_by_user_id.get(owner_user_id)
+        return str(dept_id).strip() if dept_id else None
+
+    def _filter_grouped_for_department_subtree(
+        self,
+        session: Session,
+        grouped: dict[_EntityKey, list],
+        owner_user_id_by_key: dict[_EntityKey, Optional[str]],
+        dept_by_user_id: dict[str, str],
+        target_department_id: str,
+    ) -> dict[_EntityKey, list]:
+        """仅保留负责人主部门落在目标部门子树内的实体。"""
+        subtree_ids = set(
+            department_mirror_repo.get_subtree_department_ids(session, target_department_id)
+        )
+        return {
+            key: records
+            for key, records in grouped.items()
+            if self._entity_owner_department_id(key, owner_user_id_by_key, dept_by_user_id)
+            in subtree_ids
+        }
+
     def _upsert_empty_department_summary(
         self, session: Session, week_start: date, week_end: date, dept_id: str, dept_name: str
     ) -> None:
@@ -539,24 +570,38 @@ class CRMWeeklyFollowupService:
         week_end: date,
         *,
         scopes: Set[WeeklyFollowupScope] | None = None,
+        department_id: str | None = None,
     ) -> Dict[str, Any]:
         """
         生成并写入：
         - crm_weekly_followup_entity_summary（仅 department scope）
         - crm_weekly_followup_summary（department/company，按 scopes 控制）
+
+        department_id 可选；指定时仅生成该部门（含子部门负责人跟进）的部门级总结。
         """
+        target_department_id = (department_id or "").strip() or None
         active_scopes = scopes if scopes is not None else {"department", "company"}
+        if target_department_id:
+            active_scopes = {"department"}
         include_department = "department" in active_scopes
-        include_company = "company" in active_scopes
+        include_company = "company" in active_scopes and not target_department_id
         if not include_department and not include_company:
             raise ValueError("scopes 至少包含 department 或 company")
 
+        if target_department_id:
+            target_department_name = department_mirror_repo.get_department_name_by_id(
+                session, target_department_id
+            )
+            if not target_department_name:
+                raise ValueError(f"部门不存在: {target_department_id}")
+
         logger.info(
-            "开始生成周跟进总结，日期范围：%s ~ %s（%s），scopes=%s",
+            "开始生成周跟进总结，日期范围：%s ~ %s（%s），scopes=%s，department_id=%s",
             week_start,
             week_end,
             weekly_followup_week_boundary_label(),
             sorted(active_scopes),
+            target_department_id or "",
         )
 
         # 读取本周拜访记录（证据来源）；仅加载周跟进所需列，降低大字段 IO
@@ -599,12 +644,22 @@ class CRMWeeklyFollowupService:
             logger.warning("该周没有任何拜访记录，仍按 scopes 生成空总结")
             empty_dept_count = 0
             if include_department:
-                active_departments = self._list_active_departments_for_empty_summary(session)
-                for dept_id, dept_name in active_departments:
+                if target_department_id:
                     self._upsert_empty_department_summary(
-                        session, week_start, week_end, dept_id, dept_name
+                        session,
+                        week_start,
+                        week_end,
+                        target_department_id,
+                        target_department_name or "",
                     )
-                empty_dept_count = len(active_departments)
+                    empty_dept_count = 1
+                else:
+                    active_departments = self._list_active_departments_for_empty_summary(session)
+                    for dept_id, dept_name in active_departments:
+                        self._upsert_empty_department_summary(
+                            session, week_start, week_end, dept_id, dept_name
+                        )
+                    empty_dept_count = len(active_departments)
             if include_company:
                 self._upsert_empty_company_summary(session, week_start, week_end)
             logger.info(
@@ -622,6 +677,7 @@ class CRMWeeklyFollowupService:
                 "billable_department_billing": [],
                 "billable_company": False,
                 "scopes": sorted(active_scopes),
+                "department_id": target_department_id or "",
             }
 
         # 按拜访主键缓存摘要文本，供实体 LLM 与多部门/公司 rollup 复用
@@ -821,6 +877,15 @@ class CRMWeeklyFollowupService:
         owner_user_ids = [uid for uid in owner_user_id_by_key.values() if uid]
         dept_by_user_id = user_department_relation_repo.get_primary_department_by_user_ids(session, owner_user_ids)
 
+        if target_department_id:
+            grouped = self._filter_grouped_for_department_subtree(
+                session,
+                grouped,
+                owner_user_id_by_key,
+                dept_by_user_id,
+                target_department_id,
+            )
+
         # 预热缓存，减少并行阶段重复拼接上下文
         for r in records:
             self._visit_context_for_prompt(r, visit_context_cache)
@@ -1016,6 +1081,14 @@ class CRMWeeklyFollowupService:
         )
         names_covered_by_id = set(dept_name_by_id.values())
 
+        if target_department_id:
+            by_dept_id_full = {
+                did: groups
+                for did, groups in by_dept_id_full.items()
+                if did == target_department_id
+            }
+            by_dept_name_fallback = {}
+
         unknown_department_record_groups: List[Tuple[_EntityKey, List[CRMSalesVisitRecord]]] = []
         seen_keys_unknown: set[_EntityKey] = set()
         rollup_requests: List[
@@ -1196,13 +1269,27 @@ class CRMWeeklyFollowupService:
 
         empty_dept_count = 0
         if include_department:
-            active_departments = self._list_active_departments_for_empty_summary(session)
-            for dept_id, dept_name in active_departments:
-                if dept_id not in by_dept_id_full:
-                    self._upsert_empty_department_summary(
-                        session, week_start, week_end, dept_id, dept_name
+            if target_department_id:
+                if target_department_id not in by_dept_id_full:
+                    dept_name = (
+                        dept_name_by_id.get(target_department_id)
+                        or department_mirror_repo.get_department_name_by_id(
+                            session, target_department_id
+                        )
+                        or ""
                     )
-                    empty_dept_count += 1
+                    self._upsert_empty_department_summary(
+                        session, week_start, week_end, target_department_id, dept_name
+                    )
+                    empty_dept_count = 1
+            else:
+                active_departments = self._list_active_departments_for_empty_summary(session)
+                for dept_id, dept_name in active_departments:
+                    if dept_id not in by_dept_id_full:
+                        self._upsert_empty_department_summary(
+                            session, week_start, week_end, dept_id, dept_name
+                        )
+                        empty_dept_count += 1
 
         known_dept_count = sum(
             1 for did in by_dept_id_full if dept_name_by_id.get(did, "未知部门") != "未知部门"
@@ -1228,6 +1315,7 @@ class CRMWeeklyFollowupService:
             "billable_department_billing": billable_department_items,
             "billable_company": billable_company,
             "scopes": sorted(active_scopes),
+            "department_id": target_department_id or "",
         }
 
 

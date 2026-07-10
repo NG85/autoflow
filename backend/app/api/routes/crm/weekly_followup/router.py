@@ -13,6 +13,7 @@ from sqlmodel import distinct, func, or_, select
 from sqlalchemy import false
 
 from app.api.deps import CurrentUserDep, SessionDep
+from app.repositories.department_mirror import department_mirror_repo
 from app.api.routes.crm.models import (
     AccountTagOptionOut,
     CRMComment,
@@ -663,7 +664,7 @@ def get_weekly_followup_filter_options(
 
 @router.post("/crm/weekly-followup/trigger")
 def trigger_weekly_followup_summary_task(
-    # db_session: SessionDep,
+    db_session: SessionDep,
     # user: CurrentUserDep,
     payload: WeeklyFollowupTriggerTaskIn = Body(default=WeeklyFollowupTriggerTaskIn()),
 ) -> WeeklyFollowupTriggerTaskOut:
@@ -671,6 +672,7 @@ def trigger_weekly_followup_summary_task(
     人工触发“周跟进总结”生成任务（异步，返回 task_id）。
     - 暂时不做权限校验，方便测试
     - start_date/end_date 可不传；不传时任务内部按默认口径计算（上周六-本周五，北京时间）
+    - department_id 可选；指定时仅生成该部门（含其子部门负责人跟进）的部门级总结
     """
     # _, is_company_admin, _, _ = _can_view_weekly_followup(db_session, user)
     # if not is_company_admin:
@@ -681,14 +683,40 @@ def trigger_weekly_followup_summary_task(
     if (start_date is None) != (end_date is None):
         raise HTTPException(status_code=400, detail="start_date/end_date 需要同时传或同时不传")
 
+    department_id = (payload.department_id or "").strip() or None
+    if department_id:
+        dept_name = department_mirror_repo.get_department_name_by_id(db_session, department_id)
+        if not dept_name:
+            raise HTTPException(status_code=400, detail=f"部门不存在: {department_id}")
+
+    scopes = (payload.scopes or "").strip() or None
+    if department_id:
+        if scopes and scopes.lower() == "company":
+            raise HTTPException(
+                status_code=400,
+                detail="指定 department_id 时不能仅生成公司级总结（scopes=company）",
+            )
+        scopes = scopes or "department"
+    else:
+        scopes = scopes or "all"
+
     # 延迟导入，避免路由模块加载时引入 Celery task 依赖
     from app.tasks.cron_jobs import generate_crm_weekly_followup_summary
 
     task = generate_crm_weekly_followup_summary.delay(
         start_date_str=start_date.isoformat() if start_date else None,
         end_date_str=end_date.isoformat() if end_date else None,
+        scopes=scopes,
+        department_id=department_id,
     )
-    return WeeklyFollowupTriggerTaskOut(task_id=task.id, start_date=start_date, end_date=end_date, status="PENDING")
+    return WeeklyFollowupTriggerTaskOut(
+        task_id=task.id,
+        start_date=start_date,
+        end_date=end_date,
+        department_id=department_id,
+        scopes=scopes,
+        status="PENDING",
+    )
 
 
 @router.post("/crm/weekly-followup/leader-engagement/trigger")

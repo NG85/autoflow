@@ -1076,12 +1076,16 @@ class WeeklyFollowupWeeklyListOut(BaseModel):
 class WeeklyFollowupTriggerTaskIn(BaseModel):
     start_date: Optional[date] = None
     end_date: Optional[date] = None
+    department_id: Optional[str] = None
+    scopes: Optional[str] = None  # all | department | company；指定 department_id 时默认 department
 
 
 class WeeklyFollowupTriggerTaskOut(BaseModel):
     task_id: str
     start_date: Optional[date] = None
     end_date: Optional[date] = None
+    department_id: Optional[str] = None
+    scopes: Optional[str] = None
     status: str = "PENDING"
 
 
