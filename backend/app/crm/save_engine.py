@@ -331,6 +331,9 @@ def _merge_visit_record_snapshot_from_db(snapshot: dict, db_row: Any) -> None:
         "account_id",
         "partner_name",
         "partner_id",
+        "followup_object_type",
+        "followup_object_id",
+        "followup_object_name",
         "external_collaboration_partner_name",
         "external_collaboration_partner_id",
     ):
@@ -341,11 +344,16 @@ def _merge_visit_record_snapshot_from_db(snapshot: dict, db_row: Any) -> None:
 
 
 def fill_sales_visit_record_fields(sales_visit_record, db_session):
-    # 拜访对象展示：纯伙伴拜访时无客户名，用伙伴名填充 account_name 供卡片「客户」位展示
+    from app.utils.crm_followup_object import resolve_followup_object_from_record
+
+    # 拜访对象展示：纯线索/伙伴拜访时无客户名，用跟进对象名填充 account_name 供卡片展示
     account_name = _safe_strip_field_value(sales_visit_record.get("account_name"))
     partner_name = _safe_strip_field_value(sales_visit_record.get("partner_name"))
+    followup_obj = resolve_followup_object_from_record(sales_visit_record)
     if account_name:
         sales_visit_record["account_name"] = account_name
+    elif followup_obj and followup_obj.object_name:
+        sales_visit_record["account_name"] = followup_obj.object_name
     elif partner_name:
         sales_visit_record["account_name"] = partner_name
 

@@ -36,6 +36,7 @@ def resolve_followup_account_id(
     account_id: Optional[str],
     partner_id: Optional[str],
 ) -> Optional[str]:
+    """用于 crm_accounts 关联：仅 account / partner，不含线索。"""
     aid = (account_id or "").strip()
     if aid:
         return aid

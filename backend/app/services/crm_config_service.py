@@ -96,11 +96,18 @@ DEFAULT_VISIT_RECORD_FIELD_MAPPING: Dict[str, str] = {
     "end_customer": "最终客户",
 }
 
-# alias_key -> source_key：DB 只改 partner_title / account_title 时，别名跟随生效
+# 线索类字段（lead_title / lead_title_en）：无内置默认值，仅以 DB VisitRecordFieldMapping 为准；
+# 未配置时不会出现在生效映射中，前端/筛选也不展示线索选项。
+
+# alias_key -> source_key：DB 只改 *_title 时，别名跟随生效
 _FIELD_MAPPING_ALIASES: tuple[tuple[str, str], ...] = (
     ("partner", "partner_title"),
     ("end_customer", "account_title"),
+    ("lead", "lead_title"),
 )
+
+# 跟进对象类型 filter-options / customer_attribute 可选键（lead 无默认值，未配置时不出现）
+FOLLOWUP_OBJECT_ATTRIBUTE_KEYS: tuple[str, ...] = ("end_customer", "partner", "lead")
 
 
 def get_resolved_field_mapping(db_session: Session, report_type: str = "报告") -> Dict[str, str]:
@@ -124,6 +131,15 @@ def get_resolved_field_mapping(db_session: Session, report_type: str = "报告")
             field_title_mapping[alias_key] = field_title_mapping[source_key]
 
     return field_title_mapping
+
+
+def build_customer_attribute_options(field_mapping: Dict[str, str]) -> Dict[str, str]:
+    """构建跟进对象类型筛选项：仅包含字段映射中已配置展示名的类型。"""
+    return {
+        key: label
+        for key in FOLLOWUP_OBJECT_ATTRIBUTE_KEYS
+        if (label := (field_mapping.get(key) or "").strip())
+    }
 
 
 def add_field_mapping_to_data(data: Dict[str, Any], db_session: Session, report_type: str = "报告") -> Dict[str, Any]:

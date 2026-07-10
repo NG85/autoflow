@@ -285,6 +285,12 @@ class VisitRecordBase(BaseModel):
     opportunity_id: Optional[str] = None # 商机ID
     partner_name: Optional[str] = None # 合作伙伴名称
     partner_id: Optional[str] = None # 合作伙伴ID
+    followup_object_type: Optional[str] = Field(
+        default=None,
+        description="跟进对象类型(end_customer/partner/lead)；线索等新类型写此字段",
+    )
+    followup_object_id: Optional[str] = Field(default=None, description="跟进对象ID")
+    followup_object_name: Optional[str] = Field(default=None, description="跟进对象名称")
     external_collaboration_partner_name: Optional[str] = Field(
         default=None,
         description="外部协同合作伙伴名称（与拜访对象 partner_* 独立）",
@@ -490,12 +496,15 @@ class VisitRecordQueryRequest(BaseModel):
     # 过滤条件
     record_id: Optional[str] = None  # 记录ID
     customer_level: Optional[List[str]] = None  # 客户等级（多选）
-    customer_attribute: Optional[List[str]] = None  # 跟进对象类型（多选：end_customer、partner，可多选 OR）
+    customer_attribute: Optional[List[str]] = None  # 跟进对象类型（多选：end_customer、partner、lead，可多选 OR）
     tag_ids: Optional[List[str]] = None  # 客户 tag（多选，OR，来自 crm_accounts.extra.tags）
     account_id: Optional[List[str]] = None  # 客户ID（多选）
     account_name: Optional[List[str]] = None  # 客户名称（多选）
     partner_id: Optional[List[str]] = None  # 合作伙伴ID（多选）
     partner_name: Optional[List[str]] = None  # 合作伙伴名称（多选）
+    followup_object_type: Optional[List[str]] = None  # 跟进对象类型（多选）
+    followup_object_id: Optional[List[str]] = None  # 跟进对象ID（多选）
+    followup_object_name: Optional[List[str]] = None  # 跟进对象名称（多选，线索等新类型）
     opportunity_id: Optional[List[str]] = None  # 商机ID（多选）
     opportunity_name: Optional[List[str]] = None  # 商机名称（多选）
     visit_communication_date_start: Optional[str] = None  # 跟进日期开始
@@ -536,14 +545,12 @@ class VisitRecordResponse(BaseModel):
     opportunity_id: Optional[str] = Field(default=None, description="商机ID")
     partner_name: Optional[str] = Field(default=None, description="合作伙伴")
     partner_id: Optional[str] = Field(default=None, description="合作伙伴ID")
-    followup_object_name: Optional[str] = Field(
+    followup_object_type: Optional[str] = Field(
         default=None,
-        description="跟进对象名称（有客户用 account_name，否则 partner_name）",
+        description="跟进对象类型(end_customer/partner/lead)",
     )
-    followup_object_id: Optional[str] = Field(
-        default=None,
-        description="跟进对象ID（有客户用 account_id，否则 partner_id）",
-    )
+    followup_object_id: Optional[str] = Field(default=None, description="跟进对象ID")
+    followup_object_name: Optional[str] = Field(default=None, description="跟进对象名称")
     external_collaboration_partner_name: Optional[str] = Field(
         default=None, description="外部协同合作伙伴名称"
     )
@@ -612,7 +619,7 @@ class VisitRecordResponse(BaseModel):
     )
     customer_attribute: Optional[str] = Field(
         default=None,
-        description="跟进对象类型（字段映射 end_customer/partner；有 account_id 为最终客户，否则为合作伙伴）",
+        description="跟进对象类型展示名（来自字段映射；历史数据由 account/partner 推断，新类型读 followup_object_type）",
     )
     tags: List[AccountTagOptionOut] = Field(
         default_factory=list,
@@ -962,7 +969,7 @@ class WeeklyFollowupEntityRowOut(BaseModel):
     )
     customer_attribute: Optional[str] = Field(
         default=None,
-        description="跟进对象类型展示名（有 account_id 为 end_customer，否则 partner；来自字段映射）",
+        description="跟进对象类型展示名（来自字段映射；历史 account/partner 或 followup_object_type）",
     )
     tags: List[AccountTagOptionOut] = Field(
         default_factory=list,

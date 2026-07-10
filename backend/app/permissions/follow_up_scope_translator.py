@@ -60,9 +60,10 @@ def linked_crm_follow_up_sql(
     account_params: dict[str, Any],
     opportunity_params: dict[str, Any],
 ) -> ScopeSql:
-    """LINKED_CRM 开启时：行级商机优先，否则 account_id，否则 partner_id。"""
+    """LINKED_CRM 开启时：行级商机优先，否则 account_id，否则 followup_object(lead)，否则 partner_id。"""
     opp = opportunity_scope_sql.replace("d.data_id", f"{main_alias}.opportunity_id")
     acc = account_scope_sql.replace("d.data_id", f"{main_alias}.account_id")
+    lead = account_scope_sql.replace("d.data_id", f"{main_alias}.followup_object_id")
     partner = account_scope_sql.replace("d.data_id", f"{main_alias}.partner_id")
     sql = f"""(
   ({main_alias}.opportunity_id IS NOT NULL AND {main_alias}.opportunity_id <> '' AND ({opp}))
@@ -74,6 +75,15 @@ def linked_crm_follow_up_sql(
   OR (
     ({main_alias}.opportunity_id IS NULL OR {main_alias}.opportunity_id = '')
     AND ({main_alias}.account_id IS NULL OR {main_alias}.account_id = '')
+    AND ({main_alias}.partner_id IS NULL OR {main_alias}.partner_id = '')
+    AND {main_alias}.followup_object_type = 'lead'
+    AND {main_alias}.followup_object_id IS NOT NULL AND {main_alias}.followup_object_id <> ''
+    AND ({lead})
+  )
+  OR (
+    ({main_alias}.opportunity_id IS NULL OR {main_alias}.opportunity_id = '')
+    AND ({main_alias}.account_id IS NULL OR {main_alias}.account_id = '')
+    AND ({main_alias}.followup_object_type IS NULL OR {main_alias}.followup_object_type = '' OR {main_alias}.followup_object_type <> 'lead')
     AND {main_alias}.partner_id IS NOT NULL AND {main_alias}.partner_id <> ''
     AND ({partner})
   )
