@@ -6,8 +6,8 @@ from sqlalchemy.exc import IntegrityError
 from app.repositories.base_repo import BaseRepo
 from app.models.local_contacts import LocalContact
 from app.models.crm_accounts import CRMAccount
+from app.models.crm_leads import CRMLead
 from app.models.crm_data_authority import CrmDataAuthority
-from app.models.user_reporting_relation import UserReportingRelation
 from app.rag.types import CrmDataType
 from app.repositories.user_profile import user_profile_repo
 from app.repositories.visit_record import visit_record_repo
@@ -21,7 +21,28 @@ class LocalContactRepo(BaseRepo):
     def _not_deleted_condition(self):
         """软删除条件：delete_flag 为 0 或 NULL"""
         return (LocalContact.delete_flag == 0) | (LocalContact.delete_flag.is_(None))
-    
+
+    def _get_account_by_id(self, db_session: Session, customer_id: str) -> Optional[CRMAccount]:
+        return db_session.exec(
+            select(CRMAccount).where(CRMAccount.unique_id == customer_id)
+        ).first()
+
+    def _get_lead_by_id(self, db_session: Session, customer_id: str) -> Optional[CRMLead]:
+        return db_session.exec(
+            select(CRMLead).where(CRMLead.unique_id == customer_id)
+        ).first()
+
+    def _resolve_customer_name(
+        self,
+        account: Optional[CRMAccount],
+        lead: Optional[CRMLead],
+    ) -> Optional[str]:
+        if account and account.customer_name:
+            return account.customer_name
+        if lead:
+            return lead.company_name or lead.lead_name
+        return None
+
     def check_account_permission(
         self, 
         db_session: Session, 
@@ -34,7 +55,7 @@ class LocalContactRepo(BaseRepo):
         Args:
             db_session: 数据库会话
             user_id: 用户ID
-            customer_id: 客户ID (crm_accounts.unique_id)
+            customer_id: 客户ID (crm_accounts.unique_id 或 crm_leads.unique_id)
             
         Returns:
             True 如果有权限，False 否则
@@ -60,52 +81,7 @@ class LocalContactRepo(BaseRepo):
         
         result = db_session.exec(stmt).first()
         logger.info(f"CRM data authority result for user {user_id} and customer {customer_id}: {result}")
-        if result is not None:
-            return True
-
-        # 2.3 兜底逻辑：
-        # - 如果权限表里没有记录，先检查 crm_accounts 的负责人是否为本人
-        # - 如果负责人是本人的下级（汇报关系表 user_reporting_relation，且 is_active=True），也允许访问
-        # customer_id 对应 crm_accounts.unique_id
-        owner_id_stmt = (
-            select(CRMAccount.person_in_charge_id)
-            .where(CRMAccount.unique_id == customer_id)
-            .limit(1)
-        )
-        owner_id = db_session.exec(owner_id_stmt).first()
-        logger.info(
-            f"CRM account owner_id for user {user_id} (crm_user_id={crm_user_id}) "
-            f"and customer {customer_id}: {owner_id}"
-        )
-        if not owner_id:
-            return False
-
-        # 负责人为本人
-        if str(owner_id) == str(crm_user_id):
-            return True
-
-        # 负责人为下级（直接或间接均可，依赖 user_reporting_relation 的 level）
-        try:
-            subordinate_stmt = (
-                select(UserReportingRelation.id)
-                .where(UserReportingRelation.from_user_id == str(crm_user_id))
-                .where(UserReportingRelation.to_user_id == str(owner_id))
-                .where(UserReportingRelation.is_active == True)  # noqa: E712
-                .limit(1)
-            )
-            subordinate_match = db_session.exec(subordinate_stmt).first()
-            logger.info(
-                f"CRM account subordinate owner match for user {user_id} (crm_user_id={crm_user_id}) "
-                f"and customer {customer_id} (owner_id={owner_id}): {subordinate_match}"
-            )
-            return subordinate_match is not None
-        except Exception as e:
-            # nice-to-have: 汇报关系表异常不影响主逻辑（按“未命中下级”处理）
-            logger.warning(
-                f"Failed to check subordinate relation for user {user_id} (crm_user_id={crm_user_id}) "
-                f"and customer {customer_id} (owner_id={owner_id}): {e}"
-            )
-            return False
+        return result is not None
     
     def get_by_id(
         self, 
@@ -281,16 +257,17 @@ class LocalContactRepo(BaseRepo):
         if not self.check_account_permission(db_session, user_id, customer_id):
             raise ValueError(f"User does not have permission to create contact for customer {customer_id}")
         
-        # 验证客户是否存在
-        account = db_session.exec(
-            select(CRMAccount).where(CRMAccount.unique_id == customer_id)
-        ).first()
-        if not account:
+        # 验证客户/线索是否存在（customer_id 可对应 crm_accounts 或 crm_leads）
+        account = self._get_account_by_id(db_session, customer_id)
+        lead = None if account else self._get_lead_by_id(db_session, customer_id)
+        if not account and not lead:
             raise ValueError(f"Customer with id {customer_id} not found")
-        
+
         # 填充客户名称（如果未提供）
-        if not contact_data.get("customer_name") and account.customer_name:
-            contact_data["customer_name"] = account.customer_name
+        if not contact_data.get("customer_name"):
+            customer_name = self._resolve_customer_name(account, lead)
+            if customer_name:
+                contact_data["customer_name"] = customer_name
         
         # 去重检查：使用客户+姓名+职位
         # 排除已删除的联系人，避免与新建混淆
