@@ -273,6 +273,21 @@ def _append_weekly_followup_entity_filters(
             else:
                 conds.append(false())
 
+    if payload.filter_forecast_amount_min is not None:
+        conds.append(CRMWeeklyFollowupEntitySummary.forecast_amount >= payload.filter_forecast_amount_min)
+    if payload.filter_forecast_amount_max is not None:
+        conds.append(CRMWeeklyFollowupEntitySummary.forecast_amount <= payload.filter_forecast_amount_max)
+    if payload.filter_expected_closing_date_start is not None:
+        conds.append(
+            CRMWeeklyFollowupEntitySummary.expected_closing_date
+            >= payload.filter_expected_closing_date_start
+        )
+    if payload.filter_expected_closing_date_end is not None:
+        conds.append(
+            CRMWeeklyFollowupEntitySummary.expected_closing_date
+            <= payload.filter_expected_closing_date_end
+        )
+
 
 def _weekly_followup_entities_to_row_out(
     db_session: SessionDep,
@@ -334,6 +349,8 @@ def _weekly_followup_entities_to_row_out(
                 owner_name=entity.owner_name,
                 progress=entity.progress,
                 risks=entity.risks,
+                forecast_amount=entity.forecast_amount,
+                expected_closing_date=entity.expected_closing_date,
                 comments=_to_comments(entity.comments) if include_comments else [],
             )
         )
@@ -492,6 +509,8 @@ def export_weekly_followup_detail(
                 "owner_name",
                 "progress",
                 "risks",
+                "forecast_amount",
+                "expected_closing_date",
                 "comments",
             ]
         )
@@ -537,6 +556,8 @@ def export_weekly_followup_detail(
                         item.owner_name or "",
                         item.progress or "",
                         item.risks or "",
+                        item.forecast_amount if item.forecast_amount is not None else "",
+                        item.expected_closing_date.isoformat() if item.expected_closing_date else "",
                         comments_text,
                     ]
                 )

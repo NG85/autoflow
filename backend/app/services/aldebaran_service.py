@@ -1,5 +1,6 @@
 import logging
 import time
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any, Optional
 from uuid import UUID
@@ -37,6 +38,87 @@ def _json_safe(value: Any) -> Any:
     return str(value)
 
 
+@dataclass(frozen=True)
+class AldebaranOpportunityForecast:
+    opportunity_id: str
+    forecast_amount: Optional[float] = None
+    expected_closing_date: Optional[date] = None
+
+
+def parse_aldebaran_closing_date(raw: Any) -> Optional[date]:
+    """将 Aldebaran/CRM 预计成交日期规范为 date（仅接受 YYYY-MM-DD）。"""
+    if raw is None:
+        return None
+    if isinstance(raw, datetime):
+        return raw.date()
+    if isinstance(raw, date):
+        return raw
+    s = str(raw).strip()
+    if not s:
+        return None
+    if len(s) >= 10 and s[4] == "-" and s[7] == "-":
+        try:
+            return date.fromisoformat(s[:10])
+        except ValueError:
+            return None
+    return None
+
+
+def normalize_opportunity_forecast_batch_response(body: Any) -> dict[str, AldebaranOpportunityForecast]:
+    """
+    将 Aldebaran ``POST /api/v1/opportunity/query/amount`` 响应归一化为 opportunity_id -> forecast 映射。
+
+    响应示例::
+
+        {
+          "status": "success",
+          "data": {
+            "opportunities": [
+              {
+                "unique_id": "...",
+                "forecast_amount": 390000.0,
+                "expected_closing_date": "2026-03-04",
+                "amount_field": "estimated_acv"
+              }
+            ]
+          }
+        }
+    """
+    if not isinstance(body, dict):
+        return {}
+
+    data = body.get("data")
+    if not isinstance(data, dict):
+        return {}
+
+    opportunities = data.get("opportunities")
+    if not isinstance(opportunities, list):
+        return {}
+
+    out: dict[str, AldebaranOpportunityForecast] = {}
+    for item in opportunities:
+        if not isinstance(item, dict):
+            continue
+        unique_id = str(item.get("unique_id") or "").strip()
+        if not unique_id:
+            continue
+
+        forecast_amount: Optional[float] = None
+        raw_amount = item.get("forecast_amount")
+        if raw_amount is not None:
+            try:
+                forecast_amount = float(raw_amount)
+            except (TypeError, ValueError):
+                forecast_amount = None
+
+        out[unique_id] = AldebaranOpportunityForecast(
+            opportunity_id=unique_id,
+            forecast_amount=forecast_amount,
+            expected_closing_date=parse_aldebaran_closing_date(item.get("expected_closing_date")),
+        )
+    return out
+
+
 class AldebaranClient:
     def __init__(
         self,
@@ -47,6 +129,7 @@ class AldebaranClient:
         weekly_report_path: Optional[str] = None,
         cvgg_path: Optional[str] = None,
         review_session_recalc_path: Optional[str] = None,
+        opportunity_query_amount_path: Optional[str] = None,
         messages_incoming_path: Optional[str] = None,
         message_webhook_secret: Optional[str] = None,
     ) -> None:
@@ -64,6 +147,15 @@ class AldebaranClient:
         self._review_session_recalc_path = _normalize_path(
             review_session_recalc_path or getattr(settings, "ALDEBARAN_REVIEW_SESSION_RECALC_PATH", "/api/v1/review/performance/query"),
             default="/api/v1/review/performance/query",
+        )
+        self._opportunity_query_amount_path = _normalize_path(
+            opportunity_query_amount_path
+            or getattr(
+                settings,
+                "ALDEBARAN_OPPORTUNITY_QUERY_AMOUNT_PATH",
+                "/api/v1/opportunity/query/amount",
+            ),
+            default="/api/v1/opportunity/query/amount",
         )
         self._messages_incoming_path = _normalize_path(
             messages_incoming_path or getattr(settings, "ALDEBARAN_MESSAGES_INCOMING_PATH", "/api/v1/messages/incoming"),
@@ -318,6 +410,43 @@ class AldebaranClient:
         resp.raise_for_status()
         data = resp.json()
         return data if isinstance(data, dict) else {"raw": data}
+
+    def query_opportunity_amount(
+        self,
+        opportunity_ids: list[str],
+        *,
+        timeout_seconds: int = 30,
+    ) -> dict[str, AldebaranOpportunityForecast]:
+        """
+        批量查询商机的 ``forecast_amount`` / ``expected_closing_date``。
+
+        调用 Aldebaran ``POST /api/v1/opportunity/query/amount``：
+        - 请求：``{ "opportunity_ids": [...] }``
+        - 响应：``data.opportunities[]``，每项含 ``unique_id``、``forecast_amount``、``expected_closing_date``
+        """
+        normalized_ids = [str(v).strip() for v in opportunity_ids if str(v).strip()]
+        if not normalized_ids:
+            return {}
+
+        url = f"{self._base_url}{self._opportunity_query_amount_path}"
+        payload = {"opportunity_ids": list(dict.fromkeys(normalized_ids))}
+        logger.info(
+            "调用 Aldebaran 商机金额查询接口: %s, opportunity_count=%s",
+            url,
+            len(payload["opportunity_ids"]),
+        )
+
+        resp = self._session.post(
+            url,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=timeout_seconds,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if not isinstance(data, dict) or data.get("status") != "success":
+            raise RuntimeError(f"Aldebaran opportunity query amount invalid response: {data}")
+        return normalize_opportunity_forecast_batch_response(data)
 
     def trigger_visit_record_post_process(
         self,

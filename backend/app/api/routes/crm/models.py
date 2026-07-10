@@ -971,6 +971,8 @@ class WeeklyFollowupEntityRowOut(BaseModel):
     owner_name: Optional[str] = None
     progress: Optional[str] = None
     risks: Optional[str] = None
+    forecast_amount: Optional[float] = None
+    expected_closing_date: Optional[date] = None
 
     comments: list[CRMComment] = []
 
@@ -980,6 +982,7 @@ class WeeklyFollowupDetailQueryIn(_WeeklyFollowupWeekRangeQueryMixin):
     单次周总结详情查询：
     - 给定 period（如 2026-W20）或 start_date/end_date + scope（company/department/my）
     - 返回整体 summary（company/department 有）+ scope 下的实体明细列表（可分页）
+    - 支持 forecast_amount_min/max、expected_closing_date_start/end 范围筛选（均为闭区间）
     """
     scope: WeeklyFollowupScope = "my"
     department_id: Optional[str] = None
@@ -996,6 +999,10 @@ class WeeklyFollowupDetailQueryIn(_WeeklyFollowupWeekRangeQueryMixin):
     filter_opportunity_id: Optional[str] = None  # 商机ID筛选（单选）
     filter_opportunity_name: Optional[str] = None  # 商机名称筛选（单选）
     filter_tag_ids: Optional[List[str]] = None  # 客户 tag 筛选（多选，OR）
+    filter_forecast_amount_min: Optional[float] = None  # 签约金额下限（含）
+    filter_forecast_amount_max: Optional[float] = None  # 签约金额上限（含）
+    filter_expected_closing_date_start: Optional[date] = None  # 预计成交日期下限（含，YYYY-MM-DD）
+    filter_expected_closing_date_end: Optional[date] = None  # 预计成交日期上限（含，YYYY-MM-DD）
 
 
 class WeeklyFollowupFilterOptionsQueryIn(_WeeklyFollowupWeekRangeQueryMixin):

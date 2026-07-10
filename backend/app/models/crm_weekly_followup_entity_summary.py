@@ -1,7 +1,7 @@
 from typing import Optional
 from datetime import date
 
-from sqlmodel import Field, Column, String, Date, Text, Index
+from sqlmodel import Field, Column, String, Date, Text, Index, Numeric
 from sqlalchemy import UniqueConstraint
 
 from app.models.base import UpdatableBaseModel
@@ -41,6 +41,17 @@ class CRMWeeklyFollowupEntitySummary(UUIDBaseModel, UpdatableBaseModel, table=Tr
     progress: Optional[str] = Field(default=None, sa_column=Column(Text), description="本周进展")
     risks: Optional[str] = Field(default=None, sa_column=Column(Text), description="风险/问题")
 
+    forecast_amount: Optional[float] = Field(
+        default=None,
+        sa_column=Column(Numeric(18, 2), nullable=True),
+        description="签约金额",
+    )
+    expected_closing_date: Optional[date] = Field(
+        default=None,
+        sa_column=Column(Date, nullable=True),
+        description="预计签约时间",
+    )
+
     evidence_record_ids: Optional[str] = Field(default=None, sa_column=Column(Text), description="证据拜访记录ID列表（JSON数组字符串）")
 
     # 多人评论：JSON 数组，元素结构由上层 API 约束
@@ -60,6 +71,8 @@ class CRMWeeklyFollowupEntitySummary(UUIDBaseModel, UpdatableBaseModel, table=Tr
         Index("idx_weekly_followup_entity_dept", "department_name"),
         Index("idx_weekly_followup_entity_entity", "entity_type", "entity_id"),
         Index("idx_weekly_followup_entity_owner", "owner_user_id"),
+        Index("idx_weekly_followup_entity_closing_date", "expected_closing_date"),
+        Index("idx_weekly_followup_entity_forecast_amount", "forecast_amount"),
     )
 
 
