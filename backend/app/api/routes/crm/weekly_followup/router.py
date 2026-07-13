@@ -45,6 +45,7 @@ from app.services.crm_config_service import get_resolved_field_mapping
 from app.services.crm_weekly_followup_engagement_service import crm_weekly_followup_engagement_service
 from app.utils.crm_weekly_followup_week_boundary import format_weekly_followup_period
 from app.services.oauth_service import oauth_client
+from app.permissions.weekly_followup_permission_service import weekly_followup_permission_service
 from app.utils.crm_account_tags import (
     parse_account_tags,
     resolve_followup_account_id,
@@ -59,19 +60,27 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["crm", "crm/weekly-followup"])
 
 
-def _can_view_weekly_followup(db_session: SessionDep, user: CurrentUserDep) -> tuple[bool, bool, Optional[str], Optional[str]]:
-    """
-    Returns: (can_view, is_company_admin, user_department_id, user_department_name)
-    """
+def _resolve_user_department(
+    db_session: SessionDep, user: CurrentUserDep
+) -> tuple[Optional[str], Optional[str]]:
+    """本部门 id/name：优先 user_department_relation，部门名兜底 profiles。"""
     user_profile_repo = UserProfileRepo()
     profile = user_profile_repo.get_by_user_id(db_session, user.id)
     dept_name = profile.department if profile else None
-
-    # 部门信息优先从 user_department_relation 获取（更权威）；拿不到再兜底 profiles
     dept_id = user_department_relation_repo.get_primary_department_by_user_ids(
         db_session,
         [str(user.id)],
     ).get(str(user.id))
+    return dept_id, dept_name
+
+
+def _can_view_weekly_followup(db_session: SessionDep, user: CurrentUserDep) -> tuple[bool, bool, Optional[str], Optional[str]]:
+    """
+    Returns: (can_view, is_company_admin, user_department_id, user_department_name)
+    """
+    dept_id, dept_name = _resolve_user_department(db_session, user)
+    user_profile_repo = UserProfileRepo()
+    profile = user_profile_repo.get_by_user_id(db_session, user.id)
 
     roles_and_permissions = oauth_client.query_user_roles_and_permissions(user_id=user.id)
     permissions = roles_and_permissions.get("permissions", []) if isinstance(roles_and_permissions, dict) else []
@@ -751,17 +760,21 @@ def list_weekly_followup_weekly_summaries(
 ) -> WeeklyFollowupWeeklyListOut:
     """
     每周跟进总结列表（每周一行）。
-    不同用户 scope 不同：
-    - department: 团队负责人/普通销售均可（返回团队周总结列表）
-    - company: 公司管理员（返回公司周总结列表）
-    可选 period（如 2026-W20）或 start_date/end_date 过滤周区间（period 优先）。
+
+    权限：
+    - OAuth ``sales:weekly_followup:view`` 功能门控
+    - ``company`` scope：需 data-scope global（经营层/管理员等）
+    - ``department`` scope：非 global 用户强制本部门；global 用户可按入参筛选部门
     """
-    can_view_team, is_company_admin, user_dept_id, user_dept_name = _can_view_weekly_followup(db_session, user)
+    if not weekly_followup_permission_service.gate_view(db_session, user.id):
+        raise HTTPException(status_code=403, detail="无周跟进总结查看权限")
+
+    user_dept_id, user_dept_name = _resolve_user_department(db_session, user)
+    is_global_scope = weekly_followup_permission_service.has_global_data_scope(db_session, user.id)
 
     scope = payload.scope
-    # 列表层只展示 company/department 的“周总结行”
-    if scope == "company" and not is_company_admin:
-        raise HTTPException(status_code=403, detail="权限不足：仅公司管理员可查看 company scope")
+    if scope == "company" and not is_global_scope:
+        raise HTTPException(status_code=403, detail="权限不足：仅公司级数据范围可查看 company scope")
 
     page = max(int(payload.page or 1), 1)
     size = max(min(int(payload.page_size or 20), 200), 1)
@@ -770,14 +783,14 @@ def list_weekly_followup_weekly_summaries(
     dept_id = None
     dept_name = None
     if scope == "department":
-        if is_company_admin:
+        if is_global_scope:
             dept_id = (payload.department_id or "").strip() or None
             dept_name = (payload.department_name or "").strip() or None
         else:
-            # 非公司管理员：强制本部门（团队负责人/普通销售都一样）
+            # 非公司级范围：强制本部门
             dept_id = user_dept_id
             dept_name = user_dept_name
-        if (not is_company_admin) and (dept_id is None and dept_name is None):
+        if (not is_global_scope) and (dept_id is None and dept_name is None):
             raise HTTPException(status_code=403, detail="无法获取本团队信息")
 
     items: List[WeeklyFollowupWeeklyListItemOut] = []
