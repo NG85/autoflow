@@ -12,9 +12,9 @@ import json
 import logging
 import re
 from decimal import Decimal
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import date, datetime, time, timezone, timedelta
-from sqlmodel import Session, select, text
+from sqlmodel import Session, select, text, or_
 from app.core.config import settings, WritebackMode
 from app.models.wb_review_requests import (
     ReviewOpportunityWritebackBatchRequest,
@@ -26,11 +26,15 @@ from app.models.wb_visit_requests import (
     CbgVisitRecordBatchCreateRequest,
     CbgVisitRecordCreateRequest,
     CbgVisitRecordType,
-    ChaitinVisitRecordBatchCreateRequest, 
-    ChaitinVisitRecordCreateRequest, 
-    OlmVisitRecordBatchCreateRequest, 
-    OlmVisitRecordCreateRequest
+    ChaitinVisitRecordBatchCreateRequest,
+    ChaitinVisitRecordCreateRequest,
+    OlmVisitRecordBatchCreateRequest,
+    OlmVisitRecordCreateRequest,
+    WebeyeVisitRecordBatchCreateRequest,
+    WebeyeVisitRecordCreateRequest,
 )
+from app.models.crm_accounts import CRMAccount
+from app.models.crm_leads import CRMLead
 from app.api.routes.crm.models import VisitAttachment
 
 logger = logging.getLogger(__name__)
@@ -171,7 +175,7 @@ def _crm_writeback_gateway_message_from_text(body: str) -> str:
 
 
 class CrmVisitWritebackClient:
-    """拜访记录回写 HTTP 客户端（CBG / APAC / OLM / CHAITIN 等）。"""
+    """拜访记录回写 HTTP 客户端（CBG / APAC / OLM / CHAITIN / WEBEYE 等）。"""
     
     def __init__(self, base_url: str = "http://salesforce:8080"):
         self.base_url = base_url
@@ -287,6 +291,35 @@ class CrmVisitWritebackClient:
         except httpx.RequestError as e:
             logger.error(f"长亭批量创建拜访记录失败: {e}")
             return {"success": False, "message": f"长亭批量创建拜访记录失败: {e}"}
+
+    def batch_webeye_visit_create(self, visit_requests: WebeyeVisitRecordBatchCreateRequest) -> Dict[str, Any]:
+        """
+        批量 upsert 网眼（简道云）拜访/跟进记录
+        """
+        url = f"{self.base_url}/crm-jiandaoyun/webeye/visit-record/batch"
+
+        try:
+            timeout = httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0)
+            with httpx.Client(timeout=timeout) as client:
+                # exclude_none：避免把空关联字段（lead_id/account_id）一并传给互斥场景
+                payload = visit_requests.model_dump(exclude_none=True)
+                response = client.post(url, headers=self.headers, json=payload)
+                logger.info(f"调用网眼批量拜访回写，返回: {response.text}")
+                response.raise_for_status()
+                return {"success": True, "data": response.json()}
+        except httpx.TimeoutException as e:
+            logger.error(f"网眼批量拜访回写超时: {e}")
+            return {"success": False, "message": f"网眼批量拜访回写超时: {e}"}
+        except httpx.HTTPStatusError as e:
+            logger.error(f"网眼批量拜访回写 HTTP 错误: {e.response.status_code} {e.response.text}")
+            return {
+                "success": False,
+                "message": f"网眼批量拜访回写 HTTP 错误: {e.response.status_code}",
+                "response_text": e.response.text,
+            }
+        except httpx.RequestError as e:
+            logger.error(f"网眼批量拜访回写失败: {e}")
+            return {"success": False, "message": f"网眼批量拜访回写失败: {e}"}
 
 
 class CrmReviewWritebackClient:
@@ -923,6 +956,158 @@ class CrmWritebackService:
             visit_requests.followup_records.append(visit_request)
         return visit_requests
 
+    def _resolve_webeye_recorder_username(
+        self, session: Session, record: CRMSalesVisitRecord
+    ) -> Optional[str]:
+        """将 ASK recorder_id 解析为简道云人员 username（crm_user.unique_id）。"""
+        if not record.recorder_id:
+            return None
+        try:
+            ask_id_str = str(record.recorder_id)
+            sql_query = text("""
+                SELECT cu.unique_id AS user_name
+                FROM user_profiles up
+                LEFT JOIN crm_user cu ON up.crm_user_id = cu.unique_id
+                WHERE up.oauth_user_id = :ask_id
+            """)
+            result = session.exec(sql_query, params={"ask_id": ask_id_str}).first()
+            if result:
+                user_name = result[0] if not isinstance(result, str) else result
+                if user_name:
+                    return str(user_name)
+                logger.warning(f"记录 ID {record.id}：未找到对应的网眼 CRM 用户名")
+            else:
+                logger.warning(f"记录 ID {record.id}：未找到 recorder_id {ask_id_str} 对应的用户")
+        except Exception as e:
+            logger.warning(f"记录 ID {record.id}：查询网眼 CRM 用户名失败: {e}")
+        return None
+
+    def _lookup_webeye_account_or_lead(
+        self, session: Session, entity_id: str
+    ) -> Tuple[Optional[CRMAccount], Optional[CRMLead]]:
+        """
+        用拜访记录上唯一的关联 ID（account_id 或 partner_id，二者互斥）
+        在 crm_accounts / crm_leads 中查找。
+
+        命中客户表 → 客户拜访；命中线索表 → 线索拜访；都未命中 → (None, None)。
+        若异常地两表都有同一 unique_id，优先按客户处理。
+        """
+        eid = _str_or_none(entity_id)
+        if not eid:
+            return None, None
+
+        account = session.exec(
+            select(CRMAccount).where(
+                CRMAccount.unique_id == eid,
+                or_(CRMAccount.delete_flag == 0, CRMAccount.delete_flag.is_(None)),
+            )
+        ).first()
+        if account:
+            return account, None
+
+        lead = session.exec(
+            select(CRMLead).where(
+                CRMLead.unique_id == eid,
+                CRMLead.is_deleted == 0,
+            )
+        ).first()
+        return None, lead
+
+    def generate_webeye_visit_requests(
+        self, session: Session, visit_records: List[CRMSalesVisitRecord]
+    ) -> WebeyeVisitRecordBatchCreateRequest:
+        """
+        根据拜访记录生成网眼（简道云）拜访回写请求。
+
+        约定：本地 ``account_id`` / ``partner_id``（及对应 name）互斥，只会一侧有值；
+        用该 ID 查 ``crm_accounts`` / ``crm_leads``——落在哪张表就是哪种拜访场景。
+        """
+        visit_requests = WebeyeVisitRecordBatchCreateRequest(visit_records=[])
+
+        for record in visit_records:
+            # account / partner 互斥：取有值的一侧
+            entity_id = _str_or_none(record.account_id) or _str_or_none(record.partner_id)
+            local_name = _str_or_none(record.account_name) or _str_or_none(
+                record.partner_name
+            )
+
+            if not entity_id:
+                logger.warning(
+                    f"记录 ID {record.id}：account_id/partner_id 为空，跳过网眼回写"
+                )
+                continue
+
+            account, lead = self._lookup_webeye_account_or_lead(session, entity_id)
+            if account is None and lead is None:
+                logger.warning(
+                    f"记录 ID {record.id}：在 crm_accounts/crm_leads 中未找到 "
+                    f"entity_id={entity_id}，跳过网眼回写"
+                )
+                continue
+
+            recorder_username = self._resolve_webeye_recorder_username(session, record)
+            if not recorder_username:
+                logger.warning(
+                    f"记录 ID {record.id}：未解析到简道云跟进人 username，跳过网眼回写"
+                )
+                continue
+
+            followup = (
+                record.followup_record_zh
+                or record.followup_record
+                or record.followup_content
+            )
+            next_steps = record.next_steps_zh or record.next_steps
+            visit_date = (
+                record.visit_communication_date.isoformat()
+                if record.visit_communication_date
+                else None
+            )
+            source_record_id = str(record.record_id or record.id)
+
+            if account is not None:
+                # 客户拜访：只传 account_id，不传 lead_id
+                visit_request = WebeyeVisitRecordCreateRequest(
+                    source_record_id=source_record_id,
+                    account_id=account.unique_id,
+                    customer_code=account.customer_code,
+                    account_short_name=account.customer_abbreviation,
+                    account_name=local_name or account.customer_name,
+                    opportunity_id=_str_or_none(record.opportunity_id),
+                    opportunity_name=record.opportunity_name,
+                    recorder_id=recorder_username,
+                    recorder=record.recorder,
+                    visit_communication_date=visit_date,
+                    visit_communication_method=record.visit_communication_method,
+                    followup_record=followup,
+                    next_steps=next_steps,
+                    remarks=record.remarks,
+                )
+            else:
+                # 线索拜访：只传 lead_id，不传 account_id
+                if lead is None:
+                    continue
+                lead_serial = None
+                if isinstance(lead.extra, dict):
+                    lead_serial = _str_or_none(lead.extra.get("lead_serial_number"))
+                visit_request = WebeyeVisitRecordCreateRequest(
+                    source_record_id=source_record_id,
+                    lead_id=lead.unique_id,
+                    lead_serial_number=lead_serial,
+                    account_name=local_name or lead.company_name,
+                    recorder_id=recorder_username,
+                    recorder=record.recorder,
+                    visit_communication_date=visit_date,
+                    visit_communication_method=record.visit_communication_method,
+                    followup_record=followup,
+                    next_steps=next_steps,
+                    remarks=record.remarks,
+                )
+
+            visit_requests.visit_records.append(visit_request)
+
+        return visit_requests
+
     def writeback_review_opportunity_updates_to_crm(
         self,
         *,
@@ -1204,6 +1389,63 @@ class CrmWritebackService:
                         "writeback_count": len(visit_requests.followup_records),
                         "results": return_data
                     }
+            
+            elif writeback_mode == WritebackMode.WEBEYE.value:
+                logger.info("使用WEBEYE（简道云）拜访记录回写模式")
+
+                visit_requests = self.generate_webeye_visit_requests(session, visit_records)
+
+                if not visit_requests.visit_records:
+                    logger.info("没有需要回写的WEBEYE拜访记录")
+                    return {
+                        "success": True,
+                        "message": "没有需要回写的WEBEYE拜访记录",
+                        "processed_count": len(visit_records),
+                        "writeback_count": 0,
+                    }
+
+                result = self.client.batch_webeye_visit_create(visit_requests)
+                logger.info(
+                    f"批量WEBEYE拜访记录回写完成: {len(visit_requests.visit_records)} 条记录"
+                )
+
+                return_data = result.get("data", {})
+                writeback_count = len(visit_requests.visit_records)
+                ok = bool(result.get("success"))
+                if isinstance(return_data, dict):
+                    created_visits = return_data.get("created", 0)
+                    updated_visits = return_data.get("updated", 0)
+                    failed_visits = return_data.get("failed", 0)
+                    return {
+                        "success": ok,
+                        "message": (
+                            f"{'成功' if ok else '失败'}处理 {len(visit_records)} 条拜访记录，"
+                            f"提交 {writeback_count} 条WEBEYE回写"
+                            + (
+                                f"（created={created_visits}, updated={updated_visits}, "
+                                f"failed={failed_visits}）"
+                                if ok
+                                else f"：{result.get('message', '')}"
+                            )
+                        ),
+                        "processed_count": len(visit_records),
+                        "writeback_count": writeback_count,
+                        "success_count": created_visits + updated_visits if ok else 0,
+                        "failed_count": failed_visits if ok else writeback_count,
+                        "results": return_data,
+                    }
+                return {
+                    "success": ok,
+                    "message": (
+                        f"{'成功' if ok else '失败'}处理 {len(visit_records)} 条拜访记录，"
+                        f"提交 {writeback_count} 条WEBEYE回写"
+                        + ("" if ok else f"：{result.get('message', '')}")
+                    ),
+                    "processed_count": len(visit_records),
+                    "writeback_count": writeback_count,
+                    "results": return_data,
+                }
+
             else:
                 logger.warning(
                     "拜访记录回写尚未实现: writeback_mode=%s visit_rows=%s",

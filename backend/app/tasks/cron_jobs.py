@@ -1246,6 +1246,7 @@ def crm_visit_records_writeback(self, start_date_str=None, end_date_str=None, wr
        - APAC模式：为每条拜访记录创建Salesforce的任务
        - OLM模式：为每条拜访记录创建销售易的拜访记录
        - CHAITIN模式：为每条拜访记录创建长亭的拜访记录
+       - WEBEYE模式：为每条拜访记录创建简道云跟进记录
        - 其它模式：若尚未接入拜访回写则跳过
     4. 调用相应的API进行回写或任务创建，并返回回写结果
     
