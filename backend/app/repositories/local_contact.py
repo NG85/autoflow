@@ -7,10 +7,10 @@ from app.repositories.base_repo import BaseRepo
 from app.models.local_contacts import LocalContact
 from app.models.crm_accounts import CRMAccount
 from app.models.crm_leads import CRMLead
-from app.models.crm_data_authority import CrmDataAuthority
-from app.rag.types import CrmDataType
-from app.repositories.user_profile import user_profile_repo
-from app.repositories.visit_record import visit_record_repo
+from app.permissions.crm_contact_permission_service import (
+    CRM_ACCOUNT_VIEW_PERMISSION,
+    crm_contact_permission_service,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,65 +44,56 @@ class LocalContactRepo(BaseRepo):
         return None
 
     def check_account_permission(
-        self, 
-        db_session: Session, 
-        user_id: UUID, 
-        customer_id: str
-        ) -> bool:
+        self,
+        db_session: Session,
+        user_id: UUID,
+        customer_id: str,
+        *,
+        permission: str = CRM_ACCOUNT_VIEW_PERMISSION,
+    ) -> bool:
         """
-        检查用户是否有权限访问指定的客户
-        
+        检查用户是否有权限访问指定的客户。
+
+        走 OAuth ``POST /permission/check``（resource=crm_account）。
+
         Args:
             db_session: 数据库会话
             user_id: 用户ID
             customer_id: 客户ID (crm_accounts.unique_id 或 crm_leads.unique_id)
-            
+            permission: OAuth permission code（创建联系人用 ``crm:contact:create``）
+
         Returns:
             True 如果有权限，False 否则
         """
-        # 1. 检查用户是否有权限访问所有CRM数据
-        if visit_record_repo.can_access_all_crm_data(user_id, db_session):
-            return True
-        
-        # 2. 获取用户的CRM用户ID
-        crm_user_id = user_profile_repo.get_crm_user_id_by_user_id(db_session, user_id)
-        if not crm_user_id:
-            # 如果没有CRM用户ID，则没有权限
-            logger.info(f"User {user_id} has no crm_user_id; no authorized items.")
-            return False
-        
-        # 2.2 直接查询 crm_data_authority 表，检查是否有权限访问该客户
-        stmt = select(CrmDataAuthority).where(
-            CrmDataAuthority.crm_id == str(crm_user_id),
-            CrmDataAuthority.type == CrmDataType.ACCOUNT.value,
-            CrmDataAuthority.data_id == customer_id,
-            (CrmDataAuthority.delete_flag.is_(None)) | (CrmDataAuthority.delete_flag == False)  # noqa: E712
-        ).limit(1)
-        
-        result = db_session.exec(stmt).first()
-        logger.info(f"CRM data authority result for user {user_id} and customer {customer_id}: {result}")
-        return result is not None
-    
+        return crm_contact_permission_service.check_account_access(
+            db_session,
+            user_id,
+            customer_id,
+            permission=permission,
+        )    
     def get_by_id(
-        self, 
-        db_session: Session, 
-        contact_id: str, 
-        user_id: Optional[UUID] = None
+        self,
+        db_session: Session,
+        contact_id: str,
+        user_id: Optional[UUID] = None,
     ) -> Optional[LocalContact]:
-        """根据唯一ID获取联系人（带权限检查）"""
+        """根据唯一ID获取联系人；传 user_id 时按所属客户做 OAuth 校验。"""
         query = select(LocalContact).where(
             LocalContact.unique_id == contact_id,
-            self._not_deleted_condition()
+            self._not_deleted_condition(),
         )
         contact = db_session.exec(query).first()
-        
+
         if not contact:
             return None
-        
-        # 如果提供了用户ID，检查权限
-        if user_id and not self.check_account_permission(db_session, user_id, contact.customer_id):
+
+        if user_id and not crm_contact_permission_service.check_view(
+            db_session,
+            user_id,
+            customer_id=contact.customer_id,
+        ):
             return None
-        
+
         return contact
     
     def get_by_customer_id(
@@ -114,30 +105,22 @@ class LocalContactRepo(BaseRepo):
         limit: int = 100
     ) -> Tuple[List[LocalContact], int]:
         """
-        根据客户ID获取联系人列表（带权限检查）
-        
-        Returns:
-            tuple: (联系人列表, 总数)
+        根据客户ID获取联系人列表。
+
+        权限由调用方（路由）负责；``user_id`` 仅保留兼容，不再二次鉴权。
         """
-        # 检查权限
-        if user_id and not self.check_account_permission(db_session, user_id, customer_id):
-            return [], 0
-        
-        # 构建查询条件
         conditions = [
             LocalContact.customer_id == customer_id,
             self._not_deleted_condition()
         ]
-        
-        # 构建 count 查询
+
         count_query = select(func.count(LocalContact.id)).where(and_(*conditions))
         total = db_session.exec(count_query).one()
-        
-        # 构建数据查询
+
         query = select(LocalContact).where(
             and_(*conditions)
         ).order_by(LocalContact.created_at.desc()).offset(skip).limit(limit)
-        
+
         contacts = db_session.exec(query).all()
         return contacts, total
     
@@ -152,7 +135,10 @@ class LocalContactRepo(BaseRepo):
     ) -> Tuple[List[LocalContact], int]:
         """
         搜索联系人（带权限过滤）
-        
+
+        权限：OAuth ``crm:contact:view`` 门控由路由负责；本方法用
+        ``data-scope(entity=crm_account)`` 按所属客户过滤。
+
         Args:
             db_session: 数据库会话
             user_id: 用户ID
@@ -160,62 +146,28 @@ class LocalContactRepo(BaseRepo):
             name: 可选的姓名搜索（模糊匹配）
             skip: 跳过数量
             limit: 返回数量限制
-            
+
         Returns:
             tuple: (联系人列表, 总数)（只返回用户有权限访问的客户下的联系人）
         """
-        # 构建查询条件
         conditions = [self._not_deleted_condition()]
-        
-        # 检查是否有权限访问所有CRM数据（如果是，不需要过滤权限）
-        can_access_all_crm = visit_record_repo.can_access_all_crm_data(user_id, db_session)
-        authorized_account_ids = None  # 初始化变量
-        
-        # 如果没有权限访问所有CRM数据，需要过滤权限
-        if not can_access_all_crm:
-            # 获取用户的CRM用户ID
-            crm_user_id = user_profile_repo.get_crm_user_id_by_user_id(db_session, user_id)
-            if not crm_user_id:
-                # 如果没有CRM用户ID，则没有权限
-                logger.info(f"User {user_id} has no crm_user_id; no authorized items.")
-                return [], 0
-            
-            # 查询 crm_data_authority 表获取有权限的客户ID列表
-            stmt = select(CrmDataAuthority.data_id).where(
-                CrmDataAuthority.crm_id == str(crm_user_id),
-                CrmDataAuthority.type == CrmDataType.ACCOUNT.value,
-                (CrmDataAuthority.delete_flag.is_(None)) | (CrmDataAuthority.delete_flag == False)  # noqa: E712
-            )
-            authorized_account_ids = [row[0] for row in db_session.exec(stmt).all()]
-            
-            if not authorized_account_ids:
-                # 用户没有任何客户权限
-                return [], 0
-            
-            conditions.append(LocalContact.customer_id.in_(authorized_account_ids))
-        
-        # 客户ID过滤（如果提供了 customer_id，需要检查权限）
+        conditions.append(
+            crm_contact_permission_service.list_perm_where(db_session, user_id)
+        )
+
         if customer_id:
-            # 如果用户没有权限访问所有CRM数据，需要验证该客户是否在授权列表中
-            if not can_access_all_crm and authorized_account_ids is not None:
-                if customer_id not in authorized_account_ids:
-                    # 用户没有权限访问该客户，返回空结果
-                    return [], 0
             conditions.append(LocalContact.customer_id == customer_id)
-        
-        # 姓名搜索（模糊匹配）
+
         if name:
             conditions.append(LocalContact.name.like(f"%{name}%"))
-        
-        # 构建 count 查询
+
         count_query = select(func.count(LocalContact.id)).where(and_(*conditions))
         total = db_session.exec(count_query).one()
-        
-        # 构建数据查询
+
         query = select(LocalContact).where(
             and_(*conditions)
         ).order_by(LocalContact.created_at.desc()).offset(skip).limit(limit)
-        
+
         contacts = db_session.exec(query).all()
         return contacts, total
     
@@ -252,11 +204,9 @@ class LocalContactRepo(BaseRepo):
             raise ValueError("name is required")
         if not position:
             raise ValueError("position is required")
-        
-        # 检查权限
-        if not self.check_account_permission(db_session, user_id, customer_id):
-            raise ValueError(f"User does not have permission to create contact for customer {customer_id}")
-        
+
+        # 权限由路由层 OAuth check 负责，此处不再二次鉴权
+
         # 验证客户/线索是否存在（customer_id 可对应 crm_accounts 或 crm_leads）
         account = self._get_account_by_id(db_session, customer_id)
         lead = None if account else self._get_lead_by_id(db_session, customer_id)
@@ -350,59 +300,40 @@ class LocalContactRepo(BaseRepo):
         user_id: UUID
     ) -> Optional[LocalContact]:
         """
-        更新联系人基础信息
-        
-        注意：
-            - 只允许修改基础信息，不允许修改所属客户（customer_id）
-            - 用户必须有该联系人所属客户的权限才能进行修改
-            - 不允许修改唯一标识、审计字段和删除标识
-        
-        Args:
-            db_session: 数据库会话
-            contact_id: 联系人ID
-            contact_data: 要更新的数据字典
-            user_id: 更新人ID
-            
-        Returns:
-            更新后的联系人对象，如果不存在或无权访问则返回None
-            
-        Raises:
-            ValueError: 如果用户没有权限，或尝试修改不允许的字段（customer_id, customer_name, unique_id等）
+        更新联系人基础信息。
+
+        权限由路由层 OAuth ``crm:contact:edit`` 负责；本方法只做字段约束与落库。
         """
-        contact = self.get_by_id(db_session, contact_id, user_id)
+        contact = self.get_by_id(db_session, contact_id)
         if not contact:
             return None
-        
-        # 检查用户是否有权限访问该联系人所属的客户
-        if not self.check_account_permission(db_session, user_id, contact.customer_id):
-            raise ValueError(f"User does not have permission to modify contact for customer {contact.customer_id}")
-        
+
         # 不允许修改所属客户相关字段
         if "customer_id" in contact_data:
             raise ValueError("Cannot modify customer_id. Contact's customer association cannot be changed.")
         if "customer_name" in contact_data:
             raise ValueError("Cannot modify customer_name. This field is automatically managed based on customer_id.")
-        
+
         # 不允许修改唯一标识和审计字段
         forbidden_fields = ["unique_id", "created_by", "created_at", "updated_by", "updated_at", "delete_flag"]
         for field in forbidden_fields:
             if field in contact_data:
                 raise ValueError(f"Cannot modify {field}. This field is protected.")
-        
+
         # 更新字段（只允许修改基础信息）
         from datetime import datetime
         for key, value in contact_data.items():
             if hasattr(contact, key):
                 setattr(contact, key, value)
-        
+
         contact.updated_by = user_id
         contact.updated_at = datetime.now()
-        
+
         db_session.add(contact)
         db_session.commit()
         db_session.refresh(contact)
         return contact
-    
+
     def delete(
         self,
         db_session: Session,
@@ -410,26 +341,19 @@ class LocalContactRepo(BaseRepo):
         user_id: UUID
     ) -> bool:
         """
-        软删除联系人
-        
-        Args:
-            db_session: 数据库会话
-            contact_id: 联系人ID
-            user_id: 删除人ID
-            
-        Returns:
-            True 如果删除成功，False 如果联系人不存在或无权访问
+        软删除联系人。
+
+        权限由路由层 OAuth ``crm:contact:delete`` 负责。
         """
-        contact = self.get_by_id(db_session, contact_id, user_id)
+        contact = self.get_by_id(db_session, contact_id)
         if not contact:
             return False
-        
-        # 软删除
+
         from datetime import datetime
         contact.delete_flag = 1
         contact.updated_by = user_id
         contact.updated_at = datetime.now()
-        
+
         db_session.add(contact)
         db_session.commit()
         return True
