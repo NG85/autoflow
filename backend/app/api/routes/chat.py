@@ -87,16 +87,15 @@ def _should_bill_sia(chat_type: ChatType, chat_mode: ChatMode) -> bool:
 
 
 def _build_chat_review_detail(chat_id: Optional[Any]) -> str:
-    if chat_id:
-        return f"{settings.REVIEW_REPORT_HOST}/c/{chat_id}"
-    return f"{settings.REVIEW_REPORT_HOST}/c"
+    from app.utils.push_page_urls import build_sia_chat_page_url
+
+    return build_sia_chat_page_url(str(chat_id) if chat_id else None)
 
 
 def _build_visit_prep_review_detail(chat_id: Optional[Any]) -> str:
-    host = settings.REVIEW_REPORT_HOST.rstrip("/")
-    if chat_id:
-        return f"{host}/agent/sanYeZhi/{chat_id}"
-    return f"{host}/agent/clientVisitHistory"
+    from app.utils.push_page_urls import build_visit_guide_page_url
+
+    return build_visit_guide_page_url(str(chat_id) if chat_id else None)
 
 
 def _check_sia_quota_or_raise() -> None:

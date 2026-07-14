@@ -698,9 +698,11 @@ class CRMStatisticsService:
             
             from app.utils.push_page_urls import build_task_list_page_url, build_visit_list_page_url
 
+            recorder_name = str(stats.get("recorder") or "").strip()
             base_visit_url = build_visit_list_page_url(
                 start_date=target_date.isoformat(),
                 end_date=target_date.isoformat(),
+                recorder=recorder_name or None,
             )
             
             # for assessment in assessment_details['first']:
@@ -732,7 +734,6 @@ class CRMStatisticsService:
             #             f"&account_name={assessment['account_name']}"
             #         )
 
-            recorder_name = str(stats.get("recorder") or "").strip()
             stat_date_str = target_date.isoformat()
             exec_date_str = incomplete_due_date.isoformat()
             task_detail_page = build_task_list_page_url(
@@ -1288,7 +1289,8 @@ class CRMStatisticsService:
                     if has_data:
                         report_billing_usage(
                             BillingScenario.CRM_SALES_TEAM_DEPARTMENT_DAILY,
-                            review_detail=f"{settings.REVIEW_REPORT_HOST}/reports/daily-reports/department?report_date={target_date.isoformat()}&department_name={department_name}",
+                            review_detail=department_report.get("visit_detail_page")
+                            or settings.REVIEW_REPORT_HOST,
                             trace_key=f"department-daily:{target_date.isoformat()}:{department_name}",
                             log_context=f"department={department_name} date={target_date.isoformat()}",
                         )
@@ -1398,7 +1400,8 @@ class CRMStatisticsService:
                 )
                 report_billing_usage(
                     BillingScenario.CRM_SALES_TEAM_COMPANY_DAILY,
-                    review_detail=f"{settings.REVIEW_REPORT_HOST}/reports/daily-reports/company?report_date={target_date.isoformat()}",
+                    review_detail=company_report.get("visit_detail_page")
+                    or settings.REVIEW_REPORT_HOST,
                     trace_key=f"company-daily:{target_date.isoformat()}",
                     log_context=f"company-daily:{target_date.isoformat()}",
                 )

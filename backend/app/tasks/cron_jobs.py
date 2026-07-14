@@ -5,8 +5,6 @@ from sqlmodel import Session, select
 import pytz
 from typing import Any, Optional
 
-from urllib.parse import quote_plus
-
 from app.core.config import settings, WritebackMode, WritebackFrequency
 from app.core.db import engine
 from app.celery import app
@@ -725,7 +723,8 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                                     _report_task_usage_once(
                                         BillingScenario.CRM_TEAM_WEEKLY_REPORT,
                                         f"weekly-department:{end_date.isoformat()}:{dept_name}",
-                                        f"{settings.REVIEW_REPORT_HOST}/reports/weekly-reports/department?end_date={end_date.isoformat()}&department_name={quote_plus(str(dept_name or ''))}",
+                                        department_report.get("weekly_review_1_page")
+                                        or settings.REVIEW_REPORT_HOST,
                                     )
                                 else:
                                     logger.info(
@@ -772,7 +771,8 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                                 _report_task_usage_once(
                                     BillingScenario.CRM_TEAM_WEEKLY_REPORT,
                                     f"weekly-company:{end_date.isoformat()}",
-                                    f"{settings.REVIEW_REPORT_HOST}/reports/weekly-reports/company?end_date={end_date.isoformat()}",
+                                    company_weekly_report.get("weekly_review_1_page")
+                                    or settings.REVIEW_REPORT_HOST,
                                 )
                             else:
                                 msg = str(company_result.get("message", ""))
