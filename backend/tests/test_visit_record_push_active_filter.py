@@ -3,7 +3,6 @@
 from unittest.mock import MagicMock, patch
 
 from app.services.platform_notification_service import PlatformNotificationService
-from app.services.visit_record_cc_resolver import resolve_visit_record_cc_recipients
 
 
 def test_filter_recipients_by_active_profiles_keeps_only_active():
@@ -84,47 +83,3 @@ def test_get_recipients_for_recorder_skips_inactive_leaders():
         "ou_recorder",
         "ou_active_leader",
     ]
-
-
-def test_resolve_visit_record_cc_recipients_skips_inactive_executive_admin():
-    db_session = MagicMock()
-
-    def _permission_users(_permission):
-        return [
-            {
-                "platform": "feishu",
-                "open_id": "ou_active_exec",
-                "name": "在职高管",
-                "department": "公司",
-            },
-            {
-                "platform": "feishu",
-                "open_id": "ou_inactive_exec",
-                "name": "停用高管",
-                "department": "公司",
-            },
-        ]
-
-    with patch(
-        "app.services.visit_record_cc_resolver.user_profile_repo.get_active_open_ids",
-        return_value={"ou_active_exec"},
-    ):
-        recipients = resolve_visit_record_cc_recipients(
-            db_session,
-            recorder_user_id=None,
-            get_card_permission_receivers=_permission_users,
-        )
-
-    assert recipients == {
-        "feishu": [
-            {
-                "open_id": "ou_active_exec",
-                "name": "在职高管",
-                "type": "executive_admin",
-                "cc_scope": "global",
-                "department": "公司",
-                "receive_id_type": "open_id",
-                "platform": "feishu",
-            }
-        ]
-    }

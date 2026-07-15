@@ -1,15 +1,15 @@
-"""拜访记录卡片推送：configured_cc 优先级与 department_review 过滤逻辑。"""
+"""拜访记录卡片推送：configured_cc 与 department_review 过滤逻辑。"""
 
 from unittest.mock import MagicMock, patch
 
 from app.services.platform_notification_service import PlatformNotificationService
 
 
-def test_visit_record_priority_configured_cc_over_executive_admin():
+def test_visit_record_priority_leader_over_configured_cc():
     svc = PlatformNotificationService()
     assert (
-        svc._VISIT_RECORD_RECIPIENT_TYPE_PRIORITY["configured_cc"]
-        < svc._VISIT_RECORD_RECIPIENT_TYPE_PRIORITY["executive_admin"]
+        svc._VISIT_RECORD_RECIPIENT_TYPE_PRIORITY["leader"]
+        < svc._VISIT_RECORD_RECIPIENT_TYPE_PRIORITY["configured_cc"]
     )
 
 
@@ -38,7 +38,6 @@ def test_collect_visit_record_removes_global_cc_when_department_review_group_exi
                 "cc_scope": "global",
                 "name": "全局抄送人",
             },
-            {"open_id": "ou_exec", "type": "executive_admin", "cc_scope": "global", "name": "高管"},
         ]
     }
     mock_get_groups.side_effect = [
@@ -55,7 +54,6 @@ def test_collect_visit_record_removes_global_cc_when_department_review_group_exi
 
     feishu_types = {item["type"] for item in recipients["feishu"]}
     assert "leader" not in feishu_types
-    assert "executive_admin" not in feishu_types
     assert "configured_cc" not in feishu_types
     assert "recorder" in feishu_types
     assert review_groups

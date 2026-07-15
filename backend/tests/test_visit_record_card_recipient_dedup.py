@@ -19,7 +19,7 @@ def test_visit_record_dedupes_same_template_same_person():
             {
                 "open_id": "ou_123",
                 "name": "李华",
-                "type": "executive_admin",
+                "type": "configured_cc",
                 "receive_id_type": "open_id",
             },
             {
@@ -43,7 +43,7 @@ def test_visit_record_dedupes_same_template_same_person():
     assert mock_send.call_count == 1
 
 
-def test_visit_record_dedupes_different_templates_same_person():
+def test_visit_record_dedupes_leader_template_over_collaborator():
     svc = PlatformNotificationService()
 
     def template_for_role(recipient_type, platform, visit_type, form_type):
@@ -56,7 +56,7 @@ def test_visit_record_dedupes_different_templates_same_person():
             {
                 "open_id": "ou_456",
                 "name": "王芳",
-                "type": "executive_admin",
+                "type": "configured_cc",
                 "receive_id_type": "open_id",
             },
             {
@@ -82,7 +82,7 @@ def test_visit_record_dedupes_different_templates_same_person():
     assert card_content["data"]["template_id"] == "tpl_leader"
 
 
-def test_visit_record_dedupes_configured_cc_over_executive_admin():
+def test_visit_record_dedupes_leader_over_configured_cc():
     svc = PlatformNotificationService()
 
     def template_for_role(recipient_type, platform, visit_type, form_type):
@@ -95,13 +95,13 @@ def test_visit_record_dedupes_configured_cc_over_executive_admin():
             {
                 "open_id": "ou_456",
                 "name": "王芳",
-                "type": "executive_admin",
+                "type": "configured_cc",
                 "receive_id_type": "open_id",
             },
             {
                 "open_id": "ou_456",
                 "name": "王芳",
-                "type": "configured_cc",
+                "type": "leader",
                 "receive_id_type": "open_id",
             },
         ]
