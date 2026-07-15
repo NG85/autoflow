@@ -8,10 +8,7 @@ from app.services.visit_record_cc_resolver import resolve_visit_record_cc_recipi
 
 RECORDER_USER_ID = UUID("11111111-1111-1111-1111-111111111111")
 CC_USER_ID = UUID("22222222-2222-2222-2222-222222222222")
-
-
-def _echo_active_open_ids(_db_session, open_ids):
-    return {str(open_id) for open_id in open_ids if open_id}
+GLOBAL_CC_USER_ID = UUID("33333333-3333-3333-3333-333333333333")
 
 
 def _mock_profile(user_id: UUID, *, name: str, open_id: str, platform: str = "feishu"):
@@ -52,7 +49,6 @@ def test_resolve_merges_multiple_rules_and_dedupes_recipients(
     result = resolve_visit_record_cc_recipients(
         MagicMock(),
         recorder_user_id=RECORDER_USER_ID,
-        get_card_permission_receivers=lambda _permission: [],
     )
 
     assert result == {
@@ -70,73 +66,46 @@ def test_resolve_merges_multiple_rules_and_dedupes_recipients(
     }
 
 
-@patch(
-    "app.services.visit_record_cc_resolver.user_profile_repo.get_active_open_ids",
-    side_effect=_echo_active_open_ids,
-)
 @patch("app.services.visit_record_cc_resolver.user_profile_repo.get_by_user_ids")
 @patch("app.services.visit_record_cc_resolver.notification_cc_rule_repo.merge_recipient_scopes")
 @patch("app.services.visit_record_cc_resolver.notification_cc_rule_repo.list_enabled_rules_for_recorder")
-def test_resolve_unions_rules_and_oauth_without_duplicate_open_id(
+def test_resolve_includes_global_rules(
     mock_list_rules,
     mock_merge_scopes,
     mock_get_profiles,
-    _mock_active_open_ids,
 ):
-    mock_list_rules.return_value = [_mock_rule(1, [CC_USER_ID])]
-    mock_merge_scopes.return_value = [(CC_USER_ID, "user")]
-    mock_get_profiles.return_value = [_mock_profile(CC_USER_ID, name="张三", open_id="ou_shared")]
-
-    oauth_users = [
-        {
-            "name": "张三",
-            "platform": "feishu",
-            "open_id": "ou_shared",
-            "raw": {"userId": str(CC_USER_ID)},
-        },
-        {
-            "name": "李四",
-            "platform": "feishu",
-            "open_id": "ou_oauth",
-            "raw": {},
-        },
+    mock_list_rules.return_value = [
+        _mock_rule(1, [CC_USER_ID], scope_type="user"),
+        _mock_rule(2, [GLOBAL_CC_USER_ID], scope_type="global"),
+    ]
+    mock_merge_scopes.return_value = [
+        (CC_USER_ID, "user"),
+        (GLOBAL_CC_USER_ID, "global"),
+    ]
+    mock_get_profiles.return_value = [
+        _mock_profile(CC_USER_ID, name="张三", open_id="ou_cc"),
+        _mock_profile(GLOBAL_CC_USER_ID, name="陈总", open_id="ou_global"),
     ]
 
     result = resolve_visit_record_cc_recipients(
         MagicMock(),
         recorder_user_id=RECORDER_USER_ID,
-        get_card_permission_receivers=lambda _permission: oauth_users,
     )
 
     assert len(result["feishu"]) == 2
-    types = {item["type"] for item in result["feishu"]}
-    open_ids = {item["open_id"] for item in result["feishu"]}
-    assert types == {"configured_cc", "executive_admin"}
-    assert open_ids == {"ou_shared", "ou_oauth"}
+    by_open_id = {item["open_id"]: item for item in result["feishu"]}
+    assert by_open_id["ou_cc"]["type"] == "configured_cc"
+    assert by_open_id["ou_cc"]["cc_scope"] == "user"
+    assert by_open_id["ou_global"]["type"] == "configured_cc"
+    assert by_open_id["ou_global"]["cc_scope"] == "global"
 
 
-@patch(
-    "app.services.visit_record_cc_resolver.user_profile_repo.get_active_open_ids",
-    side_effect=_echo_active_open_ids,
-)
 @patch("app.services.visit_record_cc_resolver.notification_cc_rule_repo.list_enabled_rules_for_recorder")
-def test_resolve_oauth_only_when_recorder_user_id_missing(
-    mock_list_rules,
-    _mock_active_open_ids,
-):
+def test_resolve_returns_empty_when_recorder_user_id_missing(mock_list_rules):
     result = resolve_visit_record_cc_recipients(
         MagicMock(),
         recorder_user_id=None,
-        get_card_permission_receivers=lambda _permission: [
-            {
-                "name": "高管",
-                "platform": "feishu",
-                "open_id": "ou_exec",
-                "raw": {},
-            }
-        ],
     )
 
     mock_list_rules.assert_not_called()
-    assert result["feishu"][0]["type"] == "executive_admin"
-    assert result["feishu"][0]["cc_scope"] == "global"
+    assert result == {}

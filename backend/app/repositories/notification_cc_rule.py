@@ -1,11 +1,10 @@
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Tuple
 from uuid import UUID
 
 from sqlalchemy.orm import selectinload
 from sqlmodel import Session, select, or_
 
 from app.models.notification_cc_rule import (
-    EVENT_TYPE_VISIT_RECORD_CARD,
     SCOPE_TYPE_GLOBAL,
     SCOPE_TYPE_USER,
     NotificationCcRule,
@@ -40,10 +39,6 @@ class NotificationCcRuleRepo(BaseRepo):
         )
         return list(db_session.exec(stmt).all())
 
-    def merge_recipient_user_ids(self, rules: List[NotificationCcRule]) -> List[UUID]:
-        """合并多条规则的抄送人 user_id，保持首次出现顺序。"""
-        return [user_id for user_id, _ in self.merge_recipient_scopes(rules)]
-
     def merge_recipient_scopes(self, rules: List[NotificationCcRule]) -> List[Tuple[UUID, str]]:
         """
         合并多条规则的抄送人，返回 (user_id, cc_scope)。
@@ -52,18 +47,20 @@ class NotificationCcRuleRepo(BaseRepo):
         scope_by_user: Dict[UUID, str] = {}
         ordered: List[UUID] = []
         for rule in rules:
-            rule_scope = "user" if rule.scope_type == SCOPE_TYPE_USER else "global"
+            rule_scope = (
+                SCOPE_TYPE_USER if rule.scope_type == SCOPE_TYPE_USER else SCOPE_TYPE_GLOBAL
+            )
             for recipient in rule.recipients or []:
                 uid = recipient.user_id
                 if uid is None:
                     continue
                 if uid not in ordered:
                     ordered.append(uid)
-                if rule_scope == "user":
-                    scope_by_user[uid] = "user"
+                if rule_scope == SCOPE_TYPE_USER:
+                    scope_by_user[uid] = SCOPE_TYPE_USER
                 elif uid not in scope_by_user:
-                    scope_by_user[uid] = "global"
-        return [(uid, scope_by_user.get(uid, "global")) for uid in ordered]
+                    scope_by_user[uid] = SCOPE_TYPE_GLOBAL
+        return [(uid, scope_by_user.get(uid, SCOPE_TYPE_GLOBAL)) for uid in ordered]
 
 
 notification_cc_rule_repo = NotificationCcRuleRepo()
