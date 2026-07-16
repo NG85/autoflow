@@ -36,6 +36,7 @@ from app.models.wb_visit_requests import (
 from app.models.crm_accounts import CRMAccount
 from app.models.crm_leads import CRMLead
 from app.api.routes.crm.models import VisitAttachment
+from app.utils.crm_followup_object import resolve_followup_object_from_record
 
 logger = logging.getLogger(__name__)
 
@@ -502,7 +503,12 @@ class CrmWritebackService:
                 return v.strip()
             return str(v).strip()
 
-        followup_object = _safe_str(record.account_name) or _safe_str(record.partner_name)
+        followup_obj = resolve_followup_object_from_record(record)
+        followup_object = (
+            _safe_str(followup_obj.object_name if followup_obj else None)
+            or _safe_str(record.account_name)
+            or _safe_str(record.partner_name)
+        )
         if followup_object:
             content_parts.append(f"跟进对象: {followup_object}")
         external_partner = _safe_str(getattr(record, "external_collaboration_partner_name", None))

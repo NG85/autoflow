@@ -961,11 +961,15 @@ class WeeklyFollowupEntityRowOut(BaseModel):
     partner_name: Optional[str] = None
     followup_object_name: Optional[str] = Field(
         default=None,
-        description="跟进对象名称（有客户用 account_name，否则 partner_name）",
+        description="跟进对象名称（优先 followup_object_name；否则客户/伙伴）",
     )
     followup_object_id: Optional[str] = Field(
         default=None,
-        description="跟进对象ID（有客户用 account_id，否则 partner_id）",
+        description="跟进对象ID（优先 followup_object_id；否则客户/伙伴）",
+    )
+    followup_object_type: Optional[str] = Field(
+        default=None,
+        description="跟进对象类型(end_customer/partner/lead)",
     )
     customer_attribute: Optional[str] = Field(
         default=None,

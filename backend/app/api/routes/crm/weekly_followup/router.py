@@ -46,14 +46,9 @@ from app.services.crm_weekly_followup_engagement_service import crm_weekly_follo
 from app.utils.crm_weekly_followup_week_boundary import format_weekly_followup_period
 from app.services.oauth_service import oauth_client
 from app.permissions.weekly_followup_permission_service import weekly_followup_permission_service
-from app.utils.crm_account_tags import (
-    parse_account_tags,
-    resolve_followup_account_id,
-    resolve_followup_object_id,
-    resolve_followup_object_name,
-)
+from app.utils.crm_account_tags import parse_account_tags
 from app.utils.crm_comments import CRMCommentValidationError, merge_append_crm_comments
-from app.utils.crm_followup_object_type import resolve_customer_attribute_display_label
+from app.utils.crm_followup_object_type import resolve_customer_attribute_display_label_for_object
 
 logger = logging.getLogger(__name__)
 
@@ -241,12 +236,12 @@ def _append_weekly_followup_entity_filters(
     if payload.filter_account_id:
         filter_account_id = payload.filter_account_id.strip()
         if filter_account_id:
-            account_conds.append(CRMWeeklyFollowupEntitySummary.account_id == filter_account_id)
+            account_conds.append(CRMWeeklyFollowupEntitySummary.followup_object_id == filter_account_id)
 
     if payload.filter_account_name:
         filter_account_name = payload.filter_account_name.strip()
         if filter_account_name:
-            account_conds.append(CRMWeeklyFollowupEntitySummary.account_name == filter_account_name)
+            account_conds.append(CRMWeeklyFollowupEntitySummary.followup_object_name == filter_account_name)
 
     if account_conds:
         conds.append(or_(*account_conds) if len(account_conds) > 1 else account_conds[0])
@@ -274,12 +269,8 @@ def _append_weekly_followup_entity_filters(
                 tag_ids,
                 account_ids=scoped_account_ids,
             )
-            followup_account_id = func.coalesce(
-                func.nullif(CRMWeeklyFollowupEntitySummary.account_id, ""),
-                CRMWeeklyFollowupEntitySummary.partner_id,
-            )
             if matching_account_ids:
-                conds.append(followup_account_id.in_(matching_account_ids))
+                conds.append(CRMWeeklyFollowupEntitySummary.followup_object_id.in_(matching_account_ids))
             else:
                 conds.append(false())
 
@@ -305,11 +296,14 @@ def _weekly_followup_entities_to_row_out(
     *,
     include_comments: bool,
 ) -> list[WeeklyFollowupEntityRowOut]:
+    from app.utils.crm_followup_object import FOLLOWUP_OBJECT_TYPE_LEAD
+
     followup_ids: list[str] = []
     for entity in entities:
-        followup_id = resolve_followup_account_id(entity.account_id, entity.partner_id)
-        if followup_id:
-            followup_ids.append(followup_id)
+        ftype = (getattr(entity, "followup_object_type", None) or "").strip()
+        fid = (getattr(entity, "followup_object_id", None) or "").strip()
+        if fid and ftype != FOLLOWUP_OBJECT_TYPE_LEAD:
+            followup_ids.append(fid)
 
     field_mapping = get_resolved_field_mapping(db_session, report_type="周跟进实体明细")
 
@@ -322,11 +316,17 @@ def _weekly_followup_entities_to_row_out(
 
     rows: list[WeeklyFollowupEntityRowOut] = []
     for entity in entities:
-        followup_object_id = resolve_followup_object_id(entity.account_id, entity.partner_id)
-        crm_account = crm_by_id.get(followup_object_id or "") if followup_object_id else None
-        customer_attribute = resolve_customer_attribute_display_label(
-            entity.account_id,
-            entity.partner_id,
+        ftype = (getattr(entity, "followup_object_type", None) or "").strip() or None
+        fid = (getattr(entity, "followup_object_id", None) or "").strip() or None
+        fname = (getattr(entity, "followup_object_name", None) or "").strip() or None
+
+        from app.utils.crm_followup_object import FollowupObject
+        followup_obj = FollowupObject(object_type=ftype, object_id=fid, object_name=fname) if ftype and fid else None
+
+        crm_account_join_id = fid if ftype and ftype != FOLLOWUP_OBJECT_TYPE_LEAD and fid else None
+        crm_account = crm_by_id.get(crm_account_join_id or "") if crm_account_join_id else None
+        customer_attribute = resolve_customer_attribute_display_label_for_object(
+            followup_obj,
             field_mapping,
         )
         tag_options: list[AccountTagOptionOut] = []
@@ -350,10 +350,9 @@ def _weekly_followup_entities_to_row_out(
                 opportunity_name=entity.opportunity_name,
                 partner_id=entity.partner_id,
                 partner_name=entity.partner_name,
-                followup_object_name=resolve_followup_object_name(
-                    entity.account_name, entity.partner_name
-                ),
-                followup_object_id=followup_object_id,
+                followup_object_type=followup_obj.object_type if followup_obj else None,
+                followup_object_name=followup_obj.object_name if followup_obj else None,
+                followup_object_id=followup_obj.object_id if followup_obj else None,
                 customer_attribute=customer_attribute,
                 tags=tag_options,
                 owner_name=entity.owner_name,
@@ -368,18 +367,20 @@ def _weekly_followup_entities_to_row_out(
 
 
 def _list_followup_account_ids_for_entity_conds(db_session: SessionDep, conds: list) -> list[str]:
+    """end_customer/partner 的 followup_object_id（可 join crm_accounts）；排除 lead。"""
     rows = db_session.exec(
-        select(
-            CRMWeeklyFollowupEntitySummary.account_id,
-            CRMWeeklyFollowupEntitySummary.partner_id,
-        ).where(*conds)
+        select(distinct(CRMWeeklyFollowupEntitySummary.followup_object_id))
+        .where(
+            *conds,
+            CRMWeeklyFollowupEntitySummary.followup_object_id.isnot(None),
+            func.trim(CRMWeeklyFollowupEntitySummary.followup_object_id) != "",
+            or_(
+                CRMWeeklyFollowupEntitySummary.followup_object_type.is_(None),
+                CRMWeeklyFollowupEntitySummary.followup_object_type != "lead",
+            ),
+        )
     ).all()
-    account_ids: set[str] = set()
-    for account_id, partner_id in rows:
-        followup_account_id = resolve_followup_account_id(account_id, partner_id)
-        if followup_account_id:
-            account_ids.add(followup_account_id)
-    return list(account_ids)
+    return [str(fid).strip() for fid in rows if fid and str(fid).strip()]
 
 
 @router.post("/crm/weekly-followup/detail")
@@ -506,6 +507,7 @@ def export_weekly_followup_detail(
         ws_entities.append(
             [
                 "department_name",
+                "followup_object_type",
                 "followup_object_name",
                 "followup_object_id",
                 "customer_attribute",
@@ -553,6 +555,7 @@ def export_weekly_followup_detail(
                 ws_entities.append(
                     [
                         item.department_name or "",
+                        item.followup_object_type or "",
                         item.followup_object_name or "",
                         item.followup_object_id or "",
                         item.customer_attribute or "",
@@ -661,8 +664,8 @@ def get_weekly_followup_filter_options(
         .order_by(CRMWeeklyFollowupEntitySummary.owner_name)
     ).all()
 
-    followup_account_ids = _list_followup_account_ids_for_entity_conds(db_session, conds)
-    tag_options = crm_account_repo.list_distinct_tags_by_account_ids(db_session, followup_account_ids)
+    followup_crm_ids = _list_followup_account_ids_for_entity_conds(db_session, conds)
+    tag_options = crm_account_repo.list_distinct_tags_by_account_ids(db_session, followup_crm_ids)
 
     return WeeklyFollowupFilterOptionsOut(
         department_names=[name for name in department_names if name],
