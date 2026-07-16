@@ -14,6 +14,11 @@ class CRMSalesVisitRecord(SQLModel, table=True):
     opportunity_id: Optional[str] = Field(nullable=True, max_length=255, description="商机ID")
     partner_name: Optional[str] = Field(nullable=True, max_length=255, description="合作伙伴")
     partner_id: Optional[str] = Field(nullable=True, max_length=255, description="合作伙伴ID")
+    followup_object_type: Optional[str] = Field(
+        nullable=True, max_length=50, description="跟进对象类型(end_customer/partner/lead)"
+    )
+    followup_object_id: Optional[str] = Field(nullable=True, max_length=255, description="跟进对象ID")
+    followup_object_name: Optional[str] = Field(nullable=True, max_length=255, description="跟进对象名称")
     external_collaboration_partner_name: Optional[str] = Field(
         nullable=True, max_length=255, description="外部协同合作伙伴名称"
     )

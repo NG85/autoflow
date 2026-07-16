@@ -27,9 +27,18 @@ from app.repositories.user_department_relation import user_department_relation_r
 from app.repositories.department_mirror import department_mirror_repo
 from app.services.crm_config_service import get_resolved_field_mapping
 from app.services.oauth_service import oauth_client
-from app.utils.crm_account_tags import parse_account_tags
+from app.utils.crm_account_tags import parse_account_tags, resolve_followup_account_id
 from app.utils.crm_comments import CRMCommentValidationError, merge_append_crm_comments
-from app.utils.crm_followup_object_type import resolve_customer_attribute_display_label
+from app.utils.crm_followup_object import (
+    FOLLOWUP_OBJECT_TYPE_END_CUSTOMER,
+    FOLLOWUP_OBJECT_TYPE_LEAD,
+    FOLLOWUP_OBJECT_TYPE_PARTNER,
+    FOLLOWUP_OBJECT_TYPES,
+    apply_followup_object_to_response_dict,
+    resolve_crm_account_join_id,
+    resolve_followup_object_from_record,
+)
+from app.utils.crm_followup_object_type import resolve_customer_attribute_display_label_for_object
 from app.repositories.visit_record_revisions import visit_record_revisions_repo
 from app.utils.date_utils import (
     convert_beijing_date_to_utc_range,
@@ -64,6 +73,7 @@ _VISIT_RECORD_QUALITY_FILTER_OPTIONS: Dict[str, List[str]] = {
 }
 
 # filter-options：响应字段名 -> crm_sales_visit_records 列名
+# followup_object_types 在路由层与 customer_attributes 同源下发，不在此聚合
 _VISIT_RECORD_BASE_FILTER_FIELDS: tuple[tuple[str, str], ...] = (
     ("recorders", "recorder"),
     ("departments", "recorder_department_name"),
@@ -81,7 +91,6 @@ def _split_group_concat(value: Optional[str]) -> List[str]:
         return []
     return [part for part in value.split(_VISIT_RECORD_FILTER_OPTION_SEP) if part]
 
-
 def _followup_object_crm_account_join():
     """
     跟进对象与客户/伙伴二选一：等级、extra 分别从 account_id / partner_id 关联 crm_accounts，再 coalesce。
@@ -96,26 +105,24 @@ def _followup_object_crm_account_join():
     return account_crm, partner_crm, customer_level_col, customer_attribute_col, followup_extra_col
 
 
-def _resolve_followup_object_name(
-    account_name: Optional[str],
-    partner_name: Optional[str],
-) -> Optional[str]:
-    name = (account_name or "").strip()
-    if name:
-        return name
-    partner = (partner_name or "").strip()
-    return partner or None
+def _visit_record_followup_object_type_is_set(object_type: str):
+    trimmed_type = func.trim(CRMSalesVisitRecord.followup_object_type)
+    trimmed_id = func.trim(CRMSalesVisitRecord.followup_object_id)
+    return and_(
+        CRMSalesVisitRecord.followup_object_type.isnot(None),
+        trimmed_type == object_type,
+        CRMSalesVisitRecord.followup_object_id.isnot(None),
+        trimmed_id != "",
+    )
 
 
-def _resolve_followup_object_id(
-    account_id: Optional[str],
-    partner_id: Optional[str],
-) -> Optional[str]:
-    aid = (account_id or "").strip()
-    if aid:
-        return aid
-    pid = (partner_id or "").strip()
-    return pid or None
+def _visit_record_followup_object_is_empty():
+    trimmed_type = func.trim(CRMSalesVisitRecord.followup_object_type)
+    trimmed_id = func.trim(CRMSalesVisitRecord.followup_object_id)
+    return or_(
+        CRMSalesVisitRecord.followup_object_type.is_(None),
+        and_(trimmed_type == "", trimmed_id == ""),
+    )
 
 
 def _visit_record_account_id_is_set():
@@ -143,22 +150,58 @@ def _visit_record_partner_id_is_set():
     )
 
 
+def _visit_record_partner_id_is_empty():
+    trimmed = func.trim(CRMSalesVisitRecord.partner_id)
+    return or_(
+        CRMSalesVisitRecord.partner_id.is_(None),
+        trimmed == "",
+    )
+
+
 def _visit_record_followup_is_partner_type():
     """
-    跟进对象为合作伙伴：account 必须为空且 partner 非空。
+    跟进对象为合作伙伴：
+    - 新写入：followup_object_type=partner（可同时双写 partner_*）
+    - 历史：followup_object_* 为空，且 account 空、partner 非空
     历史数据可能 account/partner 同时有值（跟进对象实为 account），不可仅凭 partner 有值命中。
     """
-    return and_(
-        _visit_record_account_id_is_empty(),
-        _visit_record_partner_id_is_set(),
+    return or_(
+        _visit_record_followup_object_type_is_set(FOLLOWUP_OBJECT_TYPE_PARTNER),
+        and_(
+            _visit_record_account_id_is_empty(),
+            _visit_record_followup_object_is_empty(),
+            _visit_record_partner_id_is_set(),
+        ),
     )
+
+
+def _visit_record_followup_is_end_customer_type():
+    """
+    跟进对象为最终客户：
+    - 新写入：followup_object_type=end_customer（可同时双写 account_*）
+    - 历史/双写：account_id 非空，且不是 lead/partner 跟进对象
+    """
+    return or_(
+        _visit_record_followup_object_type_is_set(FOLLOWUP_OBJECT_TYPE_END_CUSTOMER),
+        and_(
+            _visit_record_account_id_is_set(),
+            ~_visit_record_followup_object_type_is_set(FOLLOWUP_OBJECT_TYPE_LEAD),
+            ~_visit_record_followup_object_type_is_set(FOLLOWUP_OBJECT_TYPE_PARTNER),
+        ),
+    )
+
+
+def _visit_record_followup_is_lead_type():
+    """跟进对象为线索：followup_object_type=lead。"""
+    return _visit_record_followup_object_type_is_set(FOLLOWUP_OBJECT_TYPE_LEAD)
 
 
 def _customer_attribute_filter_predicate(selected_values: List[str]):
     """
-    customer_attribute 仅接受 end_customer / partner 键（与 filter-options 一致），多选 OR。
-    - end_customer：account_id 非空（含历史双填，跟进对象以 account 为准）
-    - partner：account_id 为空且 partner_id 非空（排除历史双填误命中）
+    customer_attribute 接受 end_customer / partner / lead 键（与 filter-options 一致），多选 OR。
+    - end_customer：followup_object_type=end_customer，或 account_id 非空（排除 lead/partner）
+    - partner：followup_object_type=partner，或历史仅 partner_* 有值
+    - lead：followup_object_type=lead
     """
     selected = {value.strip() for value in selected_values if value and value.strip()}
     if not selected:
@@ -166,12 +209,88 @@ def _customer_attribute_filter_predicate(selected_values: List[str]):
 
     predicates = []
     if "end_customer" in selected:
-        predicates.append(_visit_record_account_id_is_set())
+        predicates.append(_visit_record_followup_is_end_customer_type())
+    if "lead" in selected:
+        predicates.append(_visit_record_followup_is_lead_type())
     if "partner" in selected:
         predicates.append(_visit_record_followup_is_partner_type())
     if not predicates:
         return None
     return or_(*predicates) if len(predicates) > 1 else predicates[0]
+
+
+def _merge_string_filter_values(*sources: Optional[List[str]]) -> list[str]:
+    """多组字符串筛选值合并去重（保持首次出现顺序）。"""
+    merged: list[str] = []
+    seen: set[str] = set()
+    for values in sources:
+        if not values:
+            continue
+        for value in values:
+            key = (value or "").strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            merged.append(key)
+    return merged
+
+
+def _merge_followup_object_type_filter_values(
+    customer_attribute: Optional[List[str]],
+    followup_object_type: Optional[List[str]],
+) -> list[str]:
+    """customer_attribute 与 followup_object_type 视为同一维度，合并去重。"""
+    return _merge_string_filter_values(customer_attribute, followup_object_type)
+
+
+def _followup_object_type_filter_predicate(selected_values: List[str]):
+    """
+    合并后的跟进对象类型筛选：
+    - 已知键走 customer_attribute 推断（含历史兼容）
+    - 其余未知键仍按 followup_object_type 列精确匹配
+    """
+    if not selected_values:
+        return None
+
+    known = [value for value in selected_values if value in FOLLOWUP_OBJECT_TYPES]
+    unknown = [value for value in selected_values if value not in FOLLOWUP_OBJECT_TYPES]
+
+    predicates = []
+    if known:
+        known_predicate = _customer_attribute_filter_predicate(known)
+        if known_predicate is not None:
+            predicates.append(known_predicate)
+    if unknown:
+        predicates.append(CRMSalesVisitRecord.followup_object_type.in_(unknown))
+    if not predicates:
+        return None
+    return or_(*predicates) if len(predicates) > 1 else predicates[0]
+
+
+def _followup_object_id_filter_predicate(selected_ids: List[str]):
+    """
+    跟进对象 ID 筛选：followup_object_id / account_id / partner_id 任一命中即可（含历史）。
+    """
+    if not selected_ids:
+        return None
+    return or_(
+        CRMSalesVisitRecord.followup_object_id.in_(selected_ids),
+        CRMSalesVisitRecord.account_id.in_(selected_ids),
+        CRMSalesVisitRecord.partner_id.in_(selected_ids),
+    )
+
+
+def _followup_object_name_filter_predicate(selected_names: List[str]):
+    """
+    跟进对象名称筛选：followup_object_name / account_name / partner_name 任一命中即可（含历史）。
+    """
+    if not selected_names:
+        return None
+    return or_(
+        CRMSalesVisitRecord.followup_object_name.in_(selected_names),
+        CRMSalesVisitRecord.account_name.in_(selected_names),
+        CRMSalesVisitRecord.partner_name.in_(selected_names),
+    )
 
 
 def _empty_visit_record_page(request: VisitRecordQueryRequest) -> Page[VisitRecordResponse]:
@@ -266,6 +385,7 @@ def _convert_to_response(
     # 使用处理后的字典创建VisitRecordResponse
     from app.api.routes.crm.models import AccountTagOptionOut
 
+    apply_followup_object_to_response_dict(record_dict)
     response = VisitRecordResponse.model_validate(record_dict)
     
     # 添加关联字段
@@ -276,12 +396,6 @@ def _convert_to_response(
         for tag in parse_account_tags(followup_extra if isinstance(followup_extra, dict) else None)
     ]
     response.department = department  # 拜访人部门
-    response.followup_object_name = _resolve_followup_object_name(
-        record.account_name, record.partner_name
-    )
-    response.followup_object_id = _resolve_followup_object_id(
-        record.account_id, record.partner_id
-    )
 
     return response
 
@@ -804,8 +918,12 @@ class VisitRecordRepo(BaseRepo):
         if request.customer_level:
             query = query.where(customer_level_col.in_(request.customer_level))
 
-        if request.customer_attribute:
-            attr_predicate = _customer_attribute_filter_predicate(request.customer_attribute)
+        merged_followup_types = _merge_followup_object_type_filter_values(
+            request.customer_attribute,
+            request.followup_object_type,
+        )
+        if merged_followup_types:
+            attr_predicate = _followup_object_type_filter_predicate(merged_followup_types)
             if attr_predicate is None:
                 return _empty_visit_record_page(request)
             query = query.where(attr_predicate)
@@ -826,28 +944,25 @@ class VisitRecordRepo(BaseRepo):
                 else:
                     return _empty_visit_record_page(request)
 
-        if request.account_id:
-            query = query.where(
-                CRMSalesVisitRecord.account_id.in_(request.account_id)
-            )
+        merged_followup_ids = _merge_string_filter_values(
+            request.followup_object_id,
+            request.account_id,
+            request.partner_id,
+        )
+        if merged_followup_ids:
+            id_predicate = _followup_object_id_filter_predicate(merged_followup_ids)
+            if id_predicate is not None:
+                query = query.where(id_predicate)
 
-        if request.account_name:
-            # 客户名称完全匹配，支持多选
-            # 性能优化：使用精确匹配（可以使用索引），比模糊匹配性能更好
-            query = query.where(
-                CRMSalesVisitRecord.account_name.in_(request.account_name)
-            )
-
-        if request.partner_id:
-            query = query.where(
-                CRMSalesVisitRecord.partner_id.in_(request.partner_id)
-            )
-        if request.partner_name:
-            # 合作伙伴名称完全匹配，支持多选
-            # 性能优化：使用精确匹配（可以使用索引），比模糊匹配性能更好
-            query = query.where(
-                CRMSalesVisitRecord.partner_name.in_(request.partner_name)
-            )
+        merged_followup_names = _merge_string_filter_values(
+            request.followup_object_name,
+            request.account_name,
+            request.partner_name,
+        )
+        if merged_followup_names:
+            name_predicate = _followup_object_name_filter_predicate(merged_followup_names)
+            if name_predicate is not None:
+                query = query.where(name_predicate)
 
         if request.opportunity_id:
             query = query.where(
@@ -965,7 +1080,7 @@ class VisitRecordRepo(BaseRepo):
         followup_account_ids = list({
             fid
             for record, _ in result.items
-            if (fid := _resolve_followup_object_id(record.account_id, record.partner_id))
+            if (fid := resolve_followup_account_id(record.account_id, record.partner_id))
         })
         followup_extra_by_account_id: Dict[str, Any] = {}
         if followup_account_ids:
@@ -1020,12 +1135,17 @@ class VisitRecordRepo(BaseRepo):
         items = []
         for record, customer_level in result.items:
             department = department_map.get(record.recorder_id) if record.recorder_id else None
-            followup_id = _resolve_followup_object_id(record.account_id, record.partner_id)
-            raw_extra = followup_extra_by_account_id.get(followup_id) if followup_id else None
+            crm_account_join_id = resolve_crm_account_join_id(
+                followup_object_type=record.followup_object_type,
+                followup_object_id=record.followup_object_id,
+                account_id=record.account_id,
+                partner_id=record.partner_id,
+            )
+            raw_extra = followup_extra_by_account_id.get(crm_account_join_id) if crm_account_join_id else None
             followup_extra = raw_extra if isinstance(raw_extra, dict) else None
-            customer_attribute = resolve_customer_attribute_display_label(
-                record.account_id,
-                record.partner_id,
+            followup_obj = resolve_followup_object_from_record(record)
+            customer_attribute = resolve_customer_attribute_display_label_for_object(
+                followup_obj,
                 field_mapping,
             )
             response = _convert_to_response(
@@ -1112,9 +1232,9 @@ class VisitRecordRepo(BaseRepo):
             return None
 
         record, customer_level, followup_extra = result
-        customer_attribute = resolve_customer_attribute_display_label(
-            record.account_id,
-            record.partner_id,
+        followup_obj = resolve_followup_object_from_record(record)
+        customer_attribute = resolve_customer_attribute_display_label_for_object(
+            followup_obj,
             field_mapping,
         )
 

@@ -1073,7 +1073,7 @@ class PlatformNotificationService:
         """
         获取记录人相关的推送接收者，按平台分组
         包括：记录人本人 + OAuth 汇报链返回的管理层 leader（max_levels=1，含无本部门 leader 时上级 fallback）
-        抄送（配置表 / OAuth 全局权限）由 visit_record_cc_resolver 独立解析。
+        抄送（notification_cc_rules，含 global）由 visit_record_cc_resolver 独立解析。
         返回按平台分组的接收者字典
         """
         recipients_by_platform: Dict[str, List[Dict[str, Any]]] = {}
@@ -1322,9 +1322,9 @@ class PlatformNotificationService:
     ) -> Tuple[Dict[str, List[Dict[str, Any]]], List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
         汇总拜访记录推送的接收者与部门群配置。
-        若配置了会收拜访卡片的 department_review 群，则从个人接收者中移除 leader 与 global 抄送
-        （executive_admin、cc_scope=global 的 configured_cc）；按销售配置的 personal 抄送
-        （cc_scope=user 的 configured_cc）仍推送给个人。管理层与 global 抄送改由 review 群接收 leader 版卡片。
+        若配置了会收拜访卡片的 department_review 群，则从个人接收者中移除 leader 与
+        cc_scope=global 的 configured_cc；cc_scope=user 的 personal 抄送仍推个人。
+        管理层与 global 抄送改由 review 群接收 leader 版卡片。
         department_review_reports 群不参与拜访推送，也不影响个人接收者中的 leader。
         返回 (recipients_by_platform, department_groups_review, department_groups_brief)。
         """
@@ -1349,7 +1349,6 @@ class PlatformNotificationService:
         cc_recipients_by_platform = resolve_visit_record_cc_recipients(
             db_session,
             recorder_user_id=recorder_user_id,
-            get_card_permission_receivers=self._get_card_permission_receivers,
         )
         self._merge_visit_record_cc_recipients(recipients_by_platform, cc_recipients_by_platform)
 
@@ -1482,8 +1481,7 @@ class PlatformNotificationService:
         "recorder": 0,
         "leader": 1,
         "configured_cc": 2,
-        "executive_admin": 3,
-        "collaborative_participant": 4,
+        "collaborative_participant": 3,
     }
 
     def _send_visit_record_to_individual_recipients(

@@ -75,6 +75,7 @@ class WritebackMode(str, enum.Enum):
     APAC = "APAC"  # APAC Salesforce
     OLM = "OLM"  # OLM 销售易
     CHAITIN = "CHAITIN"  # CHAITIN 长亭自研
+    WEBEYE = "WEBEYE"  # WEBEYE 网眼简道云
 
 
 class WritebackFrequency(str, enum.Enum):

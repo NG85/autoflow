@@ -35,6 +35,51 @@ class ChaitinVisitRecordBatchCreateRequest(BaseModel):
     followup_records: List[ChaitinVisitRecordCreateRequest]
     partial_fail: bool = True
 
+
+class WebeyeVisitRecordCreateRequest(BaseModel):
+    """网眼（简道云 activities）拜访/跟进记录 upsert 请求。
+
+    线索拜访与客户拜访关联字段互斥：线索传 ``lead_id`` 勿传 ``account_id``；
+    客户传 ``account_id`` 勿传 ``lead_id``。
+    """
+
+    source_record_id: Optional[str] = Field(None, description="来源侧记录 ID（幂等键）")
+    data_id: Optional[str] = Field(None, description="简道云已有跟进记录 _id（更新时优先）")
+    data_creator: Optional[str] = Field(None, description="create 时简道云提交人 username")
+    # 客户拜访
+    account_id: Optional[str] = Field(None, description="简道云客户 _id（crm_accounts.unique_id）")
+    customer_code: Optional[str] = Field(None, description="客户编号")
+    account_short_name: Optional[str] = Field(None, description="客户简称")
+    opportunity_id: Optional[str] = Field(None, description="简道云商机 _id")
+    opportunity_name: Optional[str] = Field(None, description="商机名称")
+    opportunity_number: Optional[str] = Field(None, description="商机编号")
+    # 线索拜访
+    lead_id: Optional[str] = Field(None, description="简道云线索 _id（crm_leads.unique_id）")
+    lead_serial_number: Optional[str] = Field(None, description="线索流水号")
+    # 共用
+    account_name: Optional[str] = Field(None, description="客户全称")
+    recorder_id: Optional[str] = Field(None, description="跟进人简道云 username（crm_user.unique_id）")
+    recorder: Optional[str] = Field(None, description="跟进人显示名")
+    visit_communication_date: Optional[str] = Field(None, description="跟进日期（YYYY-MM-DD 或毫秒时间戳）")
+    visit_communication_method: Optional[str] = Field(None, description="跟进方式")
+    followup_record: Optional[str] = Field(None, description="沟通内容")
+    next_steps: Optional[str] = Field(None, description="下一步计划")
+    next_followup_time: Optional[str] = Field(None, description="下次跟进时间")
+    remarks: Optional[str] = Field(None, description="其他")
+    visit_type: Optional[str] = Field(None, description="跟进事项")
+    customer_intent: Optional[str] = Field(None, description="客户意向度")
+    customer_feedback: Optional[str] = Field(None, description="客户反馈")
+    support_needed: Optional[str] = Field(None, description="所需支持")
+    visit_record_number: Optional[str] = Field(None, description="跟进记录编号")
+    business_type: Optional[str] = Field(None, description="业务空间")
+    department: Optional[str] = Field(None, description="Team")
+
+
+class WebeyeVisitRecordBatchCreateRequest(BaseModel):
+    visit_records: List[WebeyeVisitRecordCreateRequest]
+    partial_fail: bool = True
+
+
 class CbgVisitRecordCreateRequest(BaseModel):
     """CBG日常对象创建请求"""
     content: str = Field(..., description="记录内容")

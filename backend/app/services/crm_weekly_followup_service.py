@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
 from app.models.crm_opportunities import CRMOpportunity
 from app.models.crm_accounts import CRMAccount
+from app.models.crm_leads import CRMLead
 from app.models.crm_user import CRMUser
 from app.models.user_department_relation import UserDepartmentRelation
 from app.models.crm_weekly_followup_entity_summary import CRMWeeklyFollowupEntitySummary
@@ -25,6 +26,12 @@ from app.repositories.user_department_relation import user_department_relation_r
 from app.services.aldebaran_service import AldebaranOpportunityForecast, aldebaran_client
 from app.services.crm_writeback_service import crm_writeback_service
 from app.utils.ark_llm import call_ark_llm
+from app.utils.crm_followup_object import (
+    FOLLOWUP_OBJECT_TYPE_END_CUSTOMER,
+    FOLLOWUP_OBJECT_TYPE_LEAD,
+    FOLLOWUP_OBJECT_TYPE_PARTNER,
+    resolve_followup_object_from_record,
+)
 from app.utils.crm_weekly_followup_week_boundary import (
     format_weekly_followup_period,
     resolve_weekly_followup_week_range,
@@ -70,14 +77,14 @@ def parse_weekly_followup_scopes(scopes: str | None) -> Set[WeeklyFollowupScope]
 @dataclass(frozen=True)
 class _EntityKey:
     department_name: str
-    entity_type: str  # opportunity/account/partner
+    entity_type: str  # opportunity/account/partner/lead
     entity_id: str
 
 
 class CRMWeeklyFollowupService:
     """
     生成并持久化“周跟进总结”：
-    - 明细：按（团队 + 商机/客户/合作伙伴）输出本周进展、风险/问题
+    - 明细：按（团队 + 商机/客户/合作伙伴/线索）输出本周进展、风险/问题
     - 汇总：按团队/公司输出整体描述
     """
 
@@ -89,7 +96,37 @@ class CRMWeeklyFollowupService:
         partner_id = self._legacy_partner_id(record)
         if partner_id:
             return "partner", partner_id
+        followup_obj = resolve_followup_object_from_record(record)
+        if followup_obj and followup_obj.object_type == FOLLOWUP_OBJECT_TYPE_LEAD:
+            return "lead", followup_obj.object_id
         return None
+
+    @staticmethod
+    def _first_owner_id_from_owners(owners: Any) -> Optional[str]:
+        """线索 owners JSON：暂定取数组第一个元素的 id（CRM 用户 unique_id）。"""
+        if not isinstance(owners, list) or not owners:
+            return None
+        first = owners[0]
+        if not isinstance(first, dict):
+            return None
+        owner_id = first.get("id")
+        if owner_id is None:
+            return None
+        s = str(owner_id).strip()
+        return s or None
+
+    @staticmethod
+    def _first_owner_name_from_owners(owners: Any) -> Optional[str]:
+        if not isinstance(owners, list) or not owners:
+            return None
+        first = owners[0]
+        if not isinstance(first, dict):
+            return None
+        name = first.get("name")
+        if name is None:
+            return None
+        s = str(name).strip()
+        return s or None
 
     def _truncate(self, s: str, limit: int) -> str:
         s = (s or "").strip()
@@ -166,7 +203,18 @@ class CRMWeeklyFollowupService:
         account_name = _pick_first_non_empty("account_name")
         partner_name = _pick_first_non_empty("partner_name")
         external_partner_name = _pick_first_non_empty("external_collaboration_partner_name")
-        followup_object_name = account_name or partner_name or external_partner_name
+        followup_object_name = (
+            _pick_first_non_empty("followup_object_name")
+            or account_name
+            or partner_name
+            or external_partner_name
+        )
+        entity_type_label = {
+            "opportunity": "商机",
+            "account": "客户",
+            "partner": "合作伙伴",
+            "lead": "线索",
+        }.get(key.entity_type, key.entity_type)
 
         visits_text = "\n".join(
             [
@@ -181,6 +229,7 @@ class CRMWeeklyFollowupService:
 你是销售管理周复盘助手。请基于“本周拜访记录摘要（较完整）”，输出该【{key.department_name}】团队下该实体的“本周进展与风险”结构化总结。
 
 {preamble_block}实体信息（同一组拜访记录对应同一实体）：
+- 实体类型: {entity_type_label}
 - 跟进对象: {followup_object_name or '--'}
 - 商机: {opportunity_name or '--'}
 - 合作伙伴: {partner_name or '--'}
@@ -387,6 +436,9 @@ class CRMWeeklyFollowupService:
         existing.opportunity_name = obj.opportunity_name
         existing.partner_id = obj.partner_id
         existing.partner_name = obj.partner_name
+        existing.followup_object_type = obj.followup_object_type
+        existing.followup_object_id = obj.followup_object_id
+        existing.followup_object_name = obj.followup_object_name
         existing.owner_user_id = obj.owner_user_id
         existing.owner_name = obj.owner_name
         existing.progress = obj.progress
@@ -492,6 +544,37 @@ class CRMWeeklyFollowupService:
             if did in leader_dept_ids
         ]
 
+    def _entity_owner_department_id(
+        self,
+        key: _EntityKey,
+        owner_user_id_by_key: dict[_EntityKey, Optional[str]],
+        dept_by_user_id: dict[str, str],
+    ) -> Optional[str]:
+        owner_user_id = owner_user_id_by_key.get(key)
+        if not owner_user_id:
+            return None
+        dept_id = dept_by_user_id.get(owner_user_id)
+        return str(dept_id).strip() if dept_id else None
+
+    def _filter_grouped_for_department_subtree(
+        self,
+        session: Session,
+        grouped: dict[_EntityKey, list],
+        owner_user_id_by_key: dict[_EntityKey, Optional[str]],
+        dept_by_user_id: dict[str, str],
+        target_department_id: str,
+    ) -> dict[_EntityKey, list]:
+        """仅保留负责人主部门落在目标部门子树内的实体。"""
+        subtree_ids = set(
+            department_mirror_repo.get_subtree_department_ids(session, target_department_id)
+        )
+        return {
+            key: records
+            for key, records in grouped.items()
+            if self._entity_owner_department_id(key, owner_user_id_by_key, dept_by_user_id)
+            in subtree_ids
+        }
+
     def _upsert_empty_department_summary(
         self, session: Session, week_start: date, week_end: date, dept_id: str, dept_name: str
     ) -> None:
@@ -539,24 +622,38 @@ class CRMWeeklyFollowupService:
         week_end: date,
         *,
         scopes: Set[WeeklyFollowupScope] | None = None,
+        department_id: str | None = None,
     ) -> Dict[str, Any]:
         """
         生成并写入：
         - crm_weekly_followup_entity_summary（仅 department scope）
         - crm_weekly_followup_summary（department/company，按 scopes 控制）
+
+        department_id 可选；指定时仅生成该部门（含子部门负责人跟进）的部门级总结。
         """
+        target_department_id = (department_id or "").strip() or None
         active_scopes = scopes if scopes is not None else {"department", "company"}
+        if target_department_id:
+            active_scopes = {"department"}
         include_department = "department" in active_scopes
-        include_company = "company" in active_scopes
+        include_company = "company" in active_scopes and not target_department_id
         if not include_department and not include_company:
             raise ValueError("scopes 至少包含 department 或 company")
 
+        if target_department_id:
+            target_department_name = department_mirror_repo.get_department_name_by_id(
+                session, target_department_id
+            )
+            if not target_department_name:
+                raise ValueError(f"部门不存在: {target_department_id}")
+
         logger.info(
-            "开始生成周跟进总结，日期范围：%s ~ %s（%s），scopes=%s",
+            "开始生成周跟进总结，日期范围：%s ~ %s（%s），scopes=%s，department_id=%s",
             week_start,
             week_end,
             weekly_followup_week_boundary_label(),
             sorted(active_scopes),
+            target_department_id or "",
         )
 
         # 读取本周拜访记录（证据来源）；仅加载周跟进所需列，降低大字段 IO
@@ -570,6 +667,9 @@ class CRMWeeklyFollowupService:
             CRMSalesVisitRecord.partner_id,
             CRMSalesVisitRecord.external_collaboration_partner_name,
             CRMSalesVisitRecord.external_collaboration_partner_id,
+            CRMSalesVisitRecord.followup_object_type,
+            CRMSalesVisitRecord.followup_object_id,
+            CRMSalesVisitRecord.followup_object_name,
             CRMSalesVisitRecord.contacts,
             CRMSalesVisitRecord.contact_position,
             CRMSalesVisitRecord.contact_name,
@@ -599,12 +699,22 @@ class CRMWeeklyFollowupService:
             logger.warning("该周没有任何拜访记录，仍按 scopes 生成空总结")
             empty_dept_count = 0
             if include_department:
-                active_departments = self._list_active_departments_for_empty_summary(session)
-                for dept_id, dept_name in active_departments:
+                if target_department_id:
                     self._upsert_empty_department_summary(
-                        session, week_start, week_end, dept_id, dept_name
+                        session,
+                        week_start,
+                        week_end,
+                        target_department_id,
+                        target_department_name or "",
                     )
-                empty_dept_count = len(active_departments)
+                    empty_dept_count = 1
+                else:
+                    active_departments = self._list_active_departments_for_empty_summary(session)
+                    for dept_id, dept_name in active_departments:
+                        self._upsert_empty_department_summary(
+                            session, week_start, week_end, dept_id, dept_name
+                        )
+                    empty_dept_count = len(active_departments)
             if include_company:
                 self._upsert_empty_company_summary(session, week_start, week_end)
             logger.info(
@@ -622,6 +732,7 @@ class CRMWeeklyFollowupService:
                 "billable_department_billing": [],
                 "billable_company": False,
                 "scopes": sorted(active_scopes),
+                "department_id": target_department_id or "",
             }
 
         # 按拜访主键缓存摘要文本，供实体 LLM 与多部门/公司 rollup 复用
@@ -711,6 +822,51 @@ class CRMWeeklyFollowupService:
                     "person_in_charge_id": (str(person_in_charge_id).strip() if person_in_charge_id else None),
                 }
 
+        lead_ids: set[str] = set()
+        for r in records:
+            followup_obj = resolve_followup_object_from_record(r)
+            if (
+                followup_obj
+                and followup_obj.object_type == FOLLOWUP_OBJECT_TYPE_LEAD
+                and not r.opportunity_id
+                and not r.account_id
+                and not self._legacy_partner_id(r)
+            ):
+                lead_ids.add(followup_obj.object_id)
+
+        lead_by_id: dict[str, dict[str, Optional[str]]] = {}
+        if lead_ids:
+            lead_rows = session.exec(
+                select(
+                    CRMLead.unique_id,
+                    CRMLead.lead_name,
+                    CRMLead.company_name,
+                    CRMLead.owners,
+                    CRMLead.owner_department_name,
+                ).where(
+                    CRMLead.unique_id.in_(list(lead_ids)),
+                    CRMLead.is_deleted == 0,
+                )
+            ).all()
+            for unique_id, lead_name, company_name, owners, owner_department_name in lead_rows:
+                if not unique_id:
+                    continue
+                lid = str(unique_id).strip()
+                display_name = (
+                    (str(lead_name).strip() if lead_name else "")
+                    or (str(company_name).strip() if company_name else "")
+                    or None
+                )
+                lead_by_id[lid] = {
+                    "unique_id": lid,
+                    "lead_name": display_name,
+                    "owner_id": self._first_owner_id_from_owners(owners),
+                    "owner_name": self._first_owner_name_from_owners(owners),
+                    "owner_department_name": (
+                        str(owner_department_name).strip() if owner_department_name else None
+                    ),
+                }
+
         # 批量准备：负责人（CRM 用户ID）与其部门（来自 crm_user）
         owner_crm_user_id_by_entity: dict[tuple[str, str], Optional[str]] = {}
         owner_crm_user_ids: set[str] = set()
@@ -727,6 +883,11 @@ class CRMWeeklyFollowupService:
         for pid, partner in partner_by_id.items():
             owner_id = self._norm_id(partner.get("person_in_charge_id"))
             owner_crm_user_id_by_entity[("partner", pid)] = owner_id
+            if owner_id:
+                owner_crm_user_ids.add(owner_id)
+        for lid, lead in lead_by_id.items():
+            owner_id = self._norm_id(lead.get("owner_id"))
+            owner_crm_user_id_by_entity[("lead", lid)] = owner_id
             if owner_id:
                 owner_crm_user_ids.add(owner_id)
 
@@ -768,10 +929,15 @@ class CRMWeeklyFollowupService:
                 owner_crm_user_id = owner_crm_user_id_by_entity.get(("account", entity_id))
             elif entity_type == "partner":
                 owner_crm_user_id = owner_crm_user_id_by_entity.get(("partner", entity_id))
+            elif entity_type == "lead":
+                owner_crm_user_id = owner_crm_user_id_by_entity.get(("lead", entity_id))
 
             # 团队口径：仅用负责人在 crm_user 里的 department（不做 recorder 兜底，避免口径混淆）
             if owner_crm_user_id:
                 dept_name = crm_user_dept_by_owner_id.get(owner_crm_user_id, "")
+            if not dept_name and entity_type == "lead":
+                lead = lead_by_id.get(entity_id) or {}
+                dept_name = (lead.get("owner_department_name") or "").strip()
             dept_name = dept_name.strip() or "未知部门"
 
             key = _EntityKey(department_name=dept_name, entity_type=entity_type, entity_id=entity_id)
@@ -821,6 +987,15 @@ class CRMWeeklyFollowupService:
         owner_user_ids = [uid for uid in owner_user_id_by_key.values() if uid]
         dept_by_user_id = user_department_relation_repo.get_primary_department_by_user_ids(session, owner_user_ids)
 
+        if target_department_id:
+            grouped = self._filter_grouped_for_department_subtree(
+                session,
+                grouped,
+                owner_user_id_by_key,
+                dept_by_user_id,
+                target_department_id,
+            )
+
         # 预热缓存，减少并行阶段重复拼接上下文
         for r in records:
             self._visit_context_for_prompt(r, visit_context_cache)
@@ -858,6 +1033,7 @@ class CRMWeeklyFollowupService:
 
                 compressed: List[Dict[str, Any]] = []
                 for r in record_pairs_for_llm:
+                    followup_obj = resolve_followup_object_from_record(r)
                     compressed.append(
                         {
                             "id": r.id,
@@ -866,6 +1042,11 @@ class CRMWeeklyFollowupService:
                             "partner_name": self._legacy_partner_name(r),
                             "external_collaboration_partner_name": getattr(
                                 r, "external_collaboration_partner_name", None
+                            ),
+                            "followup_object_name": (
+                                (followup_obj.object_name if followup_obj else None)
+                                or r.account_name
+                                or self._legacy_partner_name(r)
                             ),
                             "context": self._visit_context_for_prompt(r, visit_context_cache),
                         }
@@ -911,6 +1092,9 @@ class CRMWeeklyFollowupService:
                     crm_uid = owner_crm_user_id_by_key.get(key)
                     if crm_uid:
                         owner_name = crm_user_name_by_owner_id.get(crm_uid)
+                if not owner_name and key.entity_type == "lead":
+                    lead = lead_by_id.get(key.entity_id) or {}
+                    owner_name = lead.get("owner_name")
                 owner_name = (owner_name or "").strip() or None
                 owner_name_by_key[key] = owner_name
 
@@ -925,6 +1109,9 @@ class CRMWeeklyFollowupService:
                 partner_name = self._legacy_partner_name(last_record)
                 forecast_amount: Optional[float] = None
                 expected_closing_date: Optional[date] = None
+                followup_object_type: Optional[str] = None
+                followup_object_id: Optional[str] = None
+                followup_object_name: Optional[str] = None
 
                 if key.entity_type == "opportunity":
                     opp = opp_by_id.get(key.entity_id)
@@ -933,16 +1120,36 @@ class CRMWeeklyFollowupService:
                         opportunity_name = opp.get("opportunity_name") or opportunity_name
                         account_id = opp.get("customer_id") or account_id
                         account_name = opp.get("customer_name") or account_name
+                    if account_id:
+                        followup_object_type = FOLLOWUP_OBJECT_TYPE_END_CUSTOMER
+                        followup_object_id = account_id
+                        followup_object_name = account_name
                 elif key.entity_type == "account":
                     acc = acc_by_id.get(key.entity_id)
                     if acc:
                         account_id = str((acc.get("unique_id") or "") or account_id or "")
                         account_name = acc.get("customer_name") or account_name
+                    followup_object_type = FOLLOWUP_OBJECT_TYPE_END_CUSTOMER
+                    followup_object_id = account_id
+                    followup_object_name = account_name
                 elif key.entity_type == "partner":
                     partner = partner_by_id.get(key.entity_id)
                     if partner:
                         partner_id = str((partner.get("unique_id") or "") or partner_id or "")
                         partner_name = partner.get("customer_name") or partner_name
+                    followup_object_type = FOLLOWUP_OBJECT_TYPE_PARTNER
+                    followup_object_id = partner_id
+                    followup_object_name = partner_name
+                elif key.entity_type == "lead":
+                    lead = lead_by_id.get(key.entity_id) or {}
+                    visit_followup = resolve_followup_object_from_record(last_record)
+                    followup_object_type = FOLLOWUP_OBJECT_TYPE_LEAD
+                    followup_object_id = key.entity_id
+                    followup_object_name = (
+                        lead.get("lead_name")
+                        or (visit_followup.object_name if visit_followup else None)
+                        or self._norm_id(getattr(last_record, "followup_object_name", None))
+                    )
 
                 forecast_opp_id = self._forecast_opportunity_id(key)
                 if forecast_opp_id:
@@ -964,6 +1171,9 @@ class CRMWeeklyFollowupService:
                     opportunity_name=opportunity_name,
                     partner_id=partner_id,
                     partner_name=partner_name,
+                    followup_object_type=followup_object_type,
+                    followup_object_id=followup_object_id,
+                    followup_object_name=followup_object_name,
                     owner_user_id=owner_user_id,
                     owner_name=owner_name,
                     progress=progress,
@@ -985,6 +1195,9 @@ class CRMWeeklyFollowupService:
                     crm_uid = owner_crm_user_id_by_key.get(key)
                     if crm_uid:
                         owner_name = crm_user_name_by_owner_id.get(crm_uid)
+                if not owner_name and key.entity_type == "lead":
+                    lead = lead_by_id.get(key.entity_id) or {}
+                    owner_name = lead.get("owner_name")
                 owner_name_by_key[key] = (owner_name or "").strip() or None
 
         # 生成部门/公司汇总（仅 LLM）
@@ -1015,6 +1228,14 @@ class CRMWeeklyFollowupService:
             session, by_dept_id_full.keys()
         )
         names_covered_by_id = set(dept_name_by_id.values())
+
+        if target_department_id:
+            by_dept_id_full = {
+                did: groups
+                for did, groups in by_dept_id_full.items()
+                if did == target_department_id
+            }
+            by_dept_name_fallback = {}
 
         unknown_department_record_groups: List[Tuple[_EntityKey, List[CRMSalesVisitRecord]]] = []
         seen_keys_unknown: set[_EntityKey] = set()
@@ -1196,13 +1417,27 @@ class CRMWeeklyFollowupService:
 
         empty_dept_count = 0
         if include_department:
-            active_departments = self._list_active_departments_for_empty_summary(session)
-            for dept_id, dept_name in active_departments:
-                if dept_id not in by_dept_id_full:
-                    self._upsert_empty_department_summary(
-                        session, week_start, week_end, dept_id, dept_name
+            if target_department_id:
+                if target_department_id not in by_dept_id_full:
+                    dept_name = (
+                        dept_name_by_id.get(target_department_id)
+                        or department_mirror_repo.get_department_name_by_id(
+                            session, target_department_id
+                        )
+                        or ""
                     )
-                    empty_dept_count += 1
+                    self._upsert_empty_department_summary(
+                        session, week_start, week_end, target_department_id, dept_name
+                    )
+                    empty_dept_count = 1
+            else:
+                active_departments = self._list_active_departments_for_empty_summary(session)
+                for dept_id, dept_name in active_departments:
+                    if dept_id not in by_dept_id_full:
+                        self._upsert_empty_department_summary(
+                            session, week_start, week_end, dept_id, dept_name
+                        )
+                        empty_dept_count += 1
 
         known_dept_count = sum(
             1 for did in by_dept_id_full if dept_name_by_id.get(did, "未知部门") != "未知部门"
@@ -1228,6 +1463,7 @@ class CRMWeeklyFollowupService:
             "billable_department_billing": billable_department_items,
             "billable_company": billable_company,
             "scopes": sorted(active_scopes),
+            "department_id": target_department_id or "",
         }
 
 

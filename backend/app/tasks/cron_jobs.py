@@ -5,8 +5,6 @@ from sqlmodel import Session, select
 import pytz
 from typing import Any, Optional
 
-from urllib.parse import quote_plus
-
 from app.core.config import settings, WritebackMode, WritebackFrequency
 from app.core.db import engine
 from app.celery import app
@@ -725,7 +723,8 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                                     _report_task_usage_once(
                                         BillingScenario.CRM_TEAM_WEEKLY_REPORT,
                                         f"weekly-department:{end_date.isoformat()}:{dept_name}",
-                                        f"{settings.REVIEW_REPORT_HOST}/reports/weekly-reports/department?end_date={end_date.isoformat()}&department_name={quote_plus(str(dept_name or ''))}",
+                                        department_report.get("weekly_review_1_page")
+                                        or settings.REVIEW_REPORT_HOST,
                                     )
                                 else:
                                     logger.info(
@@ -772,7 +771,8 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                                 _report_task_usage_once(
                                     BillingScenario.CRM_TEAM_WEEKLY_REPORT,
                                     f"weekly-company:{end_date.isoformat()}",
-                                    f"{settings.REVIEW_REPORT_HOST}/reports/weekly-reports/company?end_date={end_date.isoformat()}",
+                                    company_weekly_report.get("weekly_review_1_page")
+                                    or settings.REVIEW_REPORT_HOST,
                                 )
                             else:
                                 msg = str(company_result.get("message", ""))
@@ -861,6 +861,7 @@ def generate_crm_weekly_followup_summary(
     end_date_str=None,
     scopes: str = "all",
     week_range_mode: str = "completed",
+    department_id: str | None = None,
 ):
     """
     生成“周跟进总结”（公司/团队整体描述 + 明细列表），用于后台页面展示与人工评论。
@@ -871,6 +872,7 @@ def generate_crm_weekly_followup_summary(
         end_date_str: 结束日期 YYYY-MM-DD，不传则按 week_range_mode 计算
         scopes: all | department | company（默认定时：周六部门、周六公司）
         week_range_mode: completed（上一完整周）| in_progress（当前周，week_end 不超过今天）
+        department_id: 可选；指定时仅生成该部门（含子部门负责人跟进）的部门级总结
     """
     from app.services.crm_weekly_followup_service import (
         parse_weekly_followup_scopes,
@@ -895,16 +897,25 @@ def generate_crm_weekly_followup_summary(
                 "data": {},
             }
 
+        target_department_id = (department_id or "").strip() or None
+        if target_department_id and "company" in active_scopes and "department" not in active_scopes:
+            return {
+                "success": False,
+                "message": "指定 department_id 时 scopes 不能仅为 company",
+                "data": {},
+            }
+
         # 计算日期范围
         if start_date_str and end_date_str:
             try:
                 start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
                 end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
                 logger.info(
-                    "开始执行CRM周跟进总结生成任务，日期范围: %s 到 %s，scopes=%s",
+                    "开始执行CRM周跟进总结生成任务，日期范围: %s 到 %s，scopes=%s，department_id=%s",
                     start_date,
                     end_date,
                     sorted(active_scopes),
+                    target_department_id or "",
                 )
             except ValueError:
                 logger.error(f"无效的日期格式: start_date={start_date_str}, end_date={end_date_str}")
@@ -915,11 +926,12 @@ def generate_crm_weekly_followup_summary(
                 today, week_range_mode=week_range_mode  # type: ignore[arg-type]
             )
             logger.info(
-                "开始执行CRM周跟进总结生成任务，week_range_mode=%s，日期: %s 到 %s，scopes=%s",
+                "开始执行CRM周跟进总结生成任务，week_range_mode=%s，日期: %s 到 %s，scopes=%s，department_id=%s",
                 week_range_mode,
                 start_date,
                 end_date,
                 sorted(active_scopes),
+                target_department_id or "",
             )
 
         with Session(engine) as session:
@@ -928,6 +940,7 @@ def generate_crm_weekly_followup_summary(
                 week_start=start_date,
                 week_end=end_date,
                 scopes=active_scopes,
+                department_id=target_department_id,
             )
             entity_count = int(result.get("entity_count") or 0) if isinstance(result, dict) else 0
             bill_dept = "department" in active_scopes and entity_count > 0
@@ -1233,6 +1246,7 @@ def crm_visit_records_writeback(self, start_date_str=None, end_date_str=None, wr
        - APAC模式：为每条拜访记录创建Salesforce的任务
        - OLM模式：为每条拜访记录创建销售易的拜访记录
        - CHAITIN模式：为每条拜访记录创建长亭的拜访记录
+       - WEBEYE模式：为每条拜访记录创建简道云跟进记录
        - 其它模式：若尚未接入拜访回写则跳过
     4. 调用相应的API进行回写或任务创建，并返回回写结果
     
