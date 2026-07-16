@@ -36,7 +36,12 @@ from app.models.wb_visit_requests import (
 from app.models.crm_accounts import CRMAccount
 from app.models.crm_leads import CRMLead
 from app.api.routes.crm.models import VisitAttachment
-from app.utils.crm_followup_object import resolve_followup_object_from_record
+from app.utils.crm_followup_object import (
+    FOLLOWUP_OBJECT_TYPE_END_CUSTOMER,
+    FOLLOWUP_OBJECT_TYPE_LEAD,
+    FOLLOWUP_OBJECT_TYPE_PARTNER,
+    resolve_followup_object_from_record,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -988,36 +993,29 @@ class CrmWritebackService:
             logger.warning(f"记录 ID {record.id}：查询网眼 CRM 用户名失败: {e}")
         return None
 
-    def _lookup_webeye_account_or_lead(
+    def _lookup_webeye_account(
         self, session: Session, entity_id: str
-    ) -> Tuple[Optional[CRMAccount], Optional[CRMLead]]:
-        """
-        用拜访记录上唯一的关联 ID（account_id 或 partner_id，二者互斥）
-        在 crm_accounts / crm_leads 中查找。
-
-        命中客户表 → 客户拜访；命中线索表 → 线索拜访；都未命中 → (None, None)。
-        若异常地两表都有同一 unique_id，优先按客户处理。
-        """
+    ) -> Optional[CRMAccount]:
         eid = _str_or_none(entity_id)
         if not eid:
-            return None, None
-
-        account = session.exec(
+            return None
+        return session.exec(
             select(CRMAccount).where(
                 CRMAccount.unique_id == eid,
                 or_(CRMAccount.delete_flag == 0, CRMAccount.delete_flag.is_(None)),
             )
         ).first()
-        if account:
-            return account, None
 
-        lead = session.exec(
+    def _lookup_webeye_lead(self, session: Session, entity_id: str) -> Optional[CRMLead]:
+        eid = _str_or_none(entity_id)
+        if not eid:
+            return None
+        return session.exec(
             select(CRMLead).where(
                 CRMLead.unique_id == eid,
                 CRMLead.is_deleted == 0,
             )
         ).first()
-        return None, lead
 
     def generate_webeye_visit_requests(
         self, session: Session, visit_records: List[CRMSalesVisitRecord]
@@ -1025,31 +1023,23 @@ class CrmWritebackService:
         """
         根据拜访记录生成网眼（简道云）拜访回写请求。
 
-        约定：本地 ``account_id`` / ``partner_id``（及对应 name）互斥，只会一侧有值；
-        用该 ID 查 ``crm_accounts`` / ``crm_leads``——落在哪张表就是哪种拜访场景。
+        以 ``followup_object_*``（含历史 account/partner 推断）决定场景：
+        - lead → 查 ``crm_leads``，只传 ``lead_id``
+        - end_customer / partner → 查 ``crm_accounts``，只传 ``account_id``
         """
         visit_requests = WebeyeVisitRecordBatchCreateRequest(visit_records=[])
 
         for record in visit_records:
-            # account / partner 互斥：取有值的一侧
-            entity_id = _str_or_none(record.account_id) or _str_or_none(record.partner_id)
-            local_name = _str_or_none(record.account_name) or _str_or_none(
-                record.partner_name
-            )
-
-            if not entity_id:
+            followup_obj = resolve_followup_object_from_record(record)
+            if not followup_obj:
                 logger.warning(
-                    f"记录 ID {record.id}：account_id/partner_id 为空，跳过网眼回写"
+                    f"记录 ID {record.id}：无法解析跟进对象（followup_object/account/partner 均为空），跳过网眼回写"
                 )
                 continue
 
-            account, lead = self._lookup_webeye_account_or_lead(session, entity_id)
-            if account is None and lead is None:
-                logger.warning(
-                    f"记录 ID {record.id}：在 crm_accounts/crm_leads 中未找到 "
-                    f"entity_id={entity_id}，跳过网眼回写"
-                )
-                continue
+            object_type = followup_obj.object_type
+            entity_id = followup_obj.object_id
+            local_name = followup_obj.object_name
 
             recorder_username = self._resolve_webeye_recorder_username(session, record)
             if not recorder_username:
@@ -1071,8 +1061,46 @@ class CrmWritebackService:
             )
             source_record_id = str(record.record_id or record.id)
 
-            if account is not None:
-                # 客户拜访：只传 account_id，不传 lead_id
+            if object_type == FOLLOWUP_OBJECT_TYPE_LEAD:
+                lead = self._lookup_webeye_lead(session, entity_id)
+                if lead is None:
+                    logger.warning(
+                        f"记录 ID {record.id}：在 crm_leads 中未找到 "
+                        f"followup_object_id={entity_id}，跳过网眼回写"
+                    )
+                    continue
+                lead_serial = None
+                if isinstance(lead.extra, dict):
+                    lead_serial = _str_or_none(lead.extra.get("lead_serial_number"))
+                display_name = (
+                    local_name
+                    or _str_or_none(lead.company_name)
+                    or _str_or_none(lead.lead_name)
+                )
+                visit_request = WebeyeVisitRecordCreateRequest(
+                    source_record_id=source_record_id,
+                    lead_id=lead.unique_id,
+                    lead_serial_number=lead_serial,
+                    account_name=display_name,
+                    recorder_id=recorder_username,
+                    recorder=record.recorder,
+                    visit_communication_date=visit_date,
+                    visit_communication_method=record.visit_communication_method,
+                    followup_record=followup,
+                    next_steps=next_steps,
+                    remarks=record.remarks,
+                )
+            elif object_type in (
+                FOLLOWUP_OBJECT_TYPE_END_CUSTOMER,
+                FOLLOWUP_OBJECT_TYPE_PARTNER,
+            ):
+                account = self._lookup_webeye_account(session, entity_id)
+                if account is None:
+                    logger.warning(
+                        f"记录 ID {record.id}：在 crm_accounts 中未找到 "
+                        f"followup_object_id={entity_id} (type={object_type})，跳过网眼回写"
+                    )
+                    continue
                 visit_request = WebeyeVisitRecordCreateRequest(
                     source_record_id=source_record_id,
                     account_id=account.unique_id,
@@ -1090,25 +1118,10 @@ class CrmWritebackService:
                     remarks=record.remarks,
                 )
             else:
-                # 线索拜访：只传 lead_id，不传 account_id
-                if lead is None:
-                    continue
-                lead_serial = None
-                if isinstance(lead.extra, dict):
-                    lead_serial = _str_or_none(lead.extra.get("lead_serial_number"))
-                visit_request = WebeyeVisitRecordCreateRequest(
-                    source_record_id=source_record_id,
-                    lead_id=lead.unique_id,
-                    lead_serial_number=lead_serial,
-                    account_name=local_name or lead.company_name,
-                    recorder_id=recorder_username,
-                    recorder=record.recorder,
-                    visit_communication_date=visit_date,
-                    visit_communication_method=record.visit_communication_method,
-                    followup_record=followup,
-                    next_steps=next_steps,
-                    remarks=record.remarks,
+                logger.warning(
+                    f"记录 ID {record.id}：不支持的跟进对象类型 {object_type!r}，跳过网眼回写"
                 )
+                continue
 
             visit_requests.visit_records.append(visit_request)
 

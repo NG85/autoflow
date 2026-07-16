@@ -1,4 +1,4 @@
-"""跟进对象统一模型：新数据写 followup_object_*，历史 account/partner 槽位只读兼容。"""
+"""跟进对象统一模型：新字段为主写入，旧 account/partner 槽位过渡期双写兼容。"""
 
 from __future__ import annotations
 
@@ -83,6 +83,39 @@ def resolve_followup_object_from_record(record: Any) -> Optional[FollowupObject]
         partner_id=getter("partner_id"),
         partner_name=getter("partner_name"),
     )
+
+
+def apply_followup_object_legacy_dual_write(payload: Dict[str, Any]) -> None:
+    """
+    写入前双写：调用方只传 followup_object_* 时，回填旧 account/partner 槽位。
+
+    - end_customer → account_id / account_name（仅补空）
+    - partner → partner_id / partner_name（仅补空）
+    - lead → 不写旧槽位（无对应语义）
+    """
+    obj_type = _strip(payload.get("followup_object_type"))
+    if not obj_type or obj_type not in FOLLOWUP_OBJECT_TYPES:
+        return
+    if obj_type == FOLLOWUP_OBJECT_TYPE_LEAD:
+        return
+
+    obj_id = _strip(payload.get("followup_object_id")) or None
+    obj_name = _strip(payload.get("followup_object_name")) or None
+    if not obj_id and not obj_name:
+        return
+
+    if obj_type == FOLLOWUP_OBJECT_TYPE_END_CUSTOMER:
+        if obj_id and not _strip(payload.get("account_id")):
+            payload["account_id"] = obj_id
+        if obj_name and not _strip(payload.get("account_name")):
+            payload["account_name"] = obj_name
+        return
+
+    if obj_type == FOLLOWUP_OBJECT_TYPE_PARTNER:
+        if obj_id and not _strip(payload.get("partner_id")):
+            payload["partner_id"] = obj_id
+        if obj_name and not _strip(payload.get("partner_name")):
+            payload["partner_name"] = obj_name
 
 
 def resolve_crm_account_join_id(

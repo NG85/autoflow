@@ -43,7 +43,7 @@ from app.repositories.visit_record import (
     visit_record_repo,
 )
 from app.services.crm_config_service import build_customer_attribute_options, get_resolved_field_mapping
-from app.utils.crm_followup_object import FOLLOWUP_OBJECT_TYPES
+from app.utils.crm_followup_object import FOLLOWUP_OBJECT_TYPES, resolve_followup_object_from_record
 from app.platforms.utils.url_parser import parse_dingtalk_transcribe_url
 from app.services.document_processing_service import document_processing_service
 from app.services.visit_record_card_push_status import (
@@ -858,6 +858,8 @@ def get_visit_record_filter_options(
             **visit_record_options,
             "customer_levels": customer_levels,
             "customer_attributes": customer_attributes,
+            # 与 customer_attributes 同源（字段映射），不扫拜访表实际数据
+            "followup_object_types": list(customer_attributes.keys()),
             "tags": [{"id": tag.id, "name": tag.name} for tag in tag_options],
         }
 
@@ -1093,7 +1095,13 @@ def update_visit_record_comments(
             from app.utils.push_page_urls import build_visit_record_page_url
 
             jump_url = build_visit_record_page_url(record_id)
-            title = (getattr(record, "account_name", None) or getattr(record, "partner_name", None) or "") or ""
+            followup_obj = resolve_followup_object_from_record(record)
+            title = (
+                (followup_obj.object_name if followup_obj else None)
+                or getattr(record, "account_name", None)
+                or getattr(record, "partner_name", None)
+                or ""
+            )
             opp = (getattr(record, "opportunity_name", None) or "") or ""
             link_text = f"{title}  {opp}".strip() or "跟进记录"
 

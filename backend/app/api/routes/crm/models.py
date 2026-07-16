@@ -496,15 +496,15 @@ class VisitRecordQueryRequest(BaseModel):
     # 过滤条件
     record_id: Optional[str] = None  # 记录ID
     customer_level: Optional[List[str]] = None  # 客户等级（多选）
-    customer_attribute: Optional[List[str]] = None  # 跟进对象类型（多选：end_customer、partner、lead，可多选 OR）
+    customer_attribute: Optional[List[str]] = None  # 跟进对象类型（多选：end_customer、partner、lead；与 followup_object_type 合并为同一维度 OR）
     tag_ids: Optional[List[str]] = None  # 客户 tag（多选，OR，来自 crm_accounts.extra.tags）
-    account_id: Optional[List[str]] = None  # 客户ID（多选）
-    account_name: Optional[List[str]] = None  # 客户名称（多选）
-    partner_id: Optional[List[str]] = None  # 合作伙伴ID（多选）
-    partner_name: Optional[List[str]] = None  # 合作伙伴名称（多选）
-    followup_object_type: Optional[List[str]] = None  # 跟进对象类型（多选）
-    followup_object_id: Optional[List[str]] = None  # 跟进对象ID（多选）
-    followup_object_name: Optional[List[str]] = None  # 跟进对象名称（多选，线索等新类型）
+    account_id: Optional[List[str]] = None  # 客户ID（多选；与 followup_object_id/partner_id 合并为跟进对象 ID 维度 OR）
+    account_name: Optional[List[str]] = None  # 客户名称（多选；与 followup_object_name/partner_name 合并为跟进对象名称维度 OR）
+    partner_id: Optional[List[str]] = None  # 合作伙伴ID（多选；与 followup_object_id/account_id 合并）
+    partner_name: Optional[List[str]] = None  # 合作伙伴名称（多选；与 followup_object_name/account_name 合并）
+    followup_object_type: Optional[List[str]] = None  # 跟进对象类型（多选；与 customer_attribute 合并，已知键走历史兼容推断）
+    followup_object_id: Optional[List[str]] = None  # 跟进对象ID（多选；与 account_id/partner_id 合并，任一列命中）
+    followup_object_name: Optional[List[str]] = None  # 跟进对象名称（多选；与 account_name/partner_name 合并，任一列命中）
     opportunity_id: Optional[List[str]] = None  # 商机ID（多选）
     opportunity_name: Optional[List[str]] = None  # 商机名称（多选）
     visit_communication_date_start: Optional[str] = None  # 跟进日期开始

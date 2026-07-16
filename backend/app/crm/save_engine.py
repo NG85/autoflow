@@ -114,7 +114,11 @@ def save_visit_record_to_crm_table(record_schema: SimpleVisitRecordCreate | Comp
     
     # 获取所有字段（排除None值）
     fields = record_schema.model_dump(exclude_none=True)
-    
+    # 调用方只传 followup_object_* 时，回填 account/partner 供下游兼容读取
+    from app.utils.crm_followup_object import apply_followup_object_legacy_dual_write
+
+    apply_followup_object_legacy_dual_write(fields)
+
     # 生成record_id
     record_id = _generate_record_id(record_schema.visit_type, now)
     
