@@ -1009,6 +1009,7 @@ class WeeklyFollowupDetailQueryIn(_WeeklyFollowupWeekRangeQueryMixin):
     filter_account_name: Optional[str] = None  # 客户名称筛选（单选）
     filter_opportunity_id: Optional[str] = None  # 商机ID筛选（单选）
     filter_opportunity_name: Optional[str] = None  # 商机名称筛选（单选）
+    filter_customer_attribute: Optional[List[str]] = None  # 跟进对象类型（多选：end_customer/partner/lead，OR）
     filter_tag_ids: Optional[List[str]] = None  # 客户 tag 筛选（多选，OR）
     filter_forecast_amount_min: Optional[float] = None  # 签约金额下限（含）
     filter_forecast_amount_max: Optional[float] = None  # 签约金额上限（含）

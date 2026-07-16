@@ -48,6 +48,7 @@ from app.services.oauth_service import oauth_client
 from app.permissions.weekly_followup_permission_service import weekly_followup_permission_service
 from app.utils.crm_account_tags import parse_account_tags
 from app.utils.crm_comments import CRMCommentValidationError, merge_append_crm_comments
+from app.utils.crm_followup_object import FOLLOWUP_OBJECT_TYPES
 from app.utils.crm_followup_object_type import resolve_customer_attribute_display_label_for_object
 
 logger = logging.getLogger(__name__)
@@ -259,6 +260,18 @@ def _append_weekly_followup_entity_filters(
 
     if opportunity_conds:
         conds.append(or_(*opportunity_conds) if len(opportunity_conds) > 1 else opportunity_conds[0])
+
+    if payload.filter_customer_attribute:
+        selected_attrs = {
+            value.strip()
+            for value in payload.filter_customer_attribute
+            if value and value.strip() and value.strip() in FOLLOWUP_OBJECT_TYPES
+        }
+        if selected_attrs:
+            conds.append(CRMWeeklyFollowupEntitySummary.followup_object_type.in_(list(selected_attrs)))
+        else:
+            # 传入了筛选值但无一合法：结果为空，避免静默忽略
+            conds.append(false())
 
     if payload.filter_tag_ids:
         tag_ids = list({tag_id.strip() for tag_id in payload.filter_tag_ids if tag_id and tag_id.strip()})
