@@ -111,3 +111,65 @@ def test_collect_visit_record_keeps_user_scoped_cc_when_department_review_group_
     assert len(cc_recipients) == 1
     assert cc_recipients[0]["open_id"] == "ou_cc_user"
     assert cc_recipients[0]["cc_scope"] == "user"
+
+
+@patch("app.services.platform_notification_service.resolve_visit_record_cc_recipients")
+@patch.object(PlatformNotificationService, "get_recipients_for_recorder")
+@patch.object(PlatformNotificationService, "_get_collaborative_participants_recipients", return_value={})
+@patch.object(PlatformNotificationService, "_get_group_chats_by_department")
+def test_collect_visit_record_removes_department_scoped_cc_when_department_review_group_exists(
+    mock_get_groups,
+    _mock_collab,
+    mock_get_recorder,
+    mock_resolve_cc,
+):
+    svc = PlatformNotificationService()
+    mock_get_recorder.return_value = {
+        "feishu": [
+            {"open_id": "ou_leader", "type": "leader", "name": "上级"},
+            {"open_id": "ou_recorder", "type": "recorder", "name": "销售"},
+        ]
+    }
+    mock_resolve_cc.return_value = {
+        "feishu": [
+            {
+                "open_id": "ou_cc_user",
+                "type": "configured_cc",
+                "cc_scope": "user",
+                "name": "个人抄送人",
+            },
+            {
+                "open_id": "ou_cc_dept",
+                "type": "configured_cc",
+                "cc_scope": "department",
+                "name": "部门抄送人",
+            },
+            {
+                "open_id": "ou_cc_global",
+                "type": "configured_cc",
+                "cc_scope": "global",
+                "name": "全局抄送人",
+            },
+        ]
+    }
+    mock_get_groups.side_effect = [
+        [{"platform": "feishu", "chat_id": "oc_review"}],
+        [],
+    ]
+
+    recipients, _, _ = svc._collect_visit_record_recipients_and_groups(
+        MagicMock(),
+        recorder_name="销售",
+        recorder_id="recorder-1",
+        visit_record={
+            "recorder_department_id": "dept-east",
+            "recorder_department_name": "华东",
+        },
+    )
+
+    mock_resolve_cc.assert_called_once()
+    assert mock_resolve_cc.call_args.kwargs["recorder_department_id"] == "dept-east"
+    cc_recipients = [r for r in recipients["feishu"] if r["type"] == "configured_cc"]
+    assert len(cc_recipients) == 1
+    assert cc_recipients[0]["open_id"] == "ou_cc_user"
+    assert cc_recipients[0]["cc_scope"] == "user"
