@@ -11,6 +11,7 @@ from sqlmodel import Session
 from app.models.notification_cc_rule import EVENT_TYPE_VISIT_RECORD_CARD
 from app.platforms.constants import PLATFORM_DINGTALK, PLATFORM_FEISHU, PLATFORM_LARK
 from app.repositories.notification_cc_rule import notification_cc_rule_repo
+from app.repositories.user_department_relation import user_department_relation_repo
 from app.repositories.user_profile import user_profile_repo
 
 logger = logging.getLogger(__name__)
@@ -65,13 +66,31 @@ def _merge_recipients_into_platform_map(
         recipients_by_platform[platform].append(recipient)
 
 
+def _resolve_recorder_department_id(
+    db_session: Session,
+    *,
+    recorder_user_id: UUID,
+    recorder_department_id: Optional[str] = None,
+) -> Optional[str]:
+    """优先用拜访快照部门；否则查录入人主部门。"""
+    snapshot = (recorder_department_id or "").strip()
+    if snapshot and snapshot != "UNKNOWN":
+        return snapshot
+    by_user = user_department_relation_repo.get_primary_department_by_user_ids(
+        db_session, [str(recorder_user_id)]
+    )
+    dept = (by_user.get(str(recorder_user_id)) or "").strip()
+    return dept or None
+
+
 def resolve_visit_record_cc_recipients(
     db_session: Session,
     *,
     recorder_user_id: Optional[UUID],
+    recorder_department_id: Optional[str] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
     """
-    解析拜访记录卡片抄送接收者：仅来自 notification_cc_rules（含 scope_type=global）。
+    解析拜访记录卡片抄送接收者：仅来自 notification_cc_rules（user / department / global）。
 
     算法见 backend/docs/visit-record-cc-rules.md。
     """
@@ -80,16 +99,24 @@ def resolve_visit_record_cc_recipients(
     if not recorder_user_id:
         return recipients_by_platform
 
+    dept_id = _resolve_recorder_department_id(
+        db_session,
+        recorder_user_id=recorder_user_id,
+        recorder_department_id=recorder_department_id,
+    )
     rules = notification_cc_rule_repo.list_enabled_rules_for_recorder(
         db_session,
         event_type=EVENT_TYPE_VISIT_RECORD_CARD,
         recorder_user_id=recorder_user_id,
+        recorder_department_id=dept_id,
     )
     recipient_scopes = notification_cc_rule_repo.merge_recipient_scopes(rules)
     if rules:
         logger.info(
-            "Visit record CC rules matched: recorder_user_id=%s, rule_ids=%s, recipient_scopes=%s",
+            "Visit record CC rules matched: recorder_user_id=%s, recorder_department_id=%s, "
+            "rule_ids=%s, recipient_scopes=%s",
             recorder_user_id,
+            dept_id,
             [rule.id for rule in rules],
             [(str(uid), scope) for uid, scope in recipient_scopes],
         )

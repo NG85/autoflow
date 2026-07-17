@@ -1073,7 +1073,7 @@ class PlatformNotificationService:
         """
         获取记录人相关的推送接收者，按平台分组
         包括：记录人本人 + OAuth 汇报链返回的管理层 leader（max_levels=1，含无本部门 leader 时上级 fallback）
-        抄送（notification_cc_rules，含 global）由 visit_record_cc_resolver 独立解析。
+        抄送（notification_cc_rules：user / department / global）由 visit_record_cc_resolver 独立解析。
         返回按平台分组的接收者字典
         """
         recipients_by_platform: Dict[str, List[Dict[str, Any]]] = {}
@@ -1323,8 +1323,8 @@ class PlatformNotificationService:
         """
         汇总拜访记录推送的接收者与部门群配置。
         若配置了会收拜访卡片的 department_review 群，则从个人接收者中移除 leader 与
-        cc_scope=global 的 configured_cc；cc_scope=user 的 personal 抄送仍推个人。
-        管理层与 global 抄送改由 review 群接收 leader 版卡片。
+        cc_scope=global / department 的 configured_cc；仅 cc_scope=user 的个性化抄送仍推个人。
+        管理层与 global / department 抄送改由 review 群接收 leader 版卡片。
         department_review_reports 群不参与拜访推送，也不影响个人接收者中的 leader。
         返回 (recipients_by_platform, department_groups_review, department_groups_brief)。
         """
@@ -1345,15 +1345,16 @@ class PlatformNotificationService:
                 else:
                     recipients_by_platform[platform] = recipients
 
+        recorder_dept_id = (visit_record or {}).get("recorder_department_id")
+        recorder_dept_name = (visit_record or {}).get("recorder_department_name")
         recorder_user_id = recorder_profile.user_id if recorder_profile and recorder_profile.user_id else None
         cc_recipients_by_platform = resolve_visit_record_cc_recipients(
             db_session,
             recorder_user_id=recorder_user_id,
+            recorder_department_id=recorder_dept_id,
         )
         self._merge_visit_record_cc_recipients(recipients_by_platform, cc_recipients_by_platform)
 
-        recorder_dept_id = (visit_record or {}).get("recorder_department_id")
-        recorder_dept_name = (visit_record or {}).get("recorder_department_name")
         department_groups_review = self._get_group_chats_by_department(
             department_id=recorder_dept_id,
             department_name=recorder_dept_name,
