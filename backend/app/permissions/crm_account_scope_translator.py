@@ -75,6 +75,23 @@ def translate_crm_account_scope_to_sql(
     AND a.person_in_charge_id IS NULL
 )"""
             )
+        elif src == "customer_attribute_unrestricted":
+            attributes = _get_str_list(item, "values")
+            if attributes:
+                placeholders = ", ".join(
+                    f":perm_customer_attribute_{idx}_{i}"
+                    for i in range(len(attributes))
+                )
+                parts.append(
+                    f"""EXISTS (
+  SELECT 1 FROM crm_accounts a
+  WHERE a.unique_id = {main_alias}.{id_column}
+    AND a.customer_attribute IN ({placeholders})
+)"""
+                )
+                for i, attribute in enumerate(attributes):
+                    params[f"perm_customer_attribute_{idx}_{i}"] = attribute
+                idx += 1
 
     if not parts:
         return _deny()
