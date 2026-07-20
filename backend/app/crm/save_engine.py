@@ -294,7 +294,7 @@ Content to analyze:
         result = call_ark_llm(
             prompt,
             temperature=0,
-            response_format={"type": "json_object"},
+            # response_format={"type": "json_object"},
         )
         data = json.loads(result)
         followup_record = data.get("followup_record", followup_content)
@@ -1878,7 +1878,7 @@ def generate_bilingual_content_batch(followup_record: str, next_steps: str) -> d
     try:
         result = call_ark_llm(
             prompt,
-            response_format={"type": "json_object"},
+            # response_format={"type": "json_object"},
         )
         data = json.loads(result)
         
@@ -2203,7 +2203,7 @@ def assess_followup_quality_bilingual(followup_record_zh: str, followup_record_e
         result = call_ark_llm(
             prompt,
             temperature=0,
-            response_format={"type": "json_object"},
+            # response_format={"type": "json_object"},
         )
         logger.info(f"Followup quality result: {result}")
         data = _safe_parse_json_object(result)
@@ -2247,7 +2247,7 @@ def assess_next_steps_quality_bilingual(next_steps_zh: str, next_steps_en: str) 
         result = call_ark_llm(
             prompt,
             temperature=0,
-            response_format={"type": "json_object"},
+            # response_format={"type": "json_object"},
         )
         logger.info(f"Next steps quality result: {result}")
         data = _safe_parse_json_object(result)
