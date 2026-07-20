@@ -2095,12 +2095,11 @@ class ChatFlow:
         return response_text
 
     def _save_cvg_messages(self) -> Generator[ChatEvent | str, None, None]:
-        """Save user command and cvg report as chat messages"""                    
+        """Save user command and cvg report as chat messages."""
         try:
-            db_messages = []
             now = datetime.now(UTC)
-            for message in self.chat_messages:
-                db_message = DBChatMessage(
+            db_messages = [
+                DBChatMessage(
                     chat_id=self.db_chat_obj.id,
                     role=message.role,
                     content=message.content,
@@ -2108,16 +2107,17 @@ class ChatFlow:
                     meta=message.additional_kwargs if message.additional_kwargs else {},
                     created_at=now,
                     updated_at=now,
-                    finished_at=now
+                    finished_at=now,
                 )
-                db_messages.append(db_message)
-            
+                for message in self.chat_messages
+            ]
+
             self.db_chat_obj, messages = chat_repo.create_chat_with_messages(
                 self.db_session,
                 self.db_chat_obj,
-                db_messages
+                db_messages,
             )
-            
+
             yield ChatEvent(
                 event_type=ChatEventType.DATA_PART,
                 payload=ChatStreamDataPayload(
@@ -2128,6 +2128,7 @@ class ChatFlow:
             )
         except Exception as e:
             logger.error(f"Failed to save cvg messages: {e}")
+            self.db_session.rollback()
             raise
         
     
