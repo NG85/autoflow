@@ -43,6 +43,7 @@ from app.repositories.visit_record import (
     visit_record_repo,
 )
 from app.services.crm_config_service import build_customer_attribute_options, get_resolved_field_mapping
+from app.utils.crm_comments import format_crm_comments_for_export
 from app.utils.crm_followup_object import FOLLOWUP_OBJECT_TYPES, resolve_followup_object_from_record
 from app.platforms.utils.url_parser import parse_dingtalk_transcribe_url
 from app.services.document_processing_service import document_processing_service
@@ -580,7 +581,8 @@ def export_visit_records_to_xlsx(
                 "Visit Purpose", "Attachment Location", "Attachment Latitude", "Attachment Longitude", "Attachment Taken At", "Follow-up Record", 
                 "AI Follow-up Record Quality Evaluation", "AI Follow-up Record Quality Evaluation Details", 
                 "Next Steps", "AI Next Steps Quality Evaluation", "AI Next Steps Quality Evaluation Details",
-                "Assessment Flag", "Record Type", "Information Source", "Remarks", "Created Time"
+                "Assessment Flag", "Record Type", "Information Source", "Remarks",
+                "Comments", "Tasks", "Created Time"
             ]
         else:
             # 中文版表头（默认）- 只包含中文字段
@@ -592,7 +594,7 @@ def export_visit_records_to_xlsx(
                 "拜访目的", "附件地点", "附件纬度", "附件经度", "附件拍摄时间", "跟进记录", 
                 "AI对跟进记录质量评估", "AI对跟进记录质量评估详情",
                 "下一步计划", "AI对下一步计划质量评估", "AI对下一步计划质量评估详情",
-                "评估标记", "记录类型", "信息来源", "备注", "创建时间"
+                "评估标记", "记录类型", "信息来源", "备注", "评论", "任务", "创建时间"
             ]
         
         ws.append(headers)
@@ -755,6 +757,8 @@ def export_visit_records_to_xlsx(
                 record_type,
                 item.visit_type or "",
                 item.remarks or "",
+                format_crm_comments_for_export(item.comments, comment_type="comment"),
+                format_crm_comments_for_export(item.comments, comment_type="task"),
                 item.last_modified_time or ""
             ]
         
