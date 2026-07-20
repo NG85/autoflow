@@ -60,7 +60,7 @@ def _post_ark_llm_request(
 def call_ark_llm(
     prompt: str,
     temperature: float = 0.3,
-    response_format: Optional[dict[str, Any]] = None,
+    # response_format: Optional[dict[str, Any]] = None,
 ) -> str:
     """
     调用 Ark LLM 的统一工具函数。
@@ -85,8 +85,8 @@ def call_ark_llm(
         ],
         "temperature": temperature,
     }
-    if response_format is not None:
-        data["response_format"] = response_format
+    # if response_format is not None:
+    #     data["response_format"] = response_format
 
     resp = _post_ark_llm_request(
         url,
