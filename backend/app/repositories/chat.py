@@ -184,16 +184,15 @@ class ChatRepo(BaseRepo):
         chat: Chat,
         messages: List[ChatMessage]
     ) -> Tuple[Chat, List[ChatMessage]]:
-        """Create chat and messages in a single transaction"""
-        # Add chat record
+        """Create chat and messages in a single short-lived transaction."""
         session.add(chat)
-        session.flush()  # Generate ID but don't commit
-        
+        # Only flush when the chat row is new and needs a generated id.
+        if chat.id is None:
+            session.flush()
+
         max_ordinal = self.get_max_message_ordinal(session, chat.id)
-        # Convert LlamaIndex ChatMessage to app ChatMessage model and set properties
         db_messages = []
         for message in messages:
-            # Create new ChatMessage model instance
             db_message = ChatMessage(
                 role=message.role,
                 content=message.content,
@@ -212,15 +211,14 @@ class ChatRepo(BaseRepo):
             )
             db_messages.append(db_message)
             max_ordinal += 1
-        
+
         session.add_all(db_messages)
-        # The transaction will be committed automatically by the session context manager
-        
-        # Refresh objects to get all database generated values
+        # Commit immediately so row locks are not held for the rest of the request/stream.
+        session.commit()
         session.refresh(chat)
         for message in db_messages:
             session.refresh(message)
-        
+
         return chat, db_messages
 
         
