@@ -330,6 +330,8 @@ class Settings(BaseSettings):
     CRM_WRITEBACK_TIMEZONE: str = "Asia/Shanghai"  # 回写任务使用的时区
     # Review 商机回写：POST ``{CRM_WRITEBACK_API_URL}{CRM_WRITEBACK_REVIEW_PATH}``
     CRM_WRITEBACK_REVIEW_PATH: str = "/crm-custom/update-business-opportunity"
+    # 网眼（简道云）拜访回写：是否回写 lead（线索）跟进；默认 False（不回写线索跟进）
+    CRM_WEBEYE_WRITEBACK_LEAD_ENABLED: bool = False
     
     # CRM sales task notification configuration
     CRM_SALES_TASK_ENABLED: bool = False

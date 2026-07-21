@@ -1024,7 +1024,8 @@ class CrmWritebackService:
         根据拜访记录生成网眼（简道云）拜访回写请求。
 
         以 ``followup_object_*``（含历史 account/partner 推断）决定场景：
-        - lead → 查 ``crm_leads``，只传 ``lead_id``
+        - lead → 查 ``crm_leads``，只传 ``lead_id``；受 ``CRM_WEBEYE_WRITEBACK_LEAD_ENABLED``
+          控制，默认关闭（不回写线索跟进）
         - end_customer / partner → 查 ``crm_accounts``，只传 ``account_id``
         """
         visit_requests = WebeyeVisitRecordBatchCreateRequest(visit_records=[])
@@ -1062,6 +1063,12 @@ class CrmWritebackService:
             source_record_id = str(record.record_id or record.id)
 
             if object_type == FOLLOWUP_OBJECT_TYPE_LEAD:
+                if not settings.CRM_WEBEYE_WRITEBACK_LEAD_ENABLED:
+                    logger.info(
+                        f"记录 ID {record.id}：跟进对象为 lead（线索），"
+                        f"CRM_WEBEYE_WRITEBACK_LEAD_ENABLED 为关闭，跳过网眼回写"
+                    )
+                    continue
                 lead = self._lookup_webeye_lead(session, entity_id)
                 if lead is None:
                     logger.warning(
