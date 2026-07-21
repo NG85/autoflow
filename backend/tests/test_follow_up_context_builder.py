@@ -41,6 +41,35 @@ def test_build_context_for_subordinate_record():
     assert context["is_subordinate_creator"] is True
     assert context["account_id"] == "acc-001"
     assert context["opportunity_id"] is None
+    assert context["followup_object_type"] is None
+    assert context["followup_object_id"] is None
+    assert context["followup_object_name"] is None
+
+
+def test_build_context_includes_followup_object_for_lead():
+    session = MagicMock()
+    record = _record(
+        account_id=None,
+        partner_id=None,
+        followup_object_type="lead",
+        followup_object_id="lead-001",
+        followup_object_name="线索甲",
+    )
+    with patch(
+        "app.permissions.follow_up_context_builder._resolve_subordinate_user_ids",
+        return_value=[],
+    ):
+        with patch(
+            "app.permissions.follow_up_context_builder._user_has_manager_role",
+            return_value=False,
+        ):
+            context = FollowUpContextBuilder(session, USER_ID).build(record)
+
+    assert context["account_id"] is None
+    assert context["partner_id"] is None
+    assert context["followup_object_type"] == "lead"
+    assert context["followup_object_id"] == "lead-001"
+    assert context["followup_object_name"] == "线索甲"
 
 
 def test_build_context_self_record_not_subordinate_creator():

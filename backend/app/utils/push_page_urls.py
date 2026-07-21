@@ -43,6 +43,7 @@ def build_visit_list_page_url(
     start_date: str,
     end_date: str,
     department_name: Optional[str] = None,
+    recorder: Optional[str] = None,
 ) -> str:
     """拜访列表页（日报卡片 visit_detail_page）。"""
     base = _visit_list_base()
@@ -55,6 +56,9 @@ def build_visit_list_page_url(
     dept = (department_name or "").strip()
     if dept:
         query = f"{query}&department_name={quote_plus(dept)}"
+    recorder_name = (recorder or "").strip()
+    if recorder_name:
+        query = f"{query}&recorder={quote_plus(recorder_name)}"
     return f"{base}?{query}"
 
 
@@ -166,3 +170,25 @@ def build_weekly_followup_summary_page_url(
     if dept:
         parts.append(f"department_name={quote_plus(dept)}")
     return f"{host}/v2/business/followup-summary/detail?{'&'.join(parts)}"
+
+
+def build_visit_guide_page_url(chat_id: Optional[str] = None) -> str:
+    """客户拜访攻略页（计费 review_detail）。"""
+    host = _host()
+    if not host:
+        return ""
+    cid = (chat_id or "").strip()
+    if cid:
+        return f"{host}/v2/business/visit-guide/{quote(cid, safe='')}"
+    return f"{host}/v2/business/visit-guide/history"
+
+
+def build_sia_chat_page_url(chat_id: Optional[str] = None) -> str:
+    """智能问答页（计费 review_detail）。"""
+    host = _host()
+    if not host:
+        return ""
+    cid = (chat_id or "").strip()
+    if cid:
+        return f"{host}/v2/c/{quote(cid, safe='')}"
+    return f"{host}/v2/c"

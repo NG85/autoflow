@@ -114,7 +114,11 @@ def save_visit_record_to_crm_table(record_schema: SimpleVisitRecordCreate | Comp
     
     # 获取所有字段（排除None值）
     fields = record_schema.model_dump(exclude_none=True)
-    
+    # 调用方只传 followup_object_* 时，回填 account/partner 供下游兼容读取
+    from app.utils.crm_followup_object import apply_followup_object_legacy_dual_write
+
+    apply_followup_object_legacy_dual_write(fields)
+
     # 生成record_id
     record_id = _generate_record_id(record_schema.visit_type, now)
     
@@ -290,7 +294,7 @@ Content to analyze:
         result = call_ark_llm(
             prompt,
             temperature=0,
-            response_format={"type": "json_object"},
+            # response_format={"type": "json_object"},
         )
         data = json.loads(result)
         followup_record = data.get("followup_record", followup_content)
@@ -331,6 +335,9 @@ def _merge_visit_record_snapshot_from_db(snapshot: dict, db_row: Any) -> None:
         "account_id",
         "partner_name",
         "partner_id",
+        "followup_object_type",
+        "followup_object_id",
+        "followup_object_name",
         "external_collaboration_partner_name",
         "external_collaboration_partner_id",
     ):
@@ -341,11 +348,16 @@ def _merge_visit_record_snapshot_from_db(snapshot: dict, db_row: Any) -> None:
 
 
 def fill_sales_visit_record_fields(sales_visit_record, db_session):
-    # 拜访对象展示：纯伙伴拜访时无客户名，用伙伴名填充 account_name 供卡片「客户」位展示
+    from app.utils.crm_followup_object import resolve_followup_object_from_record
+
+    # 拜访对象展示：纯线索/伙伴拜访时无客户名，用跟进对象名填充 account_name 供卡片展示
     account_name = _safe_strip_field_value(sales_visit_record.get("account_name"))
     partner_name = _safe_strip_field_value(sales_visit_record.get("partner_name"))
+    followup_obj = resolve_followup_object_from_record(sales_visit_record)
     if account_name:
         sales_visit_record["account_name"] = account_name
+    elif followup_obj and followup_obj.object_name:
+        sales_visit_record["account_name"] = followup_obj.object_name
     elif partner_name:
         sales_visit_record["account_name"] = partner_name
 
@@ -1866,7 +1878,7 @@ def generate_bilingual_content_batch(followup_record: str, next_steps: str) -> d
     try:
         result = call_ark_llm(
             prompt,
-            response_format={"type": "json_object"},
+            # response_format={"type": "json_object"},
         )
         data = json.loads(result)
         
@@ -2191,7 +2203,7 @@ def assess_followup_quality_bilingual(followup_record_zh: str, followup_record_e
         result = call_ark_llm(
             prompt,
             temperature=0,
-            response_format={"type": "json_object"},
+            # response_format={"type": "json_object"},
         )
         logger.info(f"Followup quality result: {result}")
         data = _safe_parse_json_object(result)
@@ -2235,7 +2247,7 @@ def assess_next_steps_quality_bilingual(next_steps_zh: str, next_steps_en: str) 
         result = call_ark_llm(
             prompt,
             temperature=0,
-            response_format={"type": "json_object"},
+            # response_format={"type": "json_object"},
         )
         logger.info(f"Next steps quality result: {result}")
         data = _safe_parse_json_object(result)

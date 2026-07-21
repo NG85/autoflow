@@ -9,6 +9,14 @@ from app.api.routes.models import (
     LocalContactUpdate,
     LocalContactResponse,
 )
+from app.permissions.crm_contact_permission_service import (
+    CRM_ACCOUNT_VIEW_PERMISSION,
+    CRM_CONTACT_CREATE_PERMISSION,
+    CRM_CONTACT_DELETE_PERMISSION,
+    CRM_CONTACT_EDIT_PERMISSION,
+    CRM_CONTACT_VIEW_PERMISSION,
+    crm_contact_permission_service,
+)
 from app.repositories.local_contact import local_contact_repo
 from app.models.local_contacts import LocalContact
 
@@ -22,23 +30,26 @@ def require_account_permission(
     db_session: SessionDep,
     user: CurrentUserDep,
     customer_id: str,
-    error_message: str = "没有权限访问该客户"
+    error_message: str = "没有权限访问该客户",
+    *,
+    permission: str = CRM_ACCOUNT_VIEW_PERMISSION,
 ) -> None:
     """
-    权限检查辅助函数：验证用户是否有权限访问指定的客户
-    
+    权限检查辅助函数：验证用户是否有权限访问指定的客户。
+
+    走 OAuth ``POST /permission/check``。创建联系人传 ``permission=crm:contact:create``。
+
     如果权限检查失败，会抛出 HTTPException(403)
-    
-    Args:
-        db_session: 数据库会话
-        user: 当前用户
-        customer_id: 客户ID
-        error_message: 权限不足时的错误消息
     """
     if not customer_id:
         raise HTTPException(status_code=400, detail="customer_id 不能为空")
-    
-    if not local_contact_repo.check_account_permission(db_session, user.id, customer_id):
+
+    if not local_contact_repo.check_account_permission(
+        db_session,
+        user.id,
+        customer_id,
+        permission=permission,
+    ):
         raise HTTPException(status_code=403, detail=error_message)
 
 
@@ -46,33 +57,30 @@ def require_contact_permission(
     db_session: SessionDep,
     user: CurrentUserDep,
     contact_id: str,
-    error_message: str = "没有权限访问该联系人所属的客户"
+    error_message: str = "没有权限访问该联系人所属的客户",
+    *,
+    permission: str = CRM_CONTACT_VIEW_PERMISSION,
 ) -> LocalContact:
     """
-    权限检查辅助函数：验证用户是否有权限访问指定联系人所属的客户
-    
-    如果权限检查失败，会抛出 HTTPException(403) 或 HTTPException(404)
-    如果权限检查通过，返回联系人对象
-    
-    Args:
-        db_session: 数据库会话
-        user: 当前用户
-        contact_id: 联系人ID
-        error_message: 权限不足时的错误消息
-    
-    Returns:
-        联系人对象
+    本地联系人单条鉴权：只校验所属客户（resource=crm_account）。
+
+    不存在 → 404；无权限 → 403。
     """
     if not contact_id:
         raise HTTPException(status_code=400, detail="contact_id 不能为空")
-    
-    contact = local_contact_repo.get_by_id(db_session, contact_id, user.id)
+
+    contact = local_contact_repo.get_by_id(db_session, contact_id)
     if not contact:
         raise HTTPException(status_code=404, detail="联系人不存在或无权限访问")
-    
-    if not local_contact_repo.check_account_permission(db_session, user.id, contact.customer_id):
+
+    if not crm_contact_permission_service.check_account_access(
+        db_session,
+        user.id,
+        contact.customer_id,
+        permission=permission,
+    ):
         raise HTTPException(status_code=403, detail=error_message)
-    
+
     return contact
 
 
@@ -120,19 +128,21 @@ def create_local_contact(
 ) -> dict:
     """
     创建本地联系人
-    
-    权限要求：用户必须有权限访问指定的客户
+
+    权限要求：OAuth ``crm:contact:create`` + 对 ``customer_id`` 对应客户有数据权限
+    （``POST /permission/check``，resource=crm_account）
     """
     try:
         contact_data = contact.model_dump(exclude_none=True)
         customer_id = contact_data.get("customer_id")
         
-        # 权限检查
+        # 权限检查：OAuth /permission/check → crm:contact:create + resource crm_account
         require_account_permission(
             db_session=db_session,
             user=user,
             customer_id=customer_id,
-            error_message=f"没有权限访问该客户，无法创建联系人"
+            error_message="没有权限访问该客户，无法创建联系人",
+            permission=CRM_CONTACT_CREATE_PERMISSION,
         )
         
         new_contact = local_contact_repo.create(
@@ -173,16 +183,15 @@ def query_local_contacts(
 ) -> dict:
     """
     查询本地联系人列表
-    
-    权限要求：只返回用户有权限访问的客户下的联系人
-    
-    Args:
-        customer_id: 可选的客户ID过滤
-        name: 可选的姓名搜索（模糊匹配）
-        page: 页码，默认1
-        page_size: 每页数量，默认20，最大100
+
+    权限要求：
+    - 功能门控 OAuth ``crm:contact:view``
+    - 列表数据范围 OAuth ``data-scope(entity=crm_account)``（按所属客户）
     """
     try:
+        if not crm_contact_permission_service.gate_view(db_session, user.id):
+            raise HTTPException(status_code=403, detail="无联系人查看权限")
+
         # 参数验证
         if page < 1:
             page = 1
@@ -190,9 +199,9 @@ def query_local_contacts(
             page_size = 20
         if page_size > 100:
             page_size = 100
-        
+
         skip = (page - 1) * page_size
-        
+
         contacts, total = local_contact_repo.search(
             db_session=db_session,
             user_id=user.id,
@@ -201,13 +210,13 @@ def query_local_contacts(
             skip=skip,
             limit=page_size
         )
-        
+
         # 转换为响应格式
         items = []
         for contact in contacts:
             response = _contact_to_response(contact)
             items.append(response.model_dump())
-        
+
         return {
             "code": 0,
             "message": "success",
@@ -218,6 +227,8 @@ def query_local_contacts(
                 "total": total,
             },
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(e)
         raise InternalServerError()
@@ -231,20 +242,19 @@ def get_local_contact(
 ) -> dict:
     """
     获取单个本地联系人详情
-    
-    权限要求：用户必须有权限访问该联系人所属的客户
+
+    权限要求：OAuth ``crm:contact:view`` + resource=crm_account（所属客户）
     """
     try:
-        # 权限检查（会返回联系人对象）
         contact = require_contact_permission(
             db_session=db_session,
             user=user,
-            contact_id=contact_id
+            contact_id=contact_id,
+            permission=CRM_CONTACT_VIEW_PERMISSION,
         )
-        
-        # 转换为响应格式
+
         response = _contact_to_response(contact)
-        
+
         return {
             "code": 0,
             "message": "success",
@@ -266,33 +276,32 @@ def update_local_contact(
 ) -> dict:
     """
     更新本地联系人
-    
-    权限要求：用户必须有权限访问该联系人所属的客户
+
+    权限要求：OAuth ``crm:contact:edit`` + resource=crm_account（所属客户）
     """
     try:
-        # 权限检查（会返回联系人对象）
         require_contact_permission(
             db_session=db_session,
             user=user,
             contact_id=contact_id,
-            error_message=f"没有权限访问该联系人所属的客户，无法修改联系人"
+            error_message="没有权限访问该联系人所属的客户，无法修改联系人",
+            permission=CRM_CONTACT_EDIT_PERMISSION,
         )
-        
+
         contact_data = contact.model_dump(exclude_none=True)
-        
+
         updated_contact = local_contact_repo.update(
             db_session=db_session,
             contact_id=contact_id,
             contact_data=contact_data,
             user_id=user.id
         )
-        
+
         if not updated_contact:
             raise HTTPException(status_code=404, detail="联系人不存在或无权限访问")
-        
-        # 转换为响应格式
+
         response = _contact_to_response(updated_contact)
-        
+
         return {
             "code": 0,
             "message": "success",
@@ -302,7 +311,6 @@ def update_local_contact(
         raise
     except ValueError as e:
         error_msg = str(e)
-        # 检查是否是权限相关的错误
         if "permission" in error_msg.lower() or "权限" in error_msg:
             raise HTTPException(status_code=403, detail=error_msg)
         raise HTTPException(status_code=400, detail=error_msg)
@@ -319,27 +327,27 @@ def delete_local_contact(
 ) -> dict:
     """
     删除本地联系人（软删除）
-    
-    权限要求：用户必须有权限访问该联系人所属的客户
+
+    权限要求：OAuth ``crm:contact:delete`` + resource=crm_account（所属客户）
     """
     try:
-        # 权限检查（会返回联系人对象）
         require_contact_permission(
             db_session=db_session,
             user=user,
             contact_id=contact_id,
-            error_message=f"没有权限访问该联系人所属的客户，无法删除联系人"
+            error_message="没有权限访问该联系人所属的客户，无法删除联系人",
+            permission=CRM_CONTACT_DELETE_PERMISSION,
         )
-        
+
         success = local_contact_repo.delete(
             db_session=db_session,
             contact_id=contact_id,
             user_id=user.id
         )
-        
+
         if not success:
             raise HTTPException(status_code=404, detail="联系人不存在或无权限访问")
-        
+
         return {
             "code": 0,
             "message": "success",
@@ -362,33 +370,32 @@ def query_local_contacts_by_customer(
 ) -> dict:
     """
     根据客户ID获取该客户下的所有本地联系人
-    
-    权限要求：用户必须有权限访问指定的客户
-    
-    Args:
-        customer_id: 客户ID
-        page: 页码，默认1
-        page_size: 每页数量，默认100，最大100
+
+    权限要求（与独立列表对齐）：
+    - 功能门控 OAuth ``crm:contact:view``
+    - 单客户数据权限 ``crm:contact:view`` + resource=crm_account
     """
     try:
-        # 权限检查
+        if not crm_contact_permission_service.gate_view(db_session, user.id):
+            raise HTTPException(status_code=403, detail="无联系人查看权限")
+
         require_account_permission(
             db_session=db_session,
             user=user,
             customer_id=customer_id,
-            error_message=f"没有权限访问该客户，无法获取联系人列表"
+            error_message="没有权限访问该客户，无法获取联系人列表",
+            permission=CRM_CONTACT_VIEW_PERMISSION,
         )
-        
-        # 参数验证
+
         if page < 1:
             page = 1
         if page_size < 1:
             page_size = 100
         if page_size > 100:
             page_size = 100
-        
+
         skip = (page - 1) * page_size
-        
+
         contacts, total = local_contact_repo.get_by_customer_id(
             db_session=db_session,
             customer_id=customer_id,
@@ -396,13 +403,12 @@ def query_local_contacts_by_customer(
             skip=skip,
             limit=page_size
         )
-        
-        # 转换为响应格式
+
         items = []
         for contact in contacts:
             response = _contact_to_response(contact)
             items.append(response.model_dump())
-        
+
         return {
             "code": 0,
             "message": "success",

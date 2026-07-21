@@ -42,7 +42,8 @@ from app.repositories.visit_record import (
     VisitRecordRevisionError,
     visit_record_repo,
 )
-from app.services.crm_config_service import get_resolved_field_mapping
+from app.services.crm_config_service import build_customer_attribute_options, get_resolved_field_mapping
+from app.utils.crm_followup_object import FOLLOWUP_OBJECT_TYPES, resolve_followup_object_from_record
 from app.platforms.utils.url_parser import parse_dingtalk_transcribe_url
 from app.services.document_processing_service import document_processing_service
 from app.services.visit_record_card_push_status import (
@@ -108,14 +109,20 @@ def _commit_async_link_visit(
 def _validate_visit_record_first_stage(record: VisitRecordCreate) -> Optional[str]:
     """
     第一阶段校验策略：
-    1) 跟进对象（客户/合作伙伴）必须且只能填写一侧
+    1) 跟进对象（客户/合作伙伴/线索等）必须且只能填写一侧
     2) 外部协同名称/ID 需成对填写
     """
     has_account = _is_non_empty(record.account_name) or _is_non_empty(record.account_id)
     has_partner = _is_non_empty(record.partner_name) or _is_non_empty(record.partner_id)
-    if not (has_account or has_partner):
+    has_followup_object = _is_non_empty(record.followup_object_type) and (
+        _is_non_empty(record.followup_object_id) or _is_non_empty(record.followup_object_name)
+    )
+    if has_followup_object and (record.followup_object_type or "").strip() not in FOLLOWUP_OBJECT_TYPES:
+        return "无效的跟进对象类型"
+    filled = sum([has_account, has_partner, has_followup_object])
+    if filled == 0:
         return "请填写跟进对象"
-    if has_account and has_partner:
+    if filled > 1:
         return "跟进对象只能填写一个"
 
     has_external_name = _is_non_empty(record.external_collaboration_partner_name)
@@ -845,16 +852,14 @@ def get_visit_record_filter_options(
         field_mapping = get_resolved_field_mapping(
             db_session, report_type="跟进记录过滤选项"
         )
-        customer_attributes = {
-            key: label
-            for key in ("end_customer", "partner")
-            if (label := (field_mapping.get(key) or "").strip())
-        }
+        customer_attributes = build_customer_attribute_options(field_mapping)
         tag_options = crm_account_repo.list_all_distinct_tags(db_session)
         result_data = {
             **visit_record_options,
             "customer_levels": customer_levels,
             "customer_attributes": customer_attributes,
+            # 与 customer_attributes 同源（字段映射），不扫拜访表实际数据
+            "followup_object_types": list(customer_attributes.keys()),
             "tags": [{"id": tag.id, "name": tag.name} for tag in tag_options],
         }
 
@@ -1090,7 +1095,13 @@ def update_visit_record_comments(
             from app.utils.push_page_urls import build_visit_record_page_url
 
             jump_url = build_visit_record_page_url(record_id)
-            title = (getattr(record, "account_name", None) or getattr(record, "partner_name", None) or "") or ""
+            followup_obj = resolve_followup_object_from_record(record)
+            title = (
+                (followup_obj.object_name if followup_obj else None)
+                or getattr(record, "account_name", None)
+                or getattr(record, "partner_name", None)
+                or ""
+            )
             opp = (getattr(record, "opportunity_name", None) or "") or ""
             link_text = f"{title}  {opp}".strip() or "跟进记录"
 

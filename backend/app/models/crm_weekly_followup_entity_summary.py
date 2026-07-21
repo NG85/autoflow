@@ -13,7 +13,7 @@ class CRMWeeklyFollowupEntitySummary(UUIDBaseModel, UpdatableBaseModel, table=Tr
     """
     CRM 周跟进实体明细（用于后台列表展示与单行评论）
 
-    entity_type 优先级：opportunity -> account -> partner
+    entity_type 优先级：opportunity -> account -> partner -> lead
     """
 
     model_config = {"from_attributes": True}
@@ -25,7 +25,10 @@ class CRMWeeklyFollowupEntitySummary(UUIDBaseModel, UpdatableBaseModel, table=Tr
     department_id: Optional[str] = Field(default=None, sa_column=Column(String(100), nullable=True), description="团队/部门ID")
     department_name: str = Field(sa_column=Column(String(255), nullable=False), description="团队/部门名称")
 
-    entity_type: str = Field(sa_column=Column(String(50), nullable=False), description="实体类型(opportunity/account/partner)")
+    entity_type: str = Field(
+        sa_column=Column(String(50), nullable=False),
+        description="实体类型(opportunity/account/partner/lead)",
+    )
     entity_id: str = Field(sa_column=Column(String(255), nullable=False), description="实体ID（与 entity_type 对应）")
 
     account_id: Optional[str] = Field(default=None, sa_column=Column(String(255)), description="客户ID")
@@ -34,6 +37,21 @@ class CRMWeeklyFollowupEntitySummary(UUIDBaseModel, UpdatableBaseModel, table=Tr
     opportunity_name: Optional[str] = Field(default=None, sa_column=Column(String(255)), description="商机名称")
     partner_id: Optional[str] = Field(default=None, sa_column=Column(String(255)), description="合作伙伴ID")
     partner_name: Optional[str] = Field(default=None, sa_column=Column(String(255)), description="合作伙伴名称")
+    followup_object_type: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(50), nullable=True),
+        description="跟进对象类型(end_customer/partner/lead)",
+    )
+    followup_object_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255), nullable=True),
+        description="跟进对象ID",
+    )
+    followup_object_name: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255), nullable=True),
+        description="跟进对象名称",
+    )
 
     owner_user_id: Optional[str] = Field(default=None, sa_column=Column(String(64)), description="负责销售用户ID（recorder_id）")
     owner_name: Optional[str] = Field(default=None, sa_column=Column(String(255)), description="负责销售姓名")
@@ -73,6 +91,11 @@ class CRMWeeklyFollowupEntitySummary(UUIDBaseModel, UpdatableBaseModel, table=Tr
         Index("idx_weekly_followup_entity_owner", "owner_user_id"),
         Index("idx_weekly_followup_entity_closing_date", "expected_closing_date"),
         Index("idx_weekly_followup_entity_forecast_amount", "forecast_amount"),
+        Index(
+            "idx_weekly_followup_entity_followup_object",
+            "followup_object_type",
+            "followup_object_id",
+        ),
     )
 
 

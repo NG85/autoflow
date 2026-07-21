@@ -93,6 +93,9 @@ class FollowUpContextBuilder:
             "account_id": _optional_str(getattr(record, "account_id", None)),
             "opportunity_id": _optional_str(getattr(record, "opportunity_id", None)),
             "partner_id": _optional_str(getattr(record, "partner_id", None)),
+            "followup_object_type": _optional_str(getattr(record, "followup_object_type", None)),
+            "followup_object_id": _optional_str(getattr(record, "followup_object_id", None)),
+            "followup_object_name": _optional_str(getattr(record, "followup_object_name", None)),
             "is_manager": is_manager,
             "is_subordinate_creator": is_subordinate_creator,
         }

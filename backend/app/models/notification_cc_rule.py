@@ -11,6 +11,7 @@ from app.models.base import UpdatableBaseModel
 
 EVENT_TYPE_VISIT_RECORD_CARD = "visit_record_card"
 SCOPE_TYPE_USER = "user"
+SCOPE_TYPE_DEPARTMENT = "department"
 SCOPE_TYPE_GLOBAL = "global"
 
 
@@ -19,7 +20,11 @@ class NotificationCcRule(UpdatableBaseModel, SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     event_type: str = Field(max_length=64, index=True, description="事件类型，如 visit_record_card")
-    scope_type: str = Field(max_length=32, index=True, description="匹配维度：user / global")
+    scope_type: str = Field(
+        max_length=32,
+        index=True,
+        description="匹配维度：user / department / global",
+    )
     scope_user_id: Optional[UUID] = Field(
         default=None,
         foreign_key="users.id",
@@ -29,7 +34,12 @@ class NotificationCcRule(UpdatableBaseModel, SQLModel, table=True):
     scope_department_id: Optional[str] = Field(
         default=None,
         max_length=255,
-        description="预留：部门维度",
+        index=True,
+        description="scope_type=department 时：录入人主部门 department_mirror.unique_id",
+    )
+    include_children: bool = Field(
+        default=False,
+        description="scope_type=department 时：为 true 则录入人所在部门为配置部门的子部门也命中",
     )
     priority: int = Field(default=0, description="管理端排序与日志，不参与过滤")
     enabled: bool = Field(default=True, index=True)

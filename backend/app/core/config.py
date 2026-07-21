@@ -75,6 +75,7 @@ class WritebackMode(str, enum.Enum):
     APAC = "APAC"  # APAC Salesforce
     OLM = "OLM"  # OLM 销售易
     CHAITIN = "CHAITIN"  # CHAITIN 长亭自研
+    WEBEYE = "WEBEYE"  # WEBEYE 网眼简道云
 
 
 class WritebackFrequency(str, enum.Enum):
@@ -403,7 +404,7 @@ class Settings(BaseSettings):
     
     # Ark LLM API
     ARK_API_KEY: str = "b1529268-82ea-407a-bd79-d01514a2ed60"
-    ARK_MODEL: str = "ep-20260108150839-t2z4c"
+    ARK_MODEL: str = "ep-20260720140407-qnj9t"
     ARK_API_URL: str = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
     ARK_HTTP_CONNECT_TIMEOUT: float = 10.0
     ARK_HTTP_READ_TIMEOUT: float = 180.0
