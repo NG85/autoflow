@@ -214,6 +214,9 @@ class Settings(BaseSettings):
     FOLLOW_UP_OAUTH_GATE_ENABLED: bool = True
     # W4 follow_up：列表 data-scope 替换遗留 report51/汇报链过滤
     FOLLOW_UP_OAUTH_DATA_SCOPE_ENABLED: bool = True
+    # W6 chats：SIA 问答 / 客户拜访攻略列表按 OAuth data-scope 过滤
+    # （enablement_sia_history / enablement_visit_guide_history；关闭时回退“仅本人”旧逻辑）
+    CHAT_OAUTH_SCOPE_ENABLED: bool = True
     # OAuth service connectivity (read-only; must not break /healthz liveness)
     OAUTH_HEALTH_PROBE_ENABLED: bool = True
     OAUTH_HEALTH_PROBE_TIMEOUT_SECONDS: float = 3.0

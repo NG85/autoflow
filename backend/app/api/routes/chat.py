@@ -387,7 +387,7 @@ def list_chats(
 def get_chat(session: SessionDep, user: OptionalUserDep, chat_id: UUID):
     chat = chat_repo.must_get(session, chat_id)
 
-    if not user_can_view_chat(chat, user):
+    if not user_can_view_chat(chat, user, session):
         raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Access denied")
 
     return {
@@ -442,7 +442,7 @@ def get_chat_subgraph(session: SessionDep, user: OptionalUserDep, chat_message_i
     try:
         chat_message = chat_repo.must_get_message(session, chat_message_id)
 
-        if not user_can_view_chat(chat_message.chat, user):
+        if not user_can_view_chat(chat_message.chat, user, session):
             raise HTTPException(
                 status_code=HTTPStatus.FORBIDDEN, detail="Access denied"
             )
@@ -463,7 +463,7 @@ def get_recommended_questions(
     try:
         chat_message = chat_repo.must_get_message(session, chat_message_id)
 
-        if not user_can_view_chat(chat_message.chat, user):
+        if not user_can_view_chat(chat_message.chat, user, session):
             raise HTTPException(
                 status_code=HTTPStatus.FORBIDDEN, detail="Access denied"
             )
@@ -483,7 +483,7 @@ def refresh_recommended_questions(
     try:
         chat_message = chat_repo.must_get_message(session, chat_message_id)
 
-        if not user_can_view_chat(chat_message.chat, user):
+        if not user_can_view_chat(chat_message.chat, user, session):
             raise HTTPException(
                 status_code=HTTPStatus.FORBIDDEN, detail="Access denied"
             )
