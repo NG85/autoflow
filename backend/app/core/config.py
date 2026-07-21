@@ -217,6 +217,10 @@ class Settings(BaseSettings):
     # W6 chats：SIA 问答 / 客户拜访攻略列表按 OAuth data-scope 过滤
     # （enablement_sia_history / enablement_visit_guide_history；关闭时回退“仅本人”旧逻辑）
     CHAT_OAUTH_SCOPE_ENABLED: bool = True
+    # W6 日报/周报：生成阶段团队统计口径按 OAuth org_scope（daily_report_team / weekly_report_team）
+    # 以部门负责人（user_department_relation.is_leader）为锚点展开汇报链人群；
+    # 关闭或解析失败时回退按部门成员表展开
+    REPORT_OAUTH_SCOPE_ENABLED: bool = True
     # OAuth service connectivity (read-only; must not break /healthz liveness)
     OAUTH_HEALTH_PROBE_ENABLED: bool = True
     OAUTH_HEALTH_PROBE_TIMEOUT_SECONDS: float = 3.0
