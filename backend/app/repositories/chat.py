@@ -8,8 +8,9 @@ from sqlmodel import select, Session, func, case, desc, col
 from fastapi_pagination import Params, Page
 from fastapi_pagination.ext.sqlmodel import paginate
 
-from app.models import Chat, User, ChatMessage, ChatUpdate, ChatFilters, ChatOrigin
+from app.models import Chat, ChatItem, User, ChatMessage, ChatUpdate, ChatFilters, ChatOrigin
 from app.repositories.base_repo import BaseRepo
+from app.repositories.user_profile import user_profile_repo
 from app.exceptions import ChatNotFound, ChatMessageNotFound
 from app.services.oauth_service import oauth_client
 
@@ -24,7 +25,7 @@ class ChatRepo(BaseRepo):
         browser_id: str | None,
         filters: ChatFilters,
         params: Params | None = Params(),
-    ) -> Page[Chat]:
+    ) -> Page[ChatItem]:
         query = select(Chat).where(Chat.deleted_at == None)
         if user:
             can_view_all_client_visit_guide = False
@@ -64,7 +65,26 @@ class ChatRepo(BaseRepo):
             query = query.where(Chat.chat_type == filters.chat_type)
 
         query = query.order_by(Chat.created_at.desc())
-        return paginate(session, query, params)
+
+        def _transform(chats: List[Chat]) -> List[ChatItem]:
+            user_ids = list({chat.user_id for chat in chats if chat.user_id})
+            name_by_user_id: Dict[UUID, str] = {}
+            if user_ids:
+                profiles = user_profile_repo.get_by_user_ids(session, user_ids)
+                name_by_user_id = {
+                    profile.user_id: profile.name
+                    for profile in profiles
+                    if profile.user_id and profile.name
+                }
+
+            items: List[ChatItem] = []
+            for chat in chats:
+                item = ChatItem.model_validate(chat)
+                item.user_name = name_by_user_id.get(chat.user_id)
+                items.append(item)
+            return items
+
+        return paginate(session, query, params, transformer=_transform)
 
     def get(
         self,

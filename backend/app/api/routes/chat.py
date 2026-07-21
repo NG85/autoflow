@@ -18,7 +18,7 @@ from app.rag.chat.chat_flow import ChatFlow
 from app.rag.retrievers.knowledge_graph.schema import KnowledgeGraphRetrievalResult
 from app.rag.chat.stream_protocol import encode_chat_stream, extract_chat_id_from_stream_item
 from app.repositories import chat_repo
-from app.models import Chat, ChatUpdate
+from app.models import Chat, ChatItem, ChatUpdate
 
 from app.rag.chat.chat_service import get_final_chat_result
 from app.models import Chat, ChatUpdate, ChatFilters
@@ -378,7 +378,7 @@ def list_chats(
     user: OptionalUserDep,
     filters: Annotated[ChatFilters, Query()],
     params: Params = Depends(),
-) -> Page[Chat]:
+) -> Page[ChatItem]:
     browser_id = request.state.browser_id
     return chat_repo.paginate(session, user, browser_id, filters, params)
 
