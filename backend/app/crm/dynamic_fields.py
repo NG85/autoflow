@@ -112,8 +112,6 @@ def generate_dynamic_fields_array(visit_record: Dict[str, Any]) -> List[Dict[str
         "visit_purpose": "拜访目的",
         "record_type": "记录类型",
         "followup_type": "跟进类型",
-        "followup_stage": "跟进阶段",
-        "field_check_in_name": "关联外勤打卡",
         "location": "拜访地点",
         "taken_at": "拍摄时间",
     }
@@ -123,8 +121,6 @@ def generate_dynamic_fields_array(visit_record: Dict[str, Any]) -> List[Dict[str
         "visit_purpose": "Visit Purpose",
         "record_type": "Record Type",
         "followup_type": "Follow-up Type",
-        "followup_stage": "Follow-up Stage",
-        "field_check_in_name": "Related Field Check-in",
         "location": "Visit Location",
         "taken_at": "Taken At",
     }
