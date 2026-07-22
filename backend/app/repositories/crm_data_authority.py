@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Iterable, Optional, Sequence
 
 from sqlalchemy import exists, select as sa_select
 from sqlmodel import Session
@@ -38,6 +38,40 @@ class CrmDataAuthorityRepo(BaseRepo):
             .where(CrmDataAuthority.data_id == data_id_column)
             .where(self._not_deleted_condition())
         )
+
+    def list_authority_rows(
+        self,
+        db_session: Session,
+        *,
+        crm_ids: Sequence[str],
+        authority_types: Optional[Iterable[str]] = None,
+        max_rows: int = 50000,
+    ) -> list[tuple[str, str]]:
+        """Materialize ``(type, data_id)`` rows for the given CRM user ids.
+
+        Used by RAG Chat: OAuth data-scope supplies ``crm_ids`` (self + org_scope),
+        then IDs are loaded from the mirror for metadata IN filters.
+        """
+        ids = [str(cid).strip() for cid in crm_ids if str(cid).strip()]
+        if not ids or max_rows <= 0:
+            return []
+
+        types = [str(t).strip() for t in (authority_types or []) if str(t).strip()]
+        stmt = (
+            sa_select(CrmDataAuthority.type, CrmDataAuthority.data_id)
+            .where(CrmDataAuthority.crm_id.in_(ids))
+            .where(self._not_deleted_condition())
+        )
+        if types:
+            stmt = stmt.where(CrmDataAuthority.type.in_(types))
+        stmt = stmt.limit(int(max_rows) + 1)
+
+        rows: list[tuple[str, str]] = []
+        for data_type, data_id in db_session.exec(stmt):
+            if not data_type or not data_id:
+                continue
+            rows.append((str(data_type), str(data_id)))
+        return rows
 
 
 crm_data_authority_repo = CrmDataAuthorityRepo()
