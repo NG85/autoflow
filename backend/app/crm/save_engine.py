@@ -1401,6 +1401,7 @@ def extract_risk_info_from_content(
             temperature=0,
             # response_format={"type": "json_object"},
         )
+        logger.info("Risk extraction result: %s", result)
         return _normalize_risk_info(result)
     except Exception as e:
         logger.warning(f"提取风险信息失败: {e}")
