@@ -110,6 +110,11 @@ def merge_append_crm_comments(
     return merged, appended
 
 
+def has_nonempty_comments(comments_raw: object) -> bool:
+    """判断 comments 数组是否非空（不区分 comment / task）。"""
+    return isinstance(comments_raw, list) and len(comments_raw) > 0
+
+
 def _comment_created_at_sort_key(item: Dict[str, Any]) -> tuple[int, str]:
     v = str(item.get("created_at") or "")
     try:
