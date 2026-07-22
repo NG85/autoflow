@@ -12,6 +12,9 @@ class CRMDynamicFieldsMixin:
     # 动态字段 - 用于推送卡片时的dynamic_fields参数
     record_type: Optional[str] = Field(default=None, description="记录类型")
     visit_purpose: Optional[str] = Field(default=None, description="拜访目的")
+    followup_type: Optional[str] = Field(default=None, description="跟进类型")
+    followup_stage: Optional[str] = Field(default=None, description="跟进阶段")
+    field_check_in_name: Optional[str] = Field(default=None, description="关联外勤打卡名称")
     visit_start_time: Optional[str] = Field(default=None, description="拜访开始时间")
     visit_end_time: Optional[str] = Field(default=None, description="拜访结束时间")
     location: Optional[str] = Field(default=None, description="拜访地点")
