@@ -498,6 +498,10 @@ def fill_sales_visit_record_fields(sales_visit_record, db_session):
         "visit_end_time",
         "record_type",
         "visit_purpose",
+        "followup_type",
+        "followup_stage",
+        "field_check_in_id",
+        "field_check_in_name",
     }
     for k, v in sales_visit_record.items():
         if v is None and k not in skip_none_to_dash:
