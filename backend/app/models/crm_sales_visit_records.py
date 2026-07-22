@@ -46,6 +46,26 @@ class CRMSalesVisitRecord(SQLModel, table=True):
     counterpart_location: Optional[str] = Field(nullable=True, max_length=255, description="拜访地点")
     visit_communication_method: Optional[str] = Field(nullable=True, max_length=255, description="拜访及沟通方式")
     visit_purpose: Optional[str] = Field(nullable=True, max_length=255, description="拜访目的")
+    followup_type: Optional[str] = Field(
+        nullable=True,
+        max_length=100,
+        description="跟进类型（前端固定选项，如新客户跟进/拜访、首次BD拜访等）",
+    )
+    followup_stage: Optional[str] = Field(
+        nullable=True,
+        max_length=100,
+        description="跟进阶段（前端固定选项；是否必填由前端按环境控制）",
+    )
+    field_check_in_id: Optional[str] = Field(
+        nullable=True,
+        max_length=255,
+        description="关联外勤打卡ID（前端传入，后端原样存储）",
+    )
+    field_check_in_name: Optional[str] = Field(
+        nullable=True,
+        max_length=255,
+        description="关联外勤打卡名称（前端传入，后端原样存储）",
+    )
     communication_duration: Optional[str] = Field(nullable=True, max_length=255, description="沟通时长")
     expectation_achieved: Optional[str] = Field(nullable=True, max_length=255, description="是/否达成预期")
     followup_record: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="跟进记录")

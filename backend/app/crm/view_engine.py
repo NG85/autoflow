@@ -12,12 +12,9 @@ from sqlalchemy.orm import joinedload, load_only, contains_eager
 
 from app.models.crm_opportunities import CRMOpportunity
 from app.models.crm_accounts import CRMAccount
-from app.repositories.crm_data_authority import crm_data_authority_repo
+from app.permissions.crm_opportunity_permission_service import crm_opportunity_permission_service
 from app.repositories.department_mirror import department_mirror_repo
-from app.repositories.user_profile import user_profile_repo
 from app.repositories.user_department_relation import user_department_relation_repo
-from app.repositories.visit_record import visit_record_repo
-from app.rag.chat.crm_authority import CrmDataType
 from app.api.routes.crm.models import (
     ViewType,
     FilterOperator,
@@ -282,24 +279,11 @@ class CrmViewEngine:
         # 构建基础查询
         base_where = []
         
-        # 应用权限过滤
+        # OAuth data-scope(entity=crm_opportunity) → SQL WHERE
         if user_id:
-            # 检查是否有权限访问所有CRM数据（如果是，不需要过滤权限）
-            can_access_all_crm = visit_record_repo.can_access_all_crm_data(user_id, db_session)
-            
-            if not can_access_all_crm:
-                crm_user_id = user_profile_repo.get_crm_user_id_by_user_id(db_session, user_id)
-                if not crm_user_id:
-                    logger.info(f"User {user_id} has no crm_user_id; no authorized items.")
-                    return {}
-                if not crm_data_authority_repo.has_any_authority(db_session, crm_user_id, CrmDataType.OPPORTUNITY):
-                    logger.info(f"No authorized items (filter opportunity on crm_data_authority table) found for user {user_id} and crm_user_id {crm_user_id}")
-                    return {}
-                base_where.append(
-                    crm_data_authority_repo.build_exists_condition(
-                        crm_user_id, CrmDataType.OPPORTUNITY, self.model.unique_id
-                    )
-                )
+            base_where.append(
+                crm_opportunity_permission_service.list_perm_where(db_session, user_id)
+            )
         
         # 获取各字段的唯一值
         options = {
@@ -448,21 +432,10 @@ class CrmViewEngine:
             query = query.options(load_only(*opportunity_fields_to_query))
         
         if user_id:
-            # 检查是否有权限访问所有CRM数据（如果是，不需要过滤权限）
-            can_access_all_crm = visit_record_repo.can_access_all_crm_data(user_id, db_session)
-            
-            if not can_access_all_crm:
-                crm_user_id = user_profile_repo.get_crm_user_id_by_user_id(db_session, user_id)
-                if not crm_user_id:
-                    logger.info(f"User {user_id} has no crm_user_id; no authorized items.")
-                    return select(self.model).where(False)
-                if not crm_data_authority_repo.has_any_authority(db_session, crm_user_id, CrmDataType.OPPORTUNITY):
-                    logger.info(f"No authorized items found for user {user_id}")
-                    return select(self.model).where(False)
-
-                query = query.filter(
-                    crm_data_authority_repo.build_exists_condition(crm_user_id, CrmDataType.OPPORTUNITY, self.model.unique_id)
-                )
+            # OAuth data-scope(entity=crm_opportunity) → SQL WHERE
+            query = query.where(
+                crm_opportunity_permission_service.list_perm_where(db_session, user_id)
+            )
         
         if request.filters:
             for filter_condition in request.filters:

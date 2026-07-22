@@ -195,12 +195,14 @@ WHERE event_type = 'visit_record_card'
 
 ### department_review 群
 
-部门配置了 `department_review` 群时：
+部门配置了会收拜访卡片的群（`department_review` / `department_review_visits` / `all`）时：
 
 - 个人列表中的 `leader`、`cc_scope=global` / `department` 的 `configured_cc` 被移除；
 - leader 版卡片改推 review 群（管理层、global 与 department 级抄送受众一般在群内）；
 - 仅 `cc_scope=user` 的 `configured_cc`（按具体销售的个性化抄送）仍推送给个人；
-- 个人推送始终保留 `recorder` 与 `collaborative_participant`。
+- 个人推送始终保留 `recorder` 与 `collaborative_participant`；
+- `department_review_visits` 只收拜访卡片，部门日/周报仍按原路由（个人或 `department_review_reports` 群）；
+- `department_review_reports` 只收部门日/周报，不参与拜访推送。
 
 ### 汇报链 early-return
 
@@ -265,7 +267,7 @@ WHERE event_type = 'visit_record_card'
 5. **open_id 去重**：同一人既是 leader 又是 configured_cc，只推一张，模板取高优先级 type。
 6. **汇报链为空**：仍有配置抄送（含 global / department）。
 7. **无 profile / 无 oauth 账号**：跳过该抄送人，不影响其他人。
-8. **department_review 群**：leader / global / department 抄送走群；仅 `cc_scope=user` 的 configured_cc 仍走个人。
+8. **department_review 群**：leader / global / department 抄送走群；仅 `cc_scope=user` 的 configured_cc 仍走个人；`department_review_visits` 仅收拜访。
 
 ---
 
@@ -290,3 +292,4 @@ WHERE event_type = 'visit_record_card'
 | OAuth 全局名单 | 已移除；公司旁观改配 global 规则 | 2026-07-15 |
 | 部门维度 | `scope_type=department` + `include_children`；cc_scope 优先级 user > department > global | 2026-07-17 |
 | department_review 与部门抄送 | `cc_scope=department` 视作部门级旁观，与 global 一样改由 review 群接收，不再推个人；仅 `user` 保留个人推送 | 2026-07-17 |
+| department_review_visits | 新增仅收拜访上级卡片的群类型，部门日/周报路由不变 | 2026-07-22 |

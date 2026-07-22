@@ -1,4 +1,5 @@
 import enum
+import logging
 from uuid import UUID
 from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime, UTC, date, timedelta
@@ -8,10 +9,29 @@ from sqlmodel import select, Session, func, case, desc, col
 from fastapi_pagination import Params, Page
 from fastapi_pagination.ext.sqlmodel import paginate
 
-from app.models import Chat, User, ChatMessage, ChatUpdate, ChatFilters, ChatOrigin
+from app.core.config import settings
+from app.models import Chat, ChatItem, User, ChatMessage, ChatUpdate, ChatFilters, ChatOrigin
+from app.permissions.chat_permission_service import chat_permission_service
 from app.repositories.base_repo import BaseRepo
+from app.repositories.user_profile import user_profile_repo
 from app.exceptions import ChatNotFound, ChatMessageNotFound
-from app.services.oauth_service import oauth_client
+
+logger = logging.getLogger(__name__)
+
+
+def _to_uuid_list(user_ids: tuple[str, ...] | List[str]) -> List[UUID]:
+    """owner users.id 字符串 → UUID 列表（跳过非法值，去重保序）。"""
+    result: List[UUID] = []
+    seen: set[UUID] = set()
+    for uid in user_ids:
+        try:
+            parsed = uid if isinstance(uid, UUID) else UUID(str(uid))
+        except (ValueError, TypeError):
+            continue
+        if parsed not in seen:
+            seen.add(parsed)
+            result.append(parsed)
+    return result
 
 
 class ChatRepo(BaseRepo):
@@ -24,24 +44,12 @@ class ChatRepo(BaseRepo):
         browser_id: str | None,
         filters: ChatFilters,
         params: Params | None = Params(),
-    ) -> Page[Chat]:
+    ) -> Page[ChatItem]:
         query = select(Chat).where(Chat.deleted_at == None)
         if user:
-            can_view_all_client_visit_guide = False
-            if filters.chat_type == "client_visit_guide":
-                try:
-                    can_view_all_client_visit_guide = (
-                        oauth_client.check_user_has_permission(
-                            user_id=user.id,
-                            permission="chats:client_visit_guide:company:view",
-                        )
-                    )
-                except Exception:
-                    can_view_all_client_visit_guide = False
-
-            if not user.is_superuser and not can_view_all_client_visit_guide:
-                # Logged-in users: list only chats owned by this account (no browser_id fallback).
-                query = query.where(Chat.user_id == user.id)
+            if not user.is_superuser:
+                # Logged-in users: no browser_id fallback; scope by OAuth data-scope.
+                query = self._apply_list_scope(session, user, filters, query)
         else:
             query = query.where(Chat.browser_id == browser_id, Chat.user_id == None)
 
@@ -64,7 +72,70 @@ class ChatRepo(BaseRepo):
             query = query.where(Chat.chat_type == filters.chat_type)
 
         query = query.order_by(Chat.created_at.desc())
-        return paginate(session, query, params)
+
+        def _transform(chats: List[Chat]) -> List[ChatItem]:
+            user_ids = list({chat.user_id for chat in chats if chat.user_id})
+            name_by_user_id: Dict[UUID, str] = {}
+            if user_ids:
+                profiles = user_profile_repo.get_by_user_ids(session, user_ids)
+                name_by_user_id = {
+                    profile.user_id: profile.name
+                    for profile in profiles
+                    if profile.user_id and profile.name
+                }
+
+            items: List[ChatItem] = []
+            for chat in chats:
+                item = ChatItem.model_validate(chat)
+                item.user_name = name_by_user_id.get(chat.user_id)
+                items.append(item)
+            return items
+
+        return paginate(session, query, params, transformer=_transform)
+
+    def _apply_list_scope(
+        self,
+        session: Session,
+        user: User,
+        filters: ChatFilters,
+        query,
+    ):
+        """按 chat_type 对登录（非超管）用户列表应用可见范围。
+
+        - default / client_visit_guide 且开关开启：按 OAuth data-scope 过滤
+          （global 角色看全部、主管看下级、销售看本人）。
+        - 其余 chat_type、开关关闭、或 data-scope 解析失败/无授权：回退“仅本人”。
+
+        与详情 ``user_can_view_chat`` 保持一致：本人的会话始终可见，故 owner 集合
+        永远并入当前用户；global 之外均在此基础上叠加 data-scope 展开的下属。
+        """
+        chat_type = filters.chat_type
+        use_oauth = (
+            settings.CHAT_OAUTH_SCOPE_ENABLED
+            and chat_permission_service.resolve_entity(chat_type) is not None
+        )
+        if not use_oauth:
+            return query.where(Chat.user_id == user.id)
+
+        try:
+            scope = chat_permission_service.build_scope(session, user.id, chat_type)
+        except Exception:
+            logger.exception(
+                "chat data-scope resolve failed, fallback to own-only, "
+                "user_id=%s chat_type=%s",
+                user.id,
+                chat_type,
+            )
+            return query.where(Chat.user_id == user.id)
+
+        if scope.allow_all:
+            return query
+
+        # deny / 无授权 / 仅 self：始终包含本人，避免服务故障或漏配导致看不到自己的会话
+        owner_uuids = _to_uuid_list(scope.owner_user_ids)
+        if user.id not in owner_uuids:
+            owner_uuids.append(user.id)
+        return query.where(Chat.user_id.in_(owner_uuids))
 
     def get(
         self,

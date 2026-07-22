@@ -4,15 +4,20 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from pydantic import BaseModel
 from app.core.config import settings
 from app.rag.types import CrmDataType
-# from cachetools import TTLCache, cached
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from app.core.db import engine
-from app.models.crm_data_authority import CrmDataAuthority
+from app.repositories.crm_data_authority import crm_data_authority_repo
 from app.repositories.user_profile import user_profile_repo
-from app.repositories.visit_record import visit_record_repo
+from app.services.oauth_service import oauth_client
 
 logger = logging.getLogger(__name__)
+
+# RAG 知识过滤主要依赖客户/商机；data-scope 取这两类后按 crm_ids 物化 mirror。
+_RAG_SCOPE_ENTITIES: tuple[str, ...] = (
+    CrmDataType.ACCOUNT.value,
+    CrmDataType.OPPORTUNITY.value,
+)
 
     
 class CRMAuthorityItem(BaseModel):
@@ -81,76 +86,174 @@ class CRMAuthority(BaseModel):
         """Check if there is any authorized data"""
         return len(self.authorized_items) == 0 or all(len(ids) == 0 for ids in self.authorized_items.values())
 
-# @cached(cache=TTLCache(maxsize=30, ttl=60 * 60 * 3), key=lambda user_id, crm_type=None: (str(user_id), crm_type))
+
+def _scope_filters(scope: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(scope, dict):
+        return []
+    filters = scope.get("filters")
+    return filters if isinstance(filters, list) else []
+
+
+def _source(item: dict[str, Any]) -> str:
+    value = item.get("source")
+    return str(value).strip() if value is not None else ""
+
+
+def _get_bool(item: dict[str, Any], *keys: str) -> bool:
+    for key in keys:
+        value = item.get(key)
+        if value is True:
+            return True
+        if isinstance(value, str) and value.lower() == "true":
+            return True
+    return False
+
+
+def _get_str(item: dict[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = item.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return None
+
+
+def _get_str_list(item: dict[str, Any], *keys: str) -> list[str]:
+    for key in keys:
+        value = item.get(key)
+        if isinstance(value, list):
+            return [str(v).strip() for v in value if str(v).strip()]
+    return []
+
+
+def scope_has_global(filters: list[dict[str, Any]] | None) -> bool:
+    """OAuth data-scope ``global.enabled`` → RAG 不过滤 CRM（等同旧 admin）。"""
+    for item in filters or []:
+        if _source(item) == "global" and _get_bool(item, "enabled"):
+            return True
+    return False
+
+
+def extract_mirror_crm_ids(filters: list[dict[str, Any]] | None) -> list[str]:
+    """从 data-scope filters 提取 mirror 用的 crm_id 集合（本人 + org_scope）。"""
+    ids: list[str] = []
+    seen: set[str] = set()
+    for item in filters or []:
+        src = _source(item)
+        if src == "crm_data_authority":
+            crm_id = _get_str(item, "crmId", "crm_id")
+            if crm_id and crm_id not in seen:
+                seen.add(crm_id)
+                ids.append(crm_id)
+        elif src == "org_scope" and _get_bool(item, "mirrorMatch", "mirror_match"):
+            for org_id in _get_str_list(item, "crmUserIds", "crm_user_ids"):
+                if org_id not in seen:
+                    seen.add(org_id)
+                    ids.append(org_id)
+    return ids
+
+
+def _resolve_scope_entities(crm_type: Optional[CrmDataType]) -> list[str]:
+    if crm_type is None:
+        return list(_RAG_SCOPE_ENTITIES)
+    if crm_type.value in _RAG_SCOPE_ENTITIES:
+        return [crm_type.value]
+    # 其他 CRM 类型：仍用 account+opportunity 的 org/self crm_ids 去 mirror 物化该 type
+    return list(_RAG_SCOPE_ENTITIES)
+
+
 def get_user_crm_authority(user_id: UUID, crm_type: Optional[CrmDataType] = None) -> Tuple[CRMAuthority, str]:
-    """Get the CRM data access permission of the user"""
-    
+    """Get CRM data access permission for RAG filtering.
+
+    真源：OAuth ``data-scope``（crm_account / crm_opportunity）→ 按 filters 中的
+    crm_ids 从 ``crm_data_authority`` 物化 ID 集合，供 metadata IN / 后滤使用。
+    ``global`` → 返回空 authority + role=admin（下游不施加 CRM 过滤）。
+    """
     authority = CRMAuthority()
-    role = None  # 初始化 role 变量
+    role = None
     try:
         with Session(engine) as session:
-            # 1) 检查用户是否有权限访问所有 CRM 数据（含 OAuth 公司级权限/角色及 UserProfile admin 兜底）
-            if visit_record_repo.can_access_all_crm_data(user_id, session):
-                logger.info("User %s can access all CRM data.", user_id)
-                role = "admin"
-                # Admin can access all CRM data; no need to materialize authorized id set.
-                return authority, role
-            
-            # 2) Map system user UUID -> crm_user_id via repo
             crm_user_id = user_profile_repo.get_crm_user_id_by_user_id(session, user_id)
-            if not crm_user_id:
-                logger.info(f"User {user_id} has no crm_user_id; no authorized items.")
+
+            scope_entities = _resolve_scope_entities(crm_type)
+            scopes: list[dict[str, Any]] = []
+            for entity in scope_entities:
+                scopes.append(
+                    oauth_client.get_data_scope(
+                        user_id=user_id,
+                        crm_user_id=crm_user_id,
+                        entity=entity,
+                    )
+                )
+
+            if scopes and all(scope_has_global(_scope_filters(s)) for s in scopes):
+                logger.info(
+                    "User %s has global CRM data-scope for %s; skip materializing authority.",
+                    user_id,
+                    scope_entities,
+                )
+                return authority, "admin"
+
+            crm_ids: list[str] = []
+            seen_ids: set[str] = set()
+            for scope in scopes:
+                for cid in extract_mirror_crm_ids(_scope_filters(scope)):
+                    if cid not in seen_ids:
+                        seen_ids.add(cid)
+                        crm_ids.append(cid)
+
+            if not crm_ids:
+                logger.info(
+                    "User %s has no mirror crm_ids from data-scope entities=%s; empty authority.",
+                    user_id,
+                    scope_entities,
+                )
                 return authority, None
-            
-            # 3) Query authority table by crm_id           
-            stmt = select(CrmDataAuthority.type, CrmDataAuthority.data_id).where(
-                CrmDataAuthority.crm_id == str(crm_user_id),
-            )
-            # filter deleted rows (NULL treated as not deleted)
-            stmt = stmt.where(
-                (CrmDataAuthority.delete_flag.is_(None)) | (CrmDataAuthority.delete_flag == False)  # noqa: E712
-            )
-            if crm_type:
-                stmt = stmt.where(CrmDataAuthority.type == crm_type.value)
 
             max_rows = max(int(getattr(settings, "CRM_AUTHORITY_MAX_ROWS", 50000)), 1)
-            stmt = stmt.limit(max_rows + 1)
+            authority_types: Optional[list[str]] = [crm_type.value] if crm_type else None
+            rows = crm_data_authority_repo.list_authority_rows(
+                session,
+                crm_ids=crm_ids,
+                authority_types=authority_types,
+                max_rows=max_rows,
+            )
+            if len(rows) > max_rows:
+                authority.truncated = True
+                rows = rows[:max_rows]
+                logger.warning(
+                    "CRM authority rows exceeded limit (max_rows=%s) for user=%s "
+                    "crm_ids=%s crm_type=%s. Authority set truncated; safe but may reduce recall.",
+                    max_rows,
+                    user_id,
+                    len(crm_ids),
+                    crm_type.value if crm_type else None,
+                )
 
-            count = 0
-            for data_type, data_id in session.exec(stmt):
-                if not data_type or not data_id:
-                    continue
+            for data_type, data_id in rows:
                 try:
                     mapped_type = CrmDataType(data_type)
                 except ValueError:
-                    logger.warning(f"Unknown CRM data type from table crm_data_authority: {data_type}")
+                    logger.warning(
+                        "Unknown CRM data type from table crm_data_authority: %s",
+                        data_type,
+                    )
                     continue
                 authority.authorized_items.setdefault(mapped_type, set()).add(data_id)
-                count += 1
-                if count >= max_rows:
-                    # If there are still more rows, we will have truncated the result set.
-                    # We don't attempt to compute the exact total count to avoid expensive COUNT(*).
-                    authority.truncated = True
-                    logger.warning(
-                        "CRM authority rows exceeded limit (max_rows=%s) for user=%s crm_user_id=%s crm_type=%s. "
-                        "Authority set truncated; this may reduce recall but remains safe.",
-                        max_rows,
-                        user_id,
-                        crm_user_id,
-                        crm_type.value if crm_type else None,
-                    )
-                    break
 
-        # Record authority statistics
         stats = {data_type: len(ids) for data_type, ids in authority.authorized_items.items()}
-        logger.info(f"User {user_id} CRM authority fetched: {stats}")
-        
+        logger.info(
+            "User %s CRM authority materialized from OAuth data-scope: crm_ids=%s stats=%s truncated=%s",
+            user_id,
+            len(crm_ids),
+            stats,
+            authority.truncated,
+        )
         return authority, role
-        
+
     except Exception as e:
         logger.error(f"Failed to get CRM authority for user {user_id}: {e}", exc_info=True)
-        # Return empty authority when error, ensuring security
         return authority, None
+
 
 def identify_crm_data_type(data_object, meta_or_metadata: str = "meta") -> tuple[Optional[str], Optional[str]]:
     """

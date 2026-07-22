@@ -304,6 +304,22 @@ class VisitRecordBase(BaseModel):
     recorder_id: Optional[str] = None # 记录人ID    
     visit_type: Optional[Literal["form", "link"]] = None # 拜访类型：form(用户填报)、link(非结构化链接/文件)
     visit_url: Optional[str] = None # 会议链接或文件URL
+    followup_type: Optional[str] = Field(
+        default=None,
+        description="跟进类型（前端固定选项，如新客户跟进/拜访、首次BD拜访等）",
+    )
+    followup_stage: Optional[str] = Field(
+        default=None,
+        description="跟进阶段（前端固定选项；是否必填由前端按环境控制）",
+    )
+    field_check_in_id: Optional[str] = Field(
+        default=None,
+        description="关联外勤打卡ID（前端传入，后端原样存储）",
+    )
+    field_check_in_name: Optional[str] = Field(
+        default=None,
+        description="关联外勤打卡名称（前端传入，后端原样存储）",
+    )
     followup_record: Optional[str] = None # 跟进记录（原文）
     followup_record_zh: Optional[str] = None # 跟进记录（中文版）
     followup_record_en: Optional[str] = None # 跟进记录（英文版）
@@ -521,6 +537,7 @@ class VisitRecordQueryRequest(BaseModel):
     record_type: Optional[List[str]] = None  # 记录类型（多选）
     is_first_visit: Optional[bool] = None  # 是否首次拜访
     is_call_high: Optional[bool] = None  # 是否call high
+    has_comments: Optional[bool] = None  # 是否有评论/任务（comments 数组非空）
     last_modified_time_start: Optional[str] = None  # 创建时间开始
     last_modified_time_end: Optional[str] = None  # 创建时间结束
     
@@ -576,6 +593,22 @@ class VisitRecordResponse(BaseModel):
     counterpart_location: Optional[str] = Field(default=None, description="拜访地点")
     visit_communication_method: Optional[str] = Field(default=None, description="拜访及沟通方式")
     visit_purpose: Optional[str] = Field(default=None, description="拜访目的")
+    followup_type: Optional[str] = Field(
+        default=None,
+        description="跟进类型（前端固定选项，如新客户跟进/拜访、首次BD拜访等）",
+    )
+    followup_stage: Optional[str] = Field(
+        default=None,
+        description="跟进阶段（前端固定选项；是否必填由前端按环境控制）",
+    )
+    field_check_in_id: Optional[str] = Field(
+        default=None,
+        description="关联外勤打卡ID（前端传入，后端原样存储）",
+    )
+    field_check_in_name: Optional[str] = Field(
+        default=None,
+        description="关联外勤打卡名称（前端传入，后端原样存储）",
+    )
     communication_duration: Optional[str] = Field(default=None, description="沟通时长")
     expectation_achieved: Optional[str] = Field(default=None, description="是/否达成预期")
     followup_record: Optional[str] = Field(default=None, description="跟进记录")
@@ -599,6 +632,7 @@ class VisitRecordResponse(BaseModel):
     parent_record: Optional[str] = Field(default=None, description="父记录")
     remarks: Optional[str] = Field(default=None, description="备注")
     comments: Optional[List[Dict[str, Any]]] = Field(default=None, description="评论列表（人工可编辑，JSON数组）")
+    has_comments: bool = Field(default=False, description="是否有评论/任务（comments 数组非空）")
     last_modified_time: Optional[str] = Field(default=None, description="最后修改时间")
     record_id: Optional[str] = Field(default=None, description="记录id")
     is_first_visit: Optional[bool] = Field(default=None, description="是否首次拜访")

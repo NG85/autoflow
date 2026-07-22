@@ -63,6 +63,26 @@ class Chat(UUIDBaseModel, UpdatableBaseModel, table=True):
     __tablename__ = "chats"
 
 
+class ChatItem(BaseModel):
+    """Chat list item enriched with the owner's display name (from user_profiles)."""
+
+    id: UUID
+    title: str
+    engine_id: Optional[int] = None
+    engine_options: Dict | str = {}
+    deleted_at: Optional[datetime] = None
+    user_id: Optional[UUID] = None
+    user_name: Optional[str] = None
+    browser_id: Optional[str] = None
+    origin: Optional[str] = None
+    visibility: ChatVisibility
+    chat_type: ChatType
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
 class ChatUpdate(BaseModel):
     title: Optional[str] = None
     visibility: Optional[ChatVisibility] = None

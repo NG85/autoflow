@@ -1,5 +1,6 @@
 import logging
 import json
+import re
 import requests
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Any
@@ -14,6 +15,11 @@ from app.services.platform_notification_service import platform_notification_ser
 from app.utils.ark_llm import call_ark_llm
 from app.utils.uuid6 import uuid6
 logger = logging.getLogger(__name__)
+
+_RISK_INFO_FENCE_RE = re.compile(
+    r"^\s*```(?:json|text|markdown|md)?\s*\n?(.*?)\n?\s*```\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
 
 def _safe_parse_json_object(raw: str) -> dict:
     """
@@ -492,6 +498,10 @@ def fill_sales_visit_record_fields(sales_visit_record, db_session):
         "visit_end_time",
         "record_type",
         "visit_purpose",
+        "followup_type",
+        "followup_stage",
+        "field_check_in_id",
+        "field_check_in_name",
     }
     for k, v in sales_visit_record.items():
         if v is None and k not in skip_none_to_dash:
@@ -1223,6 +1233,62 @@ def _build_visit_background_info(
     return background_info
 
 
+def _parse_risk_extraction_json(raw: str) -> Optional[dict]:
+    """解析风险抽取 JSON；兼容 markdown fence 与前后夹杂说明。"""
+    text = (raw or "").strip()
+    if not text:
+        return None
+
+    candidates = [text]
+    fence_match = _RISK_INFO_FENCE_RE.match(text)
+    if fence_match:
+        fenced = (fence_match.group(1) or "").strip()
+        if fenced:
+            candidates.append(fenced)
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end > start:
+        candidates.append(text[start : end + 1].strip())
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        try:
+            parsed = json.loads(candidate)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _normalize_risk_info(raw: Optional[str]) -> str:
+    """
+    解析约定 JSON {"evidences": [...], "risk": "..."}，返回卡片用纯文本。
+    空证据 / 空 risk / 解析失败 → ""。
+    """
+    parsed = _parse_risk_extraction_json(raw or "")
+    if not parsed:
+        return ""
+
+    raw_evidences = parsed.get("evidences")
+    evidences = [
+        str(item).strip()
+        for item in (raw_evidences if isinstance(raw_evidences, list) else [])
+        if str(item).strip()
+    ]
+    risk_text = parsed.get("risk")
+    risk_text = risk_text.strip() if isinstance(risk_text, str) else ""
+
+    # 显式 evidences=[] ⇒ 无风险；有证据但 risk 为空时用证据拼接兜底
+    if "evidences" in parsed and not evidences:
+        return ""
+    if evidences and not risk_text:
+        return "；".join(evidences)
+    return risk_text
+
+
 def extract_risk_info_from_content(
     content: str,
     title: Optional[str] = None,
@@ -1239,6 +1305,10 @@ def extract_risk_info_from_content(
     """
     从跟进记录正文中提取风险信息（一次 LLM 调用完成）。
     正文可能来自会议纪要/听记转写文档，也可能是销售手填的跟进内容、跟进记录或下一步计划。
+
+    约定模型输出 JSON：{"evidences": [...], "risk": "..."}（先证据后结论）；
+    本函数解析后返回 risk 纯文本（无风险为 ""），供 document_contents.risk_info
+    落库及拜访卡片 risk_info 字段填充。
     
     Args:
         content: 待分析的跟进记录正文
@@ -1254,7 +1324,7 @@ def extract_risk_info_from_content(
         remarks: 现有的remarks内容（作为上下文，可选）
         
     Returns:
-        str: 提取的风险信息，如果没有风险信息则返回空字符串
+        str: 提取的风险信息纯文本；无风险或解析失败时返回空字符串
     """
     if not content or not content.strip():
         return ""
@@ -1272,7 +1342,7 @@ def extract_risk_info_from_content(
         remarks=remarks
     )
     
-    prompt = f"""{background_info}你是一位专业的销售风险分析专家，需要从销售跟进记录正文中提取风险信息。
+    prompt = f"""{background_info}你是一位专业的销售风险分析专家，需要从销售跟进记录正文中提取风险信息，并严格输出 JSON。
 
 **内容来源**：{title or "销售跟进记录（文档转写或手填内容）"}
 
@@ -1282,35 +1352,60 @@ def extract_risk_info_from_content(
 **任务说明**：
 仅从上述「待分析内容」中识别并提取与项目推进相关的风险信息。风险包括但不限于：客户担忧疑虑异议、技术难点实施风险、业务竞争压力、时间紧迫性或预算限制、决策障碍与不确定性、客户内部阻力或组织变化、项目延期或交付风险，以及其他可能影响成交或交付的风险因素。
 
-**提取要求**：
-1. **只从正文中提取**：仅提取待分析内容中明确写到的风险，不要推测、编造或补充正文未出现的信息
-2. **参考背景信息**：可结合背景信息（拜访类型、拜访层级、已有备注等）理解上下文，但输出内容必须能在正文中找到依据
-3. **具体明确**：表述应具体、可核对，避免空泛概括
-4. **处理重复**：若正文风险与背景备注重复，以正文为准，合并去重后输出
-5. **忽略非风险信息**：进展、成果、签约付款、合同归档、交付准备等正向描述不是风险，不要写入输出
-6. **无风险则留空**：若正文中完全没有风险信息，必须直接返回空字符串
+**提取流程（必须严格按顺序）**：
+1. 先填写 evidences：从正文摘录可核对的风险证据（原文连续子串或近原文短句，每条一条）；无风险则为 []
+2. 再填写 risk：仅基于 evidences 汇总成一段自然语言；evidences 为空时 risk 必须为 ""
+3. 不要推测、编造或补充正文未出现的信息；可参考背景信息理解上下文，但 evidences/risk 必须能在正文中找到依据
+4. 忽略非风险信息：进展、成果、签约付款、合同归档、交付准备等正向描述不得写入 evidences/risk
+5. 处理重复：同义风险只保留一条 evidence；risk 合并去重，控制在 150 字以内，不用列表
 
-**输出要求（重要）**：
-- 有风险时：用一段自然语言描述，不用列表；控制在 150 字以内；直接输出风险内容，不加前缀、后缀或说明
-- 无风险时：只输出空字符串，不要输出任何文字
-
-**禁止输出**（以下均视为错误，应改为空字符串）：
+**禁止写入 evidences / risk 的内容**：
 - 「未提及任何风险」「无风险信息」「相反……」「文档明确指出……无遗留问题」等说明性、否定性、meta 表述
 - 对正文是否含风险的判断或总结
 - 项目进展、合作顺利、已完成事项等非风险描述
 
-请输出提取的风险信息（无风险则输出空字符串）：
+【收敛规则】
+- 先提取 evidences 再写 risk；二者不得矛盾。
+- len(evidences) = 0 时，risk 必须为 ""。
+- len(evidences) ≥ 1 时，risk 必须为基于 evidences 的自然语言摘要，不得为空，不得写入 evidences 未覆盖的信息。
+
+【输出格式（仅 JSON）】
+{{
+  "evidences": ["从原文摘录的风险证据，无则为 []"],
+  "risk": "基于 evidences 的一段自然语言摘要（不用列表，150字以内）；无风险时必须为空字符串"
+}}
+
+示例（有风险）：
+{{
+  "evidences": ["客户担心历史数据迁移失败", "要求先给回滚预案后再推进试点"],
+  "risk": "客户担心历史数据迁移失败，要求先给回滚预案后再推进试点。"
+}}
+
+示例（无风险）：
+{{
+  "evidences": [],
+  "risk": ""
+}}
+
+要求：
+- 仅输出 JSON，不要任何前后缀、解释文字或 markdown。
+- 必须包含 evidences 与 risk 字段；不要输出其他字段。
+- evidences 必须先于 risk 填写；risk 须与 evidences 一致。
+- 必须使用双引号（"），不能使用单引号。
+- 不能有尾随逗号。
+- 字符串中的引号必须正确转义。
+- 输出必须能被标准 JSON 解析器直接解析。
+- 无风险时必须输出 {{"evidences": [], "risk": ""}}：不要省略字段，不要用 null / NONE / 空代码块代替。
+- 不得把「无风险」「未提及风险」等 meta 表述写入 evidences 或 risk。
 """
     
     try:
-        result = call_ark_llm(prompt, temperature=0)
-        risk_info = result.strip()
-        
-        # 如果结果为空或只包含无意义的字符，返回空字符串
-        if not risk_info or len(risk_info) < 5:
-            return ""
-        
-        return risk_info
+        result = call_ark_llm(
+            prompt,
+            temperature=0,
+            # response_format={"type": "json_object"},
+        )
+        return _normalize_risk_info(result)
     except Exception as e:
         logger.warning(f"提取风险信息失败: {e}")
         return ""

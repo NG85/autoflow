@@ -5,6 +5,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+from app.utils.date_utils import convert_utc_to_local_timezone
+
 
 class CRMCommentValidationError(ValueError):
     """评论 payload 校验失败。"""
@@ -106,3 +108,57 @@ def merge_append_crm_comments(
 
     merged.sort(key=_sort_key)
     return merged, appended
+
+
+def has_nonempty_comments(comments_raw: object) -> bool:
+    """判断 comments 数组是否非空（不区分 comment / task）。"""
+    return isinstance(comments_raw, list) and len(comments_raw) > 0
+
+
+def _comment_created_at_sort_key(item: Dict[str, Any]) -> tuple[int, str]:
+    v = str(item.get("created_at") or "")
+    try:
+        return (0, datetime.fromisoformat(v.replace("Z", "+00:00")).isoformat())
+    except Exception:
+        return (1, v)
+
+
+def _format_comment_created_at(value: object) -> str:
+    if not value:
+        return ""
+    formatted = convert_utc_to_local_timezone(value)
+    return "" if formatted == "--" else formatted
+
+
+def format_crm_comments_for_export(
+    comments_raw: object,
+    *,
+    comment_type: str,
+) -> str:
+    """
+    按 type 筛选评论/任务，按 created_at 升序拼接为多行文本：
+    author（created_at）：content
+    """
+    if not isinstance(comments_raw, list):
+        return ""
+
+    target_type = str(comment_type or "").strip().lower()
+    matched: List[Dict[str, Any]] = []
+    for item in comments_raw:
+        if not isinstance(item, dict):
+            continue
+        item_type = str(item.get("type") or "comment").strip().lower()
+        if item_type != target_type:
+            continue
+        matched.append(item)
+
+    matched.sort(key=_comment_created_at_sort_key)
+
+    lines: List[str] = []
+    for item in matched:
+        author = str(item.get("author") or "")
+        created_at = _format_comment_created_at(item.get("created_at"))
+        content = str(item.get("content") or "")
+        lines.append(f"{author}（{created_at}）：{content}")
+
+    return "\n".join(lines)
