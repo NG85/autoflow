@@ -76,6 +76,7 @@ class WritebackMode(str, enum.Enum):
     OLM = "OLM"  # OLM 销售易
     CHAITIN = "CHAITIN"  # CHAITIN 长亭自研
     WEBEYE = "WEBEYE"  # WEBEYE 网眼简道云
+    FENBEITONG = "FENBEITONG"  # 分贝通 纷享销客
 
 
 class WritebackFrequency(str, enum.Enum):

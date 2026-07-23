@@ -102,3 +102,29 @@ class CbgVisitRecordType(str, enum.Enum):
     CUSTOMER_FEEDBACK = "用户反馈"
     CUSTOMER_RISK = "风险提示"
     CUSTOMER_NEXT_PLAN = "下阶段计划"
+
+
+class FenbeitongVisitRecordType(str, enum.Enum):
+    """分贝通跟进记录类型（网关约定）"""
+
+    QUICK = "快速记录"
+    FACE_VISIT = "面访"
+    PHONE = "电话"
+    REMOTE_MEETING = "远程会议"
+    CONTACT_ANNOTATION = "联系方式标注"
+
+
+class FenbeitongVisitRecordCreateRequest(BaseModel):
+    """分贝通跟进记录创建请求"""
+
+    source_record_id: Optional[str] = Field(None, description="来源记录ID（用于日志追踪）")
+    content: str = Field(..., description="跟进内容")
+    record_type: str = Field(..., description="跟进类型：快速记录/面访/电话/远程会议/联系方式标注")
+    account_ids: Optional[List[str]] = Field(None, description="关联客户ID列表")
+    opportunity_ids: Optional[List[str]] = Field(None, description="关联商机ID列表")
+    owner_user_id: Optional[str] = Field(None, description="负责人 CRM 用户ID（FSUID）")
+    checkin_id: Optional[str] = Field(None, description="关联外勤打卡ID（可选）")
+
+
+class FenbeitongVisitRecordBatchCreateRequest(BaseModel):
+    records: List[FenbeitongVisitRecordCreateRequest]

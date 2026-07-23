@@ -28,6 +28,8 @@ from app.models.wb_visit_requests import (
     CbgVisitRecordType,
     ChaitinVisitRecordBatchCreateRequest,
     ChaitinVisitRecordCreateRequest,
+    FenbeitongVisitRecordBatchCreateRequest,
+    FenbeitongVisitRecordCreateRequest,
     OlmVisitRecordBatchCreateRequest,
     OlmVisitRecordCreateRequest,
     WebeyeVisitRecordBatchCreateRequest,
@@ -243,6 +245,67 @@ class CrmVisitWritebackClient:
         except httpx.RequestError as e:
             logger.error(f"CBG批量创建日常对象失败: {e}")
             return {"success": False, "message": f"CBG批量创建日常对象失败: {e}"}
+
+    def batch_fenbeitong_visit_create(
+        self, visit_requests: FenbeitongVisitRecordBatchCreateRequest
+    ) -> Dict[str, Any]:
+        """批量创建分贝通跟进记录。"""
+        url = f"{self.base_url}/crm-custom/fenbeitong/sale-record/batch"
+
+        try:
+            timeout = httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0)
+            with httpx.Client(timeout=timeout) as client:
+                # exclude_none：未选外勤时不传 checkin_id
+                payload = visit_requests.model_dump(exclude_none=True)
+                response = client.post(url, headers=self.headers, json=payload)
+                logger.info(f"调用分贝通批量创建跟进记录，返回: {response.text}")
+                response.raise_for_status()
+                return {"success": True, "data": response.json()}
+        except httpx.TimeoutException as e:
+            logger.error(f"分贝通批量创建跟进记录超时: {e}")
+            return {"success": False, "message": f"分贝通批量创建跟进记录超时: {e}"}
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                f"分贝通批量创建跟进记录 HTTP 错误: {e.response.status_code} {e.response.text}"
+            )
+            return {
+                "success": False,
+                "message": f"分贝通批量创建跟进记录 HTTP 错误: {e.response.status_code}",
+                "data": e.response.text,
+            }
+        except httpx.RequestError as e:
+            logger.error(f"分贝通批量创建跟进记录失败: {e}")
+            return {"success": False, "message": f"分贝通批量创建跟进记录失败: {e}"}
+
+    def fetch_fenbeitong_checkins(
+        self, crmid: str, limit: int = 10
+    ) -> Dict[str, Any]:
+        """按 CRM 用户 ID 查询分贝通最近外勤打卡。"""
+        url = f"{self.base_url}/crm-custom/fenbeitong/checkins"
+        payload = {"crmid": crmid, "limit": limit}
+
+        try:
+            timeout = httpx.Timeout(connect=30.0, read=60.0, write=30.0, pool=30.0)
+            with httpx.Client(timeout=timeout) as client:
+                response = client.post(url, headers=self.headers, json=payload)
+                logger.info(f"调用分贝通外勤打卡查询，返回: {response.text}")
+                response.raise_for_status()
+                return {"success": True, "data": response.json()}
+        except httpx.TimeoutException as e:
+            logger.error(f"分贝通外勤打卡查询超时: {e}")
+            return {"success": False, "message": f"分贝通外勤打卡查询超时: {e}"}
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                f"分贝通外勤打卡查询 HTTP 错误: {e.response.status_code} {e.response.text}"
+            )
+            return {
+                "success": False,
+                "message": f"分贝通外勤打卡查询 HTTP 错误: {e.response.status_code}",
+                "data": e.response.text,
+            }
+        except httpx.RequestError as e:
+            logger.error(f"分贝通外勤打卡查询失败: {e}")
+            return {"success": False, "message": f"分贝通外勤打卡查询失败: {e}"}
     
     def batch_olm_visit_create(self, visit_requests: OlmVisitRecordBatchCreateRequest) -> Dict[str, Any]:
         """
@@ -757,6 +820,90 @@ class CrmWritebackService:
             
             visit_requests.records.append(visit_request)
             
+        return visit_requests
+
+    def generate_fenbeitong_visit_requests(
+        self, session: Session, visit_records: List[CRMSalesVisitRecord]
+    ) -> FenbeitongVisitRecordBatchCreateRequest:
+        """根据拜访记录生成分贝通跟进记录创建请求列表。
+
+        ``record_type`` 直接使用前端已对齐的 ``visit_communication_method``，不做额外映射。
+        """
+        visit_requests = FenbeitongVisitRecordBatchCreateRequest(records=[])
+
+        def _norm_id(v: Optional[str]) -> Optional[str]:
+            if v is None:
+                return None
+            s = str(v).strip()
+            return s if s else None
+
+        def _legacy_partner_id(record: CRMSalesVisitRecord) -> Optional[str]:
+            return _norm_id(record.partner_id) or _norm_id(
+                getattr(record, "external_collaboration_partner_id", None)
+            )
+
+        for record in visit_records:
+            ask_id_str = None
+            crm_user_id = None
+            if record.recorder_id:
+                try:
+                    ask_id_str = str(record.recorder_id)
+                    sql_query = text(
+                        """
+                        SELECT crm_user_id FROM user_profiles WHERE oauth_user_id = :ask_id
+                        """
+                    )
+                    result = session.exec(sql_query, params={"ask_id": ask_id_str}).first()
+                    if result:
+                        crm_user_id = str(result[0]) if result[0] is not None else None
+                    else:
+                        logger.warning(
+                            f"记录 ID {record.id}：未找到recorder_id {ask_id_str} 对应的CRM用户ID"
+                        )
+                except Exception as e:
+                    logger.warning(f"记录 ID {record.id}：查询CRM用户ID失败: {e}")
+
+            if not crm_user_id:
+                logger.warning(
+                    f"记录 ID {record.id}：未找到recorder_id {ask_id_str} 对应的CRM用户ID，"
+                    "owner_user_id 将为空"
+                )
+
+            record_type = _norm_id(record.visit_communication_method)
+            if not record_type:
+                logger.warning(
+                    f"记录 ID {record.id}：visit_communication_method 为空，跳过创建分贝通跟进记录"
+                )
+                continue
+
+            legacy_partner_id = _legacy_partner_id(record)
+            account_ids = [
+                x
+                for x in [_norm_id(record.account_id), legacy_partner_id]
+                if x is not None
+            ]
+            opportunity_ids = [
+                x for x in [_norm_id(record.opportunity_id)] if x is not None
+            ]
+
+            if not account_ids and not opportunity_ids:
+                logger.warning(
+                    f"记录 ID {record.id}：account_id/partner_id 和 opportunity_id 均为空，"
+                    "跳过创建分贝通跟进记录"
+                )
+                continue
+
+            visit_request = FenbeitongVisitRecordCreateRequest(
+                record_type=record_type,
+                content=self.generate_visit_summary_content(record),
+                account_ids=account_ids or None,
+                opportunity_ids=opportunity_ids or None,
+                owner_user_id=crm_user_id,
+                source_record_id=str(record.record_id or record.id),
+                checkin_id=_norm_id(getattr(record, "field_check_in_id", None)),
+            )
+            visit_requests.records.append(visit_request)
+
         return visit_requests
     
     def generate_olm_visit_requests(self, session: Session, visit_records: List[CRMSalesVisitRecord]) -> OlmVisitRecordBatchCreateRequest:
@@ -1465,6 +1612,66 @@ class CrmWritebackService:
                     "message": (
                         f"{'成功' if ok else '失败'}处理 {len(visit_records)} 条拜访记录，"
                         f"提交 {writeback_count} 条WEBEYE回写"
+                        + ("" if ok else f"：{result.get('message', '')}")
+                    ),
+                    "processed_count": len(visit_records),
+                    "writeback_count": writeback_count,
+                    "results": return_data,
+                }
+
+            elif writeback_mode == WritebackMode.FENBEITONG.value:
+                logger.info("使用分贝通跟进记录回写模式")
+
+                visit_requests = self.generate_fenbeitong_visit_requests(
+                    session, visit_records
+                )
+
+                if not visit_requests.records:
+                    logger.info("没有需要创建分贝通跟进记录的拜访记录")
+                    return {
+                        "success": True,
+                        "message": "没有需要创建分贝通跟进记录的拜访记录",
+                        "processed_count": len(visit_records),
+                        "writeback_count": 0,
+                    }
+
+                result = self.client.batch_fenbeitong_visit_create(visit_requests)
+                logger.info(
+                    f"批量分贝通跟进记录创建完成: {len(visit_requests.records)} 条记录"
+                )
+
+                return_data = result.get("data", {})
+                writeback_count = len(visit_requests.records)
+                ok = bool(result.get("success"))
+                if isinstance(return_data, dict):
+                    created_visits = return_data.get("created", 0)
+                    updated_visits = return_data.get("updated", 0)
+                    failed_visits = return_data.get("failed", 0)
+                    return {
+                        "success": ok,
+                        "message": (
+                            f"{'成功' if ok else '失败'}处理 {len(visit_records)} 条拜访记录，"
+                            f"提交 {writeback_count} 条分贝通回写"
+                            + (
+                                f"（created={created_visits}, updated={updated_visits}, "
+                                f"failed={failed_visits}）"
+                                if ok
+                                else f"：{result.get('message', '')}"
+                            )
+                        ),
+                        "processed_count": len(visit_records),
+                        "writeback_count": writeback_count,
+                        "success_count": (
+                            created_visits + updated_visits if ok else 0
+                        ),
+                        "failed_count": failed_visits if ok else writeback_count,
+                        "results": return_data,
+                    }
+                return {
+                    "success": ok,
+                    "message": (
+                        f"{'成功' if ok else '失败'}处理 {len(visit_records)} 条拜访记录，"
+                        f"提交 {writeback_count} 条分贝通回写"
                         + ("" if ok else f"：{result.get('message', '')}")
                     ),
                     "processed_count": len(visit_records),
