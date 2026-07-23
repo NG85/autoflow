@@ -52,8 +52,7 @@ from app.rag.chat.review.data_retriever import ReviewDataRetriever
 from app.rag.chat.review.context_builder import ReviewContextBuilder
 from app.rag.chat.review.metric_catalog import METRIC_DISPLAY_NAMES
 from app.rag.chat.review import prompts as review_prompts
-from app.models.chat import ChatType
-from app.api.routes.models import ChatMode
+from app.models.chat import ChatType, ChatMode
 
 logger = logging.getLogger(__name__)
 
@@ -206,7 +205,8 @@ class ChatFlow:
                         if not self.user
                         else ChatVisibility.PRIVATE
                     ),
-                    chat_type=self.chat_type
+                    chat_type=self.chat_type,
+                    chat_mode=self.chat_mode,
                 )
             )
             chat_id = self.db_chat_obj.id

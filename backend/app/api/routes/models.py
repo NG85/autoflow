@@ -1,7 +1,7 @@
-import enum
 from typing import List, Optional
 from pydantic import BaseModel, Field, model_validator
 
+from app.models.chat import ChatMode  # noqa: F401 — re-export for API callers
 from app.models.data_source import DataSourceType
 
 
@@ -39,16 +39,6 @@ class NotifyTosUploadRequest(BaseModel):
     data_source_type: DataSourceType
     config: List[TosUploadConfig]
     meta: dict
-
-
-class ChatMode(str, enum.Enum):
-    CREATE_CVG_REPORT = "create_cvg_report"
-    SAVE_CVG_REPORT = "save_cvg_report"
-    # cvg_chat 与 chat_type 组合决定计费，见 chat._should_bill_sia：
-    # - default + cvg_chat：三方拜访攻略流程内 chat，不计 SIA
-    # - client_visit_guide + cvg_chat：基于已有攻略报告问答，计 SIA
-    CVG_CHAT = "cvg_chat"
-    DEFAULT = "default"
 
 
 # Local Contact Models

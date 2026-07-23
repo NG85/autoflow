@@ -70,6 +70,10 @@ class ChatRepo(BaseRepo):
             query = query.where(Chat.engine_id == filters.engine_id)
         if filters.chat_type:
             query = query.where(Chat.chat_type == filters.chat_type)
+        if filters.chat_mode:
+            query = query.where(Chat.chat_mode == filters.chat_mode)
+        if filters.exclude_chat_mode:
+            query = query.where(Chat.chat_mode != filters.exclude_chat_mode)
 
         query = query.order_by(Chat.created_at.desc())
 
