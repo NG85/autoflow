@@ -30,8 +30,7 @@ from app.rag.chat.chat_service import (
     remove_chat_message_recommend_questions,
 )
 from app.exceptions import InternalServerError
-from app.models.chat import ChatType
-from app.api.routes.models import ChatMode
+from app.models.chat import ChatType, ChatMode
 from app.core.config import settings
 from app.services.feishu_billing_facade import (
     BillingScenario,
