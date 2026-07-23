@@ -1179,3 +1179,45 @@ def update_visit_record_comments(
         raise InternalServerError()
 
 
+@router.post("/crm/fenbeitong/checkins")
+def list_fenbeitong_checkins(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    crmid: Optional[str] = Body(
+        None,
+        description="纷享销客用户 ID（FSUID）；不传则用当前用户的 crm_user_id",
+    ),
+    limit: int = Body(10, ge=1, le=50, description="返回条数，默认 10"),
+):
+    """查询分贝通最近外勤打卡，供填写拜访记录时选择关联打卡。"""
+    from app.repositories.user_profile import user_profile_repo
+    from app.services.crm_writeback_service import crm_writeback_service
+
+    try:
+        resolved_crmid = (crmid or "").strip() or None
+        if not resolved_crmid:
+            resolved_crmid = user_profile_repo.get_crm_user_id_by_user_id(
+                db_session, user.id
+            )
+        if not resolved_crmid:
+            raise HTTPException(
+                status_code=400,
+                detail="未找到 CRM 用户 ID，请先绑定 crm_user_id 或显式传入 crmid",
+            )
+
+        result = crm_writeback_service.client.fetch_fenbeitong_checkins(
+            crmid=resolved_crmid, limit=limit
+        )
+        if not result.get("success"):
+            raise HTTPException(
+                status_code=502,
+                detail=result.get("message") or "查询分贝通外勤打卡失败",
+            )
+        return {"code": 0, "message": "success", "data": result.get("data") or {}}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(e)
+        raise InternalServerError()
+
+

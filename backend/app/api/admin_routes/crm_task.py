@@ -264,7 +264,7 @@ def trigger_crm_writeback_task(
     end_date: Optional[str] = Body(None, description="结束日期，格式YYYY-MM-DD，不传则默认为本周六"),
     writeback_mode: Optional[str] = Body(
         None,
-        description="拜访回写模式：CBG / APAC / OLM / CHAITIN / WEBEYE 等；不传则用 CRM_WRITEBACK_DEFAULT_MODE。二者均为空时无法触发；未实现该模式的拜访回写时任务成功结束且 writeback_count=0。",
+        description="拜访回写模式：CBG / APAC / OLM / CHAITIN / WEBEYE / FENBEITONG 等；不传则用 CRM_WRITEBACK_DEFAULT_MODE。二者均为空时无法触发；未实现该模式的拜访回写时任务成功结束且 writeback_count=0。",
     )
 ):
     """
@@ -375,7 +375,7 @@ def trigger_crm_writeback_by_ids(
     visit_record_ids: List[int] = Body(..., description="拜访记录ID列表"),
     writeback_mode: Optional[str] = Body(
         None,
-        description="拜访回写模式：CBG / APAC / OLM / CHAITIN / WEBEYE 等；不传则用 CRM_WRITEBACK_DEFAULT_MODE。二者均为空时无法执行。",
+        description="拜访回写模式：CBG / APAC / OLM / CHAITIN / WEBEYE / FENBEITONG 等；不传则用 CRM_WRITEBACK_DEFAULT_MODE。二者均为空时无法执行。",
     )
 ):
     """
