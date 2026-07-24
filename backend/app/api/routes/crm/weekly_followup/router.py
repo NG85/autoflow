@@ -13,6 +13,7 @@ from sqlmodel import distinct, func, or_, select
 from sqlalchemy import false
 
 from app.api.deps import CurrentUserDep, SessionDep
+from app.utils.excel_sanitize import sanitize_excel_row
 from app.repositories.department_mirror import department_mirror_repo
 from app.api.routes.crm.models import (
     AccountTagOptionOut,
@@ -566,26 +567,28 @@ def export_weekly_followup_detail(
                     tag.name for tag in (item.tags or []) if tag.name
                 )
                 ws_entities.append(
-                    [
-                        item.department_name or "",
-                        item.followup_object_type or "",
-                        item.followup_object_name or "",
-                        item.followup_object_id or "",
-                        item.customer_attribute or "",
-                        object_tags_text,
-                        item.account_id or "",
-                        item.account_name or "",
-                        item.opportunity_id or "",
-                        item.opportunity_name or "",
-                        item.partner_id or "",
-                        item.partner_name or "",
-                        item.owner_name or "",
-                        item.progress or "",
-                        item.risks or "",
-                        item.forecast_amount if item.forecast_amount is not None else "",
-                        item.expected_closing_date.isoformat() if item.expected_closing_date else "",
-                        comments_text,
-                    ]
+                    sanitize_excel_row(
+                        [
+                            item.department_name or "",
+                            item.followup_object_type or "",
+                            item.followup_object_name or "",
+                            item.followup_object_id or "",
+                            item.customer_attribute or "",
+                            object_tags_text,
+                            item.account_id or "",
+                            item.account_name or "",
+                            item.opportunity_id or "",
+                            item.opportunity_name or "",
+                            item.partner_id or "",
+                            item.partner_name or "",
+                            item.owner_name or "",
+                            item.progress or "",
+                            item.risks or "",
+                            item.forecast_amount if item.forecast_amount is not None else "",
+                            item.expected_closing_date.isoformat() if item.expected_closing_date else "",
+                            comments_text,
+                        ]
+                    )
                 )
 
             if page * page_size >= total or not detail.entities.items:
