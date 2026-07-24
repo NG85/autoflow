@@ -45,6 +45,7 @@ from app.repositories.visit_record import (
 from app.services.crm_config_service import build_customer_attribute_options, get_resolved_field_mapping
 from app.utils.crm_comments import format_crm_comments_for_export
 from app.utils.crm_followup_object import FOLLOWUP_OBJECT_TYPES, resolve_followup_object_from_record
+from app.utils.excel_sanitize import sanitize_excel_row
 from app.platforms.utils.url_parser import parse_dingtalk_transcribe_url
 from app.services.document_processing_service import document_processing_service
 from app.services.visit_record_card_push_status import (
@@ -788,7 +789,7 @@ def export_visit_records_to_xlsx(
             for item in result.items:
                 if total_exported >= max_export_count:
                     break
-                ws.append(item_to_row(item))
+                ws.append(sanitize_excel_row(item_to_row(item)))
                 total_exported += 1
             
             # 如果当前页数据不足一页，说明已经是最后一页
