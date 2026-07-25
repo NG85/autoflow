@@ -951,7 +951,7 @@ def supervised_revise_visit_record(
 ):
     """
     修改拜访记录（OAuth ``POST /permission/check`` → ``sales:follow_up:edit``；
-    且在可查看范围内；仅跟进日期、跟进方式；
+    且在可查看范围内；可改跟进日期、跟进方式、跟进记录、下一步计划；
     录入自然日窗口见 CRM_VISIT_RECORD_REVISE_ENTRY_WINDOW_DAYS（默认仅当日录入），
     每日截止时间见 CRM_VISIT_RECORD_REVISE_DAILY_CUTOFF_TIME（默认无限制））。
     修改后触发 Aldebaran ``crm.visit_record.revised``，由回调重推卡片。
@@ -968,6 +968,8 @@ def supervised_revise_visit_record(
                 revised_by_name=reviser_name,
                 visit_communication_date=payload.visit_communication_date,
                 visit_communication_method=payload.visit_communication_method,
+                followup_record=payload.followup_record,
+                next_steps=payload.next_steps,
             )
         except VisitRecordRevisionError as exc:
             if exc.code == "not_found":

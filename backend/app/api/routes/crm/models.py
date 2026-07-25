@@ -699,7 +699,7 @@ class VisitRecordCommentsUpdate(BaseModel):
 
 
 class VisitRecordSupervisedUpdate(BaseModel):
-    """修改拜访记录（需 sales:follow_up:edit）：仅跟进日期、跟进方式。"""
+    """修改拜访记录（需 sales:follow_up:edit）：跟进日期、跟进方式、跟进记录、下一步计划。"""
 
     visit_communication_date: Optional[str] = Field(
         default=None,
@@ -708,6 +708,14 @@ class VisitRecordSupervisedUpdate(BaseModel):
     visit_communication_method: Optional[str] = Field(
         default=None,
         description="拜访及沟通方式（选填；传空字符串可清空）",
+    )
+    followup_record: Optional[str] = Field(
+        default=None,
+        description="跟进记录（选填；传空字符串可清空）",
+    )
+    next_steps: Optional[str] = Field(
+        default=None,
+        description="下一步计划（选填；传空字符串可清空）",
     )
 
 

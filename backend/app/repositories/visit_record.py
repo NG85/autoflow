@@ -758,16 +758,24 @@ class VisitRecordRepo(BaseRepo):
         revised_by_name: Optional[str],
         visit_communication_date: Optional[str] = None,
         visit_communication_method: Optional[str] = None,
+        followup_record: Optional[str] = None,
+        next_steps: Optional[str] = None,
     ):
         """
         修改拜访记录：需 sales:follow_up:edit 且在可查看范围内；
-        仅允许改跟进日期、跟进方式；录入自然日窗口见 CRM_VISIT_RECORD_REVISE_ENTRY_WINDOW_DAYS，
+        允许改跟进日期、跟进方式、跟进记录、下一步计划；
+        录入自然日窗口见 CRM_VISIT_RECORD_REVISE_ENTRY_WINDOW_DAYS，
         每日截止时间见 CRM_VISIT_RECORD_REVISE_DAILY_CUTOFF_TIME。
         返回 (VisitRecordResponse, CRMSalesVisitRecordRevision)。
         """
         from app.core.config import settings
 
-        if visit_communication_date is None and visit_communication_method is None:
+        if (
+            visit_communication_date is None
+            and visit_communication_method is None
+            and followup_record is None
+            and next_steps is None
+        ):
             raise VisitRecordRevisionError("请至少提供一个待修改字段")
 
         record = session.exec(
@@ -826,6 +834,42 @@ class VisitRecordRepo(BaseRepo):
                     }
                 )
                 record.visit_communication_method = new_method
+
+        if followup_record is not None:
+            new_followup = str(followup_record).strip() or None
+            old_followup = self._format_field_value_for_revision(
+                "followup_record", record.followup_record
+            )
+            if old_followup != new_followup:
+                changes.append(
+                    {
+                        "field": "followup_record",
+                        "old": old_followup,
+                        "new": new_followup,
+                    }
+                )
+                record.followup_record = new_followup
+                # 与创建链路一致（默认关双语）：zh/en 均写原文，避免列表/导出读到旧值
+                record.followup_record_zh = new_followup
+                record.followup_record_en = new_followup
+
+        if next_steps is not None:
+            new_next_steps = str(next_steps).strip() or None
+            old_next_steps = self._format_field_value_for_revision(
+                "next_steps", record.next_steps
+            )
+            if old_next_steps != new_next_steps:
+                changes.append(
+                    {
+                        "field": "next_steps",
+                        "old": old_next_steps,
+                        "new": new_next_steps,
+                    }
+                )
+                record.next_steps = new_next_steps
+                # 同上：与创建链路一致，zh/en 均写原文
+                record.next_steps_zh = new_next_steps
+                record.next_steps_en = new_next_steps
 
         if not changes:
             raise VisitRecordRevisionError("提交内容与当前记录一致，无需修改")
