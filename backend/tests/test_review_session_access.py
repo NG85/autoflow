@@ -28,6 +28,11 @@ def _no_global_scope() -> dict:
     return {"filters": [{"source": "org_team_sub", "enabled": True}]}
 
 
+def _linked_crm_disabled_scope() -> dict:
+    """普通销售常见 data-scope：非 global，不抬升为 company。"""
+    return {"filters": [{"source": "linked_crm", "enabled": False}]}
+
+
 def _global_scope() -> dict:
     return {"filters": [{"source": "global", "enabled": True}]}
 
@@ -57,10 +62,10 @@ def test_list_filter_mode_department_viewer():
     assert scope.list_filter_mode == "department"
 
 
-def test_list_filter_mode_viewer_without_department_sees_company():
+def test_list_filter_mode_viewer_without_department_falls_back_to_attendee():
     scope = _scope(has_viewer=True, is_admin=False, dept_id=None)
-    assert scope.list_filter_mode == "company"
-    assert scope.can_access_session_as_viewer(OTHER_DEPT_ID) is True
+    assert scope.list_filter_mode == "attendee"
+    assert scope.can_access_session_as_viewer(OTHER_DEPT_ID) is False
 
 
 def test_list_filter_mode_regular_user():
@@ -134,7 +139,7 @@ def test_resolve_review_session_view_scope_viewer_without_department(
 
     scope = resolve_review_session_view_scope(db_session, USER_ID)
 
-    assert scope.list_filter_mode == "company"
+    assert scope.list_filter_mode == "attendee"
     assert scope.subtree_department_ids == ()
     mock_dept_mirror_repo.get_subtree_department_ids.assert_not_called()
     mock_oauth.check_function_permission.assert_called_once_with(
@@ -149,6 +154,30 @@ def test_resolve_review_session_view_scope_viewer_without_department(
     assert REVIEW_SESSION_VIEW_PERMISSION == WEEKLY_DECISION_VIEW_PERMISSION
     assert WEEKLY_DECISION_VIEW_PERMISSION == "biz:weekly_decision:view"
     assert WEEKLY_DECISION_DATA_SCOPE_ENTITY == "biz_weekly_decision"
+
+@patch("app.policies.review_session_access.department_mirror_repo")
+@patch("app.policies.review_session_access.user_department_relation_repo")
+@patch("app.policies.review_session_access.user_profile_repo")
+@patch("app.policies.review_session_access.oauth_client")
+def test_resolve_review_session_view_scope_linked_crm_without_department_is_attendee(
+    mock_oauth,
+    mock_user_profile_repo,
+    mock_user_dept_repo,
+    mock_dept_mirror_repo,
+):
+    """销售侧 data-scope=linked_crm(enabled=false) 且无主部门 → 仅参会，不可看全公司。"""
+    db_session = MagicMock()
+    mock_oauth.check_function_permission.return_value = _allow_view_check()
+    mock_oauth.get_data_scope.return_value = _linked_crm_disabled_scope()
+    mock_user_profile_repo.get_crm_user_id_by_user_id.return_value = None
+    mock_user_dept_repo.get_primary_department_by_user_ids.return_value = {}
+
+    scope = resolve_review_session_view_scope(db_session, USER_ID)
+
+    assert scope.is_company_admin is False
+    assert scope.list_filter_mode == "attendee"
+    assert scope.subtree_department_ids == ()
+    mock_dept_mirror_repo.get_subtree_department_ids.assert_not_called()
 
 
 @patch("app.policies.review_session_access.department_mirror_repo")

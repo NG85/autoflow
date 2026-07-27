@@ -68,10 +68,10 @@ def _department_or_attendee_predicate(scope: ReviewSessionViewScope, user_id: st
 class ReviewSessionViewScope:
     """
     Review session 列表/详情可见范围：
-    - 普通成员：仅本人参与的 session
-    - 有 ``biz:weekly_decision:view`` + 主部门（非 global）：本部门及下属部门的 session，
-      **并保留**本人作为参会人的其它部门 session
-    - ``biz_weekly_decision`` data-scope global，或有 viewer 权限但无部门信息：全公司 session
+    - ``biz_weekly_decision`` data-scope 含 enabled ``global``：全公司 session
+    - 非 global（如 ``linked_crm``）+ ``biz:weekly_decision:view`` + 有主部门：
+      本部门及下属部门 session，并保留本人参会的其它部门 session
+    - 非 global 且无主部门 / 无 viewer：仅本人参会 session
     """
 
     has_viewer_permission: bool
@@ -81,7 +81,7 @@ class ReviewSessionViewScope:
 
     @property
     def list_filter_mode(self) -> Literal["company", "department", "attendee"]:
-        if self.has_viewer_permission and (self.is_company_admin or not self.subtree_department_ids):
+        if self.has_viewer_permission and self.is_company_admin:
             return "company"
         if self.has_viewer_permission and self.subtree_department_ids:
             return "department"
@@ -90,8 +90,10 @@ class ReviewSessionViewScope:
     def can_access_session_as_viewer(self, session_department_id: Optional[str]) -> bool:
         if not self.has_viewer_permission:
             return False
-        if self.is_company_admin or not self.subtree_department_ids:
+        if self.is_company_admin:
             return True
+        if not self.subtree_department_ids:
+            return False
         dept_id = (session_department_id or "").strip()
         if not dept_id:
             return False
