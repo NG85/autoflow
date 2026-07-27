@@ -19,8 +19,8 @@
 
 | 项 | 说明 |
 |----|------|
-| `weekly_followup` | 周跟进，P1.2 |
-| `notification:follow_up_card:receive` | 跟进卡片推送 |
+| `weekly_followup` | 周跟进列表/详情已接 OAuth（见下节 Wave A2）；生成任务仍按部门子树 |
+| `notification:follow_up_card:receive` | 跟进/拜访卡片 **receive 资格 gate**（Wave A：**命名已对齐，推送不校验**；抄送走 `notification_cc_rules`） |
 | `crm:*:log_follow_up` | CRM 详情「录入跟进」，仍走 CRM mirror |
 | OAuth **collaborator** filter | 需 `follow_up_collab` 表；`collaborative_participants` 是 CC/通知语义，**不等同** OAuth 协作者 |
 | **LINKED_CRM** 列表分支 | OAuth 默认关（D8）；translator 已预留，未拼 SQL |
@@ -48,29 +48,13 @@ flowchart LR
 
 ---
 
-## 3. 配置开关
+## 3. 配置开关（Wave A3）
 
-位于 `app/core/config.py`（可通过环境变量覆盖）：
+跟进列表/详情/导出 **固定走 OAuth**，不再提供 `FOLLOW_UP_OAUTH_GATE_ENABLED` /
+`FOLLOW_UP_OAUTH_DATA_SCOPE_ENABLED` 回退开关；遗留 `VisitRecordAccessPolicy` /
+`report51:*` 路径已删除。
 
-| 配置项 | 默认值 | 作用 |
-|--------|--------|------|
-| `FOLLOW_UP_OAUTH_GATE_ENABLED` | `True` | 功能门控、单条 check、batch-check、导出权限 |
-| `FOLLOW_UP_OAUTH_DATA_SCOPE_ENABLED` | `True` | 列表/导出/COUNT 使用 data-scope SQL 过滤 |
-
-**开关组合行为：**
-
-| GATE | DATA_SCOPE | 行为 |
-|------|------------|------|
-| `True` | `True` | 完整 OAuth 权限（推荐，当前默认） |
-| `True` | `False` | 有功能门控和单条 check，列表仍用遗留 `VisitRecordAccessPolicy` |
-| `False` | `*` | 全部回退遗留逻辑（`report51:*` + 汇报链） |
-
-回滚示例：
-
-```bash
-FOLLOW_UP_OAUTH_GATE_ENABLED=false
-FOLLOW_UP_OAUTH_DATA_SCOPE_ENABLED=false
-```
+回滚若需降级，只能通过 OAuth 侧权限配置或回退部署版本，不能靠本地开关切回旧汇报链过滤。
 
 ---
 
@@ -125,7 +109,7 @@ backend/tests/
 
 ### 触发条件
 
-`FOLLOW_UP_OAUTH_DATA_SCOPE_ENABLED=True` 且请求带 `current_user_id`。
+请求带 `current_user_id` 时，列表/COUNT/导出一律注入 OAuth data-scope WHERE。
 
 ### SQL 翻译规则
 
@@ -167,7 +151,7 @@ backend/tests/
 
 ### 触发条件
 
-`FOLLOW_UP_OAUTH_GATE_ENABLED=True`。
+有 `current_user_id` 时一律走 OAuth `check` + context（Wave A3：无本地开关绕过）。
 
 ### 接入点
 
@@ -223,7 +207,7 @@ backend/tests/
 }
 ```
 
-`FOLLOW_UP_OAUTH_GATE_ENABLED=False` 时不返回 `permissions` 字段。
+列表当前页有记录时返回 `permissions`（`can_edit` / `can_delete`）；无用户或空页则省略。
 
 ### batch-check 请求结构（每条记录 2 项）
 
@@ -255,9 +239,43 @@ backend/tests/
 | 遗留 | 迁移后 |
 |------|--------|
 | `visit_record:page:view` | OAuth alias → `sales:follow_up:view`（功能层由 OAuth 处理） |
-| `report51:dept/company:view` 列表范围 | data-scope 开启后**不再**用于列表过滤 |
-| `VisitRecordAccessPolicy` | GATE/DATA_SCOPE 关闭时仍作兜底 |
-| `_get_user_accessible_recorder_ids` | 仅遗留路径使用；OAuth 路径不调用 |
+| `visit_record:card:receive` | OAuth alias → `notification:follow_up_card:receive`；autoflow 常量 `PERM_FOLLOW_UP_CARD_RECEIVE`；**推送不 gate**（见 `visit-record-cc-rules.md`） |
+| `report51:dept/company:view` 列表范围 | Wave A3：跟进列表**不再**使用；统一 OAuth data-scope |
+| `report51:dept/company:view` 周跟进详情 | Wave A2：已改为 `sales:weekly_followup:view` + `sales_weekly_followup` data-scope / leader（见下） |
+| `VisitRecordAccessPolicy` / `_is_admin_user` | Wave A3：**已删除**（跟进固定 OAuth） |
+| `_get_user_accessible_recorder_ids` / `_get_visit_record_accessible_recorder_uuid_ids` | **已删除**（无调用方） |
+| `can_access_all_crm_data`（`crm:company:query`） | **已删除**；周经营公司级范围改为 `biz_weekly_decision` data-scope `global`（S4） |
+| `review_session:all:view` | Wave B1：已改为 `biz:weekly_decision:view`（见 `policies/review_session_access.py`） |
+
+### Wave A3：删除跟进遗留 ACL
+
+| 删除项 | 替代 |
+|--------|------|
+| `policies/visit_record_access.py` | `follow_up_permission_service` |
+| `FOLLOW_UP_OAUTH_GATE_ENABLED` / `FOLLOW_UP_OAUTH_DATA_SCOPE_ENABLED` | 固定开启，配置项已移除 |
+| `report51:company:view`（跟进 admin） | data-scope `global` + OAuth check |
+
+### Wave A2：周跟进详情去 `report51`
+
+| 路径 | 权限 |
+|------|------|
+| 列表 `/crm/weekly-followup/query` | `sales:weekly_followup:view` + data-scope `global`（company）/ 本部门（department） |
+| 详情 / filter-options | 同上功能门控；`is_company_admin` ← global；`can_view_team` ← global / 非 self filter（如 `org_scope`）/ 部门 leader |
+| 评论编辑 | 仍仅公司级范围或 leader（与 A2 前一致） |
+
+落点：`permissions/weekly_followup_permission_service.py`、`api/routes/crm/weekly_followup/router.py`（`_can_view_weekly_followup`）。  
+说明：`is_company_admin` **不再**看 `user.is_superuser`，仅 data-scope `global`。
+
+### Wave B1 / S4：周经营决策权限对齐
+
+| 路径 | 权限 |
+|------|------|
+| 功能门控 | `biz:weekly_decision:view`（legacy `review_session:all:view` 仅作常量别名说明） |
+| 公司级列表/可见范围 | `biz_weekly_decision` data-scope **global**（已删除 `can_access_all_crm_data` / `crm:company:query`） |
+| 部门范围 | 有 view + 主部门 + 非 global → 本部门及下属子树 |
+| 无部门信息的 viewer | 全公司（与 B1 前一致） |
+
+落点：`policies/review_session_access.py`、`api/routes/crm/review/router.py`。
 
 ---
 
@@ -353,7 +371,7 @@ python -m pytest \
 | **协作者** | 建 `follow_up_collab(follow_up_id, user_id)`，列表传 `collab_exists_sql`，context 设 `is_collaborator` |
 | **LINKED_CRM** | 租户开启后对 `crm_account`/`crm_opportunity` 各调 data-scope，用 `linked_crm_follow_up_sql` 拼 OR 分支 |
 | **私密评论** | `resource.type=follow_up_comment` + `is_private`/`creator`；当前 comments 无 `is_private` 字段 |
-| **遗留清理** | OAuth 稳定后删除 `VisitRecordAccessPolicy` 列表/单条路径及 `report51:*` 过滤 |
+| **跟进卡片 receive gate** | 码已对齐 `notification:follow_up_card:receive`；推送资格过滤仍关闭（抄送走 `notification_cc_rules`） |
 
 ---
 
@@ -365,4 +383,7 @@ python -m pytest \
 | aptsell-oauth `docs/api-permission-data-scope.md` § W4 P1.1 | 接口契约、filter 语义 |
 | aptsell-oauth `docs/data-scope-matrix.md` §3.2 | 各角色可见范围 |
 | aptsell-oauth `examples/follow_up_translate_scope_to_sql.py` | SQL 翻译参考实现 |
-| `backend/docs/visit-record-cc-rules.md` | `collaborative_participants` 通知/CC 规则（与 OAuth 协作者无关） |
+| `backend/docs/visit-record-cc-rules.md` | 拜访抄送路由（`notification_cc_rules`）；卡片码 `notification:follow_up_card:receive` 命名对齐、gate 关闭 |
+| `backend/docs/daily-weekly-report-oauth-scope.md` | 日/周报统计口径 + 卡片 receive |
+| `backend/tests/test_review_session_access.py` | 周经营决策 view + data-scope global |
+| `backend/tests/test_report_receive_permission_gate.py` | 日/周报 receive gate |

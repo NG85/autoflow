@@ -32,6 +32,13 @@ from app.services.visit_record_card_push_status import (
     resolve_card_push_status_from_notification_result,
 )
 from app.services.visit_record_push_errors import split_failed_recipients_by_retryable
+from app.platforms.notification_types import (
+    PERM_DAILY_REPORT_COMPANY_RECEIVE,
+    PERM_DAILY_REPORT_PERSONAL_RECEIVE,
+    PERM_DAILY_REPORT_TEAM_RECEIVE,
+    PERM_WEEKLY_REPORT_COMPANY_RECEIVE,
+    PERM_WEEKLY_REPORT_TEAM_RECEIVE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1065,7 +1072,69 @@ class PlatformNotificationService:
             role_codes=role_codes,
             include_identity=True,
         )
-    
+
+    def _parse_recipient_user_id(self, recipient: Dict[str, Any]) -> Optional[UUID]:
+        """从接收者字典解析系统 user_id（兼容 userId / user_id）。"""
+        raw = recipient.get("user_id") or recipient.get("userId")
+        if not raw:
+            return None
+        try:
+            return UUID(str(raw))
+        except (TypeError, ValueError):
+            logger.warning(
+                "Invalid recipient user_id for receive-permission gate: name=%s raw=%s",
+                recipient.get("name"),
+                raw,
+            )
+            return None
+
+    def _user_has_receive_permission(self, user_id: UUID, permission: str) -> bool:
+        result = oauth_client.check_function_permission(
+            user_id=user_id,
+            permission=permission,
+        )
+        return bool(result.get("function_allowed") or result.get("allowed"))
+
+    def _filter_recipients_by_receive_permission(
+        self,
+        db_session: Session,
+        recipients: Optional[List[Dict[str, Any]]],
+        permission: str,
+        *,
+        report_kind: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        对个人接收者做卡片 receive 资格过滤。
+        群推送不走此过滤；无 user_id 的接收者跳过并打日志。
+        """
+        _ = db_session
+        if not recipients:
+            return []
+
+        filtered: List[Dict[str, Any]] = []
+        for recipient in recipients:
+            user_id = self._parse_recipient_user_id(recipient)
+            if not user_id:
+                logger.warning(
+                    "Skip %s recipient without resolvable user_id for permission=%s: name=%s open_id=%s",
+                    report_kind,
+                    permission,
+                    recipient.get("name"),
+                    recipient.get("open_id"),
+                )
+                continue
+            if not self._user_has_receive_permission(user_id, permission):
+                logger.info(
+                    "Skip %s recipient lacking receive permission=%s: name=%s user_id=%s",
+                    report_kind,
+                    permission,
+                    recipient.get("name"),
+                    user_id,
+                )
+                continue
+            filtered.append(recipient)
+        return filtered
+
     def get_recipients_for_recorder(
         self, 
         db_session: Session, 
@@ -1251,8 +1320,28 @@ class PlatformNotificationService:
                 logger.error(f"Error checking available profiles: {e}")
             return recipients
         
-        # 2. 只添加记录人本人
-        recorder_open_id = recorder_profile.oauth_user.open_id
+        # 2. 只添加记录人本人（需具备个人日报 receive 权限）
+        if not recorder_profile.user_id:
+            logger.warning(
+                "Recorder %s (profile: %s) has no user_id, cannot gate personal daily report",
+                recorder_name,
+                recorder_profile.name,
+            )
+            return recipients
+
+        if not self._user_has_receive_permission(
+            recorder_profile.user_id,
+            PERM_DAILY_REPORT_PERSONAL_RECEIVE,
+        ):
+            logger.info(
+                "Skip personal daily report: recorder lacks permission=%s name=%s user_id=%s",
+                PERM_DAILY_REPORT_PERSONAL_RECEIVE,
+                recorder_profile.name,
+                recorder_profile.user_id,
+            )
+            return recipients
+
+        recorder_open_id = recorder_profile.oauth_user.open_id if recorder_profile.oauth_user else None
         if recorder_open_id:
             recipients.append({
                 "open_id": recorder_open_id,
@@ -1260,11 +1349,12 @@ class PlatformNotificationService:
                 "type": "recorder",
                 "department": recorder_profile.department,
                 "receive_id_type": "open_id",
-                "platform": recorder_profile.oauth_user.provider
+                "platform": recorder_profile.oauth_user.provider,
+                "user_id": str(recorder_profile.user_id),
             })
             logger.info(f"Found daily report recipient: {recorder_profile.name} ({recorder_profile.department}) with {recorder_profile.oauth_user.provider} open_id: {recorder_open_id}")
         else:
-            logger.warning(f"Recorder {recorder_name} (profile: {recorder_profile.name}) has no {recorder_profile.oauth_user.provider} open_id, cannot send daily report")
+            logger.warning(f"Recorder {recorder_name} (profile: {recorder_profile.name}) has no {recorder_profile.oauth_user.provider if recorder_profile.oauth_user else 'unknown'} open_id, cannot send daily report")
         
         return recipients
 
@@ -1818,19 +1908,24 @@ class PlatformNotificationService:
         )
         
         if dept_manager:
-            dept_manager_open_id = dept_manager.oauth_user.open_id
+            dept_manager_open_id = (
+                dept_manager.oauth_user.open_id if dept_manager.oauth_user else None
+            )
             if dept_manager_open_id:
-                recipients.append({
+                recipient = {
                     "open_id": dept_manager_open_id,
                     "name": dept_manager.name or dept_manager.direct_manager_name,
                     "type": "department_manager",
                     "department": department_name,
                     "receive_id_type": "open_id",
-                    "platform": dept_manager.oauth_user.provider
-                })
+                    "platform": dept_manager.oauth_user.provider,
+                }
+                if dept_manager.user_id:
+                    recipient["user_id"] = str(dept_manager.user_id)
+                recipients.append(recipient)
                 logger.info(f"Found department manager for {department_name} on {dept_manager.oauth_user.provider}: {dept_manager.name}")
             else:
-                logger.warning(f"Department manager {dept_manager.name} has no {dept_manager.oauth_user.provider} open_id")
+                logger.warning(f"Department manager {dept_manager.name} has no {dept_manager.oauth_user.provider if dept_manager.oauth_user else 'unknown'} open_id")
         else:
             logger.warning(f"No department manager found for department: {department_name}")
         
@@ -1923,6 +2018,13 @@ class PlatformNotificationService:
                 db_session=db_session,
                 department_name=department_name
             )
+        # 个人负责人需过 team receive 资格；department_review 群推送不校验
+        recipients = self._filter_recipients_by_receive_permission(
+            db_session,
+            recipients,
+            PERM_DAILY_REPORT_TEAM_RECEIVE,
+            report_kind="department daily report",
+        )
         template_vars = self._convert_daily_report_data_for_feishu(db_session, department_report_data)
         if "report_date" in template_vars and hasattr(template_vars["report_date"], "isoformat"):
             template_vars["report_date"] = template_vars["report_date"].isoformat()
@@ -1943,13 +2045,14 @@ class PlatformNotificationService:
         
         规则：
         - 调用 OAuth 权限服务，查询拥有
-          permission = "daily_report:company:card:receive"
+          permission = notification:daily_report_company:receive
           的用户作为接收人
         """
+        _ = db_session
         recipients: List[Dict[str, Any]] = []
 
         card_receivers = self._get_card_permission_receivers(
-            permission="daily_report:company:card:receive",
+            permission=PERM_DAILY_REPORT_COMPANY_RECEIVE,
         )
 
         for user in card_receivers:
@@ -1982,7 +2085,7 @@ class PlatformNotificationService:
         if not recipients:
             logger.warning(
                 "No recipients found for company daily report via card-permission "
-                '(permission="daily_report:company:card:receive")'
+                f'(permission="{PERM_DAILY_REPORT_COMPANY_RECEIVE}")'
             )
 
         return recipients
@@ -2039,6 +2142,13 @@ class PlatformNotificationService:
                 db_session=db_session,
                 department_name=department_name,
             )
+        # 个人负责人需过 team receive 资格；department_review 群推送不校验
+        recipients = self._filter_recipients_by_receive_permission(
+            db_session,
+            recipients,
+            PERM_WEEKLY_REPORT_TEAM_RECEIVE,
+            report_kind="department weekly report",
+        )
         template_vars = self._convert_weekly_report_data_for_feishu(db_session, department_report_data)
         template_id_by_platform = self._get_template_id_by_platform("department_weekly_report")
         return self._send_report_to_department_review_groups_or_recipients(
@@ -2060,14 +2170,14 @@ class PlatformNotificationService:
 
         规则：
         - 调用 OAuth 权限服务，查询拥有
-          permission = "weekly_report:company:card:receive"
+          permission = notification:weekly_report_company:receive
           的用户作为接收人
         """
-
+        _ = db_session
         recipients: List[Dict[str, Any]] = []
 
         card_receivers = self._get_card_permission_receivers(
-            permission="weekly_report:company:card:receive",
+            permission=PERM_WEEKLY_REPORT_COMPANY_RECEIVE,
         )
 
         for user in card_receivers:
@@ -2101,7 +2211,7 @@ class PlatformNotificationService:
         if not recipients:
             logger.warning(
                 "No recipients found for company weekly report via card-permission "
-                '(permission="weekly_report:company:card:receive")'
+                f'(permission="{PERM_WEEKLY_REPORT_COMPANY_RECEIVE}")'
             )
 
         return recipients

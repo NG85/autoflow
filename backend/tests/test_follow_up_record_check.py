@@ -13,34 +13,35 @@ def _record() -> CRMSalesVisitRecord:
     return CRMSalesVisitRecord(record_id="fu-001", recorder_id=USER_ID)
 
 
-def test_can_view_visit_record_uses_oauth_when_gate_enabled():
+def test_can_view_visit_record_uses_oauth_check():
     repo = VisitRecordRepo()
     session = MagicMock()
     record = _record()
 
-    with patch("app.repositories.visit_record.settings") as mock_settings:
-        mock_settings.FOLLOW_UP_OAUTH_GATE_ENABLED = True
-        with patch(
-            "app.permissions.follow_up_permission_service.follow_up_permission_service.check_view",
-            return_value=True,
-        ) as check_view:
-            assert repo._can_view_visit_record(session, USER_ID, record) is True
+    with patch(
+        "app.repositories.visit_record.follow_up_permission_service.check_view",
+        return_value=True,
+    ) as check_view:
+        assert repo._can_view_visit_record(session, USER_ID, record) is True
 
     check_view.assert_called_once_with(session, USER_ID, record)
 
 
-def test_can_edit_visit_record_falls_back_to_legacy_when_gate_disabled():
+def test_can_edit_visit_record_uses_oauth_check():
     repo = VisitRecordRepo()
     session = MagicMock()
     record = _record()
 
-    with patch("app.repositories.visit_record.settings") as mock_settings:
-        mock_settings.FOLLOW_UP_OAUTH_GATE_ENABLED = False
-        with patch.object(
-            repo,
-            "_legacy_can_edit_visit_record_by_recorder_id",
-            return_value=False,
-        ) as legacy:
-            assert repo._can_edit_visit_record(session, USER_ID, record) is False
+    with patch(
+        "app.repositories.visit_record.follow_up_permission_service.check_edit",
+        return_value=False,
+    ) as check_edit:
+        assert repo._can_edit_visit_record(session, USER_ID, record) is False
 
-    legacy.assert_called_once_with(session, USER_ID, USER_ID)
+    check_edit.assert_called_once_with(session, USER_ID, record)
+
+
+def test_can_edit_visit_record_denies_without_user():
+    repo = VisitRecordRepo()
+    session = MagicMock()
+    assert repo._can_edit_visit_record(session, None, _record()) is False

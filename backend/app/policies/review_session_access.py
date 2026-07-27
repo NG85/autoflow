@@ -9,14 +9,24 @@ from sqlmodel import Session, distinct, func, select
 from app.models.crm_review import CRMReviewAttendee, CRMReviewSession
 from app.repositories.department_mirror import department_mirror_repo
 from app.repositories.user_department_relation import user_department_relation_repo
-from app.repositories.visit_record import visit_record_repo
+from app.repositories.user_profile import user_profile_repo
 from app.services.oauth_service import oauth_client
 
-REVIEW_SESSION_VIEW_PERMISSION = "review_session:all:view"
+# Wave B1：周经营决策 / review session 跨范围查看权限（legacy ``review_session:all:view``）
+WEEKLY_DECISION_VIEW_PERMISSION = "biz:weekly_decision:view"
+LEGACY_REVIEW_SESSION_VIEW_PERMISSION = "review_session:all:view"
+REVIEW_SESSION_VIEW_PERMISSION = WEEKLY_DECISION_VIEW_PERMISSION
+# W3 data-scope entity（data-scope-matrix：周度经营决策）
+WEEKLY_DECISION_DATA_SCOPE_ENTITY = "biz_weekly_decision"
+
+
+def _filter_explicitly_enabled(item: dict[str, Any]) -> bool:
+    enabled = item.get("enabled")
+    return enabled is True or str(enabled).lower() == "true"
 
 
 def _user_has_review_session_view_permission(user_id: UUID) -> bool:
-    """OAuth POST /permission/check — review session 跨团队/全量查看权限。"""
+    """OAuth POST /permission/check — 周经营决策跨团队/全量查看功能门控。"""
     check = oauth_client.check_function_permission(
         user_id=user_id,
         permission=REVIEW_SESSION_VIEW_PERMISSION,
@@ -24,15 +34,31 @@ def _user_has_review_session_view_permission(user_id: UUID) -> bool:
     return bool(check.get("allowed"))
 
 
+def _user_has_weekly_decision_global_scope(db_session: Session, user_id: UUID) -> bool:
+    """data-scope ``biz_weekly_decision`` 含 global → 公司级可见（替代遗留 crm:company:query）。"""
+    crm_user_id = user_profile_repo.get_crm_user_id_by_user_id(db_session, user_id)
+    scope = oauth_client.get_data_scope(
+        user_id=user_id,
+        crm_user_id=crm_user_id,
+        entity=WEEKLY_DECISION_DATA_SCOPE_ENTITY,
+    )
+    filters = scope.get("filters") if isinstance(scope.get("filters"), list) else []
+    for item in filters:
+        if not isinstance(item, dict):
+            continue
+        source = str(item.get("source") or "").strip()
+        if source == "global" and _filter_explicitly_enabled(item):
+            return True
+    return False
+
+
 @dataclass(frozen=True)
 class ReviewSessionViewScope:
     """
     Review session 列表/详情可见范围：
     - 普通成员：仅本人参与的 session
-    - 有 review_session:all:view + 主部门：本部门及所有下属部门的 session
-    - 公司管理员，或有 viewer 权限但无部门信息：全公司 session
-
-    注意：biz:weekly_decision:view 为周决策模块入口权限，与本 viewer 权限不等价。
+    - 有 ``biz:weekly_decision:view`` + 主部门（非 global）：本部门及所有下属部门的 session
+    - ``biz_weekly_decision`` data-scope global，或有 viewer 权限但无部门信息：全公司 session
     """
 
     has_viewer_permission: bool
@@ -113,7 +139,8 @@ def resolve_review_session_view_scope(
     user_id: UUID,
 ) -> ReviewSessionViewScope:
     has_viewer_permission = _user_has_review_session_view_permission(user_id)
-    is_company_admin = visit_record_repo.can_access_all_crm_data(user_id, db_session)
+    # 公司级范围：biz_weekly_decision data-scope global（不再用 crm:company:query）
+    is_company_admin = _user_has_weekly_decision_global_scope(db_session, user_id)
 
     user_department_id = user_department_relation_repo.get_primary_department_by_user_ids(
         db_session,

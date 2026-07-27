@@ -64,16 +64,12 @@ router = APIRouter(tags=["crm", "crm/visit-records"])
 
 def _require_follow_up_view_gate(db_session: SessionDep, user: CurrentUserDep) -> None:
     """W4 功能门控：无 sales:follow_up:view 时拒绝进入跟进列表/导出。"""
-    if not settings.FOLLOW_UP_OAUTH_GATE_ENABLED:
-        return
     if not follow_up_permission_service.gate_view(db_session, user.id):
         raise HTTPException(status_code=403, detail="无跟进记录查看权限")
 
 
 def _require_follow_up_export_permission(db_session: SessionDep, user: CurrentUserDep) -> None:
     """W4 导出功能鉴权：sales:follow_up:export。"""
-    if not settings.FOLLOW_UP_OAUTH_GATE_ENABLED:
-        return
     if not follow_up_permission_service.check_export(db_session, user.id):
         raise HTTPException(status_code=403, detail="无跟进记录导出权限")
 

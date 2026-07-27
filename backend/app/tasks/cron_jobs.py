@@ -1030,7 +1030,7 @@ def send_crm_weekly_followup_leader_engagement_report(self, week_start_str: str 
 
     说明：
     - leader 基准名单来自 OAuth departments/leaders
-    - 收件人复用公司周报收件人（permission=weekly_report:company:card:receive）
+    - 收件人复用公司周报收件人（permission=notification:weekly_report_company:receive）
     """
     try:
         from zoneinfo import ZoneInfo
