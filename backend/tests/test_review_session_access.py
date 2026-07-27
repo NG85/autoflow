@@ -102,6 +102,20 @@ def test_has_full_session_data_view_non_attendee_viewer_sees_all():
     assert scope.has_full_session_data_view(OTHER_DEPT_ID, is_leader=False, is_attendee=False) is False
 
 
+def test_department_list_filter_includes_attendee_sessions_outside_subtree():
+    """部门 viewer：列表 = 子树 ∪ 本人参会，避免跨部门参会被滤掉。"""
+    from sqlmodel import select
+
+    from app.models.crm_review import CRMReviewSession
+    from app.policies.review_session_access import apply_review_session_list_filter
+
+    scope = _scope(has_viewer=True, is_admin=False)
+    stmt = apply_review_session_list_filter(select(CRMReviewSession), scope, str(USER_ID))
+    sql = str(stmt.compile(compile_kwargs={"literal_binds": False})).lower()
+    assert "crm_review_attendee" in sql
+    assert " or " in sql
+
+
 @patch("app.policies.review_session_access.department_mirror_repo")
 @patch("app.policies.review_session_access.user_department_relation_repo")
 @patch("app.policies.review_session_access.user_profile_repo")

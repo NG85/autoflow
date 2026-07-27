@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, Optional
 from uuid import UUID
 
-from sqlmodel import Session, distinct, func, select
+from sqlmodel import Session, distinct, func, or_, select
 
 from app.models.crm_review import CRMReviewAttendee, CRMReviewSession
 from app.repositories.department_mirror import department_mirror_repo
@@ -52,12 +52,25 @@ def _user_has_weekly_decision_global_scope(db_session: Session, user_id: UUID) -
     return False
 
 
+def _attendee_session_ids_subquery(user_id: str):
+    return select(CRMReviewAttendee.session_id).where(CRMReviewAttendee.user_id == str(user_id))
+
+
+def _department_or_attendee_predicate(scope: ReviewSessionViewScope, user_id: str):
+    """本部门子树 session ∪ 本人参会 session（避免跨部门参会被部门过滤掉）。"""
+    return or_(
+        CRMReviewSession.department_id.in_(scope.subtree_department_ids),
+        CRMReviewSession.unique_id.in_(_attendee_session_ids_subquery(user_id)),
+    )
+
+
 @dataclass(frozen=True)
 class ReviewSessionViewScope:
     """
     Review session 列表/详情可见范围：
     - 普通成员：仅本人参与的 session
-    - 有 ``biz:weekly_decision:view`` + 主部门（非 global）：本部门及所有下属部门的 session
+    - 有 ``biz:weekly_decision:view`` + 主部门（非 global）：本部门及下属部门的 session，
+      **并保留**本人作为参会人的其它部门 session
     - ``biz_weekly_decision`` data-scope global，或有 viewer 权限但无部门信息：全公司 session
     """
 
@@ -190,7 +203,7 @@ def count_review_sessions_matching_scope(
             db_session.exec(
                 select(func.count())
                 .select_from(CRMReviewSession)
-                .where(CRMReviewSession.department_id.in_(scope.subtree_department_ids))
+                .where(_department_or_attendee_predicate(scope, user_id))
             ).one()
             or 0
         )
@@ -213,7 +226,7 @@ def apply_review_session_list_filter(stmt, scope: ReviewSessionViewScope, user_i
     if mode == "company":
         return stmt
     if mode == "department":
-        return stmt.where(CRMReviewSession.department_id.in_(scope.subtree_department_ids))
+        return stmt.where(_department_or_attendee_predicate(scope, user_id))
     return (
         stmt.join(
             CRMReviewAttendee,
