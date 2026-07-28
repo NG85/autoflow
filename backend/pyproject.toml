@@ -81,6 +81,10 @@ dev = [
     "ruff>=0.11.2",
 ]
 
+[[tool.uv.index]]
+url = "https://nexus.zhizhenzhihe.com/repository/pypi-group/simple/"
+default = true
+
 # Lint
 
 [tool.ruff.lint]
