@@ -80,8 +80,24 @@ class WritebackMode(str, enum.Enum):
 
 
 class WritebackFrequency(str, enum.Enum):
-    WEEKLY = "weekly"  # 按周回写（默认回写上一周）
-    DAILY = "daily"    # 按天回写（默认回写昨天）
+    """CRM 拜访记录回写的数据窗口策略（与 ``CRM_WRITEBACK_CRON`` 调度解耦）。
+
+    - weekly / daily：日历天窗口
+    - interval：滚动分钟窗口（``CRM_WRITEBACK_LOOKBACK_MINUTES``）
+
+    注意：多维表格使用独立的 ``FEISHU_BTABLE_SYNC_FREQUENCY``，勿与本枚举混用。
+    """
+
+    WEEKLY = "weekly"  # 按周回写（默认回写上一周：上周日~本周六）
+    DAILY = "daily"  # 按天回写（默认回写昨天）
+    INTERVAL = "interval"  # 滚动分钟窗口（默认回写最近 LOOKBACK 分钟）
+
+
+class BitableSyncFrequency(str, enum.Enum):
+    """多维表格回写的数据窗口策略（与 ``FEISHU_BTABLE_SYNC_CRON`` 解耦；不含 interval）。"""
+
+    WEEKLY = "weekly"  # 上周日~本周六
+    DAILY = "daily"  # 按 FEISHU_BTABLE_SYNC_CRON 时刻与 buffer 滚动 24h 窗口
 
 
 class CRMWeeklyFollowupWeekPreset(str, enum.Enum):
@@ -328,13 +344,17 @@ class Settings(BaseSettings):
     CRM_WEEKLY_FOLLOWUP_ENGAGEMENT_CRON: str = '0 9 * * 1'  # 每周一上午9:00执行（统计上一周）
     
     # CRM writeback task configuration
-    CRM_WRITEBACK_CRON: str = '0 14 * * 0'  # 每周日下午2点执行
+    # 调度（何时触发）：仅认 5 段 cron；与下方 FREQUENCY（扫什么数据）解耦
+    CRM_WRITEBACK_CRON: str = "0 14 * * 0"  # 例：每周日 14:00；分贝通可用 */30 * * * *
     CRM_WRITEBACK_API_URL: str = "http://salesforce:8080"  # CRM回写API地址
     # 拜访记录回写：None 表示关闭（不注册 Beat、执行层跳过）；非 None 为默认网关变体
     CRM_WRITEBACK_DEFAULT_MODE: Optional[WritebackMode] = None
     # Review 商机网关回写：为 True 时成员提交等路径会调用 CRM（与拜访回写独立；具体 CRM 由网关路由）
     CRM_WRITEBACK_REVIEW_ENABLED: bool = False
-    CRM_WRITEBACK_FREQUENCY: WritebackFrequency = WritebackFrequency.WEEKLY  # 回写频率：weekly（按周）或daily（按天）
+    # 数据窗口策略（仅 CRM 拜访回写）：weekly / daily / interval
+    CRM_WRITEBACK_FREQUENCY: WritebackFrequency = WritebackFrequency.WEEKLY
+    # interval 模式回溯分钟数；建议 = 调度间隔 + 少量重叠（如 30min 调度用 35）
+    CRM_WRITEBACK_LOOKBACK_MINUTES: int = 35
     CRM_WRITEBACK_TIMEZONE: str = "Asia/Shanghai"  # 回写任务使用的时区
     # Review 商机回写：POST ``{CRM_WRITEBACK_API_URL}{CRM_WRITEBACK_REVIEW_PATH}``
     CRM_WRITEBACK_REVIEW_PATH: str = "/crm-custom/update-business-opportunity"
@@ -363,6 +383,8 @@ class Settings(BaseSettings):
     # Feishu Btable sync configuration
     ENABLE_FEISHU_BTABLE_SYNC: bool = False
     FEISHU_BTABLE_SYNC_CRON: str = '0 13 * * 0'  # 每周日中午1点执行
+    # 多维表格窗口策略（与 CRM_WRITEBACK_FREQUENCY 完全独立）
+    FEISHU_BTABLE_SYNC_FREQUENCY: BitableSyncFrequency = BitableSyncFrequency.WEEKLY
     # DAILY 模式下统计窗口截止时刻 = FEISHU_BTABLE_SYNC_CRON 中的时刻往前推该分钟数
     # 例如 cron 为 30 20 * * * 且 buffer=30 → 窗口 [昨天20:00, 今天20:00)
     FEISHU_BTABLE_SYNC_WINDOW_BUFFER_MINUTES: int = 30
