@@ -1,6 +1,11 @@
+import logging
+
 from celery import Celery
 from celery.schedules import crontab
-from app.core.config import settings, WritebackFrequency
+from app.core.config import settings
+from app.services.writeback_window import parse_crontab_fields
+
+logger = logging.getLogger(__name__)
 
 
 app = Celery(
@@ -206,35 +211,31 @@ if settings.CRM_WEEKLY_FOLLOWUP_ENGAGEMENT_ENABLED:
     }
 
 # CRM拜访记录回写任务（仅当配置了默认拜访回写模式时注册 Beat）
+# 调度仅认合法 5 段 CRM_WRITEBACK_CRON；窗口策略由 CRM_WRITEBACK_FREQUENCY 决定
 if settings.CRM_WRITEBACK_DEFAULT_MODE is not None:
-    # 解析cron表达式
-    cron_expr = settings.CRM_WRITEBACK_CRON
-    cron_fields = cron_expr.strip().split()
-    
-    if len(cron_fields) == 5:
-        # 使用配置的cron表达式
-        minute, hour, day_of_month, month_of_year, day_of_week = cron_fields
-        writeback_schedule = crontab(
-            minute=minute, 
-            hour=hour, 
-            day_of_month=day_of_month, 
-            month_of_year=month_of_year, 
-            day_of_week=day_of_week
+    cron_fields = parse_crontab_fields(settings.CRM_WRITEBACK_CRON)
+    if cron_fields is None:
+        logger.error(
+            "CRM_WRITEBACK_DEFAULT_MODE=%s 已配置，但 CRM_WRITEBACK_CRON=%r 不是合法 5 段 cron，"
+            "跳过注册拜访记录回写 Beat（FREQUENCY=%s 仅影响数据窗口，不回退默认调度）",
+            settings.CRM_WRITEBACK_DEFAULT_MODE.value,
+            settings.CRM_WRITEBACK_CRON,
+            settings.CRM_WRITEBACK_FREQUENCY.value,
         )
     else:
-        # 根据频率配置使用默认值
-        if settings.CRM_WRITEBACK_FREQUENCY == WritebackFrequency.DAILY:
-            # 按天回写：每天下午2点
-            writeback_schedule = crontab(hour=14, minute=0)
-        else:  # weekly
-            # 按周回写：每周日下午2点
-            writeback_schedule = crontab(hour=14, minute=0, day_of_week=0)
-    
-    app.conf.beat_schedule = getattr(app.conf, 'beat_schedule', {})
-    app.conf.beat_schedule['crm_visit_records_writeback'] = {
-        'task': 'app.tasks.cron_jobs.crm_visit_records_writeback',
-        'schedule': writeback_schedule,
-    }
+        minute, hour, day_of_month, month_of_year, day_of_week = cron_fields
+        writeback_schedule = crontab(
+            minute=minute,
+            hour=hour,
+            day_of_month=day_of_month,
+            month_of_year=month_of_year,
+            day_of_week=day_of_week,
+        )
+        app.conf.beat_schedule = getattr(app.conf, "beat_schedule", {})
+        app.conf.beat_schedule["crm_visit_records_writeback"] = {
+            "task": "app.tasks.cron_jobs.crm_visit_records_writeback",
+            "schedule": writeback_schedule,
+        }
 
 # CRM销售任务推送任务
 if settings.CRM_SALES_TASK_ENABLED:

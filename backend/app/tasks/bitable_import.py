@@ -10,13 +10,14 @@ from app.platforms.utils.url_parser import parse_bitable_url, resolve_bitable_ap
 from app.platforms.constants import PLATFORM_FEISHU, PLATFORM_LARK
 from sqlmodel import Session
 from app.core.db import engine
-from app.core.config import settings
+from app.core.config import BitableSyncFrequency, settings
 from app.celery import app
 import pytz
 
 logger = logging.getLogger(__name__)
 
 CRM_TABLE = 'crm_sales_visit_records'
+
 
 def get_bitable_config():
     """
@@ -858,8 +859,8 @@ def sync_bitable_visit_records(
 ):
     """
     批量写入拜访记录到多维表格（飞书/Lark）。
-    时间范围与CRM回写任务一致：
-      - 当未传入起止日期时，按 settings.CRM_WRITEBACK_FREQUENCY 计算：
+    时间范围由多维表格自身配置决定（与 CRM 拜访回写完全独立）：
+      - 当未传入起止日期时，按 settings.FEISHU_BTABLE_SYNC_FREQUENCY 计算：
           - DAILY：半开区间 [start, end)，end 为 FEISHU_BTABLE_SYNC_CRON 配置时刻
             往前推 FEISHU_BTABLE_SYNC_WINDOW_BUFFER_MINUTES（默认 30 分钟），
             例如 cron=30 20 * * * → [昨天20:00, 今天20:00)
@@ -968,9 +969,8 @@ def sync_bitable_visit_records(
             range_desc = f"{start_local.isoformat()} 到 {end_local.isoformat()}"
         else:
             today = datetime.now(writeback_tz).date()
-            frequency = settings.CRM_WRITEBACK_FREQUENCY
-            from app.core.config import WritebackFrequency
-            if frequency == WritebackFrequency.DAILY:
+            frequency = settings.FEISHU_BTABLE_SYNC_FREQUENCY
+            if frequency == BitableSyncFrequency.DAILY:
                 start_local, end_local = compute_daily_bitable_window(writeback_tz)
                 using_datetime_window = True
                 range_desc = f"{start_local.isoformat()} 到 {end_local.isoformat()}"
