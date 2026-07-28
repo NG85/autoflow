@@ -260,65 +260,116 @@ def trigger_weekly_report_task(
 @router.post("/crm/writeback/trigger-task")
 def trigger_crm_writeback_task(
     user: CurrentSuperuserDep,
-    start_date: Optional[str] = Body(None, description="开始日期，格式YYYY-MM-DD，不传则默认为上周日"),
-    end_date: Optional[str] = Body(None, description="结束日期，格式YYYY-MM-DD，不传则默认为本周六"),
+    start_date: Optional[str] = Body(
+        None,
+        description="开始日期 YYYY-MM-DD；与 end_date 成对。都不传则按 CRM_WRITEBACK_FREQUENCY 自动计算",
+    ),
+    end_date: Optional[str] = Body(
+        None,
+        description="结束日期 YYYY-MM-DD；与 start_date 成对",
+    ),
+    start_datetime: Optional[str] = Body(
+        None,
+        description=(
+            "开始时间（任意窗口口径）。支持 ISO8601（含时区/Z）或无时区的 "
+            "`YYYY-MM-DD HH:MM:SS`（按 CRM_WRITEBACK_TIMEZONE）。"
+            "须与 end_datetime 成对，且不能与 start_date/end_date 同时传"
+        ),
+    ),
+    end_datetime: Optional[str] = Body(
+        None,
+        description="结束时间，格式与 start_datetime 相同",
+    ),
     writeback_mode: Optional[str] = Body(
         None,
         description="拜访回写模式：CBG / APAC / OLM / CHAITIN / WEBEYE / FENBEITONG 等；不传则用 CRM_WRITEBACK_DEFAULT_MODE。二者均为空时无法触发；未实现该模式的拜访回写时任务成功结束且 writeback_count=0。",
-    )
+    ),
 ):
     """
-    手动触发CRM拜访记录回写任务
-    
-    用于测试或手动执行CRM数据回写功能，默认处理上周日到本周六的拜访记录数据
-    
-    工作流程：
-    1. 计算指定时间范围内的拜访记录
-    2. 根据回写模式选择处理方式：
-       - CBG模式：按客户和商机分组处理拜访记录，生成格式化的回写内容
-       - APAC模式：为每条拜访记录创建Salesforce的任务
-       - OLM模式：为每条拜访记录创建销售易的拜访记录
-       - CHAITIN模式：为每条拜访记录创建长亭的拜访记录
-       - WEBEYE模式：为每条拜访记录 upsert 简道云跟进记录
-       - 其它模式：若本服务尚未接入该模式的拜访回写，则跳过（writeback_count=0）
-    3. 调用相应的API进行回写或任务创建
+    手动触发CRM拜访记录回写任务。
+
+    时间范围：
+    - start_date + end_date：日历天口径
+    - start_datetime + end_datetime：任意时刻窗口
+    - 都不传：按 ``CRM_WRITEBACK_FREQUENCY`` 自动计算
+      （weekly / daily / interval；interval 扫最近 LOOKBACK 分钟）
     """
     if not user.is_superuser:
         return {
             "code": 403,
             "message": "权限不足，只有超级管理员可以触发此任务",
-            "data": {}
+            "data": {},
         }
 
     try:
         from app.tasks.cron_jobs import crm_visit_records_writeback
-        from datetime import datetime, timedelta
-        
-        # 解析日期范围
-        if start_date and end_date:
+        from app.services.writeback_window import parse_datetime_in_writeback_tz
+
+        date_pair = bool(start_date and end_date)
+        date_partial = bool(start_date or end_date) and not date_pair
+        dt_pair = bool(start_datetime and end_datetime)
+        dt_partial = bool(start_datetime or end_datetime) and not dt_pair
+
+        if date_partial:
+            return {
+                "code": 400,
+                "message": "开始日期和结束日期必须同时提供，或都不提供以使用配置自动计算",
+                "data": {},
+            }
+        if dt_partial:
+            return {
+                "code": 400,
+                "message": "开始时间与结束时间必须同时提供，或都不提供",
+                "data": {},
+            }
+        if date_pair and (start_datetime or end_datetime):
+            return {
+                "code": 400,
+                "message": "不能同时指定日期范围（start_date/end_date）与时间窗口（start_datetime/end_datetime）",
+                "data": {},
+            }
+
+        parsed_start_date = None
+        parsed_end_date = None
+        normalized_start_dt: Optional[str] = None
+        normalized_end_dt: Optional[str] = None
+
+        if date_pair:
             try:
-                parsed_start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
-                parsed_end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
+                parsed_start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
+                parsed_end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
+                if parsed_start_date > parsed_end_date:
+                    return {
+                        "code": 400,
+                        "message": "开始日期不能晚于结束日期",
+                        "data": {},
+                    }
             except ValueError:
                 return {
                     "code": 400,
                     "message": "日期格式错误，请使用YYYY-MM-DD格式",
-                    "data": {}
+                    "data": {},
                 }
-        else:
-            # 默认处理上周日到本周六的数据
-            today = datetime.now().date()
-            # 计算上周日（今天往前推7天，然后找到最近的周日）
-            days_since_sunday = (today.weekday() + 1) % 7  # 0=周一，1=周二，...，6=周日
-            last_sunday = today - timedelta(days=days_since_sunday + 7)
-            this_saturday = last_sunday + timedelta(days=6)
-            
-            parsed_start_date = last_sunday
-            parsed_end_date = this_saturday
-        
-        logger.info(f"用户 {user.id} 手动触发CRM拜访记录回写任务，日期范围: {parsed_start_date} 到 {parsed_end_date}，回写模式: {writeback_mode}")
-        
-        # 如果没有指定回写模式，使用配置中的默认值
+
+        if dt_pair:
+            try:
+                s_loc = parse_datetime_in_writeback_tz(start_datetime)
+                e_loc = parse_datetime_in_writeback_tz(end_datetime)
+            except ValueError:
+                return {
+                    "code": 400,
+                    "message": "日期时间格式错误，请使用 ISO8601 或 YYYY-MM-DD HH:MM:SS（无时区则按 CRM_WRITEBACK_TIMEZONE）",
+                    "data": {},
+                }
+            if s_loc > e_loc:
+                return {
+                    "code": 400,
+                    "message": "开始时间不能晚于结束时间",
+                    "data": {},
+                }
+            normalized_start_dt = s_loc.isoformat()
+            normalized_end_dt = e_loc.isoformat()
+
         if writeback_mode is None:
             dm = settings.CRM_WRITEBACK_DEFAULT_MODE
             writeback_mode = dm.value if dm is not None else None
@@ -329,41 +380,65 @@ def trigger_crm_writeback_task(
                 "data": {},
             }
 
-        # 验证回写模式参数
         valid_modes = [mode.value for mode in WritebackMode]
         if writeback_mode not in valid_modes:
             return {
                 "code": 400,
                 "message": f"无效的回写模式，支持的模式: {valid_modes}",
-                "data": {}
+                "data": {},
             }
-        
-        # 触发异步任务，传递日期参数和回写模式
-        task = crm_visit_records_writeback.delay(
-            start_date_str=parsed_start_date.isoformat(),
-            end_date_str=parsed_end_date.isoformat(),
-            writeback_mode=writeback_mode
+
+        if date_pair:
+            range_desc = f"{parsed_start_date.isoformat()} 到 {parsed_end_date.isoformat()}（日历天）"
+            task = crm_visit_records_writeback.delay(
+                start_date_str=parsed_start_date.isoformat(),
+                end_date_str=parsed_end_date.isoformat(),
+                writeback_mode=writeback_mode,
+            )
+        elif dt_pair:
+            range_desc = f"{normalized_start_dt} 到 {normalized_end_dt}（时间窗口）"
+            task = crm_visit_records_writeback.delay(
+                start_datetime_str=start_datetime.strip(),
+                end_datetime_str=end_datetime.strip(),
+                writeback_mode=writeback_mode,
+            )
+        else:
+            range_desc = (
+                f"按配置自动计算（FREQUENCY={settings.CRM_WRITEBACK_FREQUENCY.value}）"
+            )
+            task = crm_visit_records_writeback.delay(writeback_mode=writeback_mode)
+
+        logger.info(
+            "用户 %s 手动触发CRM拜访记录回写任务，范围: %s，回写模式: %s",
+            user.id,
+            range_desc,
+            writeback_mode,
         )
-        
+
         return {
             "code": 0,
             "message": "CRM拜访记录回写任务已触发",
             "data": {
                 "task_id": task.id,
-                "start_date": parsed_start_date.isoformat(),
-                "end_date": parsed_end_date.isoformat(),
+                "start_date": parsed_start_date.isoformat() if parsed_start_date else None,
+                "end_date": parsed_end_date.isoformat() if parsed_end_date else None,
+                "start_datetime": normalized_start_dt,
+                "end_datetime": normalized_end_dt,
                 "writeback_mode": writeback_mode,
                 "status": "PENDING",
-                "description": f"已提交 {parsed_start_date} 到 {parsed_end_date} 的CRM拜访记录回写任务到队列，回写模式: {writeback_mode}，任务ID: {task.id}"
-            }
+                "description": (
+                    f"已提交 {range_desc} 的CRM拜访记录回写任务到队列，"
+                    f"回写模式: {writeback_mode}，任务ID: {task.id}"
+                ),
+            },
         }
-        
+
     except Exception as e:
         logger.exception(f"触发CRM拜访记录回写任务失败: {e}")
         return {
             "code": 500,
             "message": f"触发任务失败: {str(e)}",
-            "data": {}
+            "data": {},
         }
 
 
@@ -544,8 +619,14 @@ def trigger_sales_task_summary(
 @router.post("/crm/bitable-writeback/trigger-task")
 def trigger_bitable_writeback_task(
     user: CurrentSuperuserDep,
-    start_date: Optional[str] = Body(None, description="开始日期，格式YYYY-MM-DD，不传则根据CRM_WRITEBACK_FREQUENCY配置自动计算"),
-    end_date: Optional[str] = Body(None, description="结束日期，格式YYYY-MM-DD，不传则根据CRM_WRITEBACK_FREQUENCY配置自动计算"),
+    start_date: Optional[str] = Body(
+        None,
+        description="开始日期，格式YYYY-MM-DD，不传则根据 FEISHU_BTABLE_SYNC_FREQUENCY 自动计算",
+    ),
+    end_date: Optional[str] = Body(
+        None,
+        description="结束日期，格式YYYY-MM-DD，不传则根据 FEISHU_BTABLE_SYNC_FREQUENCY 自动计算",
+    ),
     start_datetime: Optional[str] = Body(
         None,
         description=(
@@ -567,7 +648,7 @@ def trigger_bitable_writeback_task(
     - 如果同时提供start_date和end_date，则使用指定的日期范围（日历天口径）
     - 如果同时提供start_datetime和end_datetime，则使用指定的时间窗口（半开区间 [start, end)，与任务内逻辑一致）
     - 上述两组参数互斥，且每组须成对出现
-    - 如果都不提供，则根据settings.CRM_WRITEBACK_FREQUENCY配置自动计算：
+    - 如果都不提供，则根据 settings.FEISHU_BTABLE_SYNC_FREQUENCY 自动计算：
       - DAILY：半开区间 [start, end)，end 为 FEISHU_BTABLE_SYNC_CRON 时刻往前推
         FEISHU_BTABLE_SYNC_WINDOW_BUFFER_MINUTES（默认 30 分钟）
       - WEEKLY：处理上周日到本周六的数据

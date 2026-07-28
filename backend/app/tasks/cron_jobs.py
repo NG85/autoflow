@@ -5,7 +5,7 @@ from sqlmodel import Session, select
 import pytz
 from typing import Any, Optional
 
-from app.core.config import settings, WritebackMode, WritebackFrequency
+from app.core.config import settings, WritebackMode
 from app.core.db import engine
 from app.celery import app
 from app.models import DataSource, DataSourceType
@@ -26,6 +26,12 @@ from app.services.crm_todo_metrics_service import (
     AssigneeMappingCache,
     crm_todo_metrics_service,
     default_todo_metrics_windows,
+)
+from app.services.writeback_window import (
+    calendar_day_window,
+    datetime_window,
+    parse_datetime_in_writeback_tz,
+    resolve_writeback_window,
 )
 from app.services.feishu_billing_facade import (
     BillingScenario,
@@ -1226,34 +1232,32 @@ def send_crm_weekly_followup_leader_engagement_report(self, week_start_str: str 
 
 
 @app.task(bind=True)
-def crm_visit_records_writeback(self, start_date_str=None, end_date_str=None, writeback_mode=None):
+def crm_visit_records_writeback(
+    self,
+    start_date_str=None,
+    end_date_str=None,
+    writeback_mode=None,
+    start_datetime_str=None,
+    end_datetime_str=None,
+):
     """
-    CRM销售拜访记录数据回写任务
-    根据配置的频率执行：weekly（每周日下午2点，处理上周日到本周六）或daily（每天执行，处理昨天）
-    
+    CRM销售拜访记录数据回写任务。
+
+    调度由 ``CRM_WRITEBACK_CRON`` 决定；未传起止参数时，数据窗口由
+    ``CRM_WRITEBACK_FREQUENCY``（weekly / daily / interval）自动计算。
+
     Args:
-        start_date_str: 开始日期字符串，格式YYYY-MM-DD，不传则根据频率配置自动计算
-        end_date_str: 结束日期字符串，格式YYYY-MM-DD，不传则根据频率配置自动计算
-        writeback_mode: 回写模式；不传则使用 ``CRM_WRITEBACK_DEFAULT_MODE``（未配置则任务跳过）
-    
-    工作流程：
-    1. 根据配置的频率计算日期范围：
-       - weekly：计算上周日到本周六的日期范围
-       - daily：计算昨天的日期范围
-    2. 从crm_sales_visit_records表查询该时间范围内的拜访记录
-    3. 根据回写模式选择处理方式：
-       - CBG模式：为每条拜访记录创建纷享销客的日常对象
-       - APAC模式：为每条拜访记录创建Salesforce的任务
-       - OLM模式：为每条拜访记录创建销售易的拜访记录
-       - CHAITIN模式：为每条拜访记录创建长亭的拜访记录
-       - WEBEYE模式：为每条拜访记录创建简道云跟进记录
-       - 其它模式：若尚未接入拜访回写则跳过
-    4. 调用相应的API进行回写或任务创建，并返回回写结果
-    
-    若 ``CRM_WRITEBACK_DEFAULT_MODE`` 未配置（为 ``None``），任务立即成功返回且不查询数据库。
+        start_date_str: 开始日期 YYYY-MM-DD（与 end_date_str 成对，日历天口径）
+        end_date_str: 结束日期 YYYY-MM-DD
+        start_datetime_str: 开始时间（与 end_datetime_str 成对；ISO8601 或
+            ``YYYY-MM-DD HH:MM:SS``，无时区按 CRM_WRITEBACK_TIMEZONE）
+        end_datetime_str: 结束时间
+        writeback_mode: 回写模式；不传则使用 ``CRM_WRITEBACK_DEFAULT_MODE``
+
+    手动补数三选一：日历天 / 任意 datetime 窗口 / 都不传则按 FREQUENCY 自动算。
+    若 ``CRM_WRITEBACK_DEFAULT_MODE`` 未配置，任务立即成功返回且不查询数据库。
     """
     try:
-        # 未指定时使用配置的默认拜访回写模式；为 None 则整任务跳过
         if writeback_mode is None:
             dm = settings.CRM_WRITEBACK_DEFAULT_MODE
             writeback_mode = dm.value if dm is not None else None
@@ -1265,109 +1269,159 @@ def crm_visit_records_writeback(self, start_date_str=None, end_date_str=None, wr
                 "data": {},
             }
 
-        # 验证回写模式
         valid_modes = [mode.value for mode in WritebackMode]
         if writeback_mode not in valid_modes:
             logger.error(f"无效的回写模式: {writeback_mode}，支持的模式: {valid_modes}")
             return {
                 "success": False,
                 "message": f"无效的回写模式: {writeback_mode}，支持的模式: {valid_modes}",
-                "data": {}
+                "data": {},
             }
-        
-        # 计算日期范围
+
+        has_dates = bool(start_date_str or end_date_str)
+        has_datetimes = bool(start_datetime_str or end_datetime_str)
+        if has_dates and has_datetimes:
+            return {
+                "success": False,
+                "message": "不能同时指定 start_date/end_date 与 start_datetime/end_datetime",
+                "data": {},
+            }
+        if has_dates and not (start_date_str and end_date_str):
+            return {
+                "success": False,
+                "message": "start_date 与 end_date 须成对出现",
+                "data": {},
+            }
+        if has_datetimes and not (start_datetime_str and end_datetime_str):
+            return {
+                "success": False,
+                "message": "start_datetime 与 end_datetime 须成对出现",
+                "data": {},
+            }
+
+        writeback_tz = pytz.timezone(settings.CRM_WRITEBACK_TIMEZONE)
+
         if start_date_str and end_date_str:
             try:
-                start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
-                end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
-                logger.info(f"开始执行CRM拜访记录回写任务，指定日期范围: {start_date} 到 {end_date}")
+                start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+                end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
             except ValueError:
-                logger.error(f"无效的日期格式: start_date={start_date_str}, end_date={end_date_str}")
+                logger.error(
+                    f"无效的日期格式: start_date={start_date_str}, end_date={end_date_str}"
+                )
                 return {
                     "success": False,
-                    "message": "无效的日期格式",
-                    "data": {}
+                    "message": "无效的日期格式，请使用 YYYY-MM-DD",
+                    "data": {},
                 }
+            if start_date > end_date:
+                return {
+                    "success": False,
+                    "message": "无效日期范围：start_date 必须 <= end_date",
+                    "data": {},
+                }
+            window = calendar_day_window(start_date, end_date, writeback_tz)
+            logger.info(
+                "开始执行CRM拜访记录回写任务，指定日历天范围: %s 到 %s",
+                start_date,
+                end_date,
+            )
+        elif start_datetime_str and end_datetime_str:
+            try:
+                start_local = parse_datetime_in_writeback_tz(
+                    start_datetime_str, writeback_tz
+                )
+                end_local = parse_datetime_in_writeback_tz(
+                    end_datetime_str, writeback_tz
+                )
+                window = datetime_window(start_local, end_local, writeback_tz)
+            except ValueError as e:
+                logger.error(
+                    "无效的日期时间: start_datetime=%s, end_datetime=%s err=%s",
+                    start_datetime_str,
+                    end_datetime_str,
+                    e,
+                )
+                return {
+                    "success": False,
+                    "message": f"无效的日期时间格式或范围: {e}",
+                    "data": {},
+                }
+            logger.info(
+                "开始执行CRM拜访记录回写任务，指定时间窗口: %s 到 %s",
+                window.start_local.isoformat(),
+                window.end_local.isoformat(),
+            )
         else:
-            # 根据配置的频率自动计算日期范围
-            # 使用配置的时区获取当前日期，确保时区一致性
-            tz = pytz.timezone(settings.CRM_WRITEBACK_TIMEZONE)
-            today = datetime.now(tz).date()
-            frequency = settings.CRM_WRITEBACK_FREQUENCY
-            
-            if frequency == WritebackFrequency.DAILY:
-                # 按天回写：处理昨天的数据
-                start_date = today - timedelta(days=1)
-                end_date = start_date
-                logger.info(f"开始执行CRM拜访记录回写任务，按天模式，处理昨天: {start_date} (时区: {settings.CRM_WRITEBACK_TIMEZONE})")
-            else:  # WritebackFrequency.WEEKLY
-                # 按周回写：处理上周日到本周六的数据
-                # 计算上周日（今天往前推7天，然后找到最近的周日）
-                days_since_sunday = (today.weekday() + 1) % 7  # 0=周一，1=周二，...，6=周日
-                last_sunday = today - timedelta(days=days_since_sunday + 7)
-                this_saturday = last_sunday + timedelta(days=6)
-                
-                start_date = last_sunday
-                end_date = this_saturday
-                logger.info(f"开始执行CRM拜访记录回写任务，按周模式，处理上周日到本周六: {start_date} 到 {end_date} (时区: {settings.CRM_WRITEBACK_TIMEZONE})")
-        
-        # 将本地时区的日期范围转换为UTC时间（数据库中last_modified_time是UTC时间）
-        writeback_tz = pytz.timezone(settings.CRM_WRITEBACK_TIMEZONE)
-        # 构建本地时区的开始和结束时间
-        start_local = datetime.combine(start_date, datetime.min.time())
-        end_local = datetime.combine(end_date, datetime.max.time())
-        # 添加时区信息并转换为UTC
-        start_local = writeback_tz.localize(start_local)
-        end_local = writeback_tz.localize(end_local)
-        start_dt_utc = start_local.astimezone(pytz.UTC)
-        end_dt_utc = end_local.astimezone(pytz.UTC)
-        # 移除时区信息（数据库中的datetime字段通常以naive UTC存储）
-        start_datetime = start_dt_utc.replace(tzinfo=None)
-        end_datetime = end_dt_utc.replace(tzinfo=None)
-        
-        logger.info(f"转换为UTC时间范围: {start_datetime} 到 {end_datetime} (UTC)")
-        
+            try:
+                window = resolve_writeback_window(writeback_tz)
+            except ValueError as e:
+                logger.error("自动计算回写窗口失败: %s", e)
+                return {
+                    "success": False,
+                    "message": str(e),
+                    "data": {},
+                }
+            logger.info(
+                "开始执行CRM拜访记录回写任务，frequency=%s mode=%s 窗口: %s ~ %s (时区: %s)",
+                window.frequency.value,
+                window.mode,
+                window.start_local.isoformat(),
+                window.end_local.isoformat(),
+                settings.CRM_WRITEBACK_TIMEZONE,
+            )
+
+        start_datetime = window.start_utc
+        end_datetime = window.end_utc
+        logger.info("转换为UTC时间范围: %s 到 %s (UTC)", start_datetime, end_datetime)
+
         with Session(engine) as session:
-            # 执行拜访记录回写
             result = crm_writeback_service.writeback_visit_records(
                 session=session,
                 start_datetime=start_datetime,
                 end_datetime=end_datetime,
-                writeback_mode=writeback_mode
+                writeback_mode=writeback_mode,
             )
-            
+
+            range_payload = {
+                "window_mode": window.mode,
+                "frequency": window.frequency.value,
+                "start_local": window.start_local.isoformat(),
+                "end_local": window.end_local.isoformat(),
+                "start_datetime_utc": start_datetime.isoformat(),
+                "end_datetime_utc": end_datetime.isoformat(),
+            }
+            if window.mode == "calendar":
+                range_payload["start_date"] = window.start_local.date().isoformat()
+                range_payload["end_date"] = window.end_local.date().isoformat()
+
             if result["success"]:
                 logger.info(f"CRM拜访记录回写任务执行成功: {result['message']}")
                 return_data = {
                     "success": True,
-                    "start_date": start_date.isoformat(),
-                    "end_date": end_date.isoformat(),
                     "processed_count": result.get("processed_count", 0),
                     "writeback_mode": writeback_mode,
-                    "message": result["message"]
+                    "message": result["message"],
+                    "writeback_count": result.get("writeback_count", 0),
+                    "success_count": result.get("success_count", 0),
+                    "failed_count": result.get("failed_count", 0),
+                    **range_payload,
                 }
-                
-                # 添加回写的统计信息
-                return_data["writeback_count"] = result.get("writeback_count", 0)
-                return_data["success_count"] = result.get("success_count", 0)
-                return_data["failed_count"] = result.get("failed_count", 0)
-                
                 return return_data
-            else:
-                logger.error(f"CRM拜访记录回写任务执行失败: {result['message']}")
-                return {
-                    "success": False,
-                    "start_date": start_date.isoformat(),
-                    "end_date": end_date.isoformat(),
-                    "message": result["message"]
-                }
-                
+
+            logger.error(f"CRM拜访记录回写任务执行失败: {result['message']}")
+            return {
+                "success": False,
+                "message": result["message"],
+                **range_payload,
+            }
+
     except Exception as e:
         logger.exception(f"CRM拜访记录回写任务执行失败: {e}")
         return {
             "success": False,
             "message": f"任务执行失败: {str(e)}",
-            "data": {}
+            "data": {},
         }
 
 
