@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable, Set
+from typing import Iterable, Optional, Set
 
 from sqlmodel import Session, select
 
@@ -10,6 +10,33 @@ from app.repositories.base_repo import BaseRepo
 
 class UserDepartmentRelationRepo(BaseRepo):
     model_cls = UserDepartmentRelation
+
+    def get_department_leader(
+        self,
+        db_session: Session,
+        department_ids: Iterable[str],
+    ) -> Optional[UserDepartmentRelation]:
+        """返回部门负责人（is_leader=True 且有效）；多条时优先 is_primary、其次 id 最小。
+
+        department_ids 应为 DepartmentMirror.unique_id（同名部门可能分布在多棵树的多个 id）。
+        以 user_department_relation.is_leader 为准，不依赖 user_profiles 的直属上级关系。
+        """
+        ids = [str(x).strip() for x in (department_ids or []) if x and str(x).strip()]
+        if not ids:
+            return None
+
+        return db_session.exec(
+            select(UserDepartmentRelation)
+            .where(
+                UserDepartmentRelation.department_id.in_(ids),
+                UserDepartmentRelation.is_leader == True,  # noqa: E712
+                UserDepartmentRelation.is_active == True,  # noqa: E712
+            )
+            .order_by(
+                UserDepartmentRelation.is_primary.desc(),
+                UserDepartmentRelation.id,
+            )
+        ).first()
 
     def get_is_leader_by_user_ids(
         self,

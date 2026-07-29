@@ -18,7 +18,7 @@ from app.rag.chat.chat_flow import ChatFlow
 from app.rag.retrievers.knowledge_graph.schema import KnowledgeGraphRetrievalResult
 from app.rag.chat.stream_protocol import encode_chat_stream, extract_chat_id_from_stream_item
 from app.repositories import chat_repo
-from app.models import Chat, ChatUpdate
+from app.models import Chat, ChatItem, ChatUpdate
 
 from app.rag.chat.chat_service import get_final_chat_result
 from app.models import Chat, ChatUpdate, ChatFilters
@@ -30,8 +30,7 @@ from app.rag.chat.chat_service import (
     remove_chat_message_recommend_questions,
 )
 from app.exceptions import InternalServerError
-from app.models.chat import ChatType
-from app.api.routes.models import ChatMode
+from app.models.chat import ChatType, ChatMode
 from app.core.config import settings
 from app.services.feishu_billing_facade import (
     BillingScenario,
@@ -378,7 +377,7 @@ def list_chats(
     user: OptionalUserDep,
     filters: Annotated[ChatFilters, Query()],
     params: Params = Depends(),
-) -> Page[Chat]:
+) -> Page[ChatItem]:
     browser_id = request.state.browser_id
     return chat_repo.paginate(session, user, browser_id, filters, params)
 
@@ -387,7 +386,7 @@ def list_chats(
 def get_chat(session: SessionDep, user: OptionalUserDep, chat_id: UUID):
     chat = chat_repo.must_get(session, chat_id)
 
-    if not user_can_view_chat(chat, user):
+    if not user_can_view_chat(chat, user, session):
         raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Access denied")
 
     return {
@@ -442,7 +441,7 @@ def get_chat_subgraph(session: SessionDep, user: OptionalUserDep, chat_message_i
     try:
         chat_message = chat_repo.must_get_message(session, chat_message_id)
 
-        if not user_can_view_chat(chat_message.chat, user):
+        if not user_can_view_chat(chat_message.chat, user, session):
             raise HTTPException(
                 status_code=HTTPStatus.FORBIDDEN, detail="Access denied"
             )
@@ -463,7 +462,7 @@ def get_recommended_questions(
     try:
         chat_message = chat_repo.must_get_message(session, chat_message_id)
 
-        if not user_can_view_chat(chat_message.chat, user):
+        if not user_can_view_chat(chat_message.chat, user, session):
             raise HTTPException(
                 status_code=HTTPStatus.FORBIDDEN, detail="Access denied"
             )
@@ -483,7 +482,7 @@ def refresh_recommended_questions(
     try:
         chat_message = chat_repo.must_get_message(session, chat_message_id)
 
-        if not user_can_view_chat(chat_message.chat, user):
+        if not user_can_view_chat(chat_message.chat, user, session):
             raise HTTPException(
                 status_code=HTTPStatus.FORBIDDEN, detail="Access denied"
             )

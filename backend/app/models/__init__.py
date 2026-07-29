@@ -15,7 +15,16 @@ from .feedback import (
 from .semantic_cache import SemanticCache
 from .staff_action_log import StaffActionLog
 from .chat_engine import ChatEngine, ChatEngineUpdate
-from .chat import Chat, ChatUpdate, ChatVisibility, ChatFilters, ChatOrigin
+from .chat import (
+    Chat,
+    ChatItem,
+    ChatUpdate,
+    ChatVisibility,
+    ChatFilters,
+    ChatOrigin,
+    ChatType,
+    ChatMode,
+)
 from .chat_message import ChatMessage
 from .document import Document, DocIndexTaskStatus, DocumentCategory, DocumentMetadata
 from .chunk import KgIndexStatus, get_kb_chunk_model, PlaybookKgIndexStatus, CrmKgIndexStatus

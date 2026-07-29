@@ -1,6 +1,6 @@
-"""将 OAuth data-scope（entity=crm_account）译为本地联系人列表 SQL WHERE。
+"""将 OAuth data-scope（entity=crm_opportunity）译为商机列表 SQL WHERE。
 
-本地联系人可见性继承所属客户：``local_contacts.customer_id`` ↔ ``crm_data_authority.data_id``。
+商机**不继承**客户权限；无 high_seas / customer_attribute_unrestricted。
 真源：aptsell-oauth docs/examples/crm_translate_scope_to_sql.py、api-permission-data-scope.md。
 """
 
@@ -9,11 +9,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-CRM_ENTITY_ACCOUNT = "crm_account"
+CRM_ENTITY_OPPORTUNITY = "crm_opportunity"
 MIRROR_TABLE = "crm_data_authority"
 DELETE_FLAG_NOT_DELETED = "0"
-LOCAL_CONTACTS_TABLE = "local_contacts"
-LOCAL_CONTACTS_ACCOUNT_COLUMN = "customer_id"
+CRM_OPPORTUNITIES_TABLE = "crm_opportunities"
+CRM_OPPORTUNITIES_ID_COLUMN = "unique_id"
 
 
 @dataclass(frozen=True)
@@ -22,14 +22,14 @@ class ScopeSql:
     params: dict[str, Any]
 
 
-def translate_crm_account_scope_to_sql(
+def translate_crm_opportunity_scope_to_sql(
     filters: list[dict[str, Any]] | None,
     merge: str,
     *,
-    main_alias: str = LOCAL_CONTACTS_TABLE,
-    id_column: str = LOCAL_CONTACTS_ACCOUNT_COLUMN,
+    main_alias: str = CRM_OPPORTUNITIES_TABLE,
+    id_column: str = CRM_OPPORTUNITIES_ID_COLUMN,
 ) -> ScopeSql:
-    """将 ``entity=crm_account`` 的 data-scope filters 译为联系人列表权限 WHERE。"""
+    """将 ``entity=crm_opportunity`` 的 data-scope filters 译为商机列表权限 WHERE。"""
     if not filters:
         return _deny()
 
@@ -38,7 +38,7 @@ def translate_crm_account_scope_to_sql(
             return _allow_all()
 
     parts: list[str] = []
-    params: dict[str, Any] = {"perm_entity_type": CRM_ENTITY_ACCOUNT}
+    params: dict[str, Any] = {"perm_entity_type": CRM_ENTITY_OPPORTUNITY}
     idx = 0
 
     for item in filters:
@@ -66,32 +66,7 @@ def translate_crm_account_scope_to_sql(
                 for i, org_id in enumerate(org_ids):
                     params[f"perm_org_id_{idx}_{i}"] = org_id
                 idx += 1
-        elif src == "high_seas" and _get_bool(item, "enabled"):
-            # local_contacts 无负责人字段，经 crm_accounts 判断公海
-            parts.append(
-                f"""EXISTS (
-  SELECT 1 FROM crm_accounts a
-  WHERE a.unique_id = {main_alias}.{id_column}
-    AND a.person_in_charge_id IS NULL
-)"""
-            )
-        elif src == "customer_attribute_unrestricted":
-            attributes = _get_str_list(item, "values")
-            if attributes:
-                placeholders = ", ".join(
-                    f":perm_customer_attribute_{idx}_{i}"
-                    for i in range(len(attributes))
-                )
-                parts.append(
-                    f"""EXISTS (
-  SELECT 1 FROM crm_accounts a
-  WHERE a.unique_id = {main_alias}.{id_column}
-    AND a.customer_attribute IN ({placeholders})
-)"""
-                )
-                for i, attribute in enumerate(attributes):
-                    params[f"perm_customer_attribute_{idx}_{i}"] = attribute
-                idx += 1
+        # high_seas / customer_attribute_unrestricted：仅 crm_account，商机忽略
 
     if not parts:
         return _deny()

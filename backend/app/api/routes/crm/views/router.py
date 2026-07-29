@@ -10,6 +10,7 @@ from app.api.routes.crm.models import Account
 from app.api.routes.crm.views.engine import view_engine
 from app.crm.view_engine import CrmViewRequest, ViewType
 from app.exceptions import InternalServerError
+from app.permissions.crm_opportunity_permission_service import crm_opportunity_permission_service
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,9 @@ def query_crm_view(
     request: CrmViewRequest,
 ):
     try:
+        if not crm_opportunity_permission_service.gate_view(db_session, user.id):
+            raise HTTPException(status_code=403, detail="无商机查看权限")
+
         result = view_engine.execute_view_query(
             db_session=db_session,
             request=request,
@@ -63,6 +67,9 @@ async def get_filter_options(
     user: CurrentUserDep,
 ):
     try:
+        if not crm_opportunity_permission_service.gate_view(db_session, user.id):
+            raise HTTPException(status_code=403, detail="无商机查看权限")
+
         return view_engine.get_filter_options(
             db_session=db_session,
             user_id=user.id,

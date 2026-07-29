@@ -68,7 +68,9 @@ def _is_invalid_tenant_token_error(exc: Exception) -> bool:
 
 
 # department_group_chats.notification_type：部门 review 群按推送内容细分
-_DEPARTMENT_REVIEW_VISIT_TYPES = frozenset({"department_review", "all"})
+_DEPARTMENT_REVIEW_VISIT_TYPES = frozenset(
+    {"department_review", "department_review_visits", "all"}
+)
 _DEPARTMENT_REVIEW_REPORT_TYPES = frozenset(
     {"department_review", "department_review_reports", "all"}
 )
@@ -82,8 +84,8 @@ def _department_group_entry_matches_notification_type(
     """
     判断群配置是否匹配请求的 notification_type。
     review_scope 仅在请求 department_review 时使用：
-      visit — 收拜访上级卡片（不含 department_review_reports）
-      report — 收部门日/周报（含 department_review_reports）
+      visit — 收拜访上级卡片（含 department_review_visits，不含 department_review_reports）
+      report — 收部门日/周报（含 department_review_reports，不含 department_review_visits）
     """
     entry_type = (entry.get("notification_type") or "all").strip().lower()
     requested = notification_type.strip().lower()
@@ -399,8 +401,9 @@ class PlatformNotificationService:
         notification_type 用于区分消息类型，仅返回配置了该类型或 "all" 的群：
           "visit_record" - 部门简报群（收文本，部门leader+销售）
           "department_review" - 部门 review 群；配合 review_scope 区分拜访卡片与日/周报：
-            review_scope="visit" — department_review、all（拜访上级卡片）
+            review_scope="visit" — department_review、department_review_visits、all（拜访上级卡片）
             review_scope="report" — department_review、department_review_reports、all（部门日/周报）
+          "department_review_visits" - 仅收拜访上级卡片，不收部门日/周报
           "department_review_reports" - 仅收部门日/周报，不收拜访卡片（拜访仍按汇报上级推送给个人）
         若配置项含 include_children=true 且传入 db_session，则填写人所在部门为配置部门的任意子部门时也会匹配该群（父部门一个群包住所有子部门）。
         数据来源：站点配置 department_group_chats（每家客户可独立配置）。
@@ -1322,8 +1325,9 @@ class PlatformNotificationService:
     ) -> Tuple[Dict[str, List[Dict[str, Any]]], List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
         汇总拜访记录推送的接收者与部门群配置。
-        若配置了会收拜访卡片的 department_review 群，则从个人接收者中移除 leader 与
-        cc_scope=global / department 的 configured_cc；仅 cc_scope=user 的个性化抄送仍推个人。
+        若配置了会收拜访卡片的群（department_review / department_review_visits / all），
+        则从个人接收者中移除 leader 与 cc_scope=global / department 的 configured_cc；
+        仅 cc_scope=user 的个性化抄送仍推个人。
         管理层与 global / department 抄送改由 review 群接收 leader 版卡片。
         department_review_reports 群不参与拜访推送，也不影响个人接收者中的 leader。
         返回 (recipients_by_platform, department_groups_review, department_groups_brief)。

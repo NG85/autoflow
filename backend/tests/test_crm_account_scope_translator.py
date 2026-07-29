@@ -38,3 +38,34 @@ def test_high_seas_joins_crm_accounts():
     )
     assert "crm_accounts" in perm.sql
     assert "person_in_charge_id IS NULL" in perm.sql
+
+
+def test_unrestricted_customer_attribute_joins_crm_accounts_with_bound_values():
+    perm = translate_crm_account_scope_to_sql(
+        [
+            {"source": "crm_data_authority", "crmId": "crm-001"},
+            {
+                "source": "customer_attribute_unrestricted",
+                "values": ["CRO", "PARTNER"],
+            },
+        ],
+        "OR",
+    )
+
+    assert " OR " in perm.sql
+    assert "crm_accounts" in perm.sql
+    assert "a.unique_id = local_contacts.customer_id" in perm.sql
+    assert "a.customer_attribute IN (" in perm.sql
+    assert "CRO" not in perm.sql
+    assert perm.params["perm_customer_attribute_1_0"] == "CRO"
+    assert perm.params["perm_customer_attribute_1_1"] == "PARTNER"
+
+
+def test_unrestricted_customer_attribute_without_values_is_ignored():
+    perm = translate_crm_account_scope_to_sql(
+        [{"source": "customer_attribute_unrestricted", "values": []}],
+        "OR",
+    )
+
+    assert perm.sql == "1=0"
+    assert perm.params == {}

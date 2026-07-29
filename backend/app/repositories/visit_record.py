@@ -28,7 +28,11 @@ from app.repositories.department_mirror import department_mirror_repo
 from app.services.crm_config_service import get_resolved_field_mapping
 from app.services.oauth_service import oauth_client
 from app.utils.crm_account_tags import parse_account_tags, resolve_followup_account_id
-from app.utils.crm_comments import CRMCommentValidationError, merge_append_crm_comments
+from app.utils.crm_comments import (
+    CRMCommentValidationError,
+    has_nonempty_comments,
+    merge_append_crm_comments,
+)
 from app.utils.crm_followup_object import (
     FOLLOWUP_OBJECT_TYPE_END_CUSTOMER,
     FOLLOWUP_OBJECT_TYPE_LEAD,
@@ -396,8 +400,18 @@ def _convert_to_response(
         for tag in parse_account_tags(followup_extra if isinstance(followup_extra, dict) else None)
     ]
     response.department = department  # 拜访人部门
+    response.has_comments = has_nonempty_comments(record.comments)
 
     return response
+
+
+def _visit_record_has_comments_predicate():
+    """构建 SQL 谓词：comments 数组是否非空（不区分 comment / task）。"""
+    comments_col = CRMSalesVisitRecord.comments
+    return and_(
+        comments_col.isnot(None),
+        func.json_length(comments_col) > 0,
+    )
 
 
 class VisitRecordRepo(BaseRepo):
@@ -1053,6 +1067,13 @@ class VisitRecordRepo(BaseRepo):
             query = query.where(
                 CRMSalesVisitRecord.is_call_high == request.is_call_high
             )
+
+        if request.has_comments is not None:
+            has_comments_predicate = _visit_record_has_comments_predicate()
+            if request.has_comments:
+                query = query.where(has_comments_predicate)
+            else:
+                query = query.where(~has_comments_predicate)
 
         # 处理创建时间筛选 - 将北京时间的日期转换为UTC时间范围
         if request.last_modified_time_start:

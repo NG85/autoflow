@@ -197,6 +197,7 @@ class ChatEngineConfig(BaseModel):
         return self.model_dump(
             exclude={
                 "llm": [
+                    "analyze_competitor_related_prompt",
                     "condense_question_prompt",
                     "text_qa_prompt",
                     "refine_prompt",

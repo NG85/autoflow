@@ -7,6 +7,8 @@ from zoneinfo import ZoneInfo
 
 from app.utils.date_utils import convert_utc_to_local_timezone
 
+from app.utils.date_utils import convert_utc_to_local_timezone
+
 
 class CRMCommentValidationError(ValueError):
     """评论 payload 校验失败。"""
@@ -108,6 +110,11 @@ def merge_append_crm_comments(
 
     merged.sort(key=_sort_key)
     return merged, appended
+
+
+def has_nonempty_comments(comments_raw: object) -> bool:
+    """判断 comments 数组是否非空（不区分 comment / task）。"""
+    return isinstance(comments_raw, list) and len(comments_raw) > 0
 
 
 def _comment_created_at_sort_key(item: Dict[str, Any]) -> tuple[int, str]:

@@ -3,8 +3,9 @@ CRM统计服务
 用于从现有的统计表中读取和处理销售人员的日报和周报数据
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 from datetime import date, datetime, timedelta
+from uuid import UUID
 
 from sqlalchemy import text
 from sqlmodel import Session, select
@@ -14,7 +15,6 @@ import logging
 from app.services.platform_notification_service import platform_notification_service
 
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
-from app.models.user_profile import UserProfile
 from app.services.oauth_service import oauth_client
 from app.core.config import settings
 from app.services.feishu_billing_facade import (
@@ -30,6 +30,67 @@ class CRMStatisticsService:
     
     def __init__(self):
         pass
+
+    def _resolve_recorder_departments(
+        self,
+        session: Session,
+        recorder_ids: Iterable[str],
+    ) -> Dict[str, str]:
+        """按 user_department_relation 解析 recorder(user_id) → 部门名称。
+
+        - 主匹配：relation.user_id == recorder_id（拜访记录 recorder_id 即系统 user_id）。
+        - 补充：relation 中 user_id 为空、仅有 crm_user_id 的行，改用 recorder 的 crm_user_id 匹配；
+          crm_user_id 仅经 user_profiles 作 user_id→crm_user_id 的 ID 桥接，部门口径仍取自 relation。
+        - relation 只有 department_id，经 department_mirror 映射为部门名称，与部门日报按名称聚合对齐。
+        """
+        from app.repositories.department_mirror import department_mirror_repo
+        from app.repositories.user_department_relation import (
+            user_department_relation_repo,
+        )
+        from app.repositories.user_profile import user_profile_repo
+
+        ids = [str(x).strip() for x in (recorder_ids or []) if x and str(x).strip()]
+        if not ids:
+            return {}
+
+        # 1) 按 user_id 匹配 relation → department_id
+        dept_id_by_recorder: Dict[str, str] = dict(
+            user_department_relation_repo.get_primary_department_by_user_ids(session, ids)
+        )
+
+        # 2) 未命中者（relation.user_id 为空）：经 profiles 取 crm_user_id，再按 crm_user_id 匹配 relation
+        unresolved = [rid for rid in ids if rid not in dept_id_by_recorder]
+        if unresolved:
+            uuids: List[UUID] = []
+            for rid in unresolved:
+                try:
+                    uuids.append(UUID(rid))
+                except (ValueError, TypeError):
+                    continue
+            crm_by_recorder: Dict[str, str] = {}
+            if uuids:
+                for profile in user_profile_repo.get_by_user_ids(session, uuids):
+                    if profile.user_id and profile.crm_user_id:
+                        crm_by_recorder[str(profile.user_id)] = str(profile.crm_user_id)
+            if crm_by_recorder:
+                dept_id_by_crm = (
+                    user_department_relation_repo.get_primary_department_by_crm_user_ids(
+                        session, list(set(crm_by_recorder.values()))
+                    )
+                )
+                for rid, crm in crm_by_recorder.items():
+                    dept_id = dept_id_by_crm.get(crm)
+                    if dept_id:
+                        dept_id_by_recorder[rid] = dept_id
+
+        # 3) department_id → 部门名称
+        dept_ids = list({did for did in dept_id_by_recorder.values() if did})
+        name_by_dept_id = department_mirror_repo.get_department_names_by_ids(session, dept_ids)
+
+        return {
+            rid: (name_by_dept_id.get(did) or "")
+            for rid, did in dept_id_by_recorder.items()
+        }
 
     def get_sales_daily_statistics(self, session: Session, target_date: date) -> List[Dict]:
         """
@@ -75,10 +136,6 @@ class CRMStatisticsService:
             CRMSalesVisitRecord.partner_name,
             CRMSalesVisitRecord.visit_communication_date,
             CRMSalesVisitRecord.is_first_visit,
-            UserProfile.department,
-        ).outerjoin(
-            UserProfile,
-            CRMSalesVisitRecord.recorder_id == UserProfile.user_id
         ).where(
             CRMSalesVisitRecord.visit_communication_date == target_date,
             CRMSalesVisitRecord.recorder_id.isnot(None)
@@ -92,13 +149,19 @@ class CRMStatisticsService:
         
         logger.info(f"找到 {len(visit_records)} 条 {target_date} 的拜访记录")
         
+        # recorder(user_id) → 部门名称：按 user_department_relation 解析（不再取 user_profiles.department）
+        department_by_recorder = self._resolve_recorder_departments(
+            session,
+            {str(record.recorder_id) for record in visit_records if record.recorder_id},
+        )
+
         # 按销售分组，收集每个销售拜访的客户、商机和合作伙伴
         sales_dict: Dict[str, Dict[str, Any]] = {}
         
         for record in visit_records:
             recorder_id = str(record.recorder_id)
             recorder_name = record.recorder or ""
-            department = record.department or ""
+            department = department_by_recorder.get(recorder_id, "")
             
             # 初始化销售信息
             if recorder_id not in sales_dict:
@@ -394,37 +457,63 @@ class CRMStatisticsService:
         if not name:
             return people, alias_to_canonical
 
-        dept_ids = department_mirror_repo.get_department_ids_by_name(session, name)
-        if dept_ids:
-            rows = session.exec(
-                select(
-                    UserDepartmentRelation.crm_user_id,
-                    UserDepartmentRelation.user_name,
-                    UserDepartmentRelation.user_id,
-                ).where(
-                    UserDepartmentRelation.department_id.in_(dept_ids),
-                    UserDepartmentRelation.is_active == True,  # noqa: E712
-                    UserDepartmentRelation.crm_user_id.is_not(None),
+        # W6：团队统计口径优先按 OAuth org_scope（部门负责人汇报链）确定基础人群；
+        # 关闭开关或解析失败/为空时回退按部门成员表展开。无论走哪条基础人群，最后都并入
+        # 统计日 sales_stats 中该部门的拜访记录人，避免有拜访但不在名册者被漏统计。
+        oauth_owners = None
+        if settings.REPORT_OAUTH_SCOPE_ENABLED:
+            try:
+                from app.permissions.report_scope_service import report_scope_service
+
+                oauth_owners = report_scope_service.resolve_team_owners(session, name)
+            except Exception:
+                logger.exception(
+                    "report team scope via OAuth failed, fallback to department members, department=%s",
+                    name,
                 )
-            ).all()
-            for crm_user_id, user_name, user_id in rows:
+                oauth_owners = None
+
+        if oauth_owners is not None:
+            people, alias_to_canonical = oauth_owners
+        else:
+            dept_ids = department_mirror_repo.get_department_ids_by_name(session, name)
+            if dept_ids:
+                rows = session.exec(
+                    select(
+                        UserDepartmentRelation.crm_user_id,
+                        UserDepartmentRelation.user_name,
+                        UserDepartmentRelation.user_id,
+                    ).where(
+                        UserDepartmentRelation.department_id.in_(dept_ids),
+                        UserDepartmentRelation.is_active == True,  # noqa: E712
+                        UserDepartmentRelation.crm_user_id.is_not(None),
+                    )
+                ).all()
+                for crm_user_id, user_name, user_id in rows:
+                    self._register_department_owner(
+                        people,
+                        alias_to_canonical,
+                        display_name=str(user_name or ""),
+                        user_id=str(user_id) if user_id else None,
+                        crm_user_id=str(crm_user_id) if crm_user_id else None,
+                    )
+
+            for profile in UserProfileRepo().get_department_members(session, name):
                 self._register_department_owner(
                     people,
                     alias_to_canonical,
-                    display_name=str(user_name or ""),
-                    user_id=str(user_id) if user_id else None,
-                    crm_user_id=str(crm_user_id) if crm_user_id else None,
+                    display_name=str(profile.name or ""),
+                    user_id=str(profile.user_id) if profile.user_id else None,
+                    crm_user_id=str(profile.crm_user_id) if profile.crm_user_id else None,
                 )
 
-        for profile in UserProfileRepo().get_department_members(session, name):
-            self._register_department_owner(
-                people,
-                alias_to_canonical,
-                display_name=str(profile.name or ""),
-                user_id=str(profile.user_id) if profile.user_id else None,
-                crm_user_id=str(profile.crm_user_id) if profile.crm_user_id else None,
-            )
-
+        # 兜底：并入统计日 sales_stats 中归属本部门、但上面基础名册未覆盖的 recorder。
+        # 即便 sales_stats 的部门也来自 user_department_relation，此步仍非冗余：
+        #   1) OAuth 命中时基础名册来自「负责人 OAuth 汇报链」，与 relation 主部门是两套来源，
+        #      汇报链外但 relation 主部门归本部门的人只能在此补入；
+        #   2) sales_stats 用主部门且不过滤 is_active/crm_user_id，而回退名册的 relation 查询要求
+        #      is_active=True 且 crm_user_id 非空——主部门行停用/缺 crm_id 的 recorder 仅在此补入。
+        # 按 canonical 聚合，重复并入不会重复计数。请勿因“看似同源”而删除。
         if stat_date is not None:
             cache_key = f"crm_sales_daily_stats:{stat_date.isoformat()}"
             sales_stats = session.info.get(cache_key)

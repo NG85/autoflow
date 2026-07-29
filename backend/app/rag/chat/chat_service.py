@@ -41,14 +41,13 @@ from app.rag.types import (
     ChatEventType,
     ChatMessageSate,
 )
+from app.core.config import settings
+from app.permissions.chat_permission_service import chat_permission_service
 from app.repositories import chat_engine_repo
 from app.repositories.embedding_model import embedding_model_repo
 from app.repositories.llm import llm_repo
-from app.services.oauth_service import oauth_client
 from app.site_settings import SiteSetting
 from llama_index.core.prompts.rich import RichPromptTemplate
-
-from app.models.chat import ChatType
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +96,9 @@ def get_final_chat_result(
     )
 
 
-def user_can_view_chat(chat: DBChat, user: Optional[User]) -> bool:
+def user_can_view_chat(
+    chat: DBChat, user: Optional[User], session: Optional[Session] = None
+) -> bool:
     # Anonymous or public chat can be accessed by anyone
     # Non-anonymous chat can be accessed by owner or superuser
     if not chat.user_id or chat.visibility == ChatVisibility.PUBLIC:
@@ -106,15 +107,27 @@ def user_can_view_chat(chat: DBChat, user: Optional[User]) -> bool:
         return False
     if user.is_superuser or chat.user_id == user.id:
         return True
-    if chat.chat_type == ChatType.CLIENT_VISIT_GUIDE:
-        try:
-            return oauth_client.check_user_has_permission(
-                user_id=user.id,
-                permission="chats:client_visit_guide:company:view",
-            )
-        except Exception:
-            return False
-    return False
+
+    # 与列表 GET /chats 保持一致：按 OAuth data-scope 判定（global 看全部 / 主管看下级）。
+    # 未开启、未纳管、缺少 session 或解析失败 → 回退“仅本人”，非本人一律拒绝。
+    if session is None or not settings.CHAT_OAUTH_SCOPE_ENABLED:
+        return False
+    if chat_permission_service.resolve_entity(chat.chat_type) is None:
+        return False
+    try:
+        scope = chat_permission_service.build_scope(session, user.id, chat.chat_type)
+    except Exception:
+        logger.exception(
+            "chat data-scope resolve failed, deny non-owner view, "
+            "user_id=%s chat_id=%s chat_type=%s",
+            user.id,
+            chat.id,
+            chat.chat_type,
+        )
+        return False
+    if scope.allow_all:
+        return True
+    return str(chat.user_id) in scope.owner_user_ids
 
 
 def user_can_edit_chat(chat: DBChat, user: Optional[User]) -> bool:
