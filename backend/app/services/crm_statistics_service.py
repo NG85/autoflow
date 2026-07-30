@@ -735,10 +735,11 @@ class CRMStatisticsService:
         """
         将跟进方式计数字典格式化为卡片文案。
         排序：按方式名称升序；「未填写」固定在最后。
+        无跟进时返回「当日无跟进记录。」。
         示例：线上会议：3        饭局聚会：2        未填写：1
         """
         if not counts:
-            return ""
+            return "当日无跟进记录。"
         named_items = sorted(
             ((name, int(cnt or 0)) for name, cnt in counts.items() if name != cls._VISIT_METHOD_UNSPECIFIED),
             key=lambda item: item[0],
@@ -747,7 +748,8 @@ class CRMStatisticsService:
             named_items.append(
                 (cls._VISIT_METHOD_UNSPECIFIED, int(counts[cls._VISIT_METHOD_UNSPECIFIED] or 0))
             )
-        return "        ".join(f"{name}：{cnt}" for name, cnt in named_items if cnt > 0)
+        text = "        ".join(f"{name}：{cnt}" for name, cnt in named_items if cnt > 0)
+        return text or "当日无跟进记录。"
 
     def _load_visit_method_counts_by_department(
         self,
@@ -1870,7 +1872,7 @@ class CRMStatisticsService:
             )
         else:
             department_report.update(self._empty_department_todo_task_stats())
-            department_report["visit_methods"] = ""
+            department_report["visit_methods"] = "当日无跟进记录。"
 
         return department_report
     
