@@ -7,7 +7,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from datetime import date, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlmodel import Session, select
 from app.models.crm_account_opportunity_assessment import CRMAccountOpportunityAssessment
 from app.models.crm_department_daily_summary import CRMDepartmentDailySummary
@@ -722,6 +722,112 @@ class CRMStatisticsService:
         )
         department_report.update(todo_stats)
         return department_report
+
+    _VISIT_METHOD_UNSPECIFIED = "未填写"
+
+    @classmethod
+    def _normalize_visit_method_label(cls, method: Optional[str]) -> str:
+        label = (method or "").strip()
+        return label or cls._VISIT_METHOD_UNSPECIFIED
+
+    @classmethod
+    def _format_visit_methods_text(cls, counts: Dict[str, int]) -> str:
+        """
+        将跟进方式计数字典格式化为卡片文案。
+        排序：按方式名称升序；「未填写」固定在最后。
+        示例：线上会议：3        饭局聚会：2        未填写：1
+        """
+        if not counts:
+            return ""
+        named_items = sorted(
+            ((name, int(cnt or 0)) for name, cnt in counts.items() if name != cls._VISIT_METHOD_UNSPECIFIED),
+            key=lambda item: item[0],
+        )
+        if cls._VISIT_METHOD_UNSPECIFIED in counts:
+            named_items.append(
+                (cls._VISIT_METHOD_UNSPECIFIED, int(counts[cls._VISIT_METHOD_UNSPECIFIED] or 0))
+            )
+        return "        ".join(f"{name}：{cnt}" for name, cnt in named_items if cnt > 0)
+
+    def _load_visit_method_counts_by_department(
+        self,
+        session: Session,
+        target_date: date,
+        department_names: Optional[List[str]] = None,
+    ) -> Dict[str, Dict[str, int]]:
+        """
+        按部门实时统计指定日各跟进方式的拜访记录条数。
+        部门归属取 recorder_department_name 快照；空方式归为「未填写」。
+        """
+        query = (
+            select(
+                CRMSalesVisitRecord.recorder_department_name,
+                CRMSalesVisitRecord.visit_communication_method,
+                func.count().label("cnt"),
+            )
+            .where(CRMSalesVisitRecord.visit_communication_date == target_date)
+            .group_by(
+                CRMSalesVisitRecord.recorder_department_name,
+                CRMSalesVisitRecord.visit_communication_method,
+            )
+        )
+        if department_names:
+            query = query.where(
+                CRMSalesVisitRecord.recorder_department_name.in_(department_names)
+            )
+
+        result: Dict[str, Dict[str, int]] = {}
+        for dept_name, method, cnt in session.exec(query).all():
+            department = (dept_name or "").strip()
+            if not department:
+                continue
+            method_label = self._normalize_visit_method_label(method)
+            dept_counts = result.setdefault(department, {})
+            dept_counts[method_label] = dept_counts.get(method_label, 0) + int(cnt or 0)
+        return result
+
+    def _load_company_visit_method_counts(
+        self,
+        session: Session,
+        target_date: date,
+    ) -> Dict[str, int]:
+        """公司级：指定日全量拜访记录按跟进方式计条数；空方式归为「未填写」。"""
+        query = (
+            select(
+                CRMSalesVisitRecord.visit_communication_method,
+                func.count().label("cnt"),
+            )
+            .where(CRMSalesVisitRecord.visit_communication_date == target_date)
+            .group_by(CRMSalesVisitRecord.visit_communication_method)
+        )
+        result: Dict[str, int] = {}
+        for method, cnt in session.exec(query).all():
+            method_label = self._normalize_visit_method_label(method)
+            result[method_label] = result.get(method_label, 0) + int(cnt or 0)
+        return result
+
+    def _enrich_report_with_visit_methods(
+        self,
+        session: Session,
+        report: Dict[str, Any],
+        *,
+        target_date: date,
+        department_name: Optional[str] = None,
+        method_counts_by_department: Optional[Dict[str, Dict[str, int]]] = None,
+    ) -> Dict[str, Any]:
+        """为团队/公司日报卡片补充 visit_methods 文案。"""
+        if department_name is not None:
+            dept = (department_name or "").strip()
+            if method_counts_by_department is not None:
+                counts = method_counts_by_department.get(dept, {})
+            else:
+                counts = self._load_visit_method_counts_by_department(
+                    session, target_date, department_names=[dept] if dept else None
+                ).get(dept, {})
+        else:
+            counts = self._load_company_visit_method_counts(session, target_date)
+        report["visit_methods"] = self._format_visit_methods_text(counts)
+        return report
 
     @staticmethod
     def _build_department_daily_page_urls(
@@ -1572,6 +1678,58 @@ class CRMStatisticsService:
             logger.error(f"发送公司日报飞书通知时出错: {str(e)}")
         
         logger.info("CRM公司日报飞书通知发送完成")
+
+    @staticmethod
+    def _empty_department_or_company_statistics() -> Dict[str, int]:
+        """团队/公司日报 statistics 空结构（与有数据时字段对齐）。"""
+        return {
+            "end_customer_total_follow_up": 0,
+            "first_visit_red_count": 0,
+            "first_visit_yellow_count": 0,
+            "first_visit_green_count": 0,
+            "end_customer_total_first_visit": 0,
+            "multi_visit_red_count": 0,
+            "multi_visit_yellow_count": 0,
+            "multi_visit_green_count": 0,
+            "end_customer_total_multi_visit": 0,
+            "partner_total_follow_up": 0,
+            "partner_red_count": 0,
+            "partner_yellow_count": 0,
+            "partner_green_count": 0,
+            # 线索：卡片侧只展示总数与红黄绿（不区分首次/多次）
+            "lead_total_follow_up": 0,
+            "lead_red_count": 0,
+            "lead_yellow_count": 0,
+            "lead_green_count": 0,
+        }
+
+    @classmethod
+    def _statistics_from_department_summary(
+        cls,
+        record: Optional[CRMDepartmentDailySummary],
+    ) -> Dict[str, int]:
+        """从 crm_department_daily_summary 记录映射到卡片 statistics。"""
+        if record is None:
+            return cls._empty_department_or_company_statistics()
+        return {
+            "end_customer_total_follow_up": record.end_customer_total_count or 0,
+            "first_visit_red_count": record.end_customer_first_visit_red_count or 0,
+            "first_visit_yellow_count": record.end_customer_first_visit_yellow_count or 0,
+            "first_visit_green_count": record.end_customer_first_visit_green_count or 0,
+            "end_customer_total_first_visit": record.end_customer_first_visit_count or 0,
+            "multi_visit_red_count": record.end_customer_regular_visit_red_count or 0,
+            "multi_visit_yellow_count": record.end_customer_regular_visit_yellow_count or 0,
+            "multi_visit_green_count": record.end_customer_regular_visit_green_count or 0,
+            "end_customer_total_multi_visit": record.end_customer_regular_visit_count or 0,
+            "partner_total_follow_up": record.partner_total_count or 0,
+            "partner_red_count": record.partner_red_count or 0,
+            "partner_yellow_count": record.partner_yellow_count or 0,
+            "partner_green_count": record.partner_green_count or 0,
+            "lead_total_follow_up": record.lead_total_count or 0,
+            "lead_red_count": record.lead_red_count or 0,
+            "lead_yellow_count": record.lead_yellow_count or 0,
+            "lead_green_count": record.lead_green_count or 0,
+        }
     
     def aggregate_department_reports(
         self,
@@ -1609,6 +1767,11 @@ class CRMStatisticsService:
             return []
         
         department_reports: List[Dict[str, Any]] = []
+        method_counts_by_department = self._load_visit_method_counts_by_department(
+            session,
+            target_date,
+            department_names=department_names,
+        )
         
         for record in records:
             department_name = record.department_name or ""
@@ -1616,26 +1779,7 @@ class CRMStatisticsService:
                 continue
             
             # 统计字段：直接使用汇总表中的结果（对齐 CRMDepartmentDailySummary 新字段定义）
-            total_stats = {
-                # 最终客户 - 总体
-                "end_customer_total_follow_up": record.end_customer_total_count or 0,
-                # 最终客户 - 首次跟进
-                "first_visit_red_count": record.end_customer_first_visit_red_count or 0,
-                "first_visit_yellow_count": record.end_customer_first_visit_yellow_count or 0,
-                "first_visit_green_count": record.end_customer_first_visit_green_count or 0,
-                "end_customer_total_first_visit": record.end_customer_first_visit_count or 0,
-                # 最终客户 - 多次跟进
-                "multi_visit_red_count": record.end_customer_regular_visit_red_count or 0,
-                "multi_visit_yellow_count": record.end_customer_regular_visit_yellow_count or 0,
-                "multi_visit_green_count": record.end_customer_regular_visit_green_count or 0,
-                "end_customer_total_multi_visit": record.end_customer_regular_visit_count or 0,
-                # 合作伙伴统计
-                "partner_total_follow_up": record.partner_total_count or 0,
-                # 合作伙伴红黄绿灯统计（不区分首次/多次）
-                "partner_red_count": record.partner_red_count or 0,
-                "partner_yellow_count": record.partner_yellow_count or 0,
-                "partner_green_count": record.partner_green_count or 0,
-            }
+            total_stats = self._statistics_from_department_summary(record)
             
             page_urls = self._build_department_daily_page_urls(
                 department_name=department_name,
@@ -1667,6 +1811,13 @@ class CRMStatisticsService:
                 department_report,
                 stat_date=target_date,
             )
+            self._enrich_report_with_visit_methods(
+                session,
+                department_report,
+                target_date=target_date,
+                department_name=department_name,
+                method_counts_by_department=method_counts_by_department,
+            )
             department_reports.append(department_report)
         
         logger.info(f"完成 {target_date} 的部门日报汇总（基于 crm_department_daily_summary），共 {len(department_reports)} 个部门")
@@ -1684,26 +1835,7 @@ class CRMStatisticsService:
         该结构与 aggregate_department_reports 返回的元素保持一致，便于直接用于卡片推送。
         """
         # 统计字段格式需与 aggregate_department_reports 中保持一致
-        total_stats = {
-            # 最终客户 - 总体（全为空数据）
-            "end_customer_total_follow_up": 0,
-            # 最终客户 - 首次跟进
-            "first_visit_red_count": 0,
-            "first_visit_yellow_count": 0,
-            "first_visit_green_count": 0,
-            "end_customer_total_first_visit": 0,
-            # 最终客户 - 多次跟进
-            "multi_visit_red_count": 0,
-            "multi_visit_yellow_count": 0,
-            "multi_visit_green_count": 0,
-            "end_customer_total_multi_visit": 0,
-            # 合作伙伴统计
-            "partner_total_follow_up": 0,
-            # 合作伙伴红黄绿灯统计（不区分首次/多次）
-            "partner_red_count": 0,
-            "partner_yellow_count": 0,
-            "partner_green_count": 0,
-        }
+        total_stats = self._empty_department_or_company_statistics()
         
         # 为了兼容飞书卡片的数据结构，即使没有数据，也构造空的红黄绿灯汇总记录
         page_urls = self._build_department_daily_page_urls(
@@ -1730,8 +1862,15 @@ class CRMStatisticsService:
                 department_report,
                 stat_date=target_date,
             )
+            self._enrich_report_with_visit_methods(
+                session,
+                department_report,
+                target_date=target_date,
+                department_name=department_name,
+            )
         else:
             department_report.update(self._empty_department_todo_task_stats())
+            department_report["visit_methods"] = ""
 
         return department_report
     
@@ -1763,50 +1902,12 @@ class CRMStatisticsService:
         # 统计字段和结构与部门日报保持一致，便于共享同一飞书模板
         if not record:
             logger.warning(f"{target_date} 在 crm_department_daily_summary 中没有找到公司级日报数据，将返回空统计")
-            total_stats = {
-                # 最终客户 - 总体（全为空数据）
-                "end_customer_total_follow_up": 0,
-                # 最终客户 - 首次跟进
-                "first_visit_red_count": 0,
-                "first_visit_yellow_count": 0,
-                "first_visit_green_count": 0,
-                "end_customer_total_first_visit": 0,
-                # 最终客户 - 多次跟进
-                "multi_visit_red_count": 0,
-                "multi_visit_yellow_count": 0,
-                "multi_visit_green_count": 0,
-                "end_customer_total_multi_visit": 0,
-                # 合作伙伴统计
-                "partner_total_follow_up": 0,
-                # 合作伙伴红黄绿灯统计（不区分首次/多次）
-                "partner_red_count": 0,
-                "partner_yellow_count": 0,
-                "partner_green_count": 0,
-            }
+            total_stats = self._empty_department_or_company_statistics()
             summary_red = ""
             summary_yellow = ""
             summary_green = ""
         else:
-            total_stats = {
-                # 最终客户 - 总体
-                "end_customer_total_follow_up": record.end_customer_total_count or 0,
-                # 最终客户 - 首次跟进
-                "first_visit_red_count": record.end_customer_first_visit_red_count or 0,
-                "first_visit_yellow_count": record.end_customer_first_visit_yellow_count or 0,
-                "first_visit_green_count": record.end_customer_first_visit_green_count or 0,
-                "end_customer_total_first_visit": record.end_customer_first_visit_count or 0,
-                # 最终客户 - 多次跟进
-                "multi_visit_red_count": record.end_customer_regular_visit_red_count or 0,
-                "multi_visit_yellow_count": record.end_customer_regular_visit_yellow_count or 0,
-                "multi_visit_green_count": record.end_customer_regular_visit_green_count or 0,
-                "end_customer_total_multi_visit": record.end_customer_regular_visit_count or 0,
-                # 合作伙伴统计
-                "partner_total_follow_up": record.partner_total_count or 0,
-                # 合作伙伴红黄绿灯统计（不区分首次/多次）
-                "partner_red_count": record.partner_red_count or 0,
-                "partner_yellow_count": record.partner_yellow_count or 0,
-                "partner_green_count": record.partner_green_count or 0,
-            }
+            total_stats = self._statistics_from_department_summary(record)
             summary_red = record.summary_red or ""
             summary_yellow = record.summary_yellow or ""
             summary_green = record.summary_green or ""
@@ -1844,6 +1945,11 @@ class CRMStatisticsService:
                 }
             ],
         }
+        self._enrich_report_with_visit_methods(
+            session,
+            company_report,
+            target_date=target_date,
+        )
         
         logger.info("公司日报汇总完成（基于 crm_department_daily_summary）")
         

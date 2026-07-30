@@ -125,6 +125,43 @@ class CRMDepartmentDailySummary(SQLModel, table=True):
         sa_column=Column(Integer, default=0),
         description="合作伙伴评估为green的次数"
     )
+
+    # Lead assessment statistics（线索不区分首次/多次展示；first/regular 字段预留）
+    lead_total_count: Optional[int] = Field(
+        default=0,
+        sa_column=Column(Integer, default=0),
+        description="线索评估总数",
+    )
+    lead_first_visit_count: Optional[int] = Field(
+        default=0,
+        sa_column=Column(Integer, default=0),
+        description="线索首次拜访评估数（当前恒为0，预留）",
+    )
+    lead_regular_visit_count: Optional[int] = Field(
+        default=0,
+        sa_column=Column(Integer, default=0),
+        description="线索多次拜访评估数",
+    )
+    lead_red_count: Optional[int] = Field(
+        default=0,
+        sa_column=Column(Integer, default=0),
+        description="线索评估为red的次数",
+    )
+    lead_yellow_count: Optional[int] = Field(
+        default=0,
+        sa_column=Column(Integer, default=0),
+        description="线索评估为yellow的次数",
+    )
+    lead_green_count: Optional[int] = Field(
+        default=0,
+        sa_column=Column(Integer, default=0),
+        description="线索评估为green的次数",
+    )
+    attribution_mode: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(20)),
+        description="部门归因模式：owner=按客户/商机/线索负责人部门，submitter=按拜访记录提交人部门",
+    )
     
     # Summary content
     summary_content: Optional[str] = Field(default=None, sa_column=Column(Text), description="汇总内容（中文）")
