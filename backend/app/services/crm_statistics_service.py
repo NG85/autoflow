@@ -21,6 +21,12 @@ from app.services.feishu_billing_facade import (
     BillingScenario,
     report_billing_usage,
 )
+from app.utils.crm_followup_object import (
+    FOLLOWUP_OBJECT_TYPE_END_CUSTOMER,
+    FOLLOWUP_OBJECT_TYPE_LEAD,
+    FOLLOWUP_OBJECT_TYPE_PARTNER,
+    resolve_followup_object_from_record,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -94,31 +100,31 @@ class CRMStatisticsService:
 
     def get_sales_daily_statistics(self, session: Session, target_date: date) -> List[Dict]:
         """
-        获取指定日期的销售日报明细和统计数据
-        通过查询指定日期的拜访记录，获取当日有哪些销售有拜访记录，
-        并按客户/合作伙伴维度统计首次拜访和多次跟进数量，同时输出去重的商机列表和无商机客户列表。
-        
+        获取指定日期的销售日报明细和统计数据。
+
+        通过查询指定日期的拜访记录，按销售分组统计跟进对象：
+        - 优先使用 followup_object_type/id/name；缺失时回退旧 account_id / partner_id。
+        - 客户：统计总数，并区分首次/多次（同一客户当天只要有一次首次即计入首次）。
+        - 合作伙伴 / 线索：只统计去重总数，不区分首次/多次。
+        - 有关联商机的拜访额外计入商机列表；无商机客户单独输出，供评估查询分开计数。
+
         Args:
             session: 数据库会话
             target_date: 目标日期
-            
+
         Returns:
             List[Dict]: 统计结果列表，每个元素包含：
                 - recorder: 销售姓名
                 - department: 所在团队
                 - end_customer_total_follow_up: 跟进客户总数（按客户ID去重）
-                - end_customer_total_first_visit: 首次拜访客户总数（去重，同一客户当天多次拜访只要有一次标记为首次即计入首次）
-                - end_customer_total_multi_visit: 多次跟进客户总数（去重，且当天没有任何一次标记为首次）
-                - partner_total_follow_up: 跟进合作伙伴总数（按合作伙伴ID去重）
-                - opportunities: 去重后的商机列表（当日该销售跟进过的商机），每个元素包含：
-                    - opportunity_id: 商机ID
-                    - opportunity_name: 商机名称
-                - accounts_without_opportunity: 无任何商机关联的去重客户列表（当日该销售仅以客户维度跟进的客户），每个元素包含：
-                    - account_id: 客户ID
-                    - account_name: 客户名称
-                - partners: 去重后的合作伙伴列表（当日该销售跟进过的合作伙伴），每个元素包含：
-                    - partner_id: 合作伙伴ID
-                    - partner_name: 合作伙伴名称
+                - end_customer_total_first_visit: 首次拜访客户总数
+                - end_customer_total_multi_visit: 多次跟进客户总数
+                - partner_total_follow_up: 跟进合作伙伴总数（按合作伙伴ID去重，不区分首次/多次）
+                - lead_total_follow_up: 跟进线索总数（按线索ID去重，不区分首次/多次）
+                - opportunities: 去重商机列表
+                - accounts_without_opportunity: 无商机关联的去重客户列表
+                - partners: 去重合作伙伴列表（partner_id / partner_name）
+                - leads: 去重线索列表（lead_id / lead_name）
         """
         logger.info(f"开始获取 {target_date} 的销售日报统计数据")
         
@@ -134,6 +140,9 @@ class CRMStatisticsService:
             CRMSalesVisitRecord.opportunity_name,
             CRMSalesVisitRecord.partner_id,
             CRMSalesVisitRecord.partner_name,
+            CRMSalesVisitRecord.followup_object_type,
+            CRMSalesVisitRecord.followup_object_id,
+            CRMSalesVisitRecord.followup_object_name,
             CRMSalesVisitRecord.visit_communication_date,
             CRMSalesVisitRecord.is_first_visit,
         ).where(
@@ -155,7 +164,7 @@ class CRMStatisticsService:
             {str(record.recorder_id) for record in visit_records if record.recorder_id},
         )
 
-        # 按销售分组，收集每个销售拜访的客户、商机和合作伙伴
+        # 按销售分组，收集每个销售拜访的客户、合作伙伴、线索和商机
         sales_dict: Dict[str, Dict[str, Any]] = {}
         
         for record in visit_records:
@@ -171,7 +180,9 @@ class CRMStatisticsService:
                     'department': department,
                     'account_visit_status': {},      # {account_id: {'has_first': bool, 'has_non_first': bool}}
                     'partner_ids': set(),            # 合作伙伴ID集合（用于去重统计总数）
+                    'lead_ids': set(),               # 线索ID集合（用于去重统计总数）
                     'partner_names': {},             # {partner_id: partner_name}
+                    'lead_names': {},                # {lead_id: lead_name}
                     'account_has_opportunity': {},   # {account_id: bool}
                     'account_names': {},             # {account_id: account_name}
                     'opportunity_map': {},           # {opportunity_id: {'opportunity_id', 'opportunity_name'}}
@@ -180,57 +191,62 @@ class CRMStatisticsService:
             is_first_visit = bool(record.is_first_visit)
             sales_info = sales_dict[recorder_id]
             
-            # 处理客户拜访记录
-            if record.account_id:
-                account_id = record.account_id
-                account_name = record.account_name or ""
-                
-                # 记录客户名称（用于后续生成无商机客户列表）
-                if account_id not in sales_info['account_names']:
-                    sales_info['account_names'][account_id] = account_name
-                
-                # 记录客户在当日是否有商机关联（只要有一条记录有商机，即认为该客户有商机）
+            followup_object = resolve_followup_object_from_record(record)
+            if not followup_object:
+                continue
+
+            object_type = (followup_object.object_type or "").strip().lower()
+            object_id = (followup_object.object_id or "").strip()
+            object_name = (followup_object.object_name or "").strip()
+            if not object_id:
+                continue
+
+            # 兼容原口径：无论对象类型，只要有关联商机都先计入商机维度；
+            # “仅跟进对象（无商机）”后续再按对象类型走各自统计分支。
+            if record.opportunity_id:
+                opp_id = record.opportunity_id
+                if opp_id not in sales_info['opportunity_map']:
+                    sales_info['opportunity_map'][opp_id] = {
+                        'opportunity_id': opp_id,
+                        'opportunity_name': record.opportunity_name or "",
+                    }
+
+            if object_type == FOLLOWUP_OBJECT_TYPE_END_CUSTOMER:
+                if object_id not in sales_info['account_names']:
+                    sales_info['account_names'][object_id] = object_name
+
                 has_opp_map = sales_info['account_has_opportunity']
-                has_opp_map[account_id] = has_opp_map.get(account_id, False) or bool(record.opportunity_id)
-                
-                # 记录客户的首次/非首次拜访状态（按 account_id 维度去重）
+                has_opp_map[object_id] = has_opp_map.get(object_id, False) or bool(record.opportunity_id)
+
                 account_status = sales_info['account_visit_status'].setdefault(
-                    account_id, {'has_first': False, 'has_non_first': False}
+                    object_id, {'has_first': False, 'has_non_first': False}
                 )
                 if is_first_visit:
                     account_status['has_first'] = True
                 else:
                     account_status['has_non_first'] = True
 
-                # 如果当前拜访关联了商机，则记录到去重商机映射中
-                if record.opportunity_id:
-                    opp_id = record.opportunity_id
-                    if opp_id not in sales_info['opportunity_map']:
-                        sales_info['opportunity_map'][opp_id] = {
-                            'opportunity_id': opp_id,
-                            'opportunity_name': record.opportunity_name or "",
-                        }
-            
-            # 处理合作伙伴拜访记录：
-            # 仅当「没有客户」且「有合作伙伴」时，才计入合作伙伴维度
-            if record.partner_id and not record.account_id:
-                partner_id = record.partner_id
-                partner_name = record.partner_name or ""
-                # 记录合作伙伴ID（用于去重统计总数）
-                sales_info['partner_ids'].add(partner_id)
-                # 记录合作伙伴名称
-                if partner_id not in sales_info['partner_names']:
-                    sales_info['partner_names'][partner_id] = partner_name
+                continue
+
+            if object_type == FOLLOWUP_OBJECT_TYPE_PARTNER:
+                if object_id not in sales_info['partner_names']:
+                    sales_info['partner_names'][object_id] = object_name
+                sales_info['partner_ids'].add(object_id)
+                continue
+
+            if object_type == FOLLOWUP_OBJECT_TYPE_LEAD:
+                if object_id not in sales_info['lead_names']:
+                    sales_info['lead_names'][object_id] = object_name
+                sales_info['lead_ids'].add(object_id)
         
         # 转换为列表格式，并根据业务规则汇总统计：
-        # 1. 客户的首次拜访/多次跟进数量：
-        #    - 同一客户当天多次拜访，只要有一次标记为首次，即计入首次；否则计入多次跟进。
-        # 2. 合作伙伴只统计总数（不区分首次/多次）
-        # 3. 输出去重后的商机列表和无商机客户列表。
+        # 客户：同一客户当天多次拜访，只要有一次标记为首次，即计入首次；否则计入多次跟进。
+        # 合作伙伴 / 线索：仅按对象 ID 去重统计总数。
         statistics_results: List[Dict[str, Any]] = []
         for recorder_id, sales_info in sales_dict.items():
             account_visit_status = sales_info['account_visit_status']
             partner_ids = sales_info['partner_ids']
+            lead_ids = sales_info['lead_ids']
             account_has_opportunity = sales_info['account_has_opportunity']
             account_names = sales_info['account_names']
             
@@ -242,7 +258,7 @@ class CRMStatisticsService:
                     first_visit_account_count += 1
                 elif status['has_non_first']:
                     multi_visit_account_count += 1
-            
+
             # 去重后的商机列表（在循环过程中已累计到 opportunity_map 中）
             opportunities = list(sales_info['opportunity_map'].values())
             
@@ -263,6 +279,14 @@ class CRMStatisticsService:
                     'partner_id': partner_id,
                     'partner_name': partner_names.get(partner_id, ""),
                 })
+
+            leads: List[Dict[str, Any]] = []
+            lead_names = sales_info['lead_names']
+            for lead_id in lead_ids:
+                leads.append({
+                    'lead_id': lead_id,
+                    'lead_name': lead_names.get(lead_id, ""),
+                })
             
             result = {
                 'recorder_id': sales_info['recorder_id'],
@@ -274,10 +298,13 @@ class CRMStatisticsService:
                 'end_customer_total_multi_visit': multi_visit_account_count,  # 多次跟进客户总数
                 # 合作伙伴维度（只统计总数，不区分首次/多次）
                 'partner_total_follow_up': len(partner_ids),                 # 跟进合作伙伴总数（按合作伙伴ID去重）
+                # 线索维度（只统计总数，不区分首次/多次）
+                'lead_total_follow_up': len(lead_ids),
                 # 其他统计
                 'opportunities': opportunities,
                 'accounts_without_opportunity': accounts_without_opportunity,
                 'partners': partners,  # 合作伙伴列表
+                'leads': leads,        # 线索列表
             }
             statistics_results.append(result)
         
@@ -285,10 +312,12 @@ class CRMStatisticsService:
         total_first_accounts = sum(r['end_customer_total_first_visit'] for r in statistics_results)
         total_multi_accounts = sum(r['end_customer_total_multi_visit'] for r in statistics_results)
         total_partners = sum(r['partner_total_follow_up'] for r in statistics_results)
+        total_leads = sum(r['lead_total_follow_up'] for r in statistics_results)
         
         logger.info(f"找到 {len(statistics_results)} 个销售")
         logger.info(f"统计：首次拜访客户 {total_first_accounts} 个，多次跟进客户 {total_multi_accounts} 个")
         logger.info(f"统计：跟进合作伙伴 {total_partners} 个")
+        logger.info(f"统计：跟进线索 {total_leads} 个")
         
         return statistics_results
 
@@ -737,17 +766,17 @@ class CRMStatisticsService:
     ) -> List[Dict]:
         """
         获取完整的销售个人日报数据，包括：
-        1. 每个销售的拜访统计数据（来自 get_sales_daily_statistics）
-        2. 基于去重商机列表和无商机客户列表，从客户商机评估表获取的评估详情
+        1. 每个销售的拜访统计（来自 get_sales_daily_statistics：客户/伙伴/线索 + 商机）
+        2. 基于去重商机、无商机客户、合作伙伴、线索列表，从评估表获取红黄绿评估详情
         3. 统计日个人任务统计（crm_todos：已完成 / 逾期 / 待完成）
-        
+
         Args:
             session: 数据库会话
             target_date: 目标日期（拜访与已完成/逾期任务统计日）
             incomplete_due_date: 待完成任务预计完成日，默认北京时间当日（日报定时任务执行日）
-            
+
         Returns:
-            List[Dict]: 完整的销售个人日报数据列表
+            List[Dict]: 完整的销售个人日报数据列表（含 lead_total_follow_up、lead 红黄绿计数等）
         """
         from app.utils.date_utils import beijing_today_date
 
@@ -767,7 +796,7 @@ class CRMStatisticsService:
             logger.info(f"{target_date} 没有找到销售个人日报数据")
             return []
         
-        # 2. 为每个销售获取评估详情（按去重商机列表 + 无商机客户列表查询）
+        # 2. 为每个销售获取评估详情（商机 / 无商机客户 / 伙伴 / 线索）
         complete_reports: List[Dict[str, Any]] = []
         
         from app.core.config import settings
@@ -775,14 +804,16 @@ class CRMStatisticsService:
             opportunities = stats.get('opportunities', []) or []
             accounts_without_opportunity = stats.get('accounts_without_opportunity', []) or []
             partners = stats.get('partners', []) or []
+            leads = stats.get('leads', []) or []
             
-            # 基于去重后的商机列表、无商机客户列表和合作伙伴列表，从客户商机评估表查询评估详情
+            # 基于去重后的商机、无商机客户、合作伙伴、线索列表查询评估详情
             assessment_details = self._get_opportunity_assessments_for_sales(
                 session=session,
                 target_date=target_date,
                 opportunities=opportunities,
                 accounts_without_opportunity=accounts_without_opportunity,
                 partners=partners,
+                leads=leads,
             )
             
             from app.utils.push_page_urls import build_task_list_page_url, build_visit_list_page_url
@@ -844,11 +875,12 @@ class CRMStatisticsService:
             ):
                 assessment.pop('assessment_flag_raw', None)
             
-            # 获取评估统计（按首次/多次、红黄绿灯计数，以及合作伙伴统计）
+            # 获取评估统计：客户按首次/多次，合作伙伴/线索仅红黄绿总数
             statistics = assessment_details.get('statistics', {
                 "first": {"red": 0, "yellow": 0, "green": 0},
                 "multi": {"red": 0, "yellow": 0, "green": 0},
-                "partner": {"red": 0, "yellow": 0, "green": 0}
+                "partner": {"red": 0, "yellow": 0, "green": 0},
+                "lead": {"red": 0, "yellow": 0, "green": 0},
             })
             
             # 添加新的统计字段（stats已包含部分统计数据）
@@ -864,6 +896,9 @@ class CRMStatisticsService:
                 'partner_red_count': statistics.get('partner', {}).get('red', 0),
                 'partner_yellow_count': statistics.get('partner', {}).get('yellow', 0),
                 'partner_green_count': statistics.get('partner', {}).get('green', 0),
+                'lead_red_count': statistics.get('lead', {}).get('red', 0),
+                'lead_yellow_count': statistics.get('lead', {}).get('yellow', 0),
+                'lead_green_count': statistics.get('lead', {}).get('green', 0),
             }
             todo_task_stats = self.get_sales_daily_todo_task_stats(
                 session,
@@ -904,18 +939,20 @@ class CRMStatisticsService:
         opportunities: List[Dict[str, Any]],
         accounts_without_opportunity: List[Dict[str, Any]],
         partners: List[Dict[str, Any]] = None,
+        leads: List[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
-        基于去重的商机列表、无商机客户列表和合作伙伴列表，从客户商机评估表获取评估详情（包含客户和合作伙伴）。
-        
+        基于去重的商机、无商机客户、合作伙伴、线索列表，从客户商机评估表获取评估详情。
+
         评估数据划分为：
-        - red/yellow/green: 按评估 flag 分组的评估详情列表（客户和合作伙伴）
+        - red/yellow/green: 按评估 flag 分组的评估详情列表（客户 / 合作伙伴 / 线索）
         - statistics: 统计数据字典，包含：
             - first: 首次拜访的红黄绿灯数量（仅客户）
             - multi: 多次跟进的红黄绿灯数量（仅客户）
             - partner: 合作伙伴的红黄绿灯数量（不区分首次/多次）
+            - lead: 线索的红黄绿灯数量（不区分首次/多次）
         """
-        # 收集目标商机ID、无商机客户ID和合作伙伴ID
+        # 收集目标商机ID、无商机客户ID、合作伙伴ID、线索ID
         opportunity_ids = {
             item.get("opportunity_id")
             for item in opportunities
@@ -931,8 +968,13 @@ class CRMStatisticsService:
             for item in (partners or [])
             if item.get("partner_id")
         }
-        
-        if not opportunity_ids and not account_ids_without_opp and not partner_ids:
+        lead_ids = {
+            item.get("lead_id")
+            for item in (leads or [])
+            if item.get("lead_id")
+        }
+
+        if not opportunity_ids and not account_ids_without_opp and not partner_ids and not lead_ids:
             # 没有任何目标，直接返回空结果
             return {
                 "red": [],
@@ -942,6 +984,7 @@ class CRMStatisticsService:
                     "first": {"red": 0, "yellow": 0, "green": 0},
                     "multi": {"red": 0, "yellow": 0, "green": 0},
                     "partner": {"red": 0, "yellow": 0, "green": 0},
+                    "lead": {"red": 0, "yellow": 0, "green": 0},
                 },
             }
         
@@ -955,6 +998,9 @@ class CRMStatisticsService:
         # 4. 合作伙伴类型：
         #    - opportunity_id 为空 且 account_id 在合作伙伴列表中
         #    - customer_type == 'partner'
+        # 5. 线索类型：
+        #    - opportunity_id 为空 且 account_id 在线索列表中
+        #    - customer_type == 'lead'
         all_records: List[CRMAccountOpportunityAssessment] = []
         
         # 查询商机类型的评估记录
@@ -984,6 +1030,15 @@ class CRMStatisticsService:
                 CRMAccountOpportunityAssessment.customer_type == 'partner',
             )
             all_records.extend(session.exec(query_partners).all())
+
+        if lead_ids:
+            query_leads = select(CRMAccountOpportunityAssessment).where(
+                CRMAccountOpportunityAssessment.assessment_date == target_date,
+                CRMAccountOpportunityAssessment.opportunity_id.is_(None),
+                CRMAccountOpportunityAssessment.account_id.in_(lead_ids),
+                CRMAccountOpportunityAssessment.customer_type == 'lead',
+            )
+            all_records.extend(session.exec(query_leads).all())
         
         if not all_records:
             return {
@@ -994,16 +1049,18 @@ class CRMStatisticsService:
                     "first": {"red": 0, "yellow": 0, "green": 0},
                     "multi": {"red": 0, "yellow": 0, "green": 0},
                     "partner": {"red": 0, "yellow": 0, "green": 0},
+                    "lead": {"red": 0, "yellow": 0, "green": 0},
                 },
             }
         
         # 统计与分组逻辑：
         # 1. 客户：按首次/多次分别统计（都包含绿灯）
-        # 2. 合作伙伴：不区分首次/多次，统一统计（都包含绿灯）
+        # 2. 合作伙伴 / 线索：不区分首次/多次，统一统计（都包含绿灯）
         # 3. 明细列表：按评估 flag（红/黄/绿）分组
         first_stats = {"red": 0, "yellow": 0, "green": 0}
         multi_stats = {"red": 0, "yellow": 0, "green": 0}
         partner_stats = {"red": 0, "yellow": 0, "green": 0}
+        lead_stats = {"red": 0, "yellow": 0, "green": 0}
         red_assessments: List[Dict[str, Any]] = []
         yellow_assessments: List[Dict[str, Any]] = []
         green_assessments: List[Dict[str, Any]] = []
@@ -1013,6 +1070,7 @@ class CRMStatisticsService:
             is_first_visit = bool(assessment.is_first_visit)
             customer_type = (assessment.customer_type or "").lower()
             is_partner = customer_type == "partner"
+            is_lead = customer_type == "lead"
             
             # 构建评估详情数据
             assessment_data: Dict[str, Any] = {
@@ -1037,6 +1095,14 @@ class CRMStatisticsService:
                     partner_stats["yellow"] += 1
                 elif flag == "green":
                     partner_stats["green"] += 1
+            elif is_lead:
+                # 线索：不区分首次/多次，统一统计（都包含绿灯）
+                if flag == "red":
+                    lead_stats["red"] += 1
+                elif flag == "yellow":
+                    lead_stats["yellow"] += 1
+                elif flag == "green":
+                    lead_stats["green"] += 1
             else:
                 # 客户：按首次/多次分别统计（都包含绿灯）
                 if is_first_visit:
@@ -1070,6 +1136,7 @@ class CRMStatisticsService:
                 "first": first_stats,
                 "multi": multi_stats,
                 "partner": partner_stats,
+                "lead": lead_stats,
             },
         }
     
@@ -1203,9 +1270,13 @@ class CRMStatisticsService:
                 statistics_data = {
                     'end_customer_total_follow_up': report.get('end_customer_total_follow_up', 0),
                     'partner_total_follow_up': report.get('partner_total_follow_up', 0),
+                    'lead_total_follow_up': report.get('lead_total_follow_up', 0),
                     'partner_red_count': report.get('partner_red_count', 0),
                     'partner_yellow_count': report.get('partner_yellow_count', 0),
                     'partner_green_count': report.get('partner_green_count', 0),
+                    'lead_red_count': report.get('lead_red_count', 0),
+                    'lead_yellow_count': report.get('lead_yellow_count', 0),
+                    'lead_green_count': report.get('lead_green_count', 0),
                     'first_visit_red_count': report.get('first_visit_red_count', 0),
                     'first_visit_yellow_count': report.get('first_visit_yellow_count', 0),
                     'first_visit_green_count': report.get('first_visit_green_count', 0),

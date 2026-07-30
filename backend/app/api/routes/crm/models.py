@@ -800,6 +800,7 @@ class BaseReportStatistics(BaseModel):
     end_customer_total_first_visit: int = Field(description="总首次拜访最终客户数", ge=0)
     end_customer_total_multi_visit: int = Field(description="总多次拜访最终客户数", ge=0)
     partner_total_follow_up: int = Field(description="总跟进合作伙伴数", ge=0)
+    lead_total_follow_up: int = Field(default=0, description="总跟进线索数", ge=0)
     partner_total_first_visit: int = Field(description="总首次拜访合作伙伴数", ge=0)
     partner_total_multi_visit: int = Field(description="总多次拜访合作伙伴数", ge=0)
     assessment_red_count: int = Field(description="评估为red的次数", ge=0)
@@ -823,6 +824,10 @@ class DailyReportStatistics(BaseReportStatistics):
     partner_red_count: int = Field(default=0, description="合作伙伴评估为red的次数", ge=0)
     partner_yellow_count: int = Field(default=0, description="合作伙伴评估为yellow的次数", ge=0)
     partner_green_count: int = Field(default=0, description="合作伙伴评估为green的次数", ge=0)
+    # 线索的红黄绿灯统计（不区分首次/多次）
+    lead_red_count: int = Field(default=0, description="线索评估为red的次数", ge=0)
+    lead_yellow_count: int = Field(default=0, description="线索评估为yellow的次数", ge=0)
+    lead_green_count: int = Field(default=0, description="线索评估为green的次数", ge=0)
 
 # 团队周报统计数据模型
 class WeeklyReportStatistics(BaseReportStatistics):
