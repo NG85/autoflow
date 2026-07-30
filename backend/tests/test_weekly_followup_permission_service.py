@@ -67,3 +67,56 @@ def test_has_global_data_scope_false_without_global_filter():
         },
     ):
         assert service.has_global_data_scope(session, USER_ID) is False
+
+
+def test_has_team_data_scope_true_for_org_scope():
+    service = _service()
+    session = MagicMock()
+    with patch.object(
+        service,
+        "get_data_scope",
+        return_value={
+            "entity": WEEKLY_FOLLOWUP_DATA_SCOPE_ENTITY,
+            "filters": [{"source": "org_scope", "enabled": True, "mode": "team_subordinates"}],
+        },
+    ):
+        assert service.has_team_data_scope(session, USER_ID) is True
+
+
+def test_has_team_data_scope_true_for_global():
+    service = _service()
+    session = MagicMock()
+    with patch.object(
+        service,
+        "get_data_scope",
+        return_value={"entity": WEEKLY_FOLLOWUP_DATA_SCOPE_ENTITY, "filters": [{"source": "global", "enabled": True}]},
+    ):
+        assert service.has_team_data_scope(session, USER_ID) is True
+
+
+def test_has_team_data_scope_false_for_self_only():
+    service = _service()
+    session = MagicMock()
+    with patch.object(
+        service,
+        "get_data_scope",
+        return_value={
+            "entity": WEEKLY_FOLLOWUP_DATA_SCOPE_ENTITY,
+            "filters": [{"source": "self_owner", "enabled": True}],
+        },
+    ):
+        assert service.has_team_data_scope(session, USER_ID) is False
+
+
+def test_has_team_data_scope_skips_disabled_org_scope():
+    service = _service()
+    session = MagicMock()
+    with patch.object(
+        service,
+        "get_data_scope",
+        return_value={
+            "entity": WEEKLY_FOLLOWUP_DATA_SCOPE_ENTITY,
+            "filters": [{"source": "org_scope", "enabled": False}],
+        },
+    ):
+        assert service.has_team_data_scope(session, USER_ID) is False

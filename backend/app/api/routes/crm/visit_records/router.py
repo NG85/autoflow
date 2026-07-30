@@ -64,16 +64,12 @@ router = APIRouter(tags=["crm", "crm/visit-records"])
 
 def _require_follow_up_view_gate(db_session: SessionDep, user: CurrentUserDep) -> None:
     """W4 功能门控：无 sales:follow_up:view 时拒绝进入跟进列表/导出。"""
-    if not settings.FOLLOW_UP_OAUTH_GATE_ENABLED:
-        return
     if not follow_up_permission_service.gate_view(db_session, user.id):
         raise HTTPException(status_code=403, detail="无跟进记录查看权限")
 
 
 def _require_follow_up_export_permission(db_session: SessionDep, user: CurrentUserDep) -> None:
     """W4 导出功能鉴权：sales:follow_up:export。"""
-    if not settings.FOLLOW_UP_OAUTH_GATE_ENABLED:
-        return
     if not follow_up_permission_service.check_export(db_session, user.id):
         raise HTTPException(status_code=403, detail="无跟进记录导出权限")
 
@@ -951,7 +947,7 @@ def supervised_revise_visit_record(
 ):
     """
     修改拜访记录（OAuth ``POST /permission/check`` → ``sales:follow_up:edit``；
-    且在可查看范围内；仅跟进日期、跟进方式；
+    且在可查看范围内；可改跟进日期、跟进方式、跟进记录、下一步计划；
     录入自然日窗口见 CRM_VISIT_RECORD_REVISE_ENTRY_WINDOW_DAYS（默认仅当日录入），
     每日截止时间见 CRM_VISIT_RECORD_REVISE_DAILY_CUTOFF_TIME（默认无限制））。
     修改后触发 Aldebaran ``crm.visit_record.revised``，由回调重推卡片。
@@ -968,6 +964,8 @@ def supervised_revise_visit_record(
                 revised_by_name=reviser_name,
                 visit_communication_date=payload.visit_communication_date,
                 visit_communication_method=payload.visit_communication_method,
+                followup_record=payload.followup_record,
+                next_steps=payload.next_steps,
             )
         except VisitRecordRevisionError as exc:
             if exc.code == "not_found":

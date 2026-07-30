@@ -14,6 +14,7 @@
 可选参数：
 - --runs 10            每条样本重复次数
 - --only followup      只测 followup（followup/next/all）
+- --sample F9          只测指定样本 ID（可多次传入，如 --sample F9 --sample N6）
 - --json report.json   导出明细 JSON
 """
 
@@ -56,6 +57,7 @@ SAMPLES: List[Sample] = [
     Sample("F6", "followup", text_zh="向客户说明了读写分离改造范围，客户确认先覆盖订单查询链路，并要求周五前给回滚预案。", expected="合格"),
     Sample("F7", "followup", text_zh="详细介绍了方案优势，客户认可，后续继续推进。", expected="不合格"),
     Sample("F8", "followup", text_zh="上午与客户DBA和架构师复盘Q1性能瓶颈，确认高峰时段写入延迟集中在库存服务；现场演示参数调优与连接池隔离方案。客户明确反馈可接受两阶段切换，并提出需先验证审计合规。双方达成下周三前完成压测并在周会上评审上线窗口。", expected="优秀"),
+    Sample("F9", "followup", text_zh="昨天拜访了昌平国家实验室的领导，张处长对我们的poc结果表示满意。", expected="不合格"),
     Sample("M1", "followup", text_en="Discussed migration scope with CTO; client requested rollback strategy and security checklist before pilot.", expected="qualified"),
     # ---------- next ----------
     Sample("N1", "next", text_zh="1. 待办事项（如：具体动作）2. 时间节点（如：完成时间）3. 预期成果", expected="不合格"),
@@ -68,6 +70,7 @@ SAMPLES: List[Sample] = [
     Sample("N8", "next", text_zh="客户已明确今年无预算，商机关闭，后续仅保持季度触达。", expected="合格"),
     Sample("N9", "next", text_zh="明天发送报价，周三电话沟通采购条款。", expected="不合格"),
     Sample("N10", "next", text_zh="今天下班前发送分阶段实施计划；周二与客户安全负责人评审权限模型；周四完成试点环境联调。目标是在本月底前推动客户内部立项并锁定一期范围。", expected="优秀"),
+    Sample("N11", "next", text_zh="约了下周四初步洽谈合同，届时再讨论具体金额等事项。后续推动在8月底前完成签约", expected="优秀"),
     Sample("M2", "next", text_en="Opportunity closed - customer declined due to budget freeze, no next steps.", expected="qualified"),
     Sample("M3", "next", text_en="Send implementation plan next week and schedule technical review to confirm phase-one scope.", expected="qualified"),
 ]
@@ -122,12 +125,24 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--runs", type=int, default=10, help="每条样本重复次数")
     parser.add_argument("--only", choices=["followup", "next", "all"], default="all")
+    parser.add_argument(
+        "--sample",
+        action="append",
+        default=[],
+        help="只测指定样本 ID，可多次传入，如 --sample F9",
+    )
     parser.add_argument("--json", dest="json_path", default="", help="导出明细 JSON 路径")
     args = parser.parse_args()
 
     samples = SAMPLES
     if args.only != "all":
         samples = [s for s in samples if s.kind == args.only]
+    if args.sample:
+        wanted = {sid.upper() for sid in args.sample}
+        samples = [s for s in samples if s.sample_id.upper() in wanted]
+        missing = wanted - {s.sample_id.upper() for s in samples}
+        if missing:
+            raise SystemExit(f"未知样本 ID: {', '.join(sorted(missing))}")
 
     all_records: List[Dict[str, Any]] = []
     grouped: Dict[str, List[Dict[str, Any]]] = defaultdict(list)

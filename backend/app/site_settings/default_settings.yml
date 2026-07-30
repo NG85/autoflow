@@ -567,13 +567,13 @@ notification:
         lark: "AAqtGR7vr9ezt"
         dingtalk: "e94991d3-1d40-4c9e-aec6-b748f6b787dd.schema"
       department_daily_report:
-        feishu: "AAqtGIwiqBUyg"
-        lark: "AAqtGIwiqBUyg"
-        dingtalk: "dcc4133e-465d-4284-8e0b-801fd60e30b4.schema"
+        feishu: "AAqWNdowg4GU3"
+        lark: "AAqWNdowg4GU3"
+        dingtalk: "0d852b70-8c61-481c-884a-c2c03b6bb633.schema"
       company_daily_report:
-        feishu: "AAqtEO2pagr39"
-        lark: "AAqtEO2pagr39"
-        dingtalk: "76858e58-57e7-4fed-bc81-fd5843ec9801.schema"
+        feishu: "AAqWNIpUKn2Yk"
+        lark: "AAqWNIpUKn2Yk"
+        dingtalk: "a6bd2900-fd9b-48ba-9d94-808440565f02.schema"
       department_weekly_report:
         feishu: "AAqX5j2jPq2Cn"
         lark: "AAqX5j2jPq2Cn"
