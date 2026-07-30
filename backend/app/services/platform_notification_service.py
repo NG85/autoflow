@@ -126,14 +126,14 @@ _DEFAULT_CARD_TEMPLATES: Dict[str, Dict[str, str]] = {
         PLATFORM_DINGTALK: "e94991d3-1d40-4c9e-aec6-b748f6b787dd.schema",
     },
     "department_daily_report": {
-        PLATFORM_FEISHU: "AAqtGIwiqBUyg",
-        PLATFORM_LARK: "AAqtGIwiqBUyg",
-        PLATFORM_DINGTALK: "dcc4133e-465d-4284-8e0b-801fd60e30b4.schema",
+        PLATFORM_FEISHU: "AAqWNdowg4GU3",
+        PLATFORM_LARK: "AAqWNdowg4GU3",
+        PLATFORM_DINGTALK: "0d852b70-8c61-481c-884a-c2c03b6bb633.schema",
     },
     "company_daily_report": {
-        PLATFORM_FEISHU: "AAqtEO2pagr39",
-        PLATFORM_LARK: "AAqtEO2pagr39",
-        PLATFORM_DINGTALK: "76858e58-57e7-4fed-bc81-fd5843ec9801.schema",
+        PLATFORM_FEISHU: "AAqWNIpUKn2Yk",
+        PLATFORM_LARK: "AAqWNIpUKn2Yk",
+        PLATFORM_DINGTALK: "a6bd2900-fd9b-48ba-9d94-808440565f02.schema",
     },
     "department_weekly_report": {
         PLATFORM_FEISHU: "AAqX5j2jPq2Cn",
