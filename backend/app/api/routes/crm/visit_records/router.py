@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Body, HTTPException
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
+from sqlmodel import select
 
 from app.api.deps import CurrentUserDep, SessionDep
 from app.api.routes.crm.models import (
@@ -25,6 +26,7 @@ from app.api.routes.crm.models import (
     VisitRecordSupervisedUpdateResponse,
 )
 from app.core.config import settings
+from app.models.crm_opportunities import CRMOpportunity
 from app.crm.save_engine import (
     notify_aldebaran_visit_record_revised,
     notify_aldebaran_visit_record_saved,
@@ -573,7 +575,7 @@ def export_visit_records_to_xlsx(
             headers = [
                 "ID", "Customer Level", "Follow-up Object", "Follow-up Object Attribute", "First Visit", "Call High",
                 "External Collaboration Partner", "External Collaboration Partner ID",
-                "Opportunity Name", "Opportunity ID", "Follow-up Date", "Person in Charge", "Department",
+                "Opportunity Name", "Opportunity Number", "Opportunity ID", "Follow-up Date", "Person in Charge", "Department",
                 "Contact Position", "Contact Name", "Collaborative Participants", "Follow-up Method",
                 "Visit Purpose", "Attachment Location", "Attachment Latitude", "Attachment Longitude", "Attachment Taken At", "Follow-up Record", 
                 "AI Follow-up Record Quality Evaluation", "AI Follow-up Record Quality Evaluation Details", 
@@ -586,7 +588,7 @@ def export_visit_records_to_xlsx(
             headers = [
                 "ID", "客户分类", "跟进对象", "跟进对象属性", "是否首次拜访", "是否Call High",
                 "外部协同合作伙伴", "外部协同合作伙伴ID",
-                "商机名称", "商机ID", "跟进日期", "负责销售", "所在团队",
+                "商机名称", "商机编号", "商机ID", "跟进日期", "负责销售", "所在团队",
                 "联系人职位", "联系人姓名", "协同参与人", "跟进方式",
                 "拜访目的", "附件地点", "附件纬度", "附件经度", "附件拍摄时间", "跟进记录", 
                 "AI对跟进记录质量评估", "AI对跟进记录质量评估详情",
@@ -610,7 +612,7 @@ def export_visit_records_to_xlsx(
         total_pages = 0
         
         # 辅助函数：将单个item转换为表格行
-        def item_to_row(item):
+        def item_to_row(item, filing_opportunity_number: str = ""):
             # 根据语言选择对应的字段值
             is_en = language == "en"
             
@@ -731,6 +733,7 @@ def export_visit_records_to_xlsx(
                 external_collaboration_partner_name,
                 external_collaboration_partner_id,
                 item.opportunity_name or "",
+                filing_opportunity_number or "",
                 item.opportunity_id or "",
                 item.visit_communication_date or "",
                 item.recorder or "",
@@ -780,12 +783,37 @@ def export_visit_records_to_xlsx(
             # 如果没有数据，退出循环
             if not result.items:
                 break
+
+            # 批量查询商机编号（crm_opportunities.filing_opportunity_number）
+            opportunity_ids = list({
+                item.opportunity_id
+                for item in result.items
+                if item.opportunity_id
+            })
+            filing_number_map: dict[str, str] = {}
+            if opportunity_ids:
+                opp_rows = db_session.exec(
+                    select(
+                        CRMOpportunity.unique_id,
+                        CRMOpportunity.filing_opportunity_number,
+                    ).where(CRMOpportunity.unique_id.in_(opportunity_ids))
+                ).all()
+                filing_number_map = {
+                    unique_id: (filing_number or "")
+                    for unique_id, filing_number in opp_rows
+                    if unique_id
+                }
             
             # 写入当前页的数据
             for item in result.items:
                 if total_exported >= max_export_count:
                     break
-                ws.append(sanitize_excel_row(item_to_row(item)))
+                filing_number = (
+                    filing_number_map.get(item.opportunity_id, "")
+                    if item.opportunity_id
+                    else ""
+                )
+                ws.append(sanitize_excel_row(item_to_row(item, filing_number)))
                 total_exported += 1
             
             # 如果当前页数据不足一页，说明已经是最后一页
