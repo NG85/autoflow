@@ -488,6 +488,88 @@ website:
           title: 客户详情
           unenabled_page: null
           visible: true
+
+        - audience:
+            department_ids_any: []
+            mode: allowlist
+            permissions_any:
+              - "system:user_list:view"
+              - "system:user_mgmt:manage"
+              - "system:role_perm:manage_template"
+              - "system:org:view"
+            roles_any: []
+            user_ids_any: []
+          enabled: true
+          has_studio: false
+          icon: "Shield"
+          key: admin-console
+          order: 300
+          parent_key: null
+          target: null
+          title: 系统管理
+          unenabled_page: null
+          visible: true
+
+        - audience:
+            department_ids_any: []
+            mode: allowlist
+            permissions_any:
+              - "system:user_list:view"
+            roles_any: []
+            user_ids_any: []
+          enabled: true
+          has_studio: false
+          icon: "Users"
+          key: admin-console-accounts
+          order: 310
+          parent_key: admin-console
+          target:
+            type: route
+            value: "/v2/admin-console/accounts"
+          title: 账号
+          unenabled_page: null
+          visible: true
+
+        - audience:
+            department_ids_any: []
+            mode: allowlist
+            permissions_any:
+              - "system:user_mgmt:manage"
+              - "system:role_perm:manage_template"
+            roles_any: []
+            user_ids_any: []
+          enabled: true
+          has_studio: false
+          icon: "KeyRound"
+          key: admin-console-roles
+          order: 320
+          parent_key: admin-console
+          target:
+            type: route
+            value: "/v2/admin-console/roles"
+          title: 角色权限
+          unenabled_page: null
+          visible: true
+
+        - audience:
+            department_ids_any: []
+            mode: allowlist
+            permissions_any:
+              - "system:org:view"
+            roles_any: []
+            user_ids_any: []
+          enabled: true
+          has_studio: false
+          icon: "Users"
+          key: admin-console-org
+          order: 330
+          parent_key: admin-console
+          target:
+            type: route
+            value: "/v2/admin-console/org"
+          title: 组织
+          unenabled_page: null
+          visible: true
     data_type: dict
     description: "Frontend menu configuration. Includes menu visibility, enablement, audience filtering rules, and optional custom unenabled page."
     client: true
