@@ -184,6 +184,7 @@ def test_get_recipients_for_company_daily_report_uses_company_receive_perm():
     assert len(recipients) == 1
     assert recipients[0]["open_id"] == "ou_c"
     assert recipients[0]["type"] == "company_executive"
+    assert recipients[0]["userId"] == str(USER_A)
 
 
 def test_get_recipients_for_company_weekly_report_uses_company_receive_perm():

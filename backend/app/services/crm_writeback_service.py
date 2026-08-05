@@ -30,6 +30,8 @@ from app.models.wb_visit_requests import (
     ChaitinVisitRecordCreateRequest,
     FenbeitongVisitRecordBatchCreateRequest,
     FenbeitongVisitRecordCreateRequest,
+    LiepinVisitRecordBatchCreateRequest,
+    LiepinVisitRecordCreateRequest,
     OlmVisitRecordBatchCreateRequest,
     OlmVisitRecordCreateRequest,
     WebeyeVisitRecordBatchCreateRequest,
@@ -183,7 +185,7 @@ def _crm_writeback_gateway_message_from_text(body: str) -> str:
 
 
 class CrmVisitWritebackClient:
-    """拜访记录回写 HTTP 客户端（CBG / APAC / OLM / CHAITIN / WEBEYE 等）。"""
+    """拜访记录回写 HTTP 客户端（CBG / APAC / OLM / CHAITIN / WEBEYE / LIEPIN 等）。"""
     
     def __init__(self, base_url: str = "http://salesforce:8080"):
         self.base_url = base_url
@@ -389,6 +391,36 @@ class CrmVisitWritebackClient:
         except httpx.RequestError as e:
             logger.error(f"网眼批量拜访回写失败: {e}")
             return {"success": False, "message": f"网眼批量拜访回写失败: {e}"}
+
+    def batch_liepin_visit_create(
+        self, visit_requests: LiepinVisitRecordBatchCreateRequest
+    ) -> Dict[str, Any]:
+        """批量回写猎聘拜访记录（``POST /crm-liepin/visit-record/batch``）。"""
+        url = f"{self.base_url}/crm-liepin/visit-record/batch"
+
+        try:
+            timeout = httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0)
+            with httpx.Client(timeout=timeout) as client:
+                payload = visit_requests.model_dump(exclude_none=True)
+                response = client.post(url, headers=self.headers, json=payload)
+                logger.info(f"调用猎聘批量拜访回写，返回: {response.text}")
+                response.raise_for_status()
+                return {"success": True, "data": response.json()}
+        except httpx.TimeoutException as e:
+            logger.error(f"猎聘批量拜访回写超时: {e}")
+            return {"success": False, "message": f"猎聘批量拜访回写超时: {e}"}
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                f"猎聘批量拜访回写 HTTP 错误: {e.response.status_code} {e.response.text}"
+            )
+            return {
+                "success": False,
+                "message": f"猎聘批量拜访回写 HTTP 错误: {e.response.status_code}",
+                "response_text": e.response.text,
+            }
+        except httpx.RequestError as e:
+            logger.error(f"猎聘批量拜访回写失败: {e}")
+            return {"success": False, "message": f"猎聘批量拜访回写失败: {e}"}
 
 
 class CrmReviewWritebackClient:
@@ -1281,6 +1313,128 @@ class CrmWritebackService:
 
         return visit_requests
 
+    def _resolve_liepin_crm_user_id(
+        self, session: Session, record: CRMSalesVisitRecord
+    ) -> Optional[str]:
+        """将 recorder_id 解析为猎聘 CRM 用户 ID（user_profiles.crm_user_id）。
+
+        与 CBG / 分贝通等拜访回写一致：``str(recorder_id)``（UUID 对象会变成 36 位带连字符）
+        匹配 ``user_profiles.oauth_user_id``。
+        """
+        if not record.recorder_id:
+            return None
+        try:
+            ask_id_str = str(record.recorder_id)
+            sql_query = text(
+                """
+                SELECT crm_user_id FROM user_profiles WHERE oauth_user_id = :ask_id
+                """
+            )
+            result = session.exec(sql_query, params={"ask_id": ask_id_str}).first()
+            if result and result[0] is not None:
+                return str(result[0])
+            logger.warning(
+                f"记录 ID {record.id}：未找到 recorder_id {ask_id_str} 对应的 CRM 用户 ID"
+            )
+        except Exception as e:
+            logger.warning(f"记录 ID {record.id}：查询猎聘 CRM 用户 ID 失败: {e}")
+        return None
+
+    @staticmethod
+    def _format_liepin_last_modified_time(dt: Optional[datetime]) -> Optional[str]:
+        """格式化为猎聘网关约定的 UTC 时间字符串 ``YYYY-MM-DD HH:MM:SS``。"""
+        if dt is None:
+            return None
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    def generate_liepin_visit_requests(
+        self, session: Session, visit_records: List[CRMSalesVisitRecord]
+    ) -> LiepinVisitRecordBatchCreateRequest:
+        """
+        根据拜访记录生成猎聘拜访回写请求。
+
+        字段对齐 ``POST /crm-liepin/visit-record``；跟进对象优先 ``followup_object_*``，
+        否则回退 account/partner。缺必填字段的记录跳过。
+        """
+        visit_requests = LiepinVisitRecordBatchCreateRequest(visits=[])
+
+        for record in visit_records:
+            followup_obj = resolve_followup_object_from_record(record)
+            if not followup_obj:
+                logger.warning(
+                    f"记录 ID {record.id}：无法解析跟进对象（followup_object/account/partner 均为空），"
+                    "跳过猎聘回写"
+                )
+                continue
+
+            object_name = _str_or_none(followup_obj.object_name)
+            if not object_name:
+                logger.warning(
+                    f"记录 ID {record.id}：followup_object_name 为空，跳过猎聘回写"
+                )
+                continue
+
+            if not record.visit_communication_date:
+                logger.warning(
+                    f"记录 ID {record.id}：visit_communication_date 为空，跳过猎聘回写"
+                )
+                continue
+
+            visit_method = _str_or_none(record.visit_communication_method)
+            if not visit_method:
+                logger.warning(
+                    f"记录 ID {record.id}：visit_communication_method 为空，跳过猎聘回写"
+                )
+                continue
+
+            followup = _str_or_none(
+                record.followup_record_zh
+                or record.followup_record
+                or record.followup_content
+            )
+            if not followup:
+                logger.warning(
+                    f"记录 ID {record.id}：followup_record 为空，跳过猎聘回写"
+                )
+                continue
+
+            next_steps = _str_or_none(record.next_steps_zh or record.next_steps)
+            if not next_steps:
+                logger.warning(
+                    f"记录 ID {record.id}：next_steps 为空，跳过猎聘回写"
+                )
+                continue
+
+            last_modified = self._format_liepin_last_modified_time(
+                record.last_modified_time
+            )
+            if not last_modified:
+                logger.warning(
+                    f"记录 ID {record.id}：last_modified_time 为空，跳过猎聘回写"
+                )
+                continue
+
+            visit_requests.visits.append(
+                LiepinVisitRecordCreateRequest(
+                    record_id=str(record.record_id or record.id),
+                    followup_object_type=followup_obj.object_type,
+                    followup_object_id=followup_obj.object_id,
+                    followup_object_name=object_name,
+                    opportunity_id=_str_or_none(record.opportunity_id),
+                    recorder=_str_or_none(record.recorder),
+                    recorder_id=self._resolve_liepin_crm_user_id(session, record),
+                    visit_communication_date=record.visit_communication_date.isoformat(),
+                    visit_communication_method=visit_method,
+                    followup_record=followup,
+                    next_steps=next_steps,
+                    last_modified_time=last_modified,
+                )
+            )
+
+        return visit_requests
+
     def writeback_review_opportunity_updates_to_crm(
         self,
         *,
@@ -1672,6 +1826,63 @@ class CrmWritebackService:
                     "message": (
                         f"{'成功' if ok else '失败'}处理 {len(visit_records)} 条拜访记录，"
                         f"提交 {writeback_count} 条分贝通回写"
+                        + ("" if ok else f"：{result.get('message', '')}")
+                    ),
+                    "processed_count": len(visit_records),
+                    "writeback_count": writeback_count,
+                    "results": return_data,
+                }
+
+            elif writeback_mode == WritebackMode.LIEPIN.value:
+                logger.info("使用猎聘拜访记录回写模式")
+
+                visit_requests = self.generate_liepin_visit_requests(
+                    session, visit_records
+                )
+
+                if not visit_requests.visits:
+                    logger.info("没有需要回写的猎聘拜访记录")
+                    return {
+                        "success": True,
+                        "message": "没有需要回写的猎聘拜访记录",
+                        "processed_count": len(visit_records),
+                        "writeback_count": 0,
+                    }
+
+                result = self.client.batch_liepin_visit_create(visit_requests)
+                logger.info(
+                    f"批量猎聘拜访记录回写完成: {len(visit_requests.visits)} 条记录"
+                )
+
+                return_data = result.get("data", {})
+                writeback_count = len(visit_requests.visits)
+                ok = bool(result.get("success"))
+                if isinstance(return_data, dict):
+                    # 网关批量响应：success / failed 计数
+                    success_count = return_data.get("success", 0)
+                    failed_count = return_data.get("failed", 0)
+                    return {
+                        "success": ok,
+                        "message": (
+                            f"{'成功' if ok else '失败'}处理 {len(visit_records)} 条拜访记录，"
+                            f"提交 {writeback_count} 条猎聘回写"
+                            + (
+                                f"（success={success_count}, failed={failed_count}）"
+                                if ok
+                                else f"：{result.get('message', '')}"
+                            )
+                        ),
+                        "processed_count": len(visit_records),
+                        "writeback_count": writeback_count,
+                        "success_count": success_count if ok else 0,
+                        "failed_count": failed_count if ok else writeback_count,
+                        "results": return_data,
+                    }
+                return {
+                    "success": ok,
+                    "message": (
+                        f"{'成功' if ok else '失败'}处理 {len(visit_records)} 条拜访记录，"
+                        f"提交 {writeback_count} 条猎聘回写"
                         + ("" if ok else f"：{result.get('message', '')}")
                     ),
                     "processed_count": len(visit_records),
