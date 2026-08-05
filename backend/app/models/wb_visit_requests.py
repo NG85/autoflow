@@ -128,3 +128,34 @@ class FenbeitongVisitRecordCreateRequest(BaseModel):
 
 class FenbeitongVisitRecordBatchCreateRequest(BaseModel):
     records: List[FenbeitongVisitRecordCreateRequest]
+
+
+class LiepinVisitRecordCreateRequest(BaseModel):
+    """猎聘拜访记录回写请求（``POST /crm-liepin/visit-record``）。"""
+
+    record_id: str = Field(..., description="拜访/跟进唯一标识")
+    followup_object_type: Optional[str] = Field(
+        None, description="跟进对象类型：end_customer / lead / partner，默认 end_customer"
+    )
+    followup_object_id: str = Field(..., description="客户/线索 unique_id")
+    followup_object_name: str = Field(..., description="客户名或线索名")
+    opportunity_id: Optional[str] = Field(None, description="关联商机 unique_id（有关联时必传）")
+    recorder: Optional[str] = Field(None, description="记录人姓名")
+    recorder_id: Optional[str] = Field(None, description="crm_user_id，如 FSUID_xxx")
+    visit_communication_date: str = Field(..., description="拜访/沟通日期 YYYY-MM-DD")
+    visit_communication_method: str = Field(
+        ...,
+        description="拜访方式：实地拜访 / 实地转远程拜访 / 远程视频会议 / 视频会议转电话拜访",
+    )
+    followup_record: str = Field(..., description="跟进记录")
+    next_steps: str = Field(..., description="下一步")
+    last_modified_time: str = Field(
+        ..., description="最后修改时间（UTC），如 2025-07-15 02:27:48"
+    )
+
+
+class LiepinVisitRecordBatchCreateRequest(BaseModel):
+    """猎聘拜访记录批量回写请求（``POST /crm-liepin/visit-record/batch``）。"""
+
+    visits: List[LiepinVisitRecordCreateRequest]
+    partial_fail: bool = True
