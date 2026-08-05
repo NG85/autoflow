@@ -259,7 +259,7 @@ def query_my_review_opp_branch_snapshots(
     """
     商机快照分页列表（不分组）。
     - 返回结构与 ``snapshot-group-data`` 一致，只是没有 ``group_by`` / ``group_key``；另含 ``forecast_type_amount_totals``、``forecast_amount_total``、``closed_won_amount``（当前筛选条件下全量金额、已成单金额，以及排除已成单后的按预测类型拆分）。
-    - session 访问：须为参会人，或有 ``review_session:all:view`` 且该 session 落于可见部门范围（公司管理员或无部门→全公司；有主部门→本部门及下属）。
+    - session 访问：须为参会人，或有 ``biz:weekly_decision:view`` 且该 session 落于可见部门范围（``biz_weekly_decision`` data-scope global 或无部门→全公司；有主部门→本部门及下属）。
     - session 内数据：普通参会成员（非 leader）仅本人；负责人看全部；非参会人以 viewer 身份进入且在可见范围内时看全部参会成员。支持筛选、排序、字段级别；``snapshot_filters`` 支持按客户筛选（``account_ids``/``account_names``，或别名 ``customer_ids``/``customer_names``）；``sorts`` 未传或空时默认：负责人 → 预测类型 → 金额（降序）。
     - 当 ``snapshot_filters.opportunity_ids`` 非空时，自动切到主表 + T2 baseline 口径查询；否则保持原 cache 可编辑口径。
     - 排序：请求体 ``sorts`` 为按优先级排列的多字段排序。
@@ -420,7 +420,7 @@ def query_review_snapshot_groups(
 ) -> ReviewSnapshotGroupsOut:
     """
     分组汇总：各分组的 key、名称、数量，以及本次 review 的信息、提交统计、是否可编辑等（不含明细行）。
-    - session 访问：须为参会人，或有 ``review_session:all:view`` 且该 session 落于可见部门范围（规则同 ``/crm/review/my/latest-session``）。
+    - session 访问：须为参会人，或有 ``biz:weekly_decision:view`` 且该 session 落于可见部门范围（规则同 ``/crm/review/my/latest-session``）。
     - session 内数据：普通参会成员（含非 leader）仅本人；负责人看全部；非参会人以 viewer 身份进入且在可见范围内时看全部参会成员。
     - ``group_by``：owner / forecast_type / opportunity_stage。
     - 可先筛选再分组；``sorts`` 仅第一项用于分组行顺序，未传或空则按分组键升序。
@@ -595,7 +595,7 @@ def query_my_latest_review_session(
 ) -> MyLatestReviewSessionOut:
     """
     当前用户参与的、汇报日最新的一场 review 的 session id；没有则为 null。
-    有 ``review_session:all:view`` 时：公司管理员或无部门信息看全公司；有所在部门则看本部门及下属部门。
+    有 ``biz:weekly_decision:view`` 时：``biz_weekly_decision`` data-scope global 或无部门信息看全公司；有所在部门则看本部门及下属部门。
     """
     scope_cache: Dict[str, ReviewSessionViewScope] = {}
     scope = get_cached_review_session_view_scope(db_session, user, scope_cache)
@@ -619,7 +619,7 @@ def query_my_review_session_history(
 ) -> ReviewSessionHistoryListOut:
     """
     当前用户参与过的 review 列表（分页），从新到旧。``size`` 最大 200。
-    有 ``review_session:all:view`` 时：公司管理员或无部门信息看全公司；有所在部门则看本部门及下属部门。
+    有 ``biz:weekly_decision:view`` 时：``biz_weekly_decision`` data-scope global 或无部门信息看全公司；有所在部门则看本部门及下属部门。
     """
     page = max(int(page or 1), 1)
     size = max(min(int(size or 20), 200), 1)
@@ -889,7 +889,7 @@ def query_review_session_kpi_metrics(
     calc_phase: Optional[str] = None,
 ) -> ReviewSessionKpiMetricsOut:
     """
-    本次 review 的 KPI 指标列表。仅负责人，或有 ``review_session:all:view`` 且该 session 落于可见部门范围的用户可调用（规则同 ``/crm/review/my/latest-session``）。可用 ``scope_type``、``calc_phase`` 筛选。
+    本次 review 的 KPI 指标列表。仅负责人，或有 ``biz:weekly_decision:view`` 且该 session 落于可见部门范围的用户可调用（规则同 ``/crm/review/my/latest-session``）。可用 ``scope_type``、``calc_phase`` 筛选。
     """
     session = crm_review_session_repo.get_by_unique_id(db_session, session_id)
     if not session:
@@ -900,7 +900,7 @@ def query_review_session_kpi_metrics(
         db_session,
         session_id=session_id,
         user=user,
-        detail="only session leader or review_session:all:view permission can view kpi metrics",
+        detail="only session leader or biz:weekly_decision:view permission can view kpi metrics",
         view_scope_cache=role_cache,
     )
 
@@ -954,7 +954,7 @@ def query_review_session_insights(
     fields_level: Literal["basic", "full"] = "basic",
 ) -> Union[ReviewSessionInsightsBasicOut, ReviewSessionInsightsOut]:
     """
-    部门视角的风险与进展洞察。仅负责人，或有 ``review_session:all:view`` 且该 session 落于可见部门范围的用户可调用（规则同 ``/crm/review/my/latest-session``）。风险为列表，进展按类别分组。
+    部门视角的风险与进展洞察。仅负责人，或有 ``biz:weekly_decision:view`` 且该 session 落于可见部门范围的用户可调用（规则同 ``/crm/review/my/latest-session``）。风险为列表，进展按类别分组。
     查询参数 ``fields_level``：basic（默认）或 full，字段多少不同。
     """
     session = crm_review_session_repo.get_by_unique_id(db_session, session_id)
@@ -966,7 +966,7 @@ def query_review_session_insights(
         db_session,
         session_id=session_id,
         user=user,
-        detail="only session leader or review_session:all:view permission can view insights",
+        detail="only session leader or biz:weekly_decision:view permission can view insights",
         view_scope_cache=scope_cache,
     )
 
@@ -1144,7 +1144,7 @@ def query_review_session_insight_risk_opportunities(
 ) -> ReviewSessionInsightDetailOut:
     """
     某条洞察（按 ``unique_id`` 定位，不限 ``record_type``）及其关联商机列表（返回关系信息，不直接展开主表 baseline 字段）。
-    - 仅负责人，或有 ``review_session:all:view`` 且该 session 落于可见部门范围的用户可调用（规则同 ``/crm/review/my/latest-session``）。
+    - 仅负责人，或有 ``biz:weekly_decision:view`` 且该 session 落于可见部门范围的用户可调用（规则同 ``/crm/review/my/latest-session``）。
     - ``risk_id`` 与 insights 列表项的 ``insight_unique_id`` 一致（RISK / PROGRESS / OPP_SUMMARY / OPP_REQS_INSIGHT 等）。
     - 若主记录为 ``record_type=RISK``，同时返回 ``RISK_PART`` 子记录（``parent_id`` 指向该风险）及其商机。
     - 前端二段式调用：先从本接口拿 ``opportunity_id``，再调用 ``POST .../baseline-opp-branch-snapshots``，并传
@@ -1159,7 +1159,7 @@ def query_review_session_insight_risk_opportunities(
         db_session,
         session_id=session_id,
         user=user,
-        detail="only session leader or review_session:all:view permission can view insights",
+        detail="only session leader or biz:weekly_decision:view permission can view insights",
         view_scope_cache=scope_cache,
     )
     risk_id = str(risk_id or "").strip()
@@ -1254,7 +1254,7 @@ def recalculate_review_session_forecast_aggregates(
     user: CurrentUserDep,
 ) -> ReviewSessionForecastRecalcOut:
     """
-    触发本次 review 的预测/业绩聚合重算（结果来自外部服务）。session 访问须为参会人，或在 ``review_session:all:view`` 可见部门范围内。
+    触发本次 review 的预测/业绩聚合重算（结果来自外部服务）。session 访问须为参会人，或在 ``biz:weekly_decision:view`` 可见部门范围内。
     session 内重算范围：负责人或非参会人 viewer（在可见部门范围内）拉全场；普通参会成员（非 leader）仅本人。具体字段见响应模型。
     """
     data = crm_review_service.recalculate_forecast_aggregates(
@@ -1302,7 +1302,7 @@ def review_session_chat(
     - root_cause: why a metric changed (why)
     - strategy: actionable recommendations (how)
 
-    Session access: attendees, or users with ``review_session:all:view`` when the session falls
+    Session access: attendees, or users with ``biz:weekly_decision:view`` when the session falls
     within their visible department scope (company-wide for admins or users without a department;
     own department subtree otherwise — same rules as ``/crm/review/my/latest-session``).
     Within-session data: non-leader attendees are limited to their own ``crm_user_id``;

@@ -41,11 +41,9 @@ from app.repositories.crm_account import crm_account_repo
 from app.repositories.department_mirror import department_mirror_repo
 from app.repositories.user_department_relation import user_department_relation_repo
 from app.repositories.user_profile import UserProfileRepo
-from app.repositories.visit_record import visit_record_repo
 from app.services.crm_config_service import get_resolved_field_mapping
 from app.services.crm_weekly_followup_engagement_service import crm_weekly_followup_engagement_service
 from app.utils.crm_weekly_followup_week_boundary import format_weekly_followup_period
-from app.services.oauth_service import oauth_client
 from app.permissions.weekly_followup_permission_service import weekly_followup_permission_service
 from app.utils.crm_account_tags import parse_account_tags
 from app.utils.crm_comments import CRMCommentValidationError, merge_append_crm_comments
@@ -72,18 +70,24 @@ def _resolve_user_department(
 
 
 def _can_view_weekly_followup(db_session: SessionDep, user: CurrentUserDep) -> tuple[bool, bool, Optional[str], Optional[str]]:
-    """
-    Returns: (can_view, is_company_admin, user_department_id, user_department_name)
+    """详情/筛选项的团队可见性（Wave A2：不再使用 report51:*）。
+
+    Returns: (can_view_team, is_company_admin, user_department_id, user_department_name)
+
+    - is_company_admin: ``sales_weekly_followup`` data-scope global
+    - can_view_team: 公司级范围、非 self 的 data-scope（org_scope 等）、或部门 leader
+    普通销售（仅 self_*、非 leader）→ can_view_team=False，department 明细仅本人行
     """
     dept_id, dept_name = _resolve_user_department(db_session, user)
     user_profile_repo = UserProfileRepo()
     profile = user_profile_repo.get_by_user_id(db_session, user.id)
 
-    roles_and_permissions = oauth_client.query_user_roles_and_permissions(user_id=user.id)
-    permissions = roles_and_permissions.get("permissions", []) if isinstance(roles_and_permissions, dict) else []
+    is_company_admin = weekly_followup_permission_service.has_global_data_scope(
+        db_session, user.id
+    )
+    has_team_scope = weekly_followup_permission_service.has_team_data_scope(db_session, user.id)
 
-    is_company_admin = visit_record_repo._is_admin_user(user.id, db_session, permissions)
-    # leader 判定：优先使用 user_department_relation.is_leader；兜底再用 profiles 的“无直属上级”口径
+    # leader 判定：优先 user_department_relation.is_leader；兜底 profiles「无直属上级」
     is_leader_flag = user_department_relation_repo.get_is_leader_by_user_ids(
         db_session,
         [str(user.id)],
@@ -92,10 +96,9 @@ def _can_view_weekly_followup(db_session: SessionDep, user: CurrentUserDep) -> t
         is_team_lead = bool(profile and profile.department and not profile.direct_manager_id)
     else:
         is_team_lead = bool(is_leader_flag)
-    has_dept_view = bool("report51:dept:view" in permissions)
 
-    can_view = bool(is_company_admin or is_team_lead or has_dept_view or user.is_superuser)
-    return can_view, bool(is_company_admin or user.is_superuser), dept_id, dept_name
+    can_view_team = bool(is_company_admin or has_team_scope or is_team_lead)
+    return can_view_team, is_company_admin, dept_id, dept_name
 
 
 def _can_edit_weekly_followup_comments(db_session: SessionDep, user: CurrentUserDep) -> tuple[bool, bool, Optional[str], Optional[str]]:
@@ -405,7 +408,15 @@ def get_weekly_followup_detail(
 ) -> WeeklyFollowupDetailOut:
     """
     查询单次周总结详情（整体总结 + scope 下实体明细列表）
+
+    权限与列表对齐：
+    - OAuth ``sales:weekly_followup:view`` 功能门控
+    - ``company`` scope：需 data-scope global
+    - ``department`` scope：团队范围（org_scope / leader / global）看全团队；否则仅本人行
     """
+    if not weekly_followup_permission_service.gate_view(db_session, user.id):
+        raise HTTPException(status_code=403, detail="无周跟进总结查看权限")
+
     week_start = payload.start_date
     week_end = payload.end_date
     period = format_weekly_followup_period(week_end)
@@ -414,7 +425,7 @@ def get_weekly_followup_detail(
 
     scope = payload.scope
     if scope == "company" and not is_company_admin:
-        raise HTTPException(status_code=403, detail="权限不足：仅公司管理员可查看 company scope")
+        raise HTTPException(status_code=403, detail="权限不足：仅公司级数据范围可查看 company scope")
     # department scope：团队负责人/管理员可看全团队；普通销售允许访问，但仅返回“自己负责”的明细行
     # 详情页明细列表需要完整展示（包含评论）
     include_comments = True
@@ -632,6 +643,9 @@ def get_weekly_followup_filter_options(
     获取周总结详情页的筛选选项（部门名称、负责人名称、客户 tags）
     用于前端下拉选择框填充
     """
+    if not weekly_followup_permission_service.gate_view(db_session, user.id):
+        raise HTTPException(status_code=403, detail="无周跟进总结查看权限")
+
     week_start = payload.start_date
     week_end = payload.end_date
 
@@ -639,7 +653,7 @@ def get_weekly_followup_filter_options(
 
     scope = payload.scope
     if scope == "company" and not is_company_admin:
-        raise HTTPException(status_code=403, detail="权限不足：仅公司管理员可查看 company scope")
+        raise HTTPException(status_code=403, detail="权限不足：仅公司级数据范围可查看 company scope")
 
     is_sales_limited = bool(scope == "department" and (not is_company_admin) and (not can_view_team))
 

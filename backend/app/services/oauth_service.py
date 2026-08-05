@@ -708,7 +708,7 @@ class OAuthClient:
 
         Args:
             user_id: 用户ID
-            permission: 权限名称，如 "report51:company:view" 或 "report51:dept:view"
+            permission: 权限名称，如 ``sales:follow_up:view``
 
         Returns:
             bool: 是否具有该权限

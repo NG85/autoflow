@@ -1,4 +1,4 @@
-"""拜访记录修改权限与修订推卡逻辑测试。"""
+"""拜访记录修订窗口与推卡逻辑测试。"""
 
 # 预加载路由模块，避免 policies <-> repositories 循环导入
 import app.api.routes.crm.visit_records.router as _visit_records_router  # noqa: F401
@@ -8,10 +8,6 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from app.policies.visit_record_access import (
-    VISIT_RECORD_EDIT_PERMISSION,
-    VisitRecordAccessPolicy,
-)
 from app.services.aldebaran_service import AldebaranClient
 from app.utils.date_utils import (
     get_visit_record_revise_entry_denial_reason,
@@ -21,96 +17,6 @@ from app.utils.date_utils import (
 )
 
 _BEIJING_TZ = ZoneInfo("Asia/Shanghai")
-
-
-def _allow_edit_check():
-    return {
-        "allowed": True,
-        "function_allowed": True,
-        "data_allowed": True,
-        "effect": "ALLOW",
-        "requires_audit": True,
-    }
-
-
-def _deny_edit_check():
-    return {
-        "allowed": False,
-        "function_allowed": False,
-        "data_allowed": False,
-        "effect": "DENY",
-        "requires_audit": False,
-    }
-
-
-def _policy(
-    user_id,
-    permissions,
-    *,
-    subordinate_ids=None,
-    is_admin=False,
-):
-    policy = VisitRecordAccessPolicy(
-        session=MagicMock(),
-        current_user_id=user_id,
-        roles_and_permissions_provider=lambda _uid: {"permissions": permissions},
-        is_admin_user_fn=lambda *_a, **_k: is_admin,
-    )
-    if subordinate_ids is not None:
-        policy._my_subordinate_user_ids = subordinate_ids
-    return policy
-
-
-@patch("app.policies.visit_record_access.oauth_client.check_function_permission")
-def test_can_edit_self_with_permission(mock_check):
-    mock_check.return_value = _allow_edit_check()
-    user_id = uuid4()
-    policy = _policy(user_id, [])
-    assert policy.can_edit_visit_record(user_id) is True
-    mock_check.assert_called_once_with(
-        user_id=user_id,
-        permission=VISIT_RECORD_EDIT_PERMISSION,
-    )
-
-
-@patch("app.policies.visit_record_access.oauth_client.check_function_permission")
-def test_can_edit_self_without_permission(mock_check):
-    mock_check.return_value = _deny_edit_check()
-    user_id = uuid4()
-    policy = _policy(user_id, [])
-    assert policy.can_edit_visit_record(user_id) is False
-
-
-@patch("app.policies.visit_record_access.oauth_client.check_function_permission")
-def test_can_edit_subordinate_with_permission(mock_check):
-    mock_check.return_value = _allow_edit_check()
-    supervisor_id = uuid4()
-    subordinate_id = uuid4()
-    policy = _policy(
-        supervisor_id,
-        [],
-        subordinate_ids=[subordinate_id],
-    )
-    assert policy.can_edit_visit_record(subordinate_id) is True
-
-
-@patch("app.policies.visit_record_access.oauth_client.check_function_permission")
-def test_can_edit_other_without_view_access_even_with_permission(mock_check):
-    mock_check.return_value = _allow_edit_check()
-    editor_id = uuid4()
-    other_id = uuid4()
-    policy = _policy(editor_id, [], subordinate_ids=[])
-    assert policy.can_edit_visit_record(other_id) is False
-
-
-@patch("app.policies.visit_record_access.oauth_client.check_function_permission")
-def test_can_edit_admin_without_permission_still_denied(mock_check):
-    mock_check.return_value = _deny_edit_check()
-    admin_id = uuid4()
-    other_id = uuid4()
-    policy = _policy(admin_id, [], is_admin=True)
-    assert policy.can_access_single_recorder(other_id) is True
-    assert policy.can_edit_visit_record(other_id) is False
 
 
 def test_entry_window_same_day_only_default():

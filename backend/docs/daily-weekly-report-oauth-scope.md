@@ -23,8 +23,19 @@
 | **公司日报** | `aggregate_company_report` 走公司级预聚合 = `GLOBAL`，不做 per-member 富集 |
 | **周报（经典）** | `generate_crm_weekly_report` 内容来自外部 Aldebaran（`fetch_weekly_report`），autoflow 侧无 per-member 聚合，无可施加 `org_scope` 的口径 |
 | **周跟进总结** | `crm_weekly_followup_service` 已按自身逻辑（部门子树）单独接入，**未纳入本次** |
-| **卡片接收权限（`notification:*:receive`）** | 公司卡片现用 `get_users_by_permission`，本次不改；权限码对齐留待后续 |
 | **历史报告列表 data-scope** | `reports.py` 未上线，本次不接 |
+
+### 卡片接收权限（已接入）
+
+| 维度 | 权限码 | 行为 |
+|------|--------|------|
+| 个人日报 | `notification:daily_report_personal:receive` | 路由=本人；推送前 `check_function_permission` |
+| 团队日报 | `notification:daily_report_team:receive` | 路由=部门负责人；个人接收者过滤；**`department_review` 群推送不校验** |
+| 公司日报 | `notification:daily_report_company:receive` | `get_users_by_permission` 直接作为收件人名单 |
+| 部门周报 | `notification:weekly_report_team:receive` | 同团队日报：负责人过滤；**群推送不校验** |
+| 公司周报 | `notification:weekly_report_company:receive` | `get_users_by_permission` 直接作为收件人名单 |
+
+落点：`platform_notification_service`（常量见 `platforms/notification_types.py`）。
 
 ---
 
@@ -216,9 +227,11 @@ aggregate_department_reports (团队日报)
 ```bash
 cd backend
 python -m pytest tests/test_report_scope_service.py -q
+python -m pytest tests/test_report_receive_permission_gate.py -q
 ```
 
 > 说明：沙箱环境跑完整 app 的 pytest 可能因原生依赖 segfault，需在沙箱外运行。
+> receive gate 覆盖：个人/团队过滤、公司 `by-permission` 权限码、日/周报发送路径绑定。
 
 ---
 
@@ -227,7 +240,6 @@ python -m pytest tests/test_report_scope_service.py -q
 | 项 | 说明 |
 |----|------|
 | **周报统计口径** | 若将来 autoflow 侧对周报做 per-member 聚合，可直接 `resolve_team_owners(..., entity="weekly_report_team")` |
-| **卡片接收权限对齐** | 现用 `daily_report:company:card:receive`，registry 为 `notification:daily_report_company:receive`（及 team/personal）；后续统一迁移并扩展个人/团队门控 |
 | **历史报告列表 data-scope** | `reports.py` 上线后按 §2.1 note 3 对 `daily_report_*`/`weekly_report_*` 走 data-scope 过滤 |
 | **负责人缺 user_id 兜底增强** | 当前回补失败即回退；可评估以 `crm_user_id` 直接作 `org_scope` 锚点 |
 
@@ -240,4 +252,5 @@ python -m pytest tests/test_report_scope_service.py -q
 | aptsell-oauth `docs/data-scope-matrix.md` §2.1 | 日报/周报两层权限（统计口径 + 卡片订阅）定义 |
 | aptsell-oauth `docs/data-scope-matrix.md` §3.2 | 各角色日报/周报可见范围 |
 | aptsell-oauth `alembic/seed_data/w3_data_scope_policies.py` | `daily_report_*` / `weekly_report_*` scope 种子 |
-| `backend/docs/follow-up-oauth-permission.md` | 跟进记录 OAuth 接入（data-scope → SQL 模式参考） |
+| `backend/docs/follow-up-oauth-permission.md` | 跟进 / 周跟进 / 周经营决策 OAuth 接入 |
+| `backend/tests/test_report_receive_permission_gate.py` | 日/周报卡片 receive gate 单测 |

@@ -54,33 +54,38 @@ def test_resolve_row_permissions_delegates_to_batch_check():
     records = [_record("fu-001")]
     expected = {"fu-001": {"can_edit": True, "can_delete": False}}
 
-    with patch("app.repositories.visit_record.settings") as mock_settings:
-        mock_settings.FOLLOW_UP_OAUTH_GATE_ENABLED = True
-        with patch(
-            "app.permissions.follow_up_permission_service.follow_up_permission_service.batch_row_permissions",
-            return_value=expected,
-        ) as batch:
-            perms = repo._resolve_row_permissions_for_page(
-                session,
-                current_user_id=USER_ID,
-                records=records,
-            )
+    with patch(
+        "app.repositories.visit_record.follow_up_permission_service.batch_row_permissions",
+        return_value=expected,
+    ) as batch:
+        perms = repo._resolve_row_permissions_for_page(
+            session,
+            current_user_id=USER_ID,
+            records=records,
+        )
 
     batch.assert_called_once_with(session, USER_ID, records)
     assert perms["fu-001"].can_edit is True
     assert perms["fu-001"].can_delete is False
 
 
-def test_resolve_row_permissions_skipped_when_gate_disabled():
+def test_resolve_row_permissions_skipped_without_user_or_records():
     repo = VisitRecordRepo()
     session = MagicMock()
 
-    with patch("app.repositories.visit_record.settings") as mock_settings:
-        mock_settings.FOLLOW_UP_OAUTH_GATE_ENABLED = False
-        perms = repo._resolve_row_permissions_for_page(
+    assert (
+        repo._resolve_row_permissions_for_page(
             session,
-            current_user_id=USER_ID,
+            current_user_id=None,
             records=[_record()],
         )
-
-    assert perms == {}
+        == {}
+    )
+    assert (
+        repo._resolve_row_permissions_for_page(
+            session,
+            current_user_id=USER_ID,
+            records=[],
+        )
+        == {}
+    )

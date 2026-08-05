@@ -12,7 +12,7 @@
 - `scope_type=department`：按录入人主部门匹配
 - `scope_type=global`：公司级旁观（每次拜访都抄送）
 
-OAuth 权限 `visit_record:card:receive`（与 `notification:follow_up_card:receive` 等同）仅作**资格 gate**，不再作为全局路由源。
+OAuth 权限码统一为 `notification:follow_up_card:receive`（legacy `visit_record:card:receive` 仅作 alias，见 `PERM_FOLLOW_UP_CARD_RECEIVE`）。该码**仅作资格语义登记**，**不作为**全局路由源；**Wave A 明确不开启** receive 资格 gate（抄送完全由规则表路由，避免误杀）。
 
 ## 术语
 
@@ -22,7 +22,7 @@ OAuth 权限 `visit_record:card:receive`（与 `notification:follow_up_card:rece
 | 管理层 | 汇报链上级（及 department_review 群）；使用 leader 版卡片模板 |
 | 抄送 | `notification_cc_rules`（含 global / department）；使用 leader 版卡片模板 |
 | 录入人 / recorder | 拜访记录的 `recorder_id` / `recorder`，对应 `user_profiles` |
-| 资格（permission） | 用户是否**允许**接收拜访抄送（`visit_record:card:receive` / `notification:follow_up_card:receive`） |
+| 资格（permission） | 语义码 `notification:follow_up_card:receive`；**当前不校验** |
 | 路由（rule） | 某次拜访**应该**抄送给谁 |
 
 > 代码中不存在 IM 意义上的 To/CC 字段；「主送 / 抄送」通过 recipient `type` 与卡片模板区分，每人单独发一张卡片。
@@ -33,7 +33,7 @@ OAuth 权限 `visit_record:card:receive`（与 `notification:follow_up_card:rece
 2. 多条规则同时命中时，**合并**抄送人；同一接收人去重。
 3. 与现有主送、汇报链、协同人、部门群推送**叠加**，不破坏现有行为。
 4. 抄送收集与汇报链查询**解耦**（汇报链为空时仍可按规则抄送）。
-5. `visit_record:card:receive` 仅作资格 gate；全局旁观走 `scope_type=global` 规则。
+5. 抄送路由仅规则表；全局旁观走 `scope_type=global`。`notification:follow_up_card:receive` **不**做推送前资格校验。
 
 ## 非目标
 
@@ -155,7 +155,7 @@ WHERE event_type = 'visit_record_card'
 对配置表抄送人：
 
 1. **批量**查 `user_profiles`（`user_id`），经 `profile.oauth_user`（`oauth_accounts`）取 `open_id`、`platform`；档案不存在、未激活或无 oauth 账号的跳过并打 warn 日志。
-2. 暂不强制校验 `visit_record:card:receive` 资格（需要时可在代码内开启）。
+2. **不**校验 `notification:follow_up_card:receive`（Wave A：gate 保持关闭）。
 
 ### Step 4：构造 recipient
 
@@ -214,7 +214,7 @@ WHERE event_type = 'visit_record_card'
 
 ```
 路由：notification_cc_rules（scope_type=user | department | global）
-资格：visit_record:card:receive / notification:follow_up_card:receive 仅作 gate（代码暂未强制校验）
+资格码：notification:follow_up_card:receive（命名对齐；推送路径不校验）
 ```
 
 公司旁观名单由 `scope_type=global` 规则维护；OAuth permission 不再作为抄送路由源。
@@ -225,9 +225,10 @@ WHERE event_type = 'visit_record_card'
 
 | 模块 | 职责 |
 |------|------|
+| `app/platforms/notification_types.py` | `PERM_FOLLOW_UP_CARD_RECEIVE` / legacy 常量（不在推送路径引用做 gate） |
 | `app/models/notification_cc_rule.py` | 规则与 recipients 模型 |
 | `app/repositories/notification_cc_rule.py` | 按 recorder / 部门查规则并合并 recipients |
-| `app/services/visit_record_cc_resolver.py` | 规则 → configured_cc recipients |
+| `app/services/visit_record_cc_resolver.py` | 规则 → configured_cc recipients（**无** receive 校验） |
 | `app/services/platform_notification_service.py` | 收集主送/leader/抄送/群，去重推送 |
 | `app/api/routes/...`（可选） | 规则 CRUD 内部 API |
 
@@ -277,7 +278,7 @@ WHERE event_type = 'visit_record_card'
 |------|------|
 | 管理 API / 后台页 | 规则 CRUD、命中预览（输入 recorder → 展示最终抄送名单） |
 | 推送审计表 | 记录 rule_id、实际推送 open_id，便于排障 |
-| 强制资格 gate | 对 configured_cc 校验 `visit_record:card:receive` |
+| ~~强制资格 gate~~ | **明确不做**：不对 configured_cc 校验 `notification:follow_up_card:receive`（防抄送误杀） |
 
 ---
 
@@ -285,7 +286,7 @@ WHERE event_type = 'visit_record_card'
 
 | 决策 | 结论 | 日期 |
 |------|------|------|
-| 新规则 vs OAuth 权限 | 路由仅规则表；permission 仅作资格 | 2026-07-15 |
+| 新规则 vs OAuth 权限 | 路由仅规则表；permission 仅命名对齐为 `notification:follow_up_card:receive`，**不开启**推送 gate | 2026-07-15 / 2026-07-24 Wave A1 |
 | 多规则命中 | 合并抄送人，不按 priority 取单条 | — |
 | 同接收人去重 | user_id（规则层）+ open_id（推送层） | — |
 | 匹配维度 | `scope_type=user` + `global` | 2026-07-15 |
@@ -293,3 +294,4 @@ WHERE event_type = 'visit_record_card'
 | 部门维度 | `scope_type=department` + `include_children`；cc_scope 优先级 user > department > global | 2026-07-17 |
 | department_review 与部门抄送 | `cc_scope=department` 视作部门级旁观，与 global 一样改由 review 群接收，不再推个人；仅 `user` 保留个人推送 | 2026-07-17 |
 | department_review_visits | 新增仅收拜访上级卡片的群类型，部门日/周报路由不变 | 2026-07-22 |
+| 权限码命名 | 业务/文档统一 `notification:follow_up_card:receive`；legacy `visit_record:card:receive` 仅 OAuth alias | 2026-07-24 |

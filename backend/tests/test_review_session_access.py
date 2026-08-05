@@ -5,6 +5,8 @@ from uuid import UUID
 
 from app.policies.review_session_access import (
     REVIEW_SESSION_VIEW_PERMISSION,
+    WEEKLY_DECISION_DATA_SCOPE_ENTITY,
+    WEEKLY_DECISION_VIEW_PERMISSION,
     ReviewSessionViewScope,
     resolve_review_session_view_scope,
 )
@@ -20,6 +22,19 @@ def _allow_view_check() -> dict:
 
 def _deny_view_check() -> dict:
     return {"allowed": False, "function_allowed": False}
+
+
+def _no_global_scope() -> dict:
+    return {"filters": [{"source": "org_team_sub", "enabled": True}]}
+
+
+def _linked_crm_disabled_scope() -> dict:
+    """普通销售常见 data-scope：非 global，不抬升为 company。"""
+    return {"filters": [{"source": "linked_crm", "enabled": False}]}
+
+
+def _global_scope() -> dict:
+    return {"filters": [{"source": "global", "enabled": True}]}
 
 
 def _scope(
@@ -47,10 +62,10 @@ def test_list_filter_mode_department_viewer():
     assert scope.list_filter_mode == "department"
 
 
-def test_list_filter_mode_viewer_without_department_sees_company():
+def test_list_filter_mode_viewer_without_department_falls_back_to_attendee():
     scope = _scope(has_viewer=True, is_admin=False, dept_id=None)
-    assert scope.list_filter_mode == "company"
-    assert scope.can_access_session_as_viewer(OTHER_DEPT_ID) is True
+    assert scope.list_filter_mode == "attendee"
+    assert scope.can_access_session_as_viewer(OTHER_DEPT_ID) is False
 
 
 def test_list_filter_mode_regular_user():
@@ -92,45 +107,93 @@ def test_has_full_session_data_view_non_attendee_viewer_sees_all():
     assert scope.has_full_session_data_view(OTHER_DEPT_ID, is_leader=False, is_attendee=False) is False
 
 
+def test_department_list_filter_includes_attendee_sessions_outside_subtree():
+    """部门 viewer：列表 = 子树 ∪ 本人参会，避免跨部门参会被滤掉。"""
+    from sqlmodel import select
+
+    from app.models.crm_review import CRMReviewSession
+    from app.policies.review_session_access import apply_review_session_list_filter
+
+    scope = _scope(has_viewer=True, is_admin=False)
+    stmt = apply_review_session_list_filter(select(CRMReviewSession), scope, str(USER_ID))
+    sql = str(stmt.compile(compile_kwargs={"literal_binds": False})).lower()
+    assert "crm_review_attendee" in sql
+    assert " or " in sql
+
+
 @patch("app.policies.review_session_access.department_mirror_repo")
 @patch("app.policies.review_session_access.user_department_relation_repo")
-@patch("app.policies.review_session_access.visit_record_repo")
+@patch("app.policies.review_session_access.user_profile_repo")
 @patch("app.policies.review_session_access.oauth_client")
 def test_resolve_review_session_view_scope_viewer_without_department(
     mock_oauth,
-    mock_visit_repo,
+    mock_user_profile_repo,
     mock_user_dept_repo,
     mock_dept_mirror_repo,
 ):
     db_session = MagicMock()
     mock_oauth.check_function_permission.return_value = _allow_view_check()
-    mock_visit_repo.can_access_all_crm_data.return_value = False
+    mock_oauth.get_data_scope.return_value = _no_global_scope()
+    mock_user_profile_repo.get_crm_user_id_by_user_id.return_value = "crm-1"
     mock_user_dept_repo.get_primary_department_by_user_ids.return_value = {}
 
     scope = resolve_review_session_view_scope(db_session, USER_ID)
 
-    assert scope.list_filter_mode == "company"
+    assert scope.list_filter_mode == "attendee"
     assert scope.subtree_department_ids == ()
     mock_dept_mirror_repo.get_subtree_department_ids.assert_not_called()
     mock_oauth.check_function_permission.assert_called_once_with(
         user_id=USER_ID,
-        permission=REVIEW_SESSION_VIEW_PERMISSION,
+        permission=WEEKLY_DECISION_VIEW_PERMISSION,
     )
+    mock_oauth.get_data_scope.assert_called_once_with(
+        user_id=USER_ID,
+        crm_user_id="crm-1",
+        entity=WEEKLY_DECISION_DATA_SCOPE_ENTITY,
+    )
+    assert REVIEW_SESSION_VIEW_PERMISSION == WEEKLY_DECISION_VIEW_PERMISSION
+    assert WEEKLY_DECISION_VIEW_PERMISSION == "biz:weekly_decision:view"
+    assert WEEKLY_DECISION_DATA_SCOPE_ENTITY == "biz_weekly_decision"
+
+@patch("app.policies.review_session_access.department_mirror_repo")
+@patch("app.policies.review_session_access.user_department_relation_repo")
+@patch("app.policies.review_session_access.user_profile_repo")
+@patch("app.policies.review_session_access.oauth_client")
+def test_resolve_review_session_view_scope_linked_crm_without_department_is_attendee(
+    mock_oauth,
+    mock_user_profile_repo,
+    mock_user_dept_repo,
+    mock_dept_mirror_repo,
+):
+    """销售侧 data-scope=linked_crm(enabled=false) 且无主部门 → 仅参会，不可看全公司。"""
+    db_session = MagicMock()
+    mock_oauth.check_function_permission.return_value = _allow_view_check()
+    mock_oauth.get_data_scope.return_value = _linked_crm_disabled_scope()
+    mock_user_profile_repo.get_crm_user_id_by_user_id.return_value = None
+    mock_user_dept_repo.get_primary_department_by_user_ids.return_value = {}
+
+    scope = resolve_review_session_view_scope(db_session, USER_ID)
+
+    assert scope.is_company_admin is False
+    assert scope.list_filter_mode == "attendee"
+    assert scope.subtree_department_ids == ()
+    mock_dept_mirror_repo.get_subtree_department_ids.assert_not_called()
 
 
 @patch("app.policies.review_session_access.department_mirror_repo")
 @patch("app.policies.review_session_access.user_department_relation_repo")
-@patch("app.policies.review_session_access.visit_record_repo")
+@patch("app.policies.review_session_access.user_profile_repo")
 @patch("app.policies.review_session_access.oauth_client")
 def test_resolve_review_session_view_scope_department_viewer(
     mock_oauth,
-    mock_visit_repo,
+    mock_user_profile_repo,
     mock_user_dept_repo,
     mock_dept_mirror_repo,
 ):
     db_session = MagicMock()
     mock_oauth.check_function_permission.return_value = _allow_view_check()
-    mock_visit_repo.can_access_all_crm_data.return_value = False
+    mock_oauth.get_data_scope.return_value = _no_global_scope()
+    mock_user_profile_repo.get_crm_user_id_by_user_id.return_value = "crm-1"
     mock_user_dept_repo.get_primary_department_by_user_ids.return_value = {
         str(USER_ID): DEPT_ID,
     }
@@ -145,17 +208,44 @@ def test_resolve_review_session_view_scope_department_viewer(
     assert scope.list_filter_mode == "department"
 
 
+@patch("app.policies.review_session_access.department_mirror_repo")
 @patch("app.policies.review_session_access.user_department_relation_repo")
-@patch("app.policies.review_session_access.visit_record_repo")
+@patch("app.policies.review_session_access.user_profile_repo")
+@patch("app.policies.review_session_access.oauth_client")
+def test_resolve_review_session_view_scope_global_data_scope(
+    mock_oauth,
+    mock_user_profile_repo,
+    mock_user_dept_repo,
+    mock_dept_mirror_repo,
+):
+    db_session = MagicMock()
+    mock_oauth.check_function_permission.return_value = _allow_view_check()
+    mock_oauth.get_data_scope.return_value = _global_scope()
+    mock_user_profile_repo.get_crm_user_id_by_user_id.return_value = "crm-1"
+    mock_user_dept_repo.get_primary_department_by_user_ids.return_value = {
+        str(USER_ID): DEPT_ID,
+    }
+
+    scope = resolve_review_session_view_scope(db_session, USER_ID)
+
+    assert scope.is_company_admin is True
+    assert scope.list_filter_mode == "company"
+    assert scope.subtree_department_ids == ()
+    mock_dept_mirror_repo.get_subtree_department_ids.assert_not_called()
+
+
+@patch("app.policies.review_session_access.user_department_relation_repo")
+@patch("app.policies.review_session_access.user_profile_repo")
 @patch("app.policies.review_session_access.oauth_client")
 def test_resolve_review_session_view_scope_denied_viewer(
     mock_oauth,
-    mock_visit_repo,
+    mock_user_profile_repo,
     mock_user_dept_repo,
 ):
     db_session = MagicMock()
     mock_oauth.check_function_permission.return_value = _deny_view_check()
-    mock_visit_repo.can_access_all_crm_data.return_value = False
+    mock_oauth.get_data_scope.return_value = _no_global_scope()
+    mock_user_profile_repo.get_crm_user_id_by_user_id.return_value = "crm-1"
     mock_user_dept_repo.get_primary_department_by_user_ids.return_value = {
         str(USER_ID): DEPT_ID,
     }

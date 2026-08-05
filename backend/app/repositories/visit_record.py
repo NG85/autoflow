@@ -19,15 +19,14 @@ from app.api.routes.crm.models import (
     VisitRecordRowPermissions,
 )
 from app.core.config import settings
-from app.policies.visit_record_access import VisitRecordAccessPolicy
 from app.repositories.crm_account import crm_account_repo
 from app.repositories.base_repo import BaseRepo
 from app.repositories.user_profile import user_profile_repo
 from app.repositories.user_department_relation import user_department_relation_repo
 from app.repositories.department_mirror import department_mirror_repo
 from app.services.crm_config_service import get_resolved_field_mapping
-from app.services.oauth_service import oauth_client
 from app.utils.crm_account_tags import parse_account_tags, resolve_followup_account_id
+from app.permissions.follow_up_permission_service import follow_up_permission_service
 from app.utils.crm_comments import (
     CRMCommentValidationError,
     has_nonempty_comments,
@@ -417,234 +416,6 @@ def _visit_record_has_comments_predicate():
 class VisitRecordRepo(BaseRepo):
     model_cls = CRMSalesVisitRecord
 
-    
-    def can_access_all_crm_data(self, current_user_id: UUID, session: Optional[Session] = None) -> bool:
-        """
-        检查用户是否有权限访问所有CRM数据
-
-        判断标准（按优先级）：
-        1. 是否有 crm:company:query 权限
-        2. 角色是否是 COMPANY_EXECUTIVE、COMPANY_ADMIN 或 COMPANY_SUB_ADMIN
-        3. UserProfile 中的 role 或 position 是否为 "admin"（兜底判断）
-
-        Args:
-            current_user_id: 用户ID
-            session: 数据库会话（可选，如果提供则作为兜底检查 UserProfile 中的 admin 角色）
-
-        Returns:
-            bool: 如果有权限访问所有CRM数据返回 True，否则返回 False
-        """
-        try:
-            roles_and_permissions = oauth_client.query_user_roles_and_permissions(user_id=current_user_id)
-            permissions = roles_and_permissions.get("permissions", []) if isinstance(roles_and_permissions, dict) else []
-            roles = roles_and_permissions.get("roles", []) if isinstance(roles_and_permissions, dict) else []
-
-            if "crm:company:query" in permissions:
-                logger.info(f"User {current_user_id} has crm:company:query permission; can access all CRM data")
-                return True
-
-            company_admin_roles = ["COMPANY_EXECUTIVE", "COMPANY_ADMIN", "COMPANY_SUB_ADMIN"]
-            role_codes = [role.get("code") for role in roles if isinstance(role, dict) and role.get("code")]
-            if any(role_code.lower() in [r.lower() for r in company_admin_roles] for role_code in role_codes):
-                logger.info(f"User {current_user_id} has company admin role {role_codes}; can access all CRM data")
-                return True
-        except Exception as e:
-            logger.warning(f"Failed to check permissions/roles for user {current_user_id}: {e}")
-
-        if session is not None:
-            try:
-                from app.repositories.user_profile import user_profile_repo
-                _, role = user_profile_repo.get_crm_user_id_and_role_by_user_id(session, current_user_id)
-                if role == "admin":
-                    logger.info(
-                        f"User {current_user_id} is admin (from UserProfile role/position, fallback check); "
-                        "can access all CRM data"
-                    )
-                    return True
-            except Exception as e:
-                logger.warning(f"Failed to check UserProfile admin role for user {current_user_id}: {e}")
-
-        return False
-    
-    def _is_admin_user(self, current_user_id: UUID, session: Session, user_permissions: Optional[List[str]] = None) -> bool:
-        """
-        检查当前用户是否为拜访记录的管理团队成员（拥有 report51:company:view 权限）。
-
-        Args:
-            current_user_id: 用户ID
-            session: 数据库会话（保留参数以兼容调用方）
-            user_permissions: 可选的用户权限列表，如果提供则直接使用，避免重复查询
-        """
-        _ = session
-        if user_permissions is None:
-            roles_and_permissions = oauth_client.query_user_roles_and_permissions(user_id=current_user_id)
-            user_permissions = roles_and_permissions.get("permissions", [])
-
-        if "report51:company:view" in user_permissions:
-            logger.info(f"User {current_user_id} has report51:company:view permission")
-            return True
-
-        logger.info(f"User {current_user_id} does not have admin permissions")
-        return False
-
-    def _get_user_accessible_recorder_ids(self, session: Session, current_user_id: UUID, user_permissions: Optional[List[str]] = None) -> Optional[List[str]]:
-        """
-        获取当前用户可访问的记录人ID列表
-        
-        根据权限决定访问范围：
-        - report51:company:view: 返回 None（表示可以访问所有记录，由调用方处理）
-        - report51:dept:view: 返回本部门所有成员的 recorder_id
-        - 都没有: 返回当前用户自己 + 所有汇报关系（递归获取所有下属） + 如果是部门负责人则包括全部门
-        
-        Args:
-            session: 数据库会话
-            current_user_id: 当前用户ID
-            user_permissions: 可选的用户权限列表，如果提供则直接使用，避免重复查询
-        """
-        # 获取用户权限（如果未提供）
-        if user_permissions is None:
-            roles_and_permissions = oauth_client.query_user_roles_and_permissions(user_id=current_user_id)
-            user_permissions = roles_and_permissions.get("permissions", [])
-        
-        # 检查是否有公司级查看权限
-        if "report51:company:view" in user_permissions:
-            logger.info(f"User {current_user_id} has report51:company:view permission, can access all records")
-            return None  # None 表示可以访问所有记录
-                
-        # 获取当前用户的档案
-        current_user_profile = user_profile_repo.get_by_user_id(session, current_user_id)
-        
-        if not current_user_profile:
-            logger.warning(f"No user profile found for user_id: {current_user_id}")
-            return []
-        
-        accessible_recorder_ids = []
-        
-        # 检查是否有部门级查看权限
-        has_dept_view = "report51:dept:view" in user_permissions
-        
-        if has_dept_view and current_user_profile.department:
-            # 如果有部门查看权限，返回本部门所有成员的 recorder_id
-            logger.info(f"User {current_user_id} has report51:dept:view permission for department {current_user_profile.department}, getting all department members")
-            department_members = user_profile_repo.get_department_members(session, current_user_profile.department)
-            for member in department_members:
-                if member.oauth_user_id:
-                    accessible_recorder_ids.append(member.oauth_user_id)
-            logger.info(f"Added {len(accessible_recorder_ids)} department members to accessible list")
-        else:
-            # 没有部门查看权限，使用原有逻辑：自己 + 汇报关系 + 部门负责人权限
-            # 1. 添加当前用户自己（如果有recorder_id）
-            if current_user_profile.oauth_user_id:
-                accessible_recorder_ids.append(current_user_profile.oauth_user_id)
-            
-            # 2. 递归获取所有汇报关系（包括直接下属和间接下属）
-            if current_user_profile.oauth_user_id:
-                all_subordinates = user_profile_repo.get_all_subordinates_recursive(session, current_user_profile.oauth_user_id)
-                for subordinate in all_subordinates:
-                    if subordinate.oauth_user_id:
-                        accessible_recorder_ids.append(subordinate.oauth_user_id)
-            
-            # 3. 如果是部门负责人（没有直属上级），获取全部门所有成员
-            if current_user_profile.department and not current_user_profile.direct_manager_id:
-                logger.info(f"User {current_user_id} is department manager for {current_user_profile.department}, getting all department members")
-                department_members = user_profile_repo.get_department_members(session, current_user_profile.department)
-                for member in department_members:
-                    if member.oauth_user_id and member.oauth_user_id not in accessible_recorder_ids:
-                        accessible_recorder_ids.append(member.oauth_user_id)
-                        logger.info(f"Added department member {member.name} ({member.oauth_user_id}) to accessible list")
-        
-        # 去重
-        accessible_recorder_ids = list(set(accessible_recorder_ids))
-        logger.info(f"User {current_user_id} can access {len(accessible_recorder_ids)} recorders: {accessible_recorder_ids}")
-        
-        return accessible_recorder_ids
-
-    def _get_visit_record_accessible_recorder_uuid_ids(
-        self,
-        session: Session,
-        current_user_id: Optional[UUID],
-        user_permissions: Optional[List[str]] = None,
-    ) -> Optional[List[UUID]]:
-        """
-        统一的“拜访记录可访问范围”计算入口，避免各方法里重复写权限逻辑。
-
-        Returns:
-        - None: 可访问所有记录（管理团队/公司级权限/未提供 current_user_id 向后兼容）
-        - []: 无任何可访问记录
-        - [UUID, ...]: 需要按 recorder_id 过滤的 UUID 列表
-        """
-        if not current_user_id:
-            logger.warning("No current_user_id provided, skipping access control")
-            return None
-
-        if user_permissions is None:
-            roles_and_permissions = oauth_client.query_user_roles_and_permissions(user_id=current_user_id)
-            user_permissions = roles_and_permissions.get("permissions", [])
-
-        # 管理团队成员（report51:company:view）可访问所有
-        if self._is_admin_user(current_user_id, session, user_permissions):
-            logger.info(f"Admin user {current_user_id} detected, skipping access control")
-            return None
-
-        accessible_recorder_ids = self._get_user_accessible_recorder_ids(
-            session=session,
-            current_user_id=current_user_id,
-            user_permissions=user_permissions,
-        )
-
-        # None 表示公司级可访问所有
-        if accessible_recorder_ids is None:
-            return None
-
-        # 空列表表示无权限
-        if not accessible_recorder_ids:
-            return []
-
-        # 字符串ID转换为UUID（兼容 32位无短横线 UUID）
-        uuid_recorder_ids: List[UUID] = []
-        try:
-            for rid in accessible_recorder_ids:
-                if not rid:
-                    continue
-                if len(rid) == 32:
-                    formatted_uuid = f"{rid[:8]}-{rid[8:12]}-{rid[12:16]}-{rid[16:20]}-{rid[20:32]}"
-                    uuid_recorder_ids.append(UUID(formatted_uuid))
-                else:
-                    uuid_recorder_ids.append(UUID(rid))
-        except ValueError as e:
-            logger.error(f"Invalid UUID format in accessible_recorder_ids: {e}")
-            return []
-
-        return uuid_recorder_ids
-
-    def _legacy_can_access_visit_record_by_recorder_id(
-        self,
-        session: Session,
-        current_user_id: Optional[UUID],
-        recorder_id: Optional[UUID],
-    ) -> bool:
-        policy = VisitRecordAccessPolicy(
-            session=session,
-            current_user_id=current_user_id,
-            roles_and_permissions_provider=lambda user_id: oauth_client.query_user_roles_and_permissions(user_id=user_id),
-            is_admin_user_fn=self._is_admin_user,
-        )
-        return policy.can_access_single_recorder(recorder_id)
-
-    def _legacy_can_edit_visit_record_by_recorder_id(
-        self,
-        session: Session,
-        current_user_id: Optional[UUID],
-        recorder_id: Optional[UUID],
-    ) -> bool:
-        policy = VisitRecordAccessPolicy(
-            session=session,
-            current_user_id=current_user_id,
-            roles_and_permissions_provider=lambda user_id: oauth_client.query_user_roles_and_permissions(user_id=user_id),
-            is_admin_user_fn=self._is_admin_user,
-        )
-        return policy.can_edit_visit_record(recorder_id)
-
     def _can_view_visit_record(
         self,
         session: Session,
@@ -653,15 +424,7 @@ class VisitRecordRepo(BaseRepo):
     ) -> bool:
         if not current_user_id:
             return True
-        if settings.FOLLOW_UP_OAUTH_GATE_ENABLED:
-            from app.permissions.follow_up_permission_service import follow_up_permission_service
-
-            return follow_up_permission_service.check_view(session, current_user_id, record)
-        return self._legacy_can_access_visit_record_by_recorder_id(
-            session,
-            current_user_id,
-            getattr(record, "recorder_id", None),
-        )
+        return follow_up_permission_service.check_view(session, current_user_id, record)
 
     def _can_edit_visit_record(
         self,
@@ -671,15 +434,7 @@ class VisitRecordRepo(BaseRepo):
     ) -> bool:
         if not current_user_id:
             return False
-        if settings.FOLLOW_UP_OAUTH_GATE_ENABLED:
-            from app.permissions.follow_up_permission_service import follow_up_permission_service
-
-            return follow_up_permission_service.check_edit(session, current_user_id, record)
-        return self._legacy_can_edit_visit_record_by_recorder_id(
-            session,
-            current_user_id,
-            getattr(record, "recorder_id", None),
-        )
+        return follow_up_permission_service.check_edit(session, current_user_id, record)
 
     def _apply_visit_record_list_permission(
         self,
@@ -688,32 +443,13 @@ class VisitRecordRepo(BaseRepo):
         *,
         current_user_id: Optional[UUID],
     ):
-        """
-        列表权限过滤：FOLLOW_UP_OAUTH_DATA_SCOPE_ENABLED 时走 OAuth data-scope；
-        否则沿用 VisitRecordAccessPolicy（本人 + 汇报下属 + report51 遗留）。
-        """
+        """列表权限过滤：OAuth ``follow_up`` data-scope → SQL WHERE（Wave A3：已移除 VisitRecordAccessPolicy）。"""
         if not current_user_id:
             logger.warning("No current_user_id provided, skipping visit record list permission filter")
             return query
 
-        if settings.FOLLOW_UP_OAUTH_DATA_SCOPE_ENABLED:
-            from app.permissions.follow_up_permission_service import follow_up_permission_service
-
-            perm_where = follow_up_permission_service.list_perm_where(session, current_user_id)
-            return query.where(perm_where)
-
-        policy = VisitRecordAccessPolicy(
-            session=session,
-            current_user_id=current_user_id,
-            roles_and_permissions_provider=lambda user_id: oauth_client.query_user_roles_and_permissions(
-                user_id=user_id
-            ),
-            is_admin_user_fn=self._is_admin_user,
-        )
-        predicate = policy.list_access_predicate(CRMSalesVisitRecord)
-        if predicate is not None:
-            return query.where(predicate)
-        return query
+        perm_where = follow_up_permission_service.list_perm_where(session, current_user_id)
+        return query.where(perm_where)
 
     def _resolve_row_permissions_for_page(
         self,
@@ -722,10 +458,8 @@ class VisitRecordRepo(BaseRepo):
         current_user_id: Optional[UUID],
         records: list[CRMSalesVisitRecord],
     ) -> dict[str, VisitRecordRowPermissions]:
-        if not settings.FOLLOW_UP_OAUTH_GATE_ENABLED or not current_user_id or not records:
+        if not current_user_id or not records:
             return {}
-
-        from app.permissions.follow_up_permission_service import follow_up_permission_service
 
         raw = follow_up_permission_service.batch_row_permissions(session, current_user_id, records)
         return {
@@ -758,16 +492,24 @@ class VisitRecordRepo(BaseRepo):
         revised_by_name: Optional[str],
         visit_communication_date: Optional[str] = None,
         visit_communication_method: Optional[str] = None,
+        followup_record: Optional[str] = None,
+        next_steps: Optional[str] = None,
     ):
         """
         修改拜访记录：需 sales:follow_up:edit 且在可查看范围内；
-        仅允许改跟进日期、跟进方式；录入自然日窗口见 CRM_VISIT_RECORD_REVISE_ENTRY_WINDOW_DAYS，
+        允许改跟进日期、跟进方式、跟进记录、下一步计划；
+        录入自然日窗口见 CRM_VISIT_RECORD_REVISE_ENTRY_WINDOW_DAYS，
         每日截止时间见 CRM_VISIT_RECORD_REVISE_DAILY_CUTOFF_TIME。
         返回 (VisitRecordResponse, CRMSalesVisitRecordRevision)。
         """
         from app.core.config import settings
 
-        if visit_communication_date is None and visit_communication_method is None:
+        if (
+            visit_communication_date is None
+            and visit_communication_method is None
+            and followup_record is None
+            and next_steps is None
+        ):
             raise VisitRecordRevisionError("请至少提供一个待修改字段")
 
         record = session.exec(
@@ -826,6 +568,42 @@ class VisitRecordRepo(BaseRepo):
                     }
                 )
                 record.visit_communication_method = new_method
+
+        if followup_record is not None:
+            new_followup = str(followup_record).strip() or None
+            old_followup = self._format_field_value_for_revision(
+                "followup_record", record.followup_record
+            )
+            if old_followup != new_followup:
+                changes.append(
+                    {
+                        "field": "followup_record",
+                        "old": old_followup,
+                        "new": new_followup,
+                    }
+                )
+                record.followup_record = new_followup
+                # 与创建链路一致（默认关双语）：zh/en 均写原文，避免列表/导出读到旧值
+                record.followup_record_zh = new_followup
+                record.followup_record_en = new_followup
+
+        if next_steps is not None:
+            new_next_steps = str(next_steps).strip() or None
+            old_next_steps = self._format_field_value_for_revision(
+                "next_steps", record.next_steps
+            )
+            if old_next_steps != new_next_steps:
+                changes.append(
+                    {
+                        "field": "next_steps",
+                        "old": old_next_steps,
+                        "new": new_next_steps,
+                    }
+                )
+                record.next_steps = new_next_steps
+                # 同上：与创建链路一致，zh/en 均写原文
+                record.next_steps_zh = new_next_steps
+                record.next_steps_en = new_next_steps
 
         if not changes:
             raise VisitRecordRevisionError("提交内容与当前记录一致，无需修改")
