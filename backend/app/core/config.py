@@ -77,6 +77,7 @@ class WritebackMode(str, enum.Enum):
     CHAITIN = "CHAITIN"  # CHAITIN 长亭自研
     WEBEYE = "WEBEYE"  # WEBEYE 网眼简道云
     FENBEITONG = "FENBEITONG"  # 分贝通 纷享销客
+    LIEPIN = "LIEPIN"  # 猎聘 CRM
 
 
 class WritebackFrequency(str, enum.Enum):
