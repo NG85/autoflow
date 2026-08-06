@@ -58,6 +58,25 @@ SAMPLES: List[Sample] = [
     Sample("F7", "followup", text_zh="详细介绍了方案优势，客户认可，后续继续推进。", expected="不合格"),
     Sample("F8", "followup", text_zh="上午与客户DBA和架构师复盘Q1性能瓶颈，确认高峰时段写入延迟集中在库存服务；现场演示参数调优与连接池隔离方案。客户明确反馈可接受两阶段切换，并提出需先验证审计合规。双方达成下周三前完成压测并在周会上评审上线窗口。", expected="优秀"),
     Sample("F9", "followup", text_zh="昨天拜访了昌平国家实验室的领导，张处长对我们的poc结果表示满意。", expected="不合格"),
+    # 笼统介绍 + 同段具体功能点 + 具体客户诉求 → 合格（避免叙事体误杀）
+    Sample(
+        "F10",
+        "followup",
+        text_zh=(
+            "今日拜访治真治合刘总,向其介绍了我司产品整体能力与应用价值。"
+            "刘总对产品表现出较高兴趣,认可产品方向,特别是APTSell的红绿灯质检,"
+            "能帮助团队快速了解到当前拜访状态。并表达了进一步深入了解的意愿。"
+            "沟通中了解到,刘总当前更关注产品交付落地后的实际效果,"
+            "希望后续交流中能够重点展示我司已有落地案例及实际应用成果,以便更全面评估合作价值。"
+        ),
+        expected="合格",
+    ),
+    Sample(
+        "F11",
+        "followup",
+        text_zh="演示了APTSell红绿灯质检能力及拜访状态可视化场景。客户认可该能力，并要求先提供两家落地案例以便评估合作价值。",
+        expected="合格",
+    ),
     Sample("M1", "followup", text_en="Discussed migration scope with CTO; client requested rollback strategy and security checklist before pilot.", expected="qualified"),
     # ---------- next ----------
     Sample("N1", "next", text_zh="1. 待办事项（如：具体动作）2. 时间节点（如：完成时间）3. 预期成果", expected="不合格"),
@@ -68,9 +87,22 @@ SAMPLES: List[Sample] = [
     Sample("N6", "next", text_zh="下周发送PoC方案并安排技术评审，推动客户确认一期范围。", expected="合格"),  # 周级时间 + 具体动作 + 推进结果
     Sample("N7", "next", text_zh="本周四前提交PoC清单，周五与客户技术团队开30分钟评审会，确认测试范围。", expected="优秀"),
     Sample("N8", "next", text_zh="客户已明确今年无预算，商机关闭，后续仅保持季度触达。", expected="合格"),
-    Sample("N9", "next", text_zh="明天发送报价，周三电话沟通采购条款。", expected="不合格"),
+    # 具体动作+时间、目标由动作隐含 → 合格（避免「未写目标句」误杀）
+    Sample("N9", "next", text_zh="明天发送报价，周三电话沟通采购条款。", expected="合格"),
     Sample("N10", "next", text_zh="今天下班前发送分阶段实施计划；周二与客户安全负责人评审权限模型；周四完成试点环境联调。目标是在本月底前推动客户内部立项并锁定一期范围。", expected="优秀"),
     Sample("N11", "next", text_zh="约了下周四初步洽谈合同，届时再讨论具体金额等事项。后续推动在8月底前完成签约", expected="优秀"),
+    Sample(
+        "N12",
+        "next",
+        text_zh="下周约刘总开会，展示落地案例并确认合作评估重点。",
+        expected="合格",
+    ),
+    Sample(
+        "N13",
+        "next",
+        text_zh="本周五给刘总发送两家APTSell落地案例。",
+        expected="合格",
+    ),
     Sample("M2", "next", text_en="Opportunity closed - customer declined due to budget freeze, no next steps.", expected="qualified"),
     Sample("M3", "next", text_en="Send implementation plan next week and schedule technical review to confirm phase-one scope.", expected="qualified"),
 ]
