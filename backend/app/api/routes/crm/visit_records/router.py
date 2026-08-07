@@ -573,7 +573,7 @@ def export_visit_records_to_xlsx(
         if language == "en":
             # 英文版表头 - 只包含英文字段
             headers = [
-                "ID", "Customer Level", "Follow-up Object", "Follow-up Object Attribute", "First Visit", "Call High",
+                "ID", "Customer Level", "Follow-up Object", "Follow-up Object ID", "Follow-up Object Attribute", "First Visit", "Call High",
                 "External Collaboration Partner", "External Collaboration Partner ID",
                 "Opportunity Name", "Opportunity Number", "Opportunity ID", "Follow-up Date", "Person in Charge", "Department",
                 "Contact Position", "Contact Name", "Collaborative Participants", "Follow-up Method",
@@ -586,7 +586,7 @@ def export_visit_records_to_xlsx(
         else:
             # 中文版表头（默认）- 只包含中文字段
             headers = [
-                "ID", "客户分类", "跟进对象", "跟进对象属性", "是否首次拜访", "是否Call High",
+                "ID", "客户分类", "跟进对象", "跟进对象ID", "跟进对象属性", "是否首次拜访", "是否Call High",
                 "外部协同合作伙伴", "外部协同合作伙伴ID",
                 "商机名称", "商机编号", "商机ID", "跟进日期", "负责销售", "所在团队",
                 "联系人职位", "联系人姓名", "协同参与人", "跟进方式",
@@ -727,6 +727,7 @@ def export_visit_records_to_xlsx(
                 item.record_id or record_id,
                 item.customer_level or "",
                 followup_object_name,
+                item.followup_object_id or "",
                 item.customer_attribute or "",
                 first_visit_text,
                 call_high_text,
