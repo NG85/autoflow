@@ -646,6 +646,16 @@ class VisitRecordResponse(BaseModel):
     latitude: Optional[float] = Field(default=None, description="纬度，范围 -90 到 90")
     longitude: Optional[float] = Field(default=None, description="经度，范围 -180 到 180")
 
+    @field_validator("attachment", mode="before")
+    @classmethod
+    def normalize_attachment(cls, v: Any) -> Any:
+        """兼容 None / 空串 / 旧字符串 / 结构化 JSON。"""
+        if v is None or v == "":
+            return None
+        if isinstance(v, VisitAttachment):
+            return v
+        return VisitAttachment.from_legacy_value(v)
+
     # 关联字段 - 来自crm_accounts表
     customer_level: Optional[str] = Field(
         default=None,

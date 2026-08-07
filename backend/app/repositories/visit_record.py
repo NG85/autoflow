@@ -360,7 +360,10 @@ def _convert_to_response(
     record_dict["collaborative_participants"] = format_collaborative_participants_names(record.collaborative_participants)
     
     attachment = record_dict.get("attachment")
-    if attachment:
+    if attachment is None or attachment == "":
+        # 库内可能存空串；VisitRecordResponse.attachment 只接受 None / VisitAttachment
+        record_dict["attachment"] = None
+    else:
         record_dict["attachment"] = VisitAttachment.from_legacy_value(attachment)
     
     # 处理联系人字段：如果数据库中有contacts字段则使用，否则从旧字段构造
