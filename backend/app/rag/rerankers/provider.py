@@ -11,6 +11,8 @@ class RerankerProvider(str, enum.Enum):
     VLLM = "vllm"
     XINFERENCE = "xinference"
     BEDROCK = "bedrock"
+    ZHIPU = "zhipu"
+    CLOUD = "cloud"
 
 
 class RerankerProviderOption(BaseModel):
@@ -134,5 +136,54 @@ reranker_provider_options: List[RerankerProviderOption] = [
             "aws_secret_access_key": "****",
             "aws_region_name": "us-west-2",
         },
+    ),
+    RerankerProviderOption(
+        provider=RerankerProvider.ZHIPU,
+        provider_display_name="Zhipu BigModel",
+        provider_description="Zhipu is a Chinese AI company, providing a large model platform.",
+        default_reranker_model="rerank",
+        reranker_model_description="Reference: https://docs.bigmodel.cn/api-reference/",
+        default_config={
+            "api_url": "https://open.bigmodel.cn/api/paas/v4/rerank",
+        },
+        default_top_n=10,
+        credentials_display_name="Zhipu API Key",
+        credentials_description="Zhipu requires an API key",
+        credentials_type="str",
+        default_credentials="*****",
+    ),
+    RerankerProviderOption(
+        provider=RerankerProvider.CLOUD,
+        provider_display_name="Cloud Compatible",
+        provider_description=(
+            "Generic cloud rerank provider for DashScope-style or Cohere-compatible APIs, "
+            "e.g. Alibaba Bailian / Model Studio."
+        ),
+        provider_url="https://help.aliyun.com/zh/model-studio/text-rerank-api",
+        default_reranker_model="gte-rerank-v2",
+        reranker_model_description=(
+            "Bailian DashScope models: gte-rerank-v2 / qwen3-vl-rerank (text). "
+            "Replace {WorkspaceId} in api_url with your MaaS workspace id."
+        ),
+        default_config={
+            "api_url": (
+                "https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com"
+                "/api/v1/services/rerank/text-rerank/text-rerank"
+            ),
+            "api_style": "dashscope",
+        },
+        config_description=(
+            "api_url: full Bailian MaaS rerank endpoint, e.g. "
+            "https://llm-xxxx.cn-beijing.maas.aliyuncs.com"
+            "/api/v1/services/rerank/text-rerank/text-rerank. "
+            "api_style: 'dashscope' (default) sends {model,input,parameters}; "
+            "'compatible' sends flat {model,query,documents,top_n} for "
+            "/compatible-api/v1/reranks. Optional instruct for compatible style."
+        ),
+        default_top_n=10,
+        credentials_display_name="Cloud API Key",
+        credentials_description="API key of the cloud platform (e.g. Bailian DASHSCOPE_API_KEY)",
+        credentials_type="str",
+        default_credentials="*****",
     ),
 ]
