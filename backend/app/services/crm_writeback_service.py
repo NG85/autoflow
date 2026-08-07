@@ -30,6 +30,7 @@ from app.models.wb_visit_requests import (
     ChaitinVisitRecordCreateRequest,
     FenbeitongVisitRecordBatchCreateRequest,
     FenbeitongVisitRecordCreateRequest,
+    LiepinVisitContact,
     LiepinVisitRecordBatchCreateRequest,
     LiepinVisitRecordCreateRequest,
     OlmVisitRecordBatchCreateRequest,
@@ -1349,6 +1350,46 @@ class CrmWritebackService:
             dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
         return dt.strftime("%Y-%m-%d %H:%M:%S")
 
+    @staticmethod
+    def _normalize_liepin_contacts(
+        record: CRMSalesVisitRecord,
+    ) -> Tuple[Optional[List[LiepinVisitContact]], Optional[List[str]]]:
+        """规范化猎聘回写 contacts，并提取 contact_id 列表。
+
+        优先 ``record.contacts``；否则回退旧字段 contact_id/name/position。
+        转发明文约定：保留规范化 contacts，并附带 ``contact_id: ["id1", ...]``。
+        """
+        contacts: List[LiepinVisitContact] = []
+
+        raw_contacts = record.contacts
+        if isinstance(raw_contacts, list) and len(raw_contacts) > 0:
+            for item in raw_contacts:
+                if not isinstance(item, dict):
+                    continue
+                contact = LiepinVisitContact(
+                    contact_id=_str_or_none(item.get("contact_id")),
+                    name=_str_or_none(item.get("name")),
+                    position=_str_or_none(item.get("position")),
+                )
+                if contact.contact_id or contact.name or contact.position:
+                    contacts.append(contact)
+        else:
+            legacy = LiepinVisitContact(
+                contact_id=_str_or_none(record.contact_id),
+                name=_str_or_none(record.contact_name),
+                position=_str_or_none(record.contact_position),
+            )
+            if legacy.contact_id or legacy.name or legacy.position:
+                contacts.append(legacy)
+
+        if not contacts:
+            return None, None
+
+        contact_ids = [
+            c.contact_id for c in contacts if c.contact_id
+        ]
+        return contacts, contact_ids or None
+
     def generate_liepin_visit_requests(
         self, session: Session, visit_records: List[CRMSalesVisitRecord]
     ) -> LiepinVisitRecordBatchCreateRequest:
@@ -1389,12 +1430,13 @@ class CrmWritebackService:
                 )
                 continue
 
-            followup = _str_or_none(
+            # 简易版仅有 followup_content 时回退到 followup_record。
+            followup_record = _str_or_none(
                 record.followup_record_zh
                 or record.followup_record
                 or record.followup_content
             )
-            if not followup:
+            if not followup_record:
                 logger.warning(
                     f"记录 ID {record.id}：followup_record 为空，跳过猎聘回写"
                 )
@@ -1416,6 +1458,8 @@ class CrmWritebackService:
                 )
                 continue
 
+            contacts, contact_ids = self._normalize_liepin_contacts(record)
+
             visit_requests.visits.append(
                 LiepinVisitRecordCreateRequest(
                     record_id=str(record.record_id or record.id),
@@ -1427,9 +1471,11 @@ class CrmWritebackService:
                     recorder_id=self._resolve_liepin_crm_user_id(session, record),
                     visit_communication_date=record.visit_communication_date.isoformat(),
                     visit_communication_method=visit_method,
-                    followup_record=followup,
+                    followup_record=followup_record,
                     next_steps=next_steps,
                     last_modified_time=last_modified,
+                    contacts=contacts,
+                    contact_id=contact_ids,
                 )
             )
 
