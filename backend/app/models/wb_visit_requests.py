@@ -130,6 +130,14 @@ class FenbeitongVisitRecordBatchCreateRequest(BaseModel):
     records: List[FenbeitongVisitRecordCreateRequest]
 
 
+class LiepinVisitContact(BaseModel):
+    """猎聘拜访回写联系人（``contacts`` 数组元素）。"""
+
+    contact_id: Optional[str] = Field(None, description="联系人 unique_id")
+    name: Optional[str] = Field(None, description="联系人姓名")
+    position: Optional[str] = Field(None, description="联系人职位")
+
+
 class LiepinVisitRecordCreateRequest(BaseModel):
     """猎聘拜访记录回写请求（``POST /crm-liepin/visit-record``）。"""
 
@@ -151,6 +159,13 @@ class LiepinVisitRecordCreateRequest(BaseModel):
     next_steps: str = Field(..., description="下一步")
     last_modified_time: str = Field(
         ..., description="最后修改时间（UTC），如 2025-07-15 02:27:48"
+    )
+    contacts: Optional[List[LiepinVisitContact]] = Field(
+        None, description="被拜访联系人数组；元素含 contact_id / name / position"
+    )
+    contact_id: Optional[List[str]] = Field(
+        None,
+        description="联系人 ID 集合；有 contacts 时可从中提取，转发明文时一并附带",
     )
 
 
