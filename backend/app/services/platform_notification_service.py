@@ -157,7 +157,7 @@ _DEFAULT_VISIT_RECORD_TEMPLATES: Dict[str, Dict[str, str]] = {
     PLATFORM_DINGTALK: {
         "form_recorder": "c218df2f-4032-4230-ac22-ce3809dbf740.schema",
         "form_leader": "b4de9410-c8b3-4f43-bcb6-dcc30cad3b44.schema",
-        "link": "3285297e-224c-47f7-b2b7-fe5a703061c1.schema",
+        "link": "3d435332-f6d6-4ed8-accb-8bd6cf57fd72.schema",
     },
     PLATFORM_FEISHU: {
         "form_simple_recorder": "AAqzQK6iUiK2k",
@@ -1514,29 +1514,42 @@ class PlatformNotificationService:
         return "customer-uploads/" in url
 
     @staticmethod
+    def _wrap_dingtalk_font(content: str) -> str:
+        """钉钉卡片自定义字号；与 meeting_notes 一致，仅在配置 CUSTOM_FONT_SIZE_TOKEN 时生效。"""
+        if settings.CUSTOM_FONT_SIZE_TOKEN:
+            return f"<font sizeToken={settings.CUSTOM_FONT_SIZE_TOKEN}>{content}</font>"
+        return content
+
+    @staticmethod
     def _build_visit_url_md(visit_url: Optional[str], record_id: Optional[str] = None) -> str:
         """
-        将 visit_url 转为飞书卡片 Markdown 超链接文案（visit_url_md）。
+        将 visit_url 转为飞书/钉钉卡片 Markdown 超链接文案（visit_url_md）。
 
-        展示文本始终为原 visit_url；仅跳转目标不同：
-        - http/https：跳转原链接，卡片内可直接打开
-        - 本地上传路径：跳转跟进记录详情页，由前端在详情页提供下载/预览
+        展示文案：
+        - http/https：保持原 URL 文本，跳转原链接
+        - 本地上传路径：展示文件名（路径最后一段），跳转跟进记录详情页
         - 其它（如钉钉会议号）：原样展示
+
+        若配置了 CUSTOM_FONT_SIZE_TOKEN（主要用于钉钉卡片），会像 meeting_notes 一样包裹 font 标签。
         """
         from app.utils.push_page_urls import build_visit_record_page_url
 
         url = (visit_url or "").strip()
         if not url:
-            return "--"
-        if url.startswith(("http://", "https://")):
-            return f"[{url}]({url})"
+            content = "--"
+        elif url.startswith(("http://", "https://")):
+            content = f"[{url}]({url})"
         # 创建时本地文件写入 visit_url，见 DocumentProcessingService._handle_local_document
-        if PlatformNotificationService._is_customer_upload_path(url):
+        elif PlatformNotificationService._is_customer_upload_path(url):
             detail_url = build_visit_record_page_url(record_id or "")
             if detail_url:
-                return f"[{url}]({detail_url})"
-            return "--"
-        return url
+                filename = url.rstrip("/").rsplit("/", 1)[-1] or url
+                content = f"[{filename}]({detail_url})"
+            else:
+                content = "--"
+        else:
+            content = url
+        return PlatformNotificationService._wrap_dingtalk_font(content)
 
     def _prepare_visit_record_template_vars(
         self,

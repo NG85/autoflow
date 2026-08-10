@@ -677,7 +677,7 @@ notification:
       dingtalk:
         form_recorder: "c218df2f-4032-4230-ac22-ce3809dbf740.schema"
         form_leader: "b4de9410-c8b3-4f43-bcb6-dcc30cad3b44.schema"
-        link: "3285297e-224c-47f7-b2b7-fe5a703061c1.schema"
+        link: "3d435332-f6d6-4ed8-accb-8bd6cf57fd72.schema"
       feishu:
         form_simple_recorder: "AAqzQK6iUiK2k"
         form_simple_leader: "AAqzQKvKzOW1z"

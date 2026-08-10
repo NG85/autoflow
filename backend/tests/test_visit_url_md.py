@@ -2,7 +2,21 @@
 
 from unittest.mock import patch
 
+import pytest
+
 from app.services.platform_notification_service import PlatformNotificationService
+
+# 本地 .env 可能已配置 CUSTOM_FONT_SIZE_TOKEN；默认用例按未配置断言
+pytestmark = pytest.mark.usefixtures("clear_custom_font_size_token")
+
+
+@pytest.fixture
+def clear_custom_font_size_token():
+    with patch(
+        "app.services.platform_notification_service.settings.CUSTOM_FONT_SIZE_TOKEN",
+        None,
+    ):
+        yield
 
 
 def test_build_visit_url_md_http_https():
@@ -16,13 +30,14 @@ def test_build_visit_url_md_http_https():
 
 def test_build_visit_url_md_local_upload_links_to_detail_page():
     path = "aptsell/data/customer-uploads/1774236579732-u86f7_附件4 接入飞书SSO登录和机器人.docx"
+    filename = "1774236579732-u86f7_附件4 接入飞书SSO登录和机器人.docx"
     with patch(
         "app.utils.push_page_urls.build_visit_record_page_url",
         return_value="https://app.example/v2/behavior/rec-1",
     ) as build_url:
         assert (
             PlatformNotificationService._build_visit_url_md(path, record_id="rec-1")
-            == f"[{path}](https://app.example/v2/behavior/rec-1)"
+            == f"[{filename}](https://app.example/v2/behavior/rec-1)"
         )
         build_url.assert_called_once_with("rec-1")
 
@@ -33,13 +48,17 @@ def test_build_visit_url_md_data_customer_uploads_without_tenant():
         "data/customer-uploads/1769417965628-8cbll_1769137760057-wtsy2_"
         "1765515782712-w9del_1761099776108-39182.docx"
     )
+    filename = (
+        "1769417965628-8cbll_1769137760057-wtsy2_"
+        "1765515782712-w9del_1761099776108-39182.docx"
+    )
     with patch(
         "app.utils.push_page_urls.build_visit_record_page_url",
         return_value="https://app.example/v2/behavior/rec-meeting",
     ) as build_url:
         assert (
             PlatformNotificationService._build_visit_url_md(path, record_id="rec-meeting")
-            == f"[{path}](https://app.example/v2/behavior/rec-meeting)"
+            == f"[{filename}](https://app.example/v2/behavior/rec-meeting)"
         )
         build_url.assert_called_once_with("rec-meeting")
 
@@ -55,7 +74,7 @@ def test_build_visit_url_md_storage_path_prefix_links_to_detail_page():
     ):
         assert (
             PlatformNotificationService._build_visit_url_md(path, record_id="rec-2")
-            == f"[{path}](https://app.example/v2/behavior/rec-2)"
+            == "[report.docx](https://app.example/v2/behavior/rec-2)"
         )
 
 
@@ -80,6 +99,31 @@ def test_build_visit_url_md_dingtalk_room_code_passthrough():
 def test_build_visit_url_md_empty():
     assert PlatformNotificationService._build_visit_url_md(None) == "--"
     assert PlatformNotificationService._build_visit_url_md("  ") == "--"
+
+
+def test_build_visit_url_md_wraps_dingtalk_font_when_token_configured():
+    url = "https://example.feishu.cn/docx/abc"
+    with patch(
+        "app.services.platform_notification_service.settings.CUSTOM_FONT_SIZE_TOKEN",
+        "small_x",
+    ):
+        assert (
+            PlatformNotificationService._build_visit_url_md(url)
+            == f"<font sizeToken=small_x>[{url}]({url})</font>"
+        )
+
+    path = "data/customer-uploads/report.docx"
+    with patch(
+        "app.services.platform_notification_service.settings.CUSTOM_FONT_SIZE_TOKEN",
+        "small_x",
+    ), patch(
+        "app.utils.push_page_urls.build_visit_record_page_url",
+        return_value="https://app.example/v2/behavior/rec-1",
+    ):
+        assert (
+            PlatformNotificationService._build_visit_url_md(path, record_id="rec-1")
+            == "<font sizeToken=small_x>[report.docx](https://app.example/v2/behavior/rec-1)</font>"
+        )
 
 
 def test_prepare_visit_record_template_vars_sets_visit_url_md_keeps_visit_url():
@@ -141,4 +185,4 @@ def test_prepare_visit_record_template_vars_local_path_uses_detail_url():
         )
 
     assert visit_record["visit_url"] == path
-    assert visit_record["visit_url_md"] == f"[{path}](https://app.example/v2/behavior/rec-9)"
+    assert visit_record["visit_url_md"] == "[report.docx](https://app.example/v2/behavior/rec-9)"

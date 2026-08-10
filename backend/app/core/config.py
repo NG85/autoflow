@@ -201,9 +201,9 @@ class Settings(BaseSettings):
  
     # Storage configuration
     STORAGE_TYPE: StorageType = StorageType.MINIO
-    STORAGE_TENANT: str = "pingcap/data"
+    STORAGE_TENANT: str = "aptsell/data"
     CUSTOMER_UPLOADS_FOLDER: str = "/customer-uploads/"
-    STORAGE_PATH_PREFIX: str = "pingcap/data/customer-uploads/"
+    STORAGE_PATH_PREFIX: str = "aptsell/data/customer-uploads/"
     
     # TOS STS
     TOS_API_KEY: str = ""
@@ -267,7 +267,7 @@ class Settings(BaseSettings):
     ALDEBARAN_BASE_URL: str = "http://aldebaran:8000"
     ALDEBARAN_CVGG_URL: str = "/api/v1/previsit/create_v4"
     ALDEBARAN_WEEKLY_REPORT_URL: str = "/api/v1/report/weekly"
-    ALDEBARAN_TENANT_ID: str = "PINGCAP"
+    ALDEBARAN_TENANT_ID: str = "APTSELL"
     ALDEBARAN_REVIEW_SESSION_RECALC_PATH: str = "/api/v1/review/performance/query"
     # 周跟进：批量查询商机 forecast_amount / expected_closing_date
     ALDEBARAN_OPPORTUNITY_QUERY_AMOUNT_PATH: str = "/api/v1/opportunity/query/amount"
