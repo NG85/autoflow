@@ -365,6 +365,7 @@ class OAuthClient:
                     "name": user.get("name") or "Unknown",
                     "platform": platform,
                     "open_id": open_id,
+                    "userId": user.get("userId") or user.get("user_id") or "",
                     "crm_user_id": user.get("crmUserId"),
                     "raw": user,
                 }

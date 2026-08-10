@@ -8,8 +8,10 @@ from llama_index.postprocessor.xinference_rerank import XinferenceRerank
 from llama_index.postprocessor.bedrock_rerank import AWSBedrockRerank
 
 from app.rag.rerankers.baisheng.baisheng_reranker import BaishengRerank
+from app.rag.rerankers.cloud.cloud_reranker import CloudRerank
 from app.rag.rerankers.local.local_reranker import LocalRerank
 from app.rag.rerankers.vllm.vllm_reranker import VLLMRerank
+from app.rag.rerankers.zhipu.zhipu_reranker import ZhipuRerank
 from app.rag.rerankers.provider import RerankerProvider
 
 from app.repositories.reranker_model import reranker_model_repo
@@ -82,6 +84,20 @@ def resolve_reranker(
                 aws_access_key_id=credentials["aws_access_key_id"],
                 aws_secret_access_key=credentials["aws_secret_access_key"],
                 region_name=credentials["aws_region_name"],
+                **config,
+            )
+        case RerankerProvider.ZHIPU:
+            return ZhipuRerank(
+                model=model,
+                top_n=top_n,
+                api_key=credentials,
+                **config,
+            )
+        case RerankerProvider.CLOUD:
+            return CloudRerank(
+                model=model,
+                top_n=top_n,
+                api_key=credentials,
                 **config,
             )
         case _:

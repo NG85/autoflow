@@ -1432,6 +1432,7 @@ class CRMStatisticsService:
                         BillingScenario.CRM_SALES_PERSONAL_DAILY,
                         review_detail=report_data.get("visit_detail_page") or settings.REVIEW_REPORT_HOST,
                         trace_key=f"sales-daily:{report_date_value}:{recorder_id}",
+                        operator_user_id=recorder_id or None,
                         log_context=f"sales-daily:{report_date_value}:{recorder_id}",
                     )
                 else:
@@ -1555,11 +1556,17 @@ class CRMStatisticsService:
                         f"推送给部门负责人 {result['success_count']}/{result['recipients_count']} 次"
                     )
                     if has_data:
+                        operator_user_id = None
+                        if managers:
+                            first_manager = managers[0] if isinstance(managers, list) else None
+                            if isinstance(first_manager, dict):
+                                operator_user_id = first_manager.get("userId") or None
                         report_billing_usage(
                             BillingScenario.CRM_SALES_TEAM_DEPARTMENT_DAILY,
                             review_detail=department_report.get("visit_detail_page")
                             or settings.REVIEW_REPORT_HOST,
                             trace_key=f"department-daily:{target_date.isoformat()}:{department_name}",
+                            operator_user_id=operator_user_id,
                             log_context=f"department={department_name} date={target_date.isoformat()}",
                         )
                     else:
@@ -1671,6 +1678,7 @@ class CRMStatisticsService:
                     review_detail=company_report.get("visit_detail_page")
                     or settings.REVIEW_REPORT_HOST,
                     trace_key=f"company-daily:{target_date.isoformat()}",
+                    operator_user_id=result.get("operator_user_id") or None,
                     log_context=f"company-daily:{target_date.isoformat()}",
                 )
             else:

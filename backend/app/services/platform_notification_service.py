@@ -2075,6 +2075,7 @@ class PlatformNotificationService:
                     "type": "company_executive",
                     "receive_id_type": "open_id",
                     "platform": platform,
+                    "userId": user.get("userId") or user.get("user_id") or "",
                 }
             )
             logger.info(
@@ -2106,7 +2107,8 @@ class PlatformNotificationService:
                 "success": False,
                 "message": f"No recipients found for company daily report",
                 "recipients_count": 0,
-                "success_count": 0
+                "success_count": 0,
+                "operator_user_id": None,
             }
         
         template_vars = self._convert_daily_report_data_for_feishu(db_session, company_report_data)
@@ -2114,12 +2116,19 @@ class PlatformNotificationService:
             template_vars["report_date"] = template_vars["report_date"].isoformat()
         template_id_by_platform = self._get_template_id_by_platform("company_daily_report")
         recipients_by_platform = self._group_recipients_by_platform(recipients)
-        return self._send_notifications_by_platform(
+        result = self._send_notifications_by_platform(
             recipients_by_platform=recipients_by_platform,
             template_id_by_platform=template_id_by_platform,
             template_vars=template_vars,
             notification_type="company daily report"
         )
+        first = recipients[0] if recipients else None
+        result["operator_user_id"] = (
+            (first.get("userId") or first.get("user_id") or None)
+            if isinstance(first, dict)
+            else None
+        )
+        return result
     
     def send_weekly_report_notification(
         self,
