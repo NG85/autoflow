@@ -683,13 +683,13 @@ notification:
         form_simple_leader: "AAqzQKvKzOW1z"
         form_complete_recorder: "AAqtEOBYVGBGe"
         form_complete_leader: "AAqtEOHUJGdza"
-        link: "AAqtEOgZn8Ou3"
+        link: "AAqPY9HeRUhiU"
       lark:
         form_simple_recorder: "AAqzQK6iUiK2k"
         form_simple_leader: "AAqzQKvKzOW1z"
         form_complete_recorder: "AAqtEOBYVGBGe"
         form_complete_leader: "AAqtEOHUJGdza"
-        link: "AAqtEOgZn8Ou3"
+        link: "AAqPY9HeRUhiU"
     data_type: dict
     description: "拜访记录卡片模板 ID。按平台（dingtalk/feishu/lark）与变体（form_recorder/form_leader/link 或 form_simple_* /form_complete_*/link）配置。"
     client: false
