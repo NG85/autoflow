@@ -37,7 +37,7 @@ def test_build_visit_url_md_local_upload_links_to_detail_page():
     ) as build_url:
         assert (
             PlatformNotificationService._build_visit_url_md(path, record_id="rec-1")
-            == f"[{filename}](https://app.example/v2/behavior/rec-1)"
+            == f"[{filename}](https://app.example/v2/behavior/rec-1#bottom)"
         )
         build_url.assert_called_once_with("rec-1")
 
@@ -58,7 +58,7 @@ def test_build_visit_url_md_data_customer_uploads_without_tenant():
     ) as build_url:
         assert (
             PlatformNotificationService._build_visit_url_md(path, record_id="rec-meeting")
-            == f"[{filename}](https://app.example/v2/behavior/rec-meeting)"
+            == f"[{filename}](https://app.example/v2/behavior/rec-meeting#bottom)"
         )
         build_url.assert_called_once_with("rec-meeting")
 
@@ -74,7 +74,7 @@ def test_build_visit_url_md_storage_path_prefix_links_to_detail_page():
     ):
         assert (
             PlatformNotificationService._build_visit_url_md(path, record_id="rec-2")
-            == "[report.docx](https://app.example/v2/behavior/rec-2)"
+            == "[report.docx](https://app.example/v2/behavior/rec-2#bottom)"
         )
 
 
@@ -122,7 +122,7 @@ def test_build_visit_url_md_wraps_dingtalk_font_when_token_configured():
     ):
         assert (
             PlatformNotificationService._build_visit_url_md(path, record_id="rec-1")
-            == "<font sizeToken=small_x>[report.docx](https://app.example/v2/behavior/rec-1)</font>"
+            == "<font sizeToken=small_x>[report.docx](https://app.example/v2/behavior/rec-1#bottom)</font>"
         )
 
 
@@ -185,4 +185,4 @@ def test_prepare_visit_record_template_vars_local_path_uses_detail_url():
         )
 
     assert visit_record["visit_url"] == path
-    assert visit_record["visit_url_md"] == "[report.docx](https://app.example/v2/behavior/rec-9)"
+    assert visit_record["visit_url_md"] == "[report.docx](https://app.example/v2/behavior/rec-9#bottom)"

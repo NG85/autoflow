@@ -1527,7 +1527,7 @@ class PlatformNotificationService:
 
         展示文案：
         - http/https：保持原 URL 文本，跳转原链接
-        - 本地上传路径：展示文件名（路径最后一段），跳转跟进记录详情页
+        - 本地上传路径：展示文件名（路径最后一段），跳转跟进记录详情页并带 #bottom 锚点
         - 其它（如钉钉会议号）：原样展示
 
         若配置了 CUSTOM_FONT_SIZE_TOKEN（主要用于钉钉卡片），会像 meeting_notes 一样包裹 font 标签。
@@ -1544,7 +1544,8 @@ class PlatformNotificationService:
             detail_url = build_visit_record_page_url(record_id or "")
             if detail_url:
                 filename = url.rstrip("/").rsplit("/", 1)[-1] or url
-                content = f"[{filename}]({detail_url})"
+                # #bottom：前端详情页打开后滚到底部（会议资料区域）
+                content = f"[{filename}]({detail_url}#bottom)"
             else:
                 content = "--"
         else:
