@@ -174,3 +174,31 @@ class LiepinVisitRecordBatchCreateRequest(BaseModel):
 
     visits: List[LiepinVisitRecordCreateRequest]
     partial_fail: bool = True
+
+
+class WywjVisitRecordCreateRequest(BaseModel):
+    """网眼云捷（飞书）拜访记录回写请求（``POST /crm-feishu/wywj/visit-record``）。"""
+
+    record_id: Optional[str] = Field(None, description="业务幂等键（与 source_record_id 二选一）")
+    source_record_id: Optional[str] = Field(None, description="业务幂等键（与 record_id 二选一）")
+    followup_object_id: Optional[str] = Field(
+        None, description="客户/线索飞书行 id（rec...）"
+    )
+    opportunity_id: Optional[str] = Field(None, description="商机飞书行 id（rec...）")
+    recorder_id: Optional[str] = Field(None, description="跟进人飞书 open_id（ou_...）")
+    collaborative_participants: Optional[List[str]] = Field(
+        None, description="内部参与人飞书 open_id（ou_...）数组"
+    )
+    visit_communication_date: Optional[str] = Field(
+        None, description="跟进日期，如 2026-07-28"
+    )
+    contact_name: Optional[str] = Field(None, description="沟通对象文本")
+    followup_record: Optional[str] = Field(None, description="跟进正文")
+    next_steps: Optional[str] = Field(None, description="下一步计划")
+
+
+class WywjVisitRecordBatchCreateRequest(BaseModel):
+    """网眼云捷拜访记录批量回写请求（``POST /crm-feishu/wywj/visit-record/batch``）。"""
+
+    visit_records: List[WywjVisitRecordCreateRequest]
+    partial_fail: bool = True

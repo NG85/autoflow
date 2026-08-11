@@ -3,6 +3,7 @@
 职责边界（配置与实现一致）：
 - **拜访记录回写**：``CRM_WRITEBACK_DEFAULT_MODE``（``None``=关闭）+ ``CrmVisitWritebackClient`` +
   ``CrmWritebackService`` 中以 ``writeback_visit_*`` / ``_execute_visit_writeback`` 为代表的路径。
+  支持 CBG / APAC / OLM / CHAITIN / WEBEYE / FENBEITONG / LIEPIN / WYWJ 等网关变体。
 - **CRM review 商机回写**：``CRM_WRITEBACK_REVIEW_ENABLED`` + ``CrmReviewWritebackClient`` +
   ``writeback_review_opportunity_updates_to_crm``（成员修改草稿并提交等）；不读写 ``CRM_WRITEBACK_DEFAULT_MODE``。
 """
@@ -37,6 +38,8 @@ from app.models.wb_visit_requests import (
     OlmVisitRecordCreateRequest,
     WebeyeVisitRecordBatchCreateRequest,
     WebeyeVisitRecordCreateRequest,
+    WywjVisitRecordBatchCreateRequest,
+    WywjVisitRecordCreateRequest,
 )
 from app.models.crm_accounts import CRMAccount
 from app.models.crm_leads import CRMLead
@@ -45,6 +48,7 @@ from app.utils.crm_followup_object import (
     FOLLOWUP_OBJECT_TYPE_END_CUSTOMER,
     FOLLOWUP_OBJECT_TYPE_LEAD,
     FOLLOWUP_OBJECT_TYPE_PARTNER,
+    FollowupObject,
     resolve_followup_object_from_record,
 )
 
@@ -186,7 +190,7 @@ def _crm_writeback_gateway_message_from_text(body: str) -> str:
 
 
 class CrmVisitWritebackClient:
-    """拜访记录回写 HTTP 客户端（CBG / APAC / OLM / CHAITIN / WEBEYE / LIEPIN 等）。"""
+    """拜访记录回写 HTTP 客户端（CBG / APAC / OLM / CHAITIN / WEBEYE / LIEPIN / WYWJ 等）。"""
     
     def __init__(self, base_url: str = "http://salesforce:8080"):
         self.base_url = base_url
@@ -422,6 +426,36 @@ class CrmVisitWritebackClient:
         except httpx.RequestError as e:
             logger.error(f"猎聘批量拜访回写失败: {e}")
             return {"success": False, "message": f"猎聘批量拜访回写失败: {e}"}
+
+    def batch_wywj_visit_create(
+        self, visit_requests: WywjVisitRecordBatchCreateRequest
+    ) -> Dict[str, Any]:
+        """批量回写网眼云捷拜访记录（``POST /crm-feishu/wywj/visit-record/batch``）。"""
+        url = f"{self.base_url}/crm-feishu/wywj/visit-record/batch"
+
+        try:
+            timeout = httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0)
+            with httpx.Client(timeout=timeout) as client:
+                payload = visit_requests.model_dump(exclude_none=True)
+                response = client.post(url, headers=self.headers, json=payload)
+                logger.info(f"调用网眼云捷批量拜访回写，返回: {response.text}")
+                response.raise_for_status()
+                return {"success": True, "data": response.json()}
+        except httpx.TimeoutException as e:
+            logger.error(f"网眼云捷批量拜访回写超时: {e}")
+            return {"success": False, "message": f"网眼云捷批量拜访回写超时: {e}"}
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                f"网眼云捷批量拜访回写 HTTP 错误: {e.response.status_code} {e.response.text}"
+            )
+            return {
+                "success": False,
+                "message": f"网眼云捷批量拜访回写 HTTP 错误: {e.response.status_code}",
+                "response_text": e.response.text,
+            }
+        except httpx.RequestError as e:
+            logger.error(f"网眼云捷批量拜访回写失败: {e}")
+            return {"success": False, "message": f"网眼云捷批量拜访回写失败: {e}"}
 
 
 class CrmReviewWritebackClient:
@@ -1481,6 +1515,270 @@ class CrmWritebackService:
 
         return visit_requests
 
+    def _resolve_feishu_open_ids(
+        self, session: Session, user_ids: List[str]
+    ) -> Dict[str, str]:
+        """批量将用户标识解析为飞书/Lark open_id（ou_...）。
+
+        入参兼容两种常见键：
+        - ``users.id`` / ``oauth_accounts.user_id``（拜访 ``recorder_id``）
+        - ``user_profiles.oauth_user_id``（协同参与人 ``ask_id``）
+        """
+        from sqlalchemy import bindparam
+
+        unique_ids = list(dict.fromkeys(uid for uid in user_ids if uid))
+        if not unique_ids:
+            return {}
+        # oauth_accounts.user_id 实际以无连字符 CHAR(32) 存储
+        query_user_ids = list(
+            dict.fromkeys(uid.replace("-", "") for uid in unique_ids if uid)
+        )
+        result: Dict[str, str] = {}
+        by_compact: Dict[str, str] = {}
+        try:
+            sql_by_user = text(
+                """
+                SELECT user_id, open_id
+                FROM oauth_accounts
+                WHERE user_id IN :user_ids
+                  AND open_id IS NOT NULL
+                  AND provider IN ('feishu', 'lark')
+                """
+            ).bindparams(bindparam("user_ids", expanding=True))
+            rows = session.exec(
+                sql_by_user, params={"user_ids": query_user_ids}
+            ).all()
+            for row in rows:
+                if not row:
+                    continue
+                uid, open_id = row[0], row[1]
+                if uid is None or open_id is None:
+                    continue
+                compact = str(uid).replace("-", "")
+                if compact not in by_compact:
+                    by_compact[compact] = str(open_id)
+        except Exception as e:
+            logger.warning(f"按 user_id 解析飞书 open_id 失败: {e}")
+
+        unresolved = [
+            uid for uid in unique_ids if uid.replace("-", "") not in by_compact
+        ]
+        if unresolved:
+            try:
+                sql_by_oauth = text(
+                    """
+                    SELECT up.oauth_user_id, oa.open_id
+                    FROM user_profiles up
+                    INNER JOIN oauth_accounts oa ON oa.user_id = up.user_id
+                    WHERE up.oauth_user_id IN :oauth_user_ids
+                      AND oa.open_id IS NOT NULL
+                      AND oa.provider IN ('feishu', 'lark')
+                    """
+                ).bindparams(bindparam("oauth_user_ids", expanding=True))
+                rows = session.exec(
+                    sql_by_oauth, params={"oauth_user_ids": unresolved}
+                ).all()
+                for row in rows:
+                    if not row:
+                        continue
+                    oauth_uid, open_id = row[0], row[1]
+                    if not oauth_uid or not open_id:
+                        continue
+                    # 直接按入参 oauth_user_id 回填
+                    key = str(oauth_uid)
+                    compact = key.replace("-", "")
+                    if compact not in by_compact:
+                        by_compact[compact] = str(open_id)
+                    if key not in result:
+                        result[key] = str(open_id)
+            except Exception as e:
+                logger.warning(f"按 oauth_user_id 解析飞书 open_id 失败: {e}")
+
+        for uid in unique_ids:
+            if uid in result:
+                continue
+            open_id = by_compact.get(uid.replace("-", ""))
+            if open_id:
+                result[uid] = open_id
+        return result
+
+    def _resolve_wywj_recorder_open_id(
+        self,
+        session: Session,
+        record: CRMSalesVisitRecord,
+        open_id_by_user_id: Optional[Dict[str, str]] = None,
+    ) -> Optional[str]:
+        """将 recorder_id 解析为飞书 open_id。"""
+        if not record.recorder_id:
+            return None
+        ask_id = str(record.recorder_id)
+        mapping = open_id_by_user_id
+        if mapping is None:
+            mapping = self._resolve_feishu_open_ids(session, [ask_id])
+        open_id = mapping.get(ask_id)
+        if not open_id:
+            logger.warning(
+                f"记录 ID {record.id}：未找到 recorder_id {ask_id} 对应的飞书 open_id"
+            )
+        return open_id
+
+    def _resolve_wywj_collaborative_open_ids(
+        self,
+        session: Session,
+        record: CRMSalesVisitRecord,
+        open_id_by_user_id: Optional[Dict[str, str]] = None,
+    ) -> Optional[List[str]]:
+        """将协同参与人 ask_id 解析为飞书 open_id 列表。"""
+        from app.utils.participants_utils import parse_collaborative_participants_list
+
+        participants = parse_collaborative_participants_list(
+            record.collaborative_participants
+        )
+        ask_ids: List[str] = []
+        for item in participants:
+            if not isinstance(item, dict):
+                continue
+            ask_id = _str_or_none(item.get("ask_id"))
+            if ask_id:
+                ask_ids.append(ask_id)
+        if not ask_ids:
+            return None
+
+        mapping = open_id_by_user_id
+        if mapping is None:
+            mapping = self._resolve_feishu_open_ids(session, ask_ids)
+        open_ids: List[str] = []
+        for ask_id in ask_ids:
+            open_id = mapping.get(ask_id)
+            if open_id and open_id not in open_ids:
+                open_ids.append(open_id)
+            elif not open_id:
+                logger.warning(
+                    f"记录 ID {record.id}：协同参与人 ask_id={ask_id} 未解析到飞书 open_id"
+                )
+        return open_ids or None
+
+    @staticmethod
+    def _collect_wywj_user_ids_for_open_id_lookup(
+        record: CRMSalesVisitRecord,
+    ) -> List[str]:
+        """收集单条拜访中需要解析飞书 open_id 的用户标识。"""
+        from app.utils.participants_utils import parse_collaborative_participants_list
+
+        ids: List[str] = []
+        if record.recorder_id:
+            ids.append(str(record.recorder_id))
+        for item in parse_collaborative_participants_list(
+            record.collaborative_participants
+        ):
+            if not isinstance(item, dict):
+                continue
+            ask_id = _str_or_none(item.get("ask_id"))
+            if ask_id:
+                ids.append(ask_id)
+        return ids
+
+    @staticmethod
+    def _format_wywj_contact_name(record: CRMSalesVisitRecord) -> Optional[str]:
+        """网眼云捷接触对象：仅从 contacts[].name 拼接。"""
+        raw_contacts = record.contacts
+        if not isinstance(raw_contacts, list) or not raw_contacts:
+            return None
+        names: List[str] = []
+        for item in raw_contacts:
+            if not isinstance(item, dict):
+                continue
+            name = _str_or_none(item.get("name"))
+            if name:
+                names.append(name)
+        return "、".join(names) if names else None
+
+    @staticmethod
+    def _is_wywj_writeback_record_id(record_id: Optional[str]) -> bool:
+        """仅 ``form_`` / ``link_`` 前缀的业务 record_id 需要网眼云捷回写。"""
+        rid = _str_or_none(record_id)
+        if not rid:
+            return False
+        return rid.startswith("form_") or rid.startswith("link_")
+
+    def generate_wywj_visit_requests(
+        self, session: Session, visit_records: List[CRMSalesVisitRecord]
+    ) -> WywjVisitRecordBatchCreateRequest:
+        """
+        根据拜访记录生成网眼云捷（飞书）拜访回写请求。
+
+        仅处理 ``record_id`` 以 ``form_`` / ``link_`` 开头的拜访记录。
+
+        字段对齐 ``POST /crm-feishu/wywj/visit-record``：
+        - source_record_id：本地 ``record_id``（幂等键）
+        - followup_object_id / opportunity_id：飞书行 id（rec...），直接取本地跟进对象/商机 id
+        - recorder_id / collaborative_participants：飞书 open_id（ou_...）
+        """
+        visit_requests = WywjVisitRecordBatchCreateRequest(visit_records=[])
+
+        candidates: List[Tuple[CRMSalesVisitRecord, str, FollowupObject]] = []
+        user_ids_for_lookup: List[str] = []
+        for record in visit_records:
+            source_record_id = _str_or_none(record.record_id)
+            if not self._is_wywj_writeback_record_id(source_record_id):
+                logger.info(
+                    f"记录 ID {record.id}：record_id={record.record_id!r} "
+                    f"非 form_/link_ 前缀，跳过网眼云捷回写"
+                )
+                continue
+
+            followup_obj = resolve_followup_object_from_record(record)
+            if not followup_obj:
+                logger.warning(
+                    f"记录 ID {record.id}：无法解析跟进对象（followup_object/account/partner 均为空），"
+                    "跳过网眼云捷回写"
+                )
+                continue
+
+            candidates.append((record, source_record_id, followup_obj))
+            user_ids_for_lookup.extend(
+                self._collect_wywj_user_ids_for_open_id_lookup(record)
+            )
+
+        open_id_by_user_id = (
+            self._resolve_feishu_open_ids(session, user_ids_for_lookup)
+            if candidates
+            else {}
+        )
+
+        for record, source_record_id, followup_obj in candidates:
+            followup_record = _str_or_none(
+                record.followup_record_zh
+                or record.followup_record
+                or record.followup_content
+            )
+            next_steps = _str_or_none(record.next_steps_zh or record.next_steps)
+            visit_date = (
+                record.visit_communication_date.isoformat()
+                if record.visit_communication_date
+                else None
+            )
+
+            visit_requests.visit_records.append(
+                WywjVisitRecordCreateRequest(
+                    source_record_id=source_record_id,
+                    followup_object_id=followup_obj.object_id,
+                    opportunity_id=_str_or_none(record.opportunity_id),
+                    recorder_id=self._resolve_wywj_recorder_open_id(
+                        session, record, open_id_by_user_id
+                    ),
+                    collaborative_participants=self._resolve_wywj_collaborative_open_ids(
+                        session, record, open_id_by_user_id
+                    ),
+                    visit_communication_date=visit_date,
+                    contact_name=self._format_wywj_contact_name(record),
+                    followup_record=followup_record,
+                    next_steps=next_steps,
+                )
+            )
+
+        return visit_requests
+
     def writeback_review_opportunity_updates_to_crm(
         self,
         *,
@@ -1929,6 +2227,66 @@ class CrmWritebackService:
                     "message": (
                         f"{'成功' if ok else '失败'}处理 {len(visit_records)} 条拜访记录，"
                         f"提交 {writeback_count} 条猎聘回写"
+                        + ("" if ok else f"：{result.get('message', '')}")
+                    ),
+                    "processed_count": len(visit_records),
+                    "writeback_count": writeback_count,
+                    "results": return_data,
+                }
+
+            elif writeback_mode == WritebackMode.WYWJ.value:
+                logger.info("使用网眼云捷（飞书）拜访记录回写模式")
+
+                visit_requests = self.generate_wywj_visit_requests(
+                    session, visit_records
+                )
+
+                if not visit_requests.visit_records:
+                    logger.info("没有需要回写的网眼云捷拜访记录")
+                    return {
+                        "success": True,
+                        "message": "没有需要回写的网眼云捷拜访记录",
+                        "processed_count": len(visit_records),
+                        "writeback_count": 0,
+                    }
+
+                result = self.client.batch_wywj_visit_create(visit_requests)
+                logger.info(
+                    f"批量网眼云捷拜访记录回写完成: {len(visit_requests.visit_records)} 条记录"
+                )
+
+                return_data = result.get("data", {})
+                writeback_count = len(visit_requests.visit_records)
+                ok = bool(result.get("success"))
+                if isinstance(return_data, dict):
+                    created_visits = return_data.get("created", 0)
+                    updated_visits = return_data.get("updated", 0)
+                    failed_visits = return_data.get("failed", 0)
+                    return {
+                        "success": ok,
+                        "message": (
+                            f"{'成功' if ok else '失败'}处理 {len(visit_records)} 条拜访记录，"
+                            f"提交 {writeback_count} 条网眼云捷回写"
+                            + (
+                                f"（created={created_visits}, updated={updated_visits}, "
+                                f"failed={failed_visits}）"
+                                if ok
+                                else f"：{result.get('message', '')}"
+                            )
+                        ),
+                        "processed_count": len(visit_records),
+                        "writeback_count": writeback_count,
+                        "success_count": (
+                            created_visits + updated_visits if ok else 0
+                        ),
+                        "failed_count": failed_visits if ok else writeback_count,
+                        "results": return_data,
+                    }
+                return {
+                    "success": ok,
+                    "message": (
+                        f"{'成功' if ok else '失败'}处理 {len(visit_records)} 条拜访记录，"
+                        f"提交 {writeback_count} 条网眼云捷回写"
                         + ("" if ok else f"：{result.get('message', '')}")
                     ),
                     "processed_count": len(visit_records),

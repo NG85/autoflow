@@ -78,6 +78,7 @@ class WritebackMode(str, enum.Enum):
     WEBEYE = "WEBEYE"  # WEBEYE 网眼简道云
     FENBEITONG = "FENBEITONG"  # 分贝通 纷享销客
     LIEPIN = "LIEPIN"  # 猎聘 CRM
+    WYWJ = "WYWJ"  # 网眼云捷（飞书多维表格）
 
 
 class WritebackFrequency(str, enum.Enum):
