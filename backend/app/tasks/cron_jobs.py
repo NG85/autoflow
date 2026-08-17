@@ -1899,6 +1899,7 @@ def _get_sales_tasks_from_crm_todos(
 
     查询条件：
     - 负责人存在（owner_name 或 owner_id）
+    - 未删除（is_deleted = 0）
     - due_date 在指定的时间范围内（range_start 到 range_end）
     
     参数:
@@ -1959,6 +1960,7 @@ def _get_sales_tasks_from_crm_todos(
         WHERE (owner_name IS NOT NULL OR owner_id IS NOT NULL)
             AND data_source IS NOT NULL
             AND due_date IS NOT NULL
+            AND is_deleted = 0
             {time_condition_clause}
             {status_condition}
         ORDER BY due_date ASC
@@ -2027,6 +2029,7 @@ def _count_cancelled_tasks(session: Session, start_date: datetime, end_date: dat
     
     查询条件：
     - 负责人存在（owner_name 或 owner_id）
+    - 未删除（is_deleted = 0）
     - ai_status为CANCELLED
     - due_date在指定的时间范围内（start_date 到 end_date）
     返回:
@@ -2044,6 +2047,7 @@ def _count_cancelled_tasks(session: Session, start_date: datetime, end_date: dat
         FROM crm_todos
         WHERE (owner_name IS NOT NULL OR owner_id IS NOT NULL)
             AND data_source IS NOT NULL
+            AND is_deleted = 0
             AND ai_status = 'CANCELLED'
             AND due_date >= :start_date
             AND due_date <= :end_date
@@ -2068,6 +2072,7 @@ def _count_no_due_date_tasks(session: Session) -> dict[str, int]:
     
     查询条件：
     - 负责人存在（owner_name 或 owner_id）
+    - 未删除（is_deleted = 0）
     - due_date IS NULL
     - ai_status为PENDING或IN_PROGRESS
     
@@ -2086,6 +2091,7 @@ def _count_no_due_date_tasks(session: Session) -> dict[str, int]:
         FROM crm_todos
         WHERE (owner_name IS NOT NULL OR owner_id IS NOT NULL)
             AND data_source IS NOT NULL
+            AND is_deleted = 0
             AND ai_status IN ('PENDING', 'IN_PROGRESS')
             AND due_date IS NULL
         GROUP BY owner_name, owner_id
