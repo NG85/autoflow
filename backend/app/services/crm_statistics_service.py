@@ -380,6 +380,7 @@ class CRMStatisticsService:
             WHERE (owner_name IS NOT NULL OR owner_id IS NOT NULL)
                 AND data_source IS NOT NULL
                 AND due_date IS NOT NULL
+                AND is_deleted = 0
                 AND owner_id = :owner_id
                 AND due_date >= :range_start
                 AND due_date <= :range_end
@@ -625,6 +626,7 @@ class CRMStatisticsService:
             WHERE (owner_name IS NOT NULL OR owner_id IS NOT NULL)
                 AND data_source IS NOT NULL
                 AND due_date IS NOT NULL
+                AND is_deleted = 0
                 AND owner_id IN ({placeholders})
                 AND due_date >= :range_start
                 AND due_date <= :range_end

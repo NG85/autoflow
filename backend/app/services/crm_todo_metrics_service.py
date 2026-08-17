@@ -228,6 +228,7 @@ class CRMTodoMetricsService:
                   COUNT(1) AS cnt
                 FROM crm_todos
                 WHERE data_source = 'MANUAL'
+                  AND is_deleted = 0
                   AND create_time IS NOT NULL
                   AND create_time >= :utc_start
                   AND create_time <= :utc_end
@@ -342,6 +343,7 @@ class CRMTodoMetricsService:
                 SELECT owner_id, owner_name, data_source, COUNT(1) AS cnt
                 FROM crm_todos
                 WHERE data_source IS NOT NULL
+                  AND is_deleted = 0
                   AND data_source IN :sources
                   AND ai_status = 'COMPLETED'
                   AND due_date IS NOT NULL
@@ -476,6 +478,7 @@ class CRMTodoMetricsService:
                 SELECT owner_id, owner_name, ai_status, COUNT(1) AS cnt
                 FROM crm_todos
                 WHERE data_source IS NOT NULL
+                  AND is_deleted = 0
                   AND due_date IS NOT NULL
                   AND due_date >= :week_start
                   AND due_date <= :week_end
@@ -612,6 +615,7 @@ class CRMTodoMetricsService:
                   COUNT(1) AS status_cnt
                 FROM crm_todos
                 WHERE data_source IS NOT NULL
+                  AND is_deleted = 0
                   AND ai_status IS NOT NULL
                   AND (owner_id IS NOT NULL OR owner_name IS NOT NULL)
                 GROUP BY owner_id, owner_name, ai_status
@@ -855,6 +859,7 @@ class CRMTodoMetricsService:
                 SELECT data_source, COUNT(1) AS cnt
                 FROM crm_todos
                 WHERE data_source IS NOT NULL
+                  AND is_deleted = 0
                   AND due_date IS NULL
                   AND data_source IN :sources
                 GROUP BY data_source
@@ -927,6 +932,7 @@ class CRMTodoMetricsService:
                 SELECT data_source, COUNT(1) AS cnt
                 FROM crm_todos
                 WHERE data_source IS NOT NULL
+                  AND is_deleted = 0
                   AND due_date IS NULL
                   AND data_source IN :sources
                 GROUP BY data_source
