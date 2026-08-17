@@ -6,6 +6,7 @@ import pytz
 
 from app.tasks.bitable_import import (
     _bitable_crm_select_sql,
+    build_bitable_fields_from_crm_row,
     compute_daily_bitable_window,
     normalize_bitable_record_ids,
     parse_bitable_sync_cron_hour_minute,
@@ -59,3 +60,48 @@ def test_bitable_crm_select_sql_uses_oauth_accounts_for_recorder_open_id():
     assert "up.open_id" not in sql
     assert "recorder_open_id" in sql
     assert "up.department AS recorder_department" in sql
+    assert "crm_sales_visit_records.followup_object_type" in sql
+    assert "crm_sales_visit_records.followup_object_id" in sql
+    assert "crm_sales_visit_records.followup_object_name" in sql
+
+
+def test_build_bitable_fields_writes_lead_name_not_account_name():
+    fields = build_bitable_fields_from_crm_row(
+        {
+            "record_id": "form_lead_001",
+            "account_name": "应忽略的双写客户名",
+            "followup_object_type": "lead",
+            "followup_object_id": "5ff3e47230bbb7000193f7e7",
+            "followup_object_name": "测试线索",
+            "opportunity_name": None,
+        }
+    )
+    assert fields["线索"] == "测试线索"
+    assert fields["唯一ID"] == "form_lead_001"
+    assert "客户名称" not in fields
+
+
+def test_build_bitable_fields_lead_falls_back_to_id():
+    fields = build_bitable_fields_from_crm_row(
+        {
+            "record_id": "form_lead_002",
+            "followup_object_type": "lead",
+            "followup_object_id": "5ff3e47230bbb7000193f7e7",
+            "followup_object_name": None,
+        }
+    )
+    assert fields["线索"] == "5ff3e47230bbb7000193f7e7"
+
+
+def test_build_bitable_fields_does_not_write_lead_for_customer():
+    fields = build_bitable_fields_from_crm_row(
+        {
+            "record_id": "form_acc_001",
+            "account_name": "测试客户",
+            "followup_object_type": "end_customer",
+            "followup_object_id": "acc_001",
+            "followup_object_name": "测试客户",
+        }
+    )
+    assert fields["客户名称"] == "测试客户"
+    assert "线索" not in fields
