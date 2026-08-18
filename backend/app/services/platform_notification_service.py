@@ -157,21 +157,21 @@ _DEFAULT_VISIT_RECORD_TEMPLATES: Dict[str, Dict[str, str]] = {
     PLATFORM_DINGTALK: {
         "form_recorder": "c218df2f-4032-4230-ac22-ce3809dbf740.schema",
         "form_leader": "b4de9410-c8b3-4f43-bcb6-dcc30cad3b44.schema",
-        "link": "3285297e-224c-47f7-b2b7-fe5a703061c1.schema",
+        "link": "3d435332-f6d6-4ed8-accb-8bd6cf57fd72.schema",
     },
     PLATFORM_FEISHU: {
         "form_simple_recorder": "AAqzQK6iUiK2k",
         "form_simple_leader": "AAqzQKvKzOW1z",
         "form_complete_recorder": "AAqtEOBYVGBGe",
         "form_complete_leader": "AAqtEOHUJGdza",
-        "link": "AAqtEOgZn8Ou3",
+        "link": "AAqPY9HeRUhiU",
     },
     PLATFORM_LARK: {
         "form_simple_recorder": "AAqzQK6iUiK2k",
         "form_simple_leader": "AAqzQKvKzOW1z",
         "form_complete_recorder": "AAqtEOBYVGBGe",
         "form_complete_leader": "AAqtEOHUJGdza",
-        "link": "AAqtEOgZn8Ou3",
+        "link": "AAqPY9HeRUhiU",
     },
 }
 
@@ -1497,6 +1497,61 @@ class PlatformNotificationService:
                 filtered[platform] = kept
         return filtered
 
+    @staticmethod
+    def _is_customer_upload_path(visit_url: str) -> bool:
+        """本地上传文档路径（非公网 URL）。
+
+        常见形态：
+        - {tenant}/data/customer-uploads/xxx.docx（如 aptsell/data/customer-uploads/...）
+        - data/customer-uploads/xxx.docx
+        - settings.STORAGE_PATH_PREFIX 前缀路径
+        """
+        url = (visit_url or "").strip()
+        if not url or url.startswith(("http://", "https://")):
+            return False
+        if url.startswith(settings.STORAGE_PATH_PREFIX):
+            return True
+        return "customer-uploads/" in url
+
+    @staticmethod
+    def _wrap_dingtalk_font(content: str) -> str:
+        """钉钉卡片自定义字号；与 meeting_notes 一致，仅在配置 CUSTOM_FONT_SIZE_TOKEN 时生效。"""
+        if settings.CUSTOM_FONT_SIZE_TOKEN:
+            return f"<font sizeToken={settings.CUSTOM_FONT_SIZE_TOKEN}>{content}</font>"
+        return content
+
+    @staticmethod
+    def _build_visit_url_md(visit_url: Optional[str], record_id: Optional[str] = None) -> str:
+        """
+        将 visit_url 转为飞书/钉钉卡片 Markdown 超链接文案（visit_url_md）。
+
+        展示文案：
+        - http/https：保持原 URL 文本，跳转原链接
+        - 本地上传路径：展示文件名（路径最后一段），跳转跟进记录详情页并带 #bottom 锚点
+        - 其它（如钉钉会议号）：原样展示
+
+        若配置了 CUSTOM_FONT_SIZE_TOKEN（主要用于钉钉卡片），会像 meeting_notes 一样包裹 font 标签。
+        """
+        from app.utils.push_page_urls import build_visit_record_page_url
+
+        url = (visit_url or "").strip()
+        if not url:
+            content = "--"
+        elif url.startswith(("http://", "https://")):
+            content = f"[{url}]({url})"
+        # 创建时本地文件写入 visit_url，见 DocumentProcessingService._handle_local_document
+        elif PlatformNotificationService._is_customer_upload_path(url):
+            detail_url = build_visit_record_page_url(record_id or "")
+            if detail_url:
+                filename = url.rstrip("/").rsplit("/", 1)[-1] or url
+                # #bottom：前端详情页打开后滚到底部（会议资料区域）
+                content = f"[{filename}]({detail_url}#bottom)"
+            else:
+                content = "--"
+        else:
+            content = url
+        return PlatformNotificationService._wrap_dingtalk_font(content)
+
     def _prepare_visit_record_template_vars(
         self,
         record_id: str,
@@ -1516,6 +1571,11 @@ class PlatformNotificationService:
             text = format_collaborative_participants_names(visit_record.get("collaborative_participants")) or "--"
             visit_record["collaborative_participants"] = text
             logger.info("Replaced collaborative participants: %s -> %s", visit_record.get("collaborative_participants"), text)
+            # visit_url 原字段保留；新增 visit_url_md 供卡片 Markdown 组件展示超链接
+            visit_record["visit_url_md"] = self._build_visit_url_md(
+                visit_record.get("visit_url"),
+                record_id=record_id,
+            )
 
         dynamic_fields = []
         if visit_record:
