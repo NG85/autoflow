@@ -57,8 +57,8 @@ SAMPLES: List[Sample] = [
     Sample("F6", "followup", text_zh="向客户说明了读写分离改造范围，客户确认先覆盖订单查询链路，并要求周五前给回滚预案。", expected="合格"),
     Sample("F7", "followup", text_zh="详细介绍了方案优势，客户认可，后续继续推进。", expected="不合格"),
     Sample("F8", "followup", text_zh="上午与客户DBA和架构师复盘Q1性能瓶颈，确认高峰时段写入延迟集中在库存服务；现场演示参数调优与连接池隔离方案。客户明确反馈可接受两阶段切换，并提出需先验证审计合规。双方达成下周三前完成压测并在周会上评审上线窗口。", expected="优秀"),
-    Sample("F9", "followup", text_zh="昨天拜访了昌平国家实验室的领导，张处长对我们的poc结果表示满意。", expected="不合格"),
-    # 笼统介绍 + 同段具体功能点 + 具体客户诉求 → 合格（避免叙事体误杀）
+    Sample("F9", "followup", text_zh="昨天拜访了昌平国家实验室的领导，张处长对我们的poc结果表示满意。", expected="不合格"),  # 仅拜访对象+笼统满意，不得因「拜访了谁」放宽
+    # 笼统介绍 + 同段具体功能点 + 具体客户诉求 → 合格（拜访本身不单算动作，有效动作常仅 1 条，最高合格）
     Sample(
         "F10",
         "followup",
@@ -75,6 +75,34 @@ SAMPLES: List[Sample] = [
         "F11",
         "followup",
         text_zh="演示了APTSell红绿灯质检能力及拜访状态可视化场景。客户认可该能力，并要求先提供两家落地案例以便评估合作价值。",
+        expected="合格",
+    ),
+    # 非拜访跟进 + 客户拒绝回应/失联 → 客户侧状态计入 feedbacks → 合格
+    Sample(
+        "F12",
+        "followup",
+        text_zh="上周给客户发了律师函，已经联系了两家催款公司。客户目前拒绝回应、联系不上。",
+        expected="合格",
+    ),
+    # 触达动作 + 无法接通/空号 → 合格（避免「打电话」被当成空泛活动词）
+    Sample(
+        "F13",
+        "followup",
+        text_zh="今日三次致电客户财务负责人，两次无人接听，第三次提示空号。已改发催款邮件，对方未回复。",
+        expected="合格",
+    ),
+    # 上门/对接中断：客户不在、联系人离职、前台拦截 → 合格
+    Sample(
+        "F14",
+        "followup",
+        text_zh="上午上门拜访，前台不给转接；后电话联系原对接人张总，对方已离职，目前无人承接。",
+        expected="合格",
+    ),
+    # 经营结论/商机关闭写在跟进记录 → 合格（与下一步计划 closed_case 对齐）
+    Sample(
+        "F15",
+        "followup",
+        text_zh="电话与客户采购确认，对方明确今年已无预算、商机关闭，后续仅保持季度触达。",
         expected="合格",
     ),
     Sample("M1", "followup", text_en="Discussed migration scope with CTO; client requested rollback strategy and security checklist before pilot.", expected="qualified"),
