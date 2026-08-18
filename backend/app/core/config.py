@@ -432,7 +432,7 @@ class Settings(BaseSettings):
     
     # Ark LLM API
     ARK_API_KEY: str = "b1529268-82ea-407a-bd79-d01514a2ed60"
-    ARK_MODEL: str = "ep-20260720140407-qnj9t"
+    ARK_MODEL: str = "ep-20260807151127-l88dw"
     ARK_API_URL: str = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
     ARK_HTTP_CONNECT_TIMEOUT: float = 10.0
     ARK_HTTP_READ_TIMEOUT: float = 180.0
