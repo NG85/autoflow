@@ -161,9 +161,9 @@ def generate_crm_daily_statistics(self, target_date_str=None, report_type=None):
     1. 查询指定日期的拜访记录，按销售人员分组，统计客户/合作伙伴/线索并生成完整个人日报
        （客户区分首次/多次；合作伙伴与线索只统计总数；有商机与仅跟进对象分开计数）
     2. 基于客户/商机/线索评估信息，补充红黄绿灯统计与评估明细，推送销售个人日报飞书卡片给每个有数据的销售人员
-    3. 从 crm_department_daily_summary 表中读取部门级汇总数据，为所有有负责人的部门生成部门日报（无数据部门生成空日报）
-    4. 从 crm_department_daily_summary 表中读取公司级汇总数据，生成公司日报
-    5. 将部门日报和公司日报通过飞书卡片推送给对应的负责人 / 管理员
+    3. 从 crm_department_daily_summary 表中读取部门级汇总数据，为所有有负责人的部门生成部门日报（无跟进发短文本，有跟进发完整卡片）
+    4. 从 crm_department_daily_summary 表中读取公司级汇总数据，生成公司日报（无跟进发短文本，有跟进发完整卡片）
+    5. 将部门日报和公司日报通过飞书推送给对应的负责人 / 管理员（卡片或短文本）
     
     """
     try:
@@ -198,13 +198,15 @@ def generate_crm_daily_statistics(self, target_date_str=None, report_type=None):
                 triggered_types.append("sales")
             
             # 2. 生成并推送团队（部门）日报
-            #    - 即使没有团队日报数据，也会为所有有负责人的部门生成空数据的团队日报
+            # 即使没有团队日报数据，也会为所有有负责人的部门生成日报并推送
+            # （无跟进时发短文本，有跟进时发完整卡片）
             if not report_type or report_type == "department":
                 crm_statistics_service._generate_and_send_department_daily_reports(session, target_date)
                 triggered_types.append("department")
             
             # 3. 生成并推送公司日报
             #    - 基于 crm_department_daily_summary 中的公司级汇总数据
+            #    - 无跟进时发短文本，有跟进时发完整卡片
             if not report_type or report_type == "company":
                 crm_statistics_service._generate_and_send_company_daily_report(session, target_date)
                 triggered_types.append("company")
@@ -218,9 +220,9 @@ def generate_crm_daily_statistics(self, target_date_str=None, report_type=None):
                 message = f"已生成日报 report_type={report_type or 'all'}；个人日报处理了 {sales_count} 个销售人员"
             else:
                 logger.warning(
-                    f"{target_date} 日报任务已执行，report_type={report_type or 'all'}；个人日报数据为 0（若选择了部门/公司日报，则仍会生成空日报）"
+                    f"{target_date} 日报任务已执行，report_type={report_type or 'all'}；个人日报数据为 0（若选择了部门/公司日报，则仍会推送：有跟进发卡片，无跟进发短文本）"
                 )
-                message = f"已生成日报 report_type={report_type or 'all'}；个人日报数据为 0（若选择了部门/公司日报，则仍会生成空日报）"
+                message = f"已生成日报 report_type={report_type or 'all'}；个人日报数据为 0（若选择了部门/公司日报，则仍会推送：有跟进发卡片，无跟进发短文本）"
             
             # 返回简化的结果（用于任务状态查询 API）
             return {

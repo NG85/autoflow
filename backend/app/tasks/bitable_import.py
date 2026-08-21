@@ -12,6 +12,7 @@ from sqlmodel import Session
 from app.core.db import engine
 from app.core.config import BitableSyncFrequency, settings
 from app.celery import app
+from app.utils.crm_followup_object import FOLLOWUP_OBJECT_TYPE_LEAD
 import pytz
 
 logger = logging.getLogger(__name__)
@@ -257,6 +258,22 @@ def _apply_partner_fallback_from_external_collaboration(crm_row: dict) -> None:
             crm_row["partner_id"] = ext_id
 
 
+def _followup_object_type(crm_row: dict) -> str:
+    return str(crm_row.get("followup_object_type") or "").strip()
+
+
+def _apply_lead_fields_to_bitable(crm_row: dict, feishu_fields: dict) -> None:
+    """线索拜访写入「线索」字段，与客户名称互斥。"""
+    if _followup_object_type(crm_row) != FOLLOWUP_OBJECT_TYPE_LEAD:
+        return
+    lead_name = crm_row.get("followup_object_name")
+    lead_id = crm_row.get("followup_object_id")
+    if not _is_blank_field_value(lead_name):
+        feishu_fields["线索"] = lead_name
+    elif not _is_blank_field_value(lead_id):
+        feishu_fields["线索"] = lead_id
+
+
 def build_bitable_fields_from_crm_row(crm_row: dict) -> dict:
     """
     将CRM表中的行数据（以DB字段命名）转换为Feishu/Lark多维表格可接受的fields结构。
@@ -264,6 +281,8 @@ def build_bitable_fields_from_crm_row(crm_row: dict) -> dict:
     """
     _apply_partner_fallback_from_external_collaboration(crm_row)
     feishu_fields = {}
+    is_lead_followup = _followup_object_type(crm_row) == FOLLOWUP_OBJECT_TYPE_LEAD
+    _apply_lead_fields_to_bitable(crm_row, feishu_fields)
     ts_fields = {"拜访及沟通日期", "创建时间"}
     bool_fields = {"是否首次拜访", "是否关键决策人拜访"}
     # 使用配置的时区
@@ -367,6 +386,9 @@ def build_bitable_fields_from_crm_row(crm_row: dict) -> dict:
             if feishu_key == "联系人姓名" and contacts_name_text:
                 continue
             if feishu_key == "联系人职位" and contacts_position_text:
+                continue
+            # 线索拜访不写入客户名称，避免跟进对象名被双写到客户列
+            if is_lead_followup and feishu_key in {"客户名称", "客户ID"}:
                 continue
             if feishu_key in ts_fields:
                 ts = _to_millis(value)
@@ -680,6 +702,9 @@ def _bitable_crm_select_sql(where_clause: str) -> str:
     cols_list.append(f"{CRM_TABLE}.contacts")
     cols_list.append(f"{CRM_TABLE}.external_collaboration_partner_name")
     cols_list.append(f"{CRM_TABLE}.external_collaboration_partner_id")
+    cols_list.append(f"{CRM_TABLE}.followup_object_type")
+    cols_list.append(f"{CRM_TABLE}.followup_object_id")
+    cols_list.append(f"{CRM_TABLE}.followup_object_name")
     cols = ", ".join(cols_list)
     return f"""
         SELECT {cols},

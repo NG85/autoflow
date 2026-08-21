@@ -86,6 +86,7 @@ class CbgVisitRecordCreateRequest(BaseModel):
     record_type: str = Field(..., description="跟进类型名称")
     account_ids: Optional[List[str]] = Field(None, description="关联客户ID列表")
     opportunity_ids: Optional[List[str]] = Field(None, description="关联商机ID列表")
+    lead_ids: Optional[List[str]] = Field(None, description="关联线索ID列表")
     owner_user_id: Optional[str] = Field(None, description="负责人ID")
     source_record_id: Optional[str] = Field(None, description="来源记录ID（用于日志追踪）")
 
@@ -167,6 +168,7 @@ class LiepinVisitRecordCreateRequest(BaseModel):
         None,
         description="联系人 ID 集合；有 contacts 时可从中提取，转发明文时一并附带",
     )
+    visit_url: Optional[str] = Field(None, description="会议链接或文件URL")
 
 
 class LiepinVisitRecordBatchCreateRequest(BaseModel):
