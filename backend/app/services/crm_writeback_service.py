@@ -1524,6 +1524,7 @@ class CrmWritebackService:
                     last_modified_time=last_modified,
                     contacts=contacts,
                     contact_id=contact_ids,
+                    visit_url=_str_or_none(record.visit_url),
                 )
             )
 

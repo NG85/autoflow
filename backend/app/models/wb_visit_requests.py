@@ -168,6 +168,7 @@ class LiepinVisitRecordCreateRequest(BaseModel):
         None,
         description="联系人 ID 集合；有 contacts 时可从中提取，转发明文时一并附带",
     )
+    visit_url: Optional[str] = Field(None, description="会议链接或文件URL")
 
 
 class LiepinVisitRecordBatchCreateRequest(BaseModel):
