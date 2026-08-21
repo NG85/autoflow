@@ -2057,13 +2057,91 @@ class PlatformNotificationService:
             notification_type=notification_type,
         )
 
+    @staticmethod
+    def _format_empty_daily_report_text(
+        *,
+        report_date: Any,
+        department_name: Optional[str] = None,
+    ) -> str:
+        """无跟进时的部门/公司日报短文本。"""
+        if hasattr(report_date, "isoformat"):
+            date_str = report_date.isoformat()
+        else:
+            date_str = str(report_date or "").strip() or "--"
+        if department_name:
+            return f"【部门日报】{department_name}（{date_str}）：当日无跟进记录。"
+        return f"【公司日报】（{date_str}）：当日无跟进记录。"
+
+    def _send_report_text_to_department_review_groups_or_recipients(
+        self,
+        db_session: Session,
+        department_name: str,
+        recipients: Optional[List[Dict[str, Any]]],
+        message_text: str,
+        report_kind: str = "department daily report",
+    ) -> Dict[str, Any]:
+        """
+        部门类报告文本推送：路由与卡片一致（优先 department_review 群，否则个人接收者）。
+        """
+        department_groups_review = self._get_group_chats_by_department(
+            department_id=None,
+            department_name=department_name,
+            notification_type="department_review",
+            db_session=db_session,
+            review_scope="report",
+        )
+        if not recipients and not department_groups_review:
+            logger.warning(
+                "No recipients and no review group for %s of %s",
+                report_kind, department_name,
+            )
+            return {
+                "success": False,
+                "message": f"No recipients found for {report_kind} of {department_name}",
+                "recipients_count": 0,
+                "success_count": 0,
+            }
+        if department_groups_review:
+            by_platform = defaultdict(list)
+            for g in department_groups_review:
+                p = g.get("platform")
+                if p:
+                    by_platform[p].append(g)
+            success_count = 0
+            for platform, group_chats in by_platform.items():
+                if not self._validate_platform_support(platform):
+                    continue
+                n = self._send_text_to_group_chats(
+                    platform=platform,
+                    group_chats=group_chats,
+                    text=message_text,
+                )
+                success_count += n
+            return {
+                "success": success_count > 0,
+                "message": (
+                    f"Pushed {report_kind} text to {success_count} review group(s)"
+                    if success_count
+                    else "No review groups sent"
+                ),
+                "recipients_count": success_count,
+                "success_count": success_count,
+            }
+        return self.send_text_notification_to_recipients(
+            recipients=recipients or [],
+            message_text=message_text,
+            notification_type=f"{report_kind} empty text",
+        )
+
     def send_department_daily_report_notification(
         self,
         db_session: Session,
         department_report_data: Dict[str, Any],
         recipients: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
-        """发送部门日报飞书卡片通知"""
+        """发送部门日报通知：有跟进发卡片，无跟进发短文本。"""
+        from app.services.crm_statistics_service import CRMStatisticsService
+
         department_name = department_report_data.get("department_name")
         if not department_name:
             logger.warning("Department report data missing department name")
@@ -2085,6 +2163,22 @@ class PlatformNotificationService:
             PERM_DAILY_REPORT_TEAM_RECEIVE,
             report_kind="department daily report",
         )
+        if not CRMStatisticsService.daily_report_has_follow_up(department_report_data):
+            message_text = self._format_empty_daily_report_text(
+                report_date=department_report_data.get("report_date"),
+                department_name=department_name,
+            )
+            logger.info(
+                "Department daily report has no follow-up, sending text instead of card: %s",
+                department_name,
+            )
+            return self._send_report_text_to_department_review_groups_or_recipients(
+                db_session=db_session,
+                department_name=department_name,
+                recipients=recipients,
+                message_text=message_text,
+                report_kind="department daily report",
+            )
         template_vars = self._convert_daily_report_data_for_feishu(db_session, department_report_data)
         if "report_date" in template_vars and hasattr(template_vars["report_date"], "isoformat"):
             template_vars["report_date"] = template_vars["report_date"].isoformat()
@@ -2156,7 +2250,8 @@ class PlatformNotificationService:
         db_session: Session,
         company_report_data: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """发送公司日报飞书卡片通知"""
+        """发送公司日报通知：有跟进发卡片，无跟进发短文本。"""
+        from app.services.crm_statistics_service import CRMStatisticsService
         
         # 获取推送对象 - 根据应用ID判断推送目标
         recipients = self.get_recipients_for_company_daily_report(db_session)
@@ -2170,6 +2265,26 @@ class PlatformNotificationService:
                 "success_count": 0,
                 "operator_user_id": None,
             }
+
+        first = recipients[0] if recipients else None
+        operator_user_id = (
+            (first.get("userId") or first.get("user_id") or None)
+            if isinstance(first, dict)
+            else None
+        )
+
+        if not CRMStatisticsService.daily_report_has_follow_up(company_report_data):
+            message_text = self._format_empty_daily_report_text(
+                report_date=company_report_data.get("report_date"),
+            )
+            logger.info("Company daily report has no follow-up, sending text instead of card")
+            result = self.send_text_notification_to_recipients(
+                recipients=recipients,
+                message_text=message_text,
+                notification_type="company daily report empty text",
+            )
+            result["operator_user_id"] = operator_user_id
+            return result
         
         template_vars = self._convert_daily_report_data_for_feishu(db_session, company_report_data)
         if "report_date" in template_vars and hasattr(template_vars["report_date"], "isoformat"):
@@ -2182,12 +2297,7 @@ class PlatformNotificationService:
             template_vars=template_vars,
             notification_type="company daily report"
         )
-        first = recipients[0] if recipients else None
-        result["operator_user_id"] = (
-            (first.get("userId") or first.get("user_id") or None)
-            if isinstance(first, dict)
-            else None
-        )
+        result["operator_user_id"] = operator_user_id
         return result
     
     def send_weekly_report_notification(

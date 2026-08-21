@@ -115,6 +115,11 @@ def test_send_department_daily_report_filters_with_team_receive_perm():
     svc = _svc()
     recipients = [{"name": "lead", "user_id": str(USER_A), "open_id": "ou_a"}]
     filtered = list(recipients)
+    report_data = {
+        "department_name": "Sales",
+        "report_date": "2026-01-01",
+        "statistics": [{"end_customer_total_follow_up": 1, "partner_total_follow_up": 0, "lead_total_follow_up": 0}],
+    }
 
     with patch.object(
         svc, "_filter_recipients_by_receive_permission", return_value=filtered
@@ -129,7 +134,7 @@ def test_send_department_daily_report_filters_with_team_receive_perm():
     ) as mock_send:
         result = svc.send_department_daily_report_notification(
             MagicMock(),
-            {"department_name": "Sales"},
+            report_data,
             recipients=recipients,
         )
 
@@ -138,6 +143,77 @@ def test_send_department_daily_report_filters_with_team_receive_perm():
     assert mock_filter.call_args.args[2] == PERM_DAILY_REPORT_TEAM_RECEIVE
     assert mock_filter.call_args.kwargs["report_kind"] == "department daily report"
     assert mock_send.call_args.kwargs["recipients"] == filtered
+
+
+def test_send_department_daily_report_empty_sends_text_not_card():
+    svc = _svc()
+    recipients = [{"name": "lead", "user_id": str(USER_A), "open_id": "ou_a"}]
+    report_data = {
+        "department_name": "Sales",
+        "report_date": "2026-01-04",
+        "statistics": [{"end_customer_total_follow_up": 0, "partner_total_follow_up": 0, "lead_total_follow_up": 0}],
+    }
+
+    with patch.object(
+        svc, "_filter_recipients_by_receive_permission", return_value=recipients
+    ), patch.object(
+        svc,
+        "_send_report_text_to_department_review_groups_or_recipients",
+        return_value={"success": True, "recipients_count": 1, "success_count": 1},
+    ) as mock_text, patch.object(
+        svc,
+        "_send_report_to_department_review_groups_or_recipients",
+    ) as mock_card:
+        result = svc.send_department_daily_report_notification(
+            MagicMock(),
+            report_data,
+            recipients=recipients,
+        )
+
+    assert result["success"] is True
+    mock_text.assert_called_once()
+    assert "当日无跟进记录" in mock_text.call_args.kwargs["message_text"]
+    assert "Sales" in mock_text.call_args.kwargs["message_text"]
+    mock_card.assert_not_called()
+
+
+def test_send_company_daily_report_empty_sends_text_not_card():
+    svc = _svc()
+    recipients = [{"name": "Exec", "userId": str(USER_A), "open_id": "ou_c", "platform": "feishu"}]
+    report_data = {
+        "report_date": "2026-01-04",
+        "statistics": [{"end_customer_total_follow_up": 0, "partner_total_follow_up": 0, "lead_total_follow_up": 0}],
+    }
+
+    with patch.object(
+        svc, "get_recipients_for_company_daily_report", return_value=recipients
+    ), patch.object(
+        svc,
+        "send_text_notification_to_recipients",
+        return_value={"success": True, "recipients_count": 1, "success_count": 1},
+    ) as mock_text, patch.object(
+        svc, "_send_notifications_by_platform"
+    ) as mock_card:
+        result = svc.send_company_daily_report_notification(MagicMock(), report_data)
+
+    assert result["success"] is True
+    assert result["operator_user_id"] == str(USER_A)
+    mock_text.assert_called_once()
+    assert "公司日报" in mock_text.call_args.kwargs["message_text"]
+    assert "当日无跟进记录" in mock_text.call_args.kwargs["message_text"]
+    mock_card.assert_not_called()
+
+
+def test_format_empty_daily_report_text():
+    svc = _svc()
+    assert (
+        svc._format_empty_daily_report_text(report_date="2026-01-04", department_name="华东")
+        == "【部门日报】华东（2026-01-04）：当日无跟进记录。"
+    )
+    assert (
+        svc._format_empty_daily_report_text(report_date="2026-01-04")
+        == "【公司日报】（2026-01-04）：当日无跟进记录。"
+    )
 
 
 def test_send_weekly_report_filters_with_team_receive_perm():

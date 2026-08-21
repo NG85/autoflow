@@ -1454,8 +1454,8 @@ class CRMStatisticsService:
     
     def _generate_and_send_department_daily_reports(self, session: Session, target_date: date) -> None:
         """
-        生成并推送部门日报
-        即使部门没有数据，也会给负责人发送空数据的卡片通知
+        生成并推送部门日报。
+        有跟进数据发完整卡片；无跟进则发短文本（告知当日无跟进记录），不再推空卡片模板。
         
         Args:
             session: 数据库会话
@@ -1489,23 +1489,22 @@ class CRMStatisticsService:
             )
             return
 
-        department_reports_with_data = self.aggregate_department_reports(
+        department_reports_with_summary = self.aggregate_department_reports(
             session=session,
             target_date=target_date,
             department_names=department_names_to_process,
         )
-        department_reports_with_data_by_name = {
+        department_reports_with_summary_by_name = {
             report.get("department_name"): report
-            for report in department_reports_with_data
+            for report in department_reports_with_summary
             if report.get("department_name")
         }
-        departments_with_data = set(department_reports_with_data_by_name.keys())
 
-        # 为没有数据的部门生成空数据的报告
-        department_reports_no_data = []
+        # 汇总表无行的部门：生成空报告结构（推送侧会改发短文本）
+        department_reports_no_summary = []
         all_department_reports: List[Dict[str, Any]] = []
         for department_name in department_names_to_process:
-            existing_report = department_reports_with_data_by_name.get(department_name)
+            existing_report = department_reports_with_summary_by_name.get(department_name)
             if existing_report:
                 all_department_reports.append(existing_report)
                 continue
@@ -1515,7 +1514,7 @@ class CRMStatisticsService:
                 target_date=target_date,
                 session=session,
             )
-            department_reports_no_data.append(empty_report)
+            department_reports_no_summary.append(empty_report)
             all_department_reports.append(empty_report)
             logger.info(f"为部门 {department_name} 生成空数据报告（无销售数据）")
         
@@ -1523,13 +1522,15 @@ class CRMStatisticsService:
             logger.warning(f"{target_date} 没有找到任何部门，跳过部门日报推送")
             return
         
-        # 检查飞书推送开关（只在发送卡片时检查，不影响计算逻辑）
+        # 检查飞书推送开关（只在发送时检查，不影响计算逻辑）
         if not settings.CRM_DAILY_REPORT_FEISHU_ENABLED:
-            logger.info("CRM日报飞书推送功能已禁用，跳过部门日报卡片推送（但数据已生成）")
+            logger.info("CRM日报飞书推送功能已禁用，跳过部门日报推送（但数据已生成）")
             return
         
         total_departments = 0
         successful_departments = 0
+        with_follow_up_count = 0
+        without_follow_up_count = 0
 
         for department_report in all_department_reports:
             try:
@@ -1541,8 +1542,13 @@ class CRMStatisticsService:
                     logger.warning(f"[部门日报] 跳过无部门名称的日报数据: {department_report}")
                     continue
 
-                has_data = department_name in departments_with_data
+                has_follow_up = self.daily_report_has_follow_up(department_report)
+                if has_follow_up:
+                    with_follow_up_count += 1
+                else:
+                    without_follow_up_count += 1
                 # 有配置 review 群则推送到群（无论是否有负责人）；无群时推送给负责人
+                # 无跟进时 notification 层改为短文本，有跟进仍发完整卡片
                 result = platform_notification_service.send_department_daily_report_notification(
                     db_session=session,
                     department_report_data=department_report,
@@ -1552,12 +1558,12 @@ class CRMStatisticsService:
                 
                 if result["success"]:
                     successful_departments += 1
-                    data_status = "有数据" if has_data else "无数据"
+                    data_status = "有跟进(卡片)" if has_follow_up else "无跟进(文本)"
                     logger.info(
                         f"成功为部门 {department_report['department_name']} ({data_status}) 发送日报飞书通知，"
-                        f"推送给部门负责人 {result['success_count']}/{result['recipients_count']} 次"
+                        f"推送 {result['success_count']}/{result['recipients_count']} 次"
                     )
-                    if has_data:
+                    if has_follow_up:
                         operator_user_id = None
                         if managers:
                             first_manager = managers[0] if isinstance(managers, list) else None
@@ -1590,7 +1596,8 @@ class CRMStatisticsService:
         
         logger.info(
             f"CRM部门日报飞书通知发送完成: {successful_departments}/{total_departments} 个部门的通知发送成功 "
-            f"(有数据: {len(departments_with_data)}, 无数据: {len(department_reports_no_data)})"
+            f"(有跟进: {with_follow_up_count}, 无跟进: {without_follow_up_count}, "
+            f"无汇总行: {len(department_reports_no_summary)})"
         )
 
     def send_department_daily_report_for_department(
@@ -1601,7 +1608,7 @@ class CRMStatisticsService:
     ) -> Dict[str, Any]:
         """
         仅针对指定部门生成并推送一次部门日报（用于补发/重推）。
-        有数据则用汇总表数据，无数据则发空日报；推送逻辑与定时任务一致（review 群或负责人）。
+        有跟进发完整卡片，无跟进发短文本；推送路由与定时任务一致（review 群或负责人）。
         """
         from app.core.config import settings
 
@@ -1645,7 +1652,8 @@ class CRMStatisticsService:
 
     def _generate_and_send_company_daily_report(self, session: Session, target_date: date) -> None:
         """
-        生成并推送公司日报
+        生成并推送公司日报。
+        有跟进数据发完整卡片；无跟进则发短文本（告知当日无跟进记录）。
         
         Args:
             session: 数据库会话
@@ -1658,31 +1666,38 @@ class CRMStatisticsService:
         # 生成公司汇总报告（无论开关是否启用，都执行计算逻辑）
         company_report = self.aggregate_company_report(session, target_date)
         
-        # 检查飞书推送开关（只在发送卡片时检查，不影响计算逻辑）
+        # 检查飞书推送开关（只在发送时检查，不影响计算逻辑）
         if not settings.CRM_DAILY_REPORT_FEISHU_ENABLED:
-            logger.info("CRM日报飞书推送功能已禁用，跳过公司日报卡片推送（但数据已生成）")
+            logger.info("CRM日报飞书推送功能已禁用，跳过公司日报推送（但数据已生成）")
             return
         
         try:
-            # 发送公司日报飞书通知
+            has_follow_up = self.daily_report_has_follow_up(company_report)
             result = platform_notification_service.send_company_daily_report_notification(
                 db_session=session,
                 company_report_data=company_report
             )
             
             if result["success"]:
+                push_kind = "卡片" if has_follow_up else "文本"
                 logger.info(
-                    f"成功发送公司日报飞书通知，"
+                    f"成功发送公司日报飞书通知（{push_kind}），"
                     f"推送成功 {result['success_count']}/{result['recipients_count']} 次"
                 )
-                report_billing_usage(
-                    BillingScenario.CRM_SALES_TEAM_COMPANY_DAILY,
-                    review_detail=company_report.get("visit_detail_page")
-                    or settings.REVIEW_REPORT_HOST,
-                    trace_key=f"company-daily:{target_date.isoformat()}",
-                    operator_user_id=result.get("operator_user_id") or None,
-                    log_context=f"company-daily:{target_date.isoformat()}",
-                )
+                if has_follow_up:
+                    report_billing_usage(
+                        BillingScenario.CRM_SALES_TEAM_COMPANY_DAILY,
+                        review_detail=company_report.get("visit_detail_page")
+                        or settings.REVIEW_REPORT_HOST,
+                        trace_key=f"company-daily:{target_date.isoformat()}",
+                        operator_user_id=result.get("operator_user_id") or None,
+                        log_context=f"company-daily:{target_date.isoformat()}",
+                    )
+                else:
+                    logger.info(
+                        "Skip billing for empty company daily report: date=%s",
+                        target_date.isoformat(),
+                    )
             else:
                 logger.warning(f"公司日报飞书通知发送失败: {result['message']}")
                 
@@ -1714,6 +1729,25 @@ class CRMStatisticsService:
             "lead_yellow_count": 0,
             "lead_green_count": 0,
         }
+
+    @staticmethod
+    def daily_report_has_follow_up(report_data: Optional[Dict[str, Any]]) -> bool:
+        """
+        判断部门/公司日报是否有跟进数据。
+        口径：客户 + 伙伴 + 线索跟进总数 > 0（与空卡/短文本分流、计费一致）。
+        """
+        if not report_data:
+            return False
+        statistics = report_data.get("statistics") or []
+        stats = statistics[0] if statistics else {}
+        if not isinstance(stats, dict):
+            return False
+        total = (
+            int(stats.get("end_customer_total_follow_up") or 0)
+            + int(stats.get("partner_total_follow_up") or 0)
+            + int(stats.get("lead_total_follow_up") or 0)
+        )
+        return total > 0
 
     @classmethod
     def _statistics_from_department_summary(
