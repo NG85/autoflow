@@ -541,7 +541,7 @@ class VisitRecordQueryRequest(BaseModel):
     last_modified_time_start: Optional[str] = None  # 创建时间开始
     last_modified_time_end: Optional[str] = None  # 创建时间结束
     
-    # 排序 - 默认按拜访日期降序
+    # 排序 - 默认按跟进日期、创建时间（录入时间 last_modified_time）降序
     sort_by: str = "visit_communication_date"  # 排序字段
     sort_direction: str = "desc"  # 排序方向：asc/desc
     language: Optional[str] = None # 语言，只在导出时生效
