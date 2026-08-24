@@ -99,7 +99,7 @@ def _build_visit_prep_review_detail(chat_id: Optional[Any]) -> str:
 
 def _check_sia_quota_or_raise() -> None:
     try:
-        quota_ok, quota_msg, _ = check_billing_quota()
+        quota_ok, quota_msg, _ = check_billing_quota(BillingScenario.SIA_CHAT)
     except Exception as exc:
         logger.error("SIA quota check failed before /chats: %s", exc)
         raise HTTPException(status_code=502, detail="计费服务异常，请稍后重试")
@@ -121,7 +121,9 @@ def _visit_prep_trace_key(chat_id: Any) -> str:
 
 def _check_visit_prep_quota_or_raise() -> None:
     try:
-        quota_ok, quota_msg, _ = check_billing_quota()
+        quota_ok, quota_msg, _ = check_billing_quota(
+            BillingScenario.ACCOUNT_VISIT_PREP_GUIDE
+        )
     except Exception as exc:
         logger.error("Visit prep guide quota check failed before /chats: %s", exc)
         raise HTTPException(status_code=502, detail="计费服务异常，请稍后重试")

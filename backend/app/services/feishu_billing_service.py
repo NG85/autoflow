@@ -97,9 +97,10 @@ class FeishuBillingService:
         self._retry_attempts = max(1, settings.FEISHU_PAID_API_RETRY_ATTEMPTS)
         self._retry_base_seconds = max(0.1, settings.FEISHU_PAID_API_RETRY_BASE_SECONDS)
 
-    def _get(self, path: str) -> dict[str, Any]:
+    def _get(self, path: str, params: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         response = self._session.get(
             f"{self._base_url}{path}",
+            params=params or None,
             timeout=self._timeout_seconds,
         )
         response.raise_for_status()
@@ -121,20 +122,34 @@ class FeishuBillingService:
             raise RuntimeError(f"Invalid billing response: {data}")
         return data
 
-    def check_quota(self) -> tuple[bool, str, int]:
-        data = self._get("/v1/usage_records/tenant_quota")
+    def check_quota(self, ai_module_key: Optional[str] = None) -> tuple[bool, str, int]:
+        """
+        查询租户 AI 额度。
+
+        传入 ``ai_module_key`` 时按该功能计费点数校验 remaining quota；
+        响应可能含 ``required_points``，额度不足时 ``msg`` 会带具体点数说明。
+        """
+        params: Optional[dict[str, Any]] = None
+        if ai_module_key:
+            params = {"ai_module_key": ai_module_key}
+        data = self._get("/v1/usage_records/tenant_quota", params=params)
         code = data.get("code")
+        api_msg = str(data.get("msg") or "").strip()
+        if code == 400:
+            return False, api_msg or f"计费配置无效(code={code})", 0
+        if code == 502:
+            return False, api_msg or f"查询租户 AI 额度失败(code={code})", 0
         if code != 200:
-            return False, f"计费额度查询失败(code={code})", 0
+            return False, api_msg or f"计费额度查询失败(code={code})", 0
 
         tenant_quota = (data.get("data") or {}).get("tenant_quota") or {}
         sufficient = tenant_quota.get("sufficient")
         quota = int(tenant_quota.get("quota") or 0)
         if sufficient is not True:
-            return False, "租户额度不足，请联系管理员", quota
+            return False, api_msg or "租户额度不足，请联系管理员", quota
         if quota <= 0:
-            return False, "租户额度不足，请联系管理员", quota
-        return True, "租户额度充足", quota
+            return False, api_msg or "租户额度不足，请联系管理员", quota
+        return True, api_msg or "租户额度充足", quota
 
     @staticmethod
     def normalize_operator(raw_user_id: Any) -> str:

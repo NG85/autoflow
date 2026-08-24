@@ -57,13 +57,50 @@ _RANDOM_TRACE_PREFIX: dict[BillingScenario, str] = {
 }
 
 
-def check_billing_quota() -> tuple[bool, str, int]:
+def check_billing_quota(
+    scenario: Optional[BillingScenario] = None,
+    *,
+    ai_module_key: Optional[str] = None,
+) -> tuple[bool, str, int]:
     """
     查询租户计费额度。CRM_BILLING_ENABLED 为 False 时不请求远端，返回 (True, 'billing disabled', 0)。
+
+    优先使用 ``ai_module_key``；未传时由 ``scenario`` 映射到对应功能点，
+    以便远端按该功能 ``points`` 校验剩余额度是否充足。
     """
     if not settings.CRM_BILLING_ENABLED:
         return True, "billing disabled", 0
-    return feishu_billing_service.check_quota()
+    module_key = ai_module_key
+    if not module_key and scenario is not None:
+        module_key = _SCENARIO_MODULE_KEY[scenario]
+    return feishu_billing_service.check_quota(ai_module_key=module_key)
+
+
+def check_billing_quota_for_scenarios(
+    scenarios: list[BillingScenario],
+) -> tuple[bool, str, int]:
+    """
+    按多个场景依次查额度（同一 ``ai_module_key`` 只查一次）。
+    任一不足则返回失败；全部通过则返回最后一次成功结果。
+    """
+    if not settings.CRM_BILLING_ENABLED:
+        return True, "billing disabled", 0
+    if not scenarios:
+        return feishu_billing_service.check_quota()
+
+    seen_keys: set[str] = set()
+    last_ok, last_msg, last_quota = True, "租户额度充足", 0
+    for scenario in scenarios:
+        module_key = _SCENARIO_MODULE_KEY[scenario]
+        if module_key in seen_keys:
+            continue
+        seen_keys.add(module_key)
+        last_ok, last_msg, last_quota = feishu_billing_service.check_quota(
+            ai_module_key=module_key
+        )
+        if not last_ok:
+            return last_ok, last_msg, last_quota
+    return last_ok, last_msg, last_quota
 
 
 def report_billing_usage(
