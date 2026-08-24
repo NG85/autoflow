@@ -242,7 +242,8 @@ class CrmVisitWritebackClient:
             # 设置较长的超时时间来处理批量日常对象创建
             timeout = httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0)
             with httpx.Client(timeout=timeout) as client:
-                response = client.post(url, headers=self.headers, json=visit_requests.model_dump())
+                payload = visit_requests.model_dump(exclude_none=True)
+                response = client.post(url, headers=self.headers, json=payload)
                 logger.info(f"调用CBG批量创建日常对象，返回: {response.text}")
                 response.raise_for_status()
                 return {"success": True, "data": response.json()}
@@ -810,7 +811,9 @@ class CrmWritebackService:
     
     def generate_cbg_visit_requests(self, session: Session, visit_records: List[CRMSalesVisitRecord]) -> CbgVisitRecordBatchCreateRequest:
         """
-        根据拜访记录生成CBG日常对象创建请求列表
+        根据拜访记录生成CBG日常对象创建请求列表。
+
+        线索跟进（followup_object_type=lead）写入 ``lead_ids``，不传 ``account_ids``。
         
         Args:
             session: 数据库会话
@@ -834,6 +837,7 @@ class CrmWritebackService:
 
         for record in visit_records:
             crm_user_id = None
+            ask_id_str = None
             if record.recorder_id:
                 try:
                     # 将32位UUID转换为36位字符串（带连字符）
@@ -870,17 +874,27 @@ class CrmWritebackService:
             ]
             opportunity_ids = [x for x in [_norm_id(record.opportunity_id)] if x is not None]
 
-            # account_id / partner_id 业务上至少一个应有值；若都为空，跳过该记录避免创建无关联对象
-            if not account_ids and not opportunity_ids:
+            lead_ids: list[str] = []
+            followup_obj = resolve_followup_object_from_record(record)
+            if followup_obj and followup_obj.object_type == FOLLOWUP_OBJECT_TYPE_LEAD:
+                lead_id = _norm_id(followup_obj.object_id)
+                if lead_id:
+                    lead_ids.append(lead_id)
+                # 线索与客户互斥：线索跟进不传 account_ids
+                account_ids = []
+
+            # 客户/伙伴、商机、线索至少一类有值；线索跟进走 lead_ids
+            if not account_ids and not opportunity_ids and not lead_ids:
                 logger.warning(
-                    f"记录 ID {record.id}：account_id/partner_id 和 opportunity_id 均为空，跳过创建CBG日常对象"
+                    f"记录 ID {record.id}：account_id/partner_id、opportunity_id 和 lead_id 均为空，跳过创建CBG日常对象"
                 )
                 continue
             visit_request = CbgVisitRecordCreateRequest(
                     record_type=record_type,
                     content=self.generate_visit_summary_content(record),
-                    account_ids=account_ids,
-                    opportunity_ids=opportunity_ids,
+                    account_ids=account_ids or None,
+                    opportunity_ids=opportunity_ids or None,
+                    lead_ids=lead_ids or None,
                     owner_user_id=crm_user_id,
                     source_record_id=str(record.record_id or record.id),
             )
@@ -1510,6 +1524,7 @@ class CrmWritebackService:
                     last_modified_time=last_modified,
                     contacts=contacts,
                     contact_id=contact_ids,
+                    visit_url=_str_or_none(record.visit_url),
                 )
             )
 
