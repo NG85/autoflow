@@ -36,6 +36,7 @@ from app.services.writeback_window import (
 from app.services.feishu_billing_facade import (
     BillingScenario,
     check_billing_quota,
+    check_billing_quota_for_scenarios,
     report_billing_usage,
 )
 from app.tasks.knowledge_base import import_documents_from_kb_datasource
@@ -44,9 +45,19 @@ from app.utils.date_utils import beijing_today_date
 logger = logging.getLogger(__name__)
 
 
-def _check_billing_quota_for_task(task_name: str) -> tuple[bool, str]:
+def _check_billing_quota_for_task(
+    task_name: str,
+    scenario: BillingScenario | None = None,
+    *,
+    scenarios: list[BillingScenario] | None = None,
+) -> tuple[bool, str]:
     try:
-        quota_ok, quota_message, quota_value = check_billing_quota()
+        if scenarios:
+            quota_ok, quota_message, quota_value = check_billing_quota_for_scenarios(
+                scenarios
+            )
+        else:
+            quota_ok, quota_message, quota_value = check_billing_quota(scenario)
     except Exception as exc:
         logger.error("Billing quota check failed before task=%s: %s", task_name, exc)
         return False, "计费服务异常，请稍后重试"
@@ -59,6 +70,21 @@ def _check_billing_quota_for_task(task_name: str) -> tuple[bool, str]:
         )
         return False, quota_message
     return True, "ok"
+
+
+def _daily_statistics_quota_scenarios(report_type: Optional[str]) -> list[BillingScenario]:
+    """按日报 report_type 映射额度预检场景（同一 module_key 会去重）。"""
+    if report_type == "sales":
+        return [BillingScenario.CRM_SALES_PERSONAL_DAILY]
+    if report_type == "department":
+        return [BillingScenario.CRM_SALES_TEAM_DEPARTMENT_DAILY]
+    if report_type == "company":
+        return [BillingScenario.CRM_SALES_TEAM_COMPANY_DAILY]
+    # 不传 report_type 时跑全部：个人 + 团队（部门/公司同 module_key）
+    return [
+        BillingScenario.CRM_SALES_PERSONAL_DAILY,
+        BillingScenario.CRM_SALES_TEAM_DEPARTMENT_DAILY,
+    ]
 
 
 def _report_task_usage_once(scenario: BillingScenario, trace_key: str, review_detail: str) -> None:
@@ -167,7 +193,10 @@ def generate_crm_daily_statistics(self, target_date_str=None, report_type=None):
     
     """
     try:
-        quota_ok, quota_msg = _check_billing_quota_for_task("generate_crm_daily_statistics")
+        quota_ok, quota_msg = _check_billing_quota_for_task(
+            "generate_crm_daily_statistics",
+            scenarios=_daily_statistics_quota_scenarios(report_type),
+        )
         if not quota_ok:
             return {"success": False, "message": quota_msg, "data": {}}
 
@@ -261,7 +290,10 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
     4. 推送公司周报给管理团队
     """
     try:
-        quota_ok, quota_msg = _check_billing_quota_for_task("generate_crm_weekly_report")
+        quota_ok, quota_msg = _check_billing_quota_for_task(
+            "generate_crm_weekly_report",
+            BillingScenario.CRM_TEAM_WEEKLY_REPORT,
+        )
         if not quota_ok:
             return {"success": False, "message": quota_msg, "data": {}}
         
@@ -889,7 +921,10 @@ def generate_crm_weekly_followup_summary(
     )
 
     try:
-        quota_ok, quota_msg = _check_billing_quota_for_task("generate_crm_weekly_followup_summary")
+        quota_ok, quota_msg = _check_billing_quota_for_task(
+            "generate_crm_weekly_followup_summary",
+            BillingScenario.CRM_WEEKLY_FOLLOWUP_SUMMARY,
+        )
         if not quota_ok:
             return {"success": False, "message": quota_msg, "data": {}}
 
