@@ -57,7 +57,7 @@ from app.services.visit_record_card_push_status import (
 )
 from app.tasks.dingtalk_transcribe import process_dingtalk_transcribe_visit_record
 from app.tasks.link_visit_enrichment import process_link_visit_enrichment
-from app.services.feishu_billing_facade import check_billing_quota
+from app.services.feishu_billing_facade import BillingScenario, check_billing_quota
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +161,9 @@ def create_visit_record(
     """
     try:
         try:
-            quota_ok, quota_message, quota_value = check_billing_quota()
+            quota_ok, quota_message, quota_value = check_billing_quota(
+                BillingScenario.VISIT_RECORD
+            )
         except Exception as exc:
             logger.error("Failed to query billing quota before visit record: %s", exc)
             return {"code": 502, "message": "计费服务异常，请稍后重试", "data": {}}
@@ -489,6 +491,7 @@ def query_visit_records(
     查询CRM跟进记录
     支持条件查询和分页（含 tag_ids：按跟进对象关联客户的 extra.tags 筛选，多选 OR）
     根据当前用户的汇报关系限制数据访问权限
+    默认按跟进日期、创建时间（录入时间）降序
     """
     try:
         _require_follow_up_view_gate(db_session, user)

@@ -867,12 +867,16 @@ class VisitRecordRepo(BaseRepo):
             if utc_end_datetime:
                 query = query.where(CRMSalesVisitRecord.last_modified_time <= utc_end_datetime)
 
-        # 应用排序 - 默认按拜访日期降序
+        # 应用排序 - 默认按跟进日期、创建时间（录入时间 last_modified_time）降序
         sort_field = getattr(CRMSalesVisitRecord, request.sort_by, CRMSalesVisitRecord.visit_communication_date)
-        if request.sort_direction.lower() == "desc":
-            query = query.order_by(desc(sort_field))
+        order_fn = desc if request.sort_direction.lower() == "desc" else asc
+        if sort_field is CRMSalesVisitRecord.last_modified_time:
+            query = query.order_by(order_fn(sort_field))
         else:
-            query = query.order_by(asc(sort_field))
+            query = query.order_by(
+                order_fn(sort_field),
+                order_fn(CRMSalesVisitRecord.last_modified_time),
+            )
 
         # 执行分页查询
         params = Params(page=request.page, size=request.page_size)

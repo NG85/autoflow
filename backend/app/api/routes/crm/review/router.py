@@ -188,7 +188,7 @@ def _build_special_reason_options_by_tenant(db_session: Session) -> dict[str, di
 
 def _check_sia_quota_or_raise() -> None:
     try:
-        quota_ok, quota_msg, _ = check_billing_quota()
+        quota_ok, quota_msg, _ = check_billing_quota(BillingScenario.REVIEW_SIA_CHAT)
     except Exception as exc:
         logger.error("SIA quota check failed before review chat: %s", exc)
         raise HTTPException(status_code=502, detail="计费服务异常，请稍后重试")
