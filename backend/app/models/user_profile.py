@@ -6,7 +6,7 @@ from sqlmodel import (
     SQLModel,
     Relationship as SQLRelationship,
 )
-from app.models.user_oauth_account import UserOAuthAccount
+from app.models.user_oauth_account import UserOAuthAccount, select_latest_oauth_account
 
 if TYPE_CHECKING:
     from app.models.auth import User
@@ -101,18 +101,14 @@ class UserProfile(SQLModel, table=True):
         """
         获取用户的OAuth账号
         
-        在实际业务场景中，通常是 1 对 1 关系（客户公司通常只使用一类 OAuth），
-        因此此属性返回唯一的 OAuth 账号。如果存在多个账号，返回第一个。
-        
-        注意：此属性主要用于向后兼容和简化 1 对 1 场景的使用。
-        如果需要支持多账号场景，请使用 oauth_users 列表或 get_oauth_account_by_platform() 方法。
+        在实际业务场景中，通常是 1 对 1 关系（客户公司通常只使用一类 OAuth）。
+        若同一用户绑定多个平台，只考虑受支持且有 open_id 的账号，
+        再按 update_time（其次 create_time）取较新的一条。与拜访推送同一套选择逻辑。
         
         Returns:
-            用户的OAuth账号（在 1 对 1 场景下是唯一的账号），如果不存在返回None
+            可用于推送的 OAuth 账号；多绑定时取较新的一条，如果不存在返回None
         """
-        if self.oauth_users:
-            return self.oauth_users[0]
-        return None
+        return select_latest_oauth_account(self.oauth_users or [])
     
     def get_oauth_account_by_platform(self, platform: str) -> Optional["UserOAuthAccount"]:
         """
@@ -182,13 +178,11 @@ class UserProfile(SQLModel, table=True):
         """
         获取用户当前的平台
         
-        在实际业务场景中（1 对 1 关系），返回用户唯一的 OAuth 平台。
-        如果存在多个账号，返回第一个有 open_id 的平台。
+        与 oauth_user 相同：多绑定时返回较新的可推送账号所在平台。
         
         Returns:
             当前平台名称，如果不存在返回None
         """
-        # 在 1 对 1 场景下，直接使用 oauth_user 属性更简洁
-        if self.oauth_user and self.oauth_user.provider and self.oauth_user.open_id:
+        if self.oauth_user and self.oauth_user.provider:
             return self.oauth_user.provider
         return None

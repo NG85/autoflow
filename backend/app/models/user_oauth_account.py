@@ -1,7 +1,10 @@
-from typing import Optional
+from datetime import datetime
+from typing import Iterable, Optional
 from uuid import UUID
 from sqlmodel import Field, SQLModel
 from sqlalchemy import UniqueConstraint
+
+from app.platforms.constants import SUPPORTED_PLATFORMS
 
 
 class UserOAuthAccount(SQLModel, table=True):
@@ -84,7 +87,50 @@ class UserOAuthAccount(SQLModel, table=True):
         max_length=255,
         description="企业ID"
     )
+
+    create_time: Optional[datetime] = Field(
+        default=None,
+        description="创建时间（由其他系统维护）",
+    )
+    update_time: Optional[datetime] = Field(
+        default=None,
+        description="更新时间（由其他系统维护）",
+    )
         
     def __repr__(self):
         return f"<UserOAuthAccount(uid={self.uid}, user_id={str(self.user_id)}, provider='{self.provider}', open_id='{self.open_id}', union_id='{self.union_id}')>"
+
+
+def _oauth_account_sort_datetime(value: object) -> datetime:
+    if not isinstance(value, datetime):
+        return datetime.min
+    if value.tzinfo is not None:
+        return value.replace(tzinfo=None)
+    return value
+
+
+def is_deliverable_oauth_account(account: Optional["UserOAuthAccount"]) -> bool:
+    """是否可用于推送：受支持平台且有 open_id。"""
+    if account is None:
+        return False
+    provider = getattr(account, "provider", None)
+    open_id = getattr(account, "open_id", None)
+    return bool(provider in SUPPORTED_PLATFORMS and open_id)
+
+
+def select_latest_oauth_account(
+    accounts: Iterable["UserOAuthAccount"],
+) -> Optional["UserOAuthAccount"]:
+    """在可推送账号中，按 update_time、create_time、uid 选取较新的一条。"""
+    valid = [account for account in accounts if is_deliverable_oauth_account(account)]
+    if not valid:
+        return None
+    return max(
+        valid,
+        key=lambda account: (
+            _oauth_account_sort_datetime(getattr(account, "update_time", None)),
+            _oauth_account_sort_datetime(getattr(account, "create_time", None)),
+            str(getattr(account, "uid", "") or ""),
+        ),
+    )
 
