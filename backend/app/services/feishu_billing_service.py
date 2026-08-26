@@ -164,8 +164,17 @@ class FeishuBillingService:
         return f"{prefix}-{uuid4()}"
 
     @staticmethod
+    def _trace_tenant_salt() -> str:
+        return str(settings.ALDEBARAN_TENANT_ID or "").strip() or "unknown"
+
+    @staticmethod
     def deterministic_trace_id(prefix: str, unique_key: str) -> str:
-        digest = hashlib.sha256(unique_key.encode("utf-8")).hexdigest()[:24]
+        """
+        同一租户内对 unique_key 幂等；哈希材料含 ALDEBARAN_TENANT_ID，
+        避免不同租户共享计费侧时生成相同 trace_id 导致扣费冲突。
+        """
+        material = f"{FeishuBillingService._trace_tenant_salt()}\0{unique_key}"
+        digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
         return f"{prefix}-{digest}"
 
     def report_usage_with_retry(

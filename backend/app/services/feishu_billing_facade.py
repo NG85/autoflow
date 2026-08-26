@@ -117,7 +117,7 @@ def report_billing_usage(
     - 随机 trace：SIA_CHAT、REVIEW_SIA_CHAT（无需 trace_key）
     - VISIT_RECORD：有 ``trace_key``（建议 ``visit-record:{record_id}``）时用确定性 trace；未传或为空时用
       ``visit-record-{uuid}`` 随机 trace（成功保存但无 record_id 时的兜底）
-    - 其余场景：必须传非空 ``trace_key``
+    - 其余场景：必须传非空 ``trace_key``（确定性 trace 会混入 ALDEBARAN_TENANT_ID，跨租户不撞单）
     - operator_user_id 为 None 时按 system 规范化（与原先 normalize 行为一致）
     """
     if not settings.CRM_BILLING_ENABLED:
