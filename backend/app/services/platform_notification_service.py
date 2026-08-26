@@ -9,6 +9,7 @@ from uuid import UUID
 from app.utils.redis_client import redis_client
 
 from sqlmodel import Session
+from app.models.user_oauth_account import select_latest_oauth_account
 from app.repositories.user_profile import user_profile_repo
 from app.repositories.department_mirror import department_mirror_repo
 from app.platforms.constants import (
@@ -1144,7 +1145,8 @@ class PlatformNotificationService:
     ) -> Dict[str, List[Dict[str, Any]]]:
         """
         获取记录人相关的推送接收者，按平台分组
-        包括：记录人本人 + OAuth 汇报链返回的管理层 leader（max_levels=1，含无本部门 leader 时上级 fallback）
+        包括：记录人本人（多平台绑定时只推 oauth_accounts 中 update_time 较新的 provider）
+        + OAuth 汇报链返回的管理层 leader（max_levels=1，含无本部门 leader 时上级 fallback）。
         抄送（notification_cc_rules：user / department / global）由 visit_record_cc_resolver 独立解析。
         返回按平台分组的接收者字典
         """
@@ -1160,40 +1162,37 @@ class PlatformNotificationService:
             logger.warning(f"No profile found for recorder: name={recorder_name}, id={recorder_id}")
             return recipients_by_platform
         
-        # 2. 获取记录人的 OAuth 账号
-        oauth_account = recorder_profile.oauth_user
-        if not oauth_account:
+        # 2. 获取记录人 OAuth 账号；双绑时只取较新的受支持平台
+        oauth_accounts = list(recorder_profile.oauth_users or [])
+        if not oauth_accounts:
             logger.warning(
                 f"Recorder {recorder_name} (profile: {recorder_profile.name}) has no oauth_user, "
                 f"cannot resolve notification recipients via reporting chain"
             )
             return recipients_by_platform
         
-        # 3. 先添加记录人本人
-        platform = oauth_account.provider
-        if not self._validate_platform_support(platform):
-            logger.warning(f"Recorder platform {platform} not supported, skipping recorder")
+        oauth_account = select_latest_oauth_account(oauth_accounts)
+        if oauth_account:
+            platform = oauth_account.provider
+            if platform not in recipients_by_platform:
+                recipients_by_platform[platform] = []
+            recipients_by_platform[platform].append(
+                {
+                    "open_id": oauth_account.open_id,
+                    "name": recorder_profile.name or recorder_name or "Unknown",
+                    "type": "recorder",
+                    "department": recorder_profile.department,
+                    "receive_id_type": "open_id",
+                    "platform": platform,
+                }
+            )
         else:
-            recorder_open_id = oauth_account.open_id
-            if not recorder_open_id:
-                logger.warning(
-                    f"Recorder {recorder_name} (profile: {recorder_profile.name}) "
-                    f"has no open_id, cannot send notification"
-                )
-            else:
-                if platform not in recipients_by_platform:
-                    recipients_by_platform[platform] = []
-                
-                recipients_by_platform[platform].append(
-                    {
-                        "open_id": recorder_open_id,
-                        "name": recorder_profile.name or recorder_name or "Unknown",
-                        "type": "recorder",
-                        "department": recorder_profile.department,
-                        "receive_id_type": "open_id",
-                        "platform": platform,
-                    }
-                )
+            logger.warning(
+                "Recorder %s (profile: %s) has no supported oauth_user with open_id, "
+                "skipping recorder push",
+                recorder_name,
+                recorder_profile.name,
+            )
         
         # 4. 调用 OAuth 查询管理层 leader（max_levels=1：本部门 leader；无则 fallback 上级部门主管）
         # 使用系统用户ID（user_id），而不是OAuth平台的用户ID
@@ -1201,9 +1200,11 @@ class PlatformNotificationService:
         if recorder_profile.user_id:
             # 将UUID转换为字符串
             base_user_id = str(recorder_profile.user_id)
-        elif oauth_account.user_id:
-            # 如果profile没有user_id，尝试从oauth_account获取
-            base_user_id = str(oauth_account.user_id)
+        else:
+            for oauth_account in oauth_accounts:
+                if oauth_account.user_id:
+                    base_user_id = str(oauth_account.user_id)
+                    break
         
         if not base_user_id:
             logger.warning(
