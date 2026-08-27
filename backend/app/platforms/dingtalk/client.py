@@ -316,6 +316,20 @@ class DingTalkClient(BaseClient):
         else:
             return {"errcode": -1, "errmsg": f"Unsupported message type: {msg_type}"}
     
+    @staticmethod
+    def _robot_text_msg_param(text: str) -> Tuple[str, Dict[str, str]]:
+        """
+        钉钉机器人文本统一走 sampleMarkdown。
+
+        无链接的纯文本（如无跟进公司/部门日报）或带链接的评论等，都走 sampleMarkdown。
+        """
+        body = text if isinstance(text, str) else str(text or "")
+        first_line = body.strip().split("\n", 1)[0].strip() or "通知"
+        return "sampleMarkdown", {
+            "title": first_line[:64],
+            "text": body.replace("\n", "\n\n"),
+        }
+
     def _send_text_message(
         self,
         receive_id_type: str,
@@ -330,37 +344,38 @@ class DingTalkClient(BaseClient):
         API文档：https://open.dingtalk.com/document/isvapp/send-single-chat-messages-in-bulk
         """
         url = f"{self.base_url}/v1.0/robot/oToMessages/batchSend"
-        
-        msg_key = "sampleMarkdown" if "https://" in text else "sampleText"
-        msg_param = {
-            "content": text
-        } if msg_key == "sampleText" else {
-            "title": "新的互动提醒",
-            "text": text.replace("\n", "\n\n")
-        }
-        
+        msg_key, msg_param = self._robot_text_msg_param(text)
+        msg_param_json = json.dumps(msg_param, ensure_ascii=False)
+
         payload = {
             "robotCode": robot_code,  # 机器人code
             "userIds": [receive_id],   # 用户ID列表
             "msgKey": msg_key,  # 消息模板key
-            "msgParam": json.dumps(msg_param, ensure_ascii=False)  # 消息参数
+            "msgParam": msg_param_json,
         }
-        
+
         if receive_id_type == "chat_id":
             url = f"{self.base_url}/v1.0/robot/groupMessages/send"
-            payload={
+            payload = {
                 "robotCode": robot_code,  # 机器人code
                 "openConversationId": receive_id,   # 群聊ID
                 "msgKey": msg_key,  # 消息模板key
-                "msgParam": json.dumps(msg_param, ensure_ascii=False)  # 消息参数
+                "msgParam": msg_param_json,
             }
-            
+
         try:
             resp = requests.post(url, headers=headers, json=payload)
+            if not resp.ok:
+                logger.error(
+                    "发送钉钉文本消息失败: status=%s receive_id=%s body=%s",
+                    resp.status_code,
+                    receive_id,
+                    resp.text,
+                )
             resp.raise_for_status()
-            
+
             result = resp.json()
-            
+
             # 新版API返回格式：包含processQueryKey或invalidStaffIdList
             if "processQueryKey" in result or "invalidStaffIdList" in result:
                 logger.info(f"成功发送钉钉文本消息到用户: {receive_id}")
@@ -368,6 +383,8 @@ class DingTalkClient(BaseClient):
             else:
                 logger.error(f"发送钉钉文本消息失败: {result}")
                 return result
+        except requests.HTTPError:
+            raise
         except Exception as e:
             logger.error(f"发送钉钉文本消息异常: {e}")
             return {"errcode": -1, "errmsg": str(e)}
