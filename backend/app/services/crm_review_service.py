@@ -39,9 +39,42 @@ from app.policies.review_session_access import (
     user_can_access_review_session,
 )
 from app.services.aldebaran_service import aldebaran_client
+from app.services.crm_config_service import get_crm_config_service
 from app.services.crm_writeback_service import crm_writeback_service
 
 logger = logging.getLogger(__name__)
+
+_CALCULATION_FIELD_MAPPING_TYPE = "CalculationFieldMapping"
+_ACV_FIELD_CONFIG_KEY = "acv_field"
+_DEFAULT_ACV_FIELD = "estimated_tcv"
+
+
+def _resolve_opportunity_forecast_amount(
+    db_session: Session,
+    opp: CRMOpportunity,
+) -> Optional[float]:
+    """
+    无 review snapshot 时，按 crm_system_configurations 的 CalculationFieldMapping.acv_field
+    取商机上对应字段作为 forecast_amount；未配置或字段非法时默认 estimated_tcv。
+    """
+    mapped_field = (
+        get_crm_config_service(db_session).get_config_value(
+            _CALCULATION_FIELD_MAPPING_TYPE,
+            _ACV_FIELD_CONFIG_KEY,
+            default_value=_DEFAULT_ACV_FIELD,
+        )
+        or _DEFAULT_ACV_FIELD
+    ).strip()
+    allowed_fields = set(CRMOpportunity.model_fields.keys())
+    field_name = mapped_field if mapped_field in allowed_fields else _DEFAULT_ACV_FIELD
+    raw = getattr(opp, field_name, None)
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
 
 # Leader merge: keyset pagination on cache PK ``id`` (only orders rows within the cache table
 MERGE_CACHE_BATCH_SIZE = 500
@@ -2217,7 +2250,11 @@ class CRMReviewService:
                     "owner_id": getattr(opp, "owner_id", None),
                     "owner_name": getattr(opp, "owner", None),
                     "forecast_type": getattr(opp, "forecast_type", None),
-                    "forecast_amount": None,
+                    "forecast_amount": (
+                        _resolve_opportunity_forecast_amount(db_session, opp)
+                        if not sid
+                        else None
+                    ),
                     "opportunity_stage": getattr(opp, "opportunity_stage", None),
                     "expected_closing_date": getattr(opp, "expected_closing_date", None),
                     "stage_stay": None,
