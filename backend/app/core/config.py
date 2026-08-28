@@ -56,6 +56,7 @@ class Environment(str, enum.Enum):
 class StorageType(str, enum.Enum):
     TOS = "tos"
     MINIO = "minio"
+    UFILE = "ufile"
 
 
 class VisitRecordFormType(str, enum.Enum):
@@ -215,12 +216,20 @@ class Settings(BaseSettings):
     TOS_ENDPOINT: str = f"tos-{TOS_REGION}.volces.com"
     TOS_BUCKET: str = "aptsell-dev"
     
-    # MinIO configuration
+    # MinIO configuration (SigV2 POST policy)
     MINIO_ENDPOINT: str = "localhost:9000"
     MINIO_ACCESS_KEY: str = "minioadmin"
     MINIO_SECRET_KEY: str = "minioadmin"
     MINIO_SECURE: bool = False
     MINIO_BUCKET: str = "autoflow"
+
+    # UFile S3-compatible configuration (SigV4 POST policy)
+    UFILE_ENDPOINT: str = ""
+    UFILE_ACCESS_KEY: str = ""
+    UFILE_SECRET_KEY: str = ""
+    UFILE_BUCKET: str = ""
+    # Empty = infer from endpoint host, e.g. s3-cn-wlcb.ufileos.com -> cn-wlcb
+    UFILE_REGION: str = ""
     
     # Max rows to load from crm_data_authority when materializing ID sets in application memory.
     # If exceeded, the result will be truncated (safe but may reduce recall).
