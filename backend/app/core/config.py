@@ -79,6 +79,7 @@ class WritebackMode(str, enum.Enum):
     FENBEITONG = "FENBEITONG"  # 分贝通 纷享销客
     LIEPIN = "LIEPIN"  # 猎聘 CRM
     WYWJ = "WYWJ"  # 网眼云捷（飞书多维表格）
+    ZHIPU = "ZHIPU"  # 智谱 纷享销客
 
 
 class WritebackFrequency(str, enum.Enum):
