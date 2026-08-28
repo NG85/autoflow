@@ -29,8 +29,10 @@ class STSCredentialResponse(BaseModel):
     path_prefix: str
     region: Optional[str] = None
     storage_type: StorageType
+    signature_version: Optional[str] = None
+    post_form: Optional[dict[str, str]] = None
 
-@router.get("/sts", response_model=STSCredentialResponse)
+@router.get("/sts", response_model=STSCredentialResponse, response_model_exclude_none=True)
 def get_sts(
     user: CurrentUserDep,
     access_key: Optional[str] = Query(None, description="Access key for TOS")
@@ -62,16 +64,35 @@ def get_sts(
                 path_prefix=settings.STORAGE_PATH_PREFIX,
                 storage_type=storage_type
             )
-        else:  # MinIO
+        elif storage_type == StorageType.UFILE:
+            result = sts.get_ufile_sts_token(
+                access_key=settings.UFILE_ACCESS_KEY,
+                secret_key=settings.UFILE_SECRET_KEY,
+                bucket=settings.UFILE_BUCKET,
+                endpoint=settings.UFILE_ENDPOINT,
+                region=settings.UFILE_REGION or None,
+            )
+            credentials = result["Result"]["Credentials"]
+            return STSCredentialResponse(
+                access_key_id=credentials["access_key_id"],
+                secret_access_key=credentials["secret_access_key"],
+                session_token=credentials["session_token"],
+                endpoint=settings.UFILE_ENDPOINT,
+                region=credentials["region"],
+                bucket=settings.UFILE_BUCKET,
+                path_prefix=settings.STORAGE_PATH_PREFIX,
+                storage_type=storage_type,
+                signature_version=credentials["signature_version"],
+                post_form=credentials["post_form"],
+            )
+        else:  # MinIO SigV2 POST
             result = sts.get_minio_sts_token(
                 access_key=settings.MINIO_ACCESS_KEY,
                 secret_key=settings.MINIO_SECRET_KEY,
                 bucket=settings.MINIO_BUCKET,
-                endpoint=settings.MINIO_ENDPOINT
+                endpoint=settings.MINIO_ENDPOINT,
             )
-            
             credentials = result["Result"]["Credentials"]
-            
             return STSCredentialResponse(
                 access_key_id=credentials["access_key_id"],
                 secret_access_key=credentials["secret_access_key"],
@@ -79,7 +100,7 @@ def get_sts(
                 endpoint=settings.MINIO_ENDPOINT,
                 bucket=settings.MINIO_BUCKET,
                 path_prefix=settings.STORAGE_PATH_PREFIX,
-                storage_type=storage_type
+                storage_type=storage_type,
             )
     except Exception as e:
         logger.error(f"Failed to get STS credentials: {e}")
