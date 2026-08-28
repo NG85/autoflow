@@ -491,7 +491,7 @@ def query_visit_records(
     查询CRM跟进记录
     支持条件查询和分页（含 tag_ids：按跟进对象关联客户的 extra.tags 筛选，多选 OR）
     根据当前用户的汇报关系限制数据访问权限
-    默认按跟进日期、创建时间（录入时间）降序
+    默认按跟进日期、创建时间（录入时间）降序；可通过 sorts 指定多字段排序
     """
     try:
         _require_follow_up_view_gate(db_session, user)

@@ -94,6 +94,46 @@ def _split_group_concat(value: Optional[str]) -> List[str]:
         return []
     return [part for part in value.split(_VISIT_RECORD_FILTER_OPTION_SEP) if part]
 
+
+# 列表排序别名 -> 实际列名（department 为响应字段，对应记录人部门快照）
+_VISIT_RECORD_SORT_FIELD_ALIASES: Dict[str, str] = {
+    "department": "recorder_department_name",
+}
+
+
+def _visit_record_sort_column(field: str, customer_level_col: Any) -> Any:
+    key = (field or "").strip()
+    if not key:
+        return None
+    if key == "customer_level":
+        return customer_level_col
+    mapped = _VISIT_RECORD_SORT_FIELD_ALIASES.get(key, key)
+    column = getattr(CRMSalesVisitRecord, mapped, None)
+    if column is None or not hasattr(column, "desc"):
+        return None
+    return column
+
+
+def _visit_record_order_by_clauses(
+    sorts: List[tuple[str, str]],
+    *,
+    customer_level_col: Any,
+) -> List[Any]:
+    clauses: List[Any] = []
+    for field, direction in sorts:
+        column = _visit_record_sort_column(field, customer_level_col)
+        if column is None:
+            continue
+        order_fn = desc if direction == "desc" else asc
+        clauses.append(order_fn(column))
+    if clauses:
+        return clauses
+    return [
+        desc(CRMSalesVisitRecord.visit_communication_date),
+        desc(CRMSalesVisitRecord.last_modified_time),
+    ]
+
+
 def _followup_object_crm_account_join():
     """
     跟进对象与客户/伙伴二选一：等级、extra 分别从 account_id / partner_id 关联 crm_accounts，再 coalesce。
@@ -868,15 +908,11 @@ class VisitRecordRepo(BaseRepo):
                 query = query.where(CRMSalesVisitRecord.last_modified_time <= utc_end_datetime)
 
         # 应用排序 - 默认按跟进日期、创建时间（录入时间 last_modified_time）降序
-        sort_field = getattr(CRMSalesVisitRecord, request.sort_by, CRMSalesVisitRecord.visit_communication_date)
-        order_fn = desc if request.sort_direction.lower() == "desc" else asc
-        if sort_field is CRMSalesVisitRecord.last_modified_time:
-            query = query.order_by(order_fn(sort_field))
-        else:
-            query = query.order_by(
-                order_fn(sort_field),
-                order_fn(CRMSalesVisitRecord.last_modified_time),
-            )
+        order_clauses = _visit_record_order_by_clauses(
+            request.resolved_sorts(),
+            customer_level_col=customer_level_col,
+        )
+        query = query.order_by(*order_clauses)
 
         # 执行分页查询
         params = Params(page=request.page, size=request.page_size)
