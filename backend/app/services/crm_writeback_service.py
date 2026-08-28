@@ -3,7 +3,7 @@
 职责边界（配置与实现一致）：
 - **拜访记录回写**：``CRM_WRITEBACK_DEFAULT_MODE``（``None``=关闭）+ ``CrmVisitWritebackClient`` +
   ``CrmWritebackService`` 中以 ``writeback_visit_*`` / ``_execute_visit_writeback`` 为代表的路径。
-  支持 CBG / APAC / OLM / CHAITIN / WEBEYE / FENBEITONG / LIEPIN / WYWJ 等网关变体。
+  支持 CBG / APAC / OLM / CHAITIN / WEBEYE / FENBEITONG / LIEPIN / WYWJ / ZHIPU 等网关变体。
 - **CRM review 商机回写**：``CRM_WRITEBACK_REVIEW_ENABLED`` + ``CrmReviewWritebackClient`` +
   ``writeback_review_opportunity_updates_to_crm``（成员修改草稿并提交等）；不读写 ``CRM_WRITEBACK_DEFAULT_MODE``。
 """
@@ -40,6 +40,8 @@ from app.models.wb_visit_requests import (
     WebeyeVisitRecordCreateRequest,
     WywjVisitRecordBatchCreateRequest,
     WywjVisitRecordCreateRequest,
+    ZhipuVisitRecordBatchCreateRequest,
+    ZhipuVisitRecordCreateRequest,
 )
 from app.models.crm_accounts import CRMAccount
 from app.models.crm_leads import CRMLead
@@ -190,7 +192,7 @@ def _crm_writeback_gateway_message_from_text(body: str) -> str:
 
 
 class CrmVisitWritebackClient:
-    """拜访记录回写 HTTP 客户端（CBG / APAC / OLM / CHAITIN / WEBEYE / LIEPIN / WYWJ 等）。"""
+    """拜访记录回写 HTTP 客户端（CBG / APAC / OLM / CHAITIN / WEBEYE / LIEPIN / WYWJ / ZHIPU 等）。"""
     
     def __init__(self, base_url: str = "http://salesforce:8080"):
         self.base_url = base_url
@@ -457,6 +459,36 @@ class CrmVisitWritebackClient:
         except httpx.RequestError as e:
             logger.error(f"网眼云捷批量拜访回写失败: {e}")
             return {"success": False, "message": f"网眼云捷批量拜访回写失败: {e}"}
+
+    def batch_zhipu_visit_create(
+        self, visit_requests: ZhipuVisitRecordBatchCreateRequest
+    ) -> Dict[str, Any]:
+        """批量回写智谱跟进记录（``POST /crm-fxiaoke/zhipu/sale-record/batch``）。"""
+        url = f"{self.base_url}/crm-fxiaoke/zhipu/sale-record/batch"
+
+        try:
+            timeout = httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0)
+            with httpx.Client(timeout=timeout) as client:
+                payload = visit_requests.model_dump(exclude_none=True)
+                response = client.post(url, headers=self.headers, json=payload)
+                logger.info(f"调用智谱批量拜访回写，返回: {response.text}")
+                response.raise_for_status()
+                return {"success": True, "data": response.json()}
+        except httpx.TimeoutException as e:
+            logger.error(f"智谱批量拜访回写超时: {e}")
+            return {"success": False, "message": f"智谱批量拜访回写超时: {e}"}
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                f"智谱批量拜访回写 HTTP 错误: {e.response.status_code} {e.response.text}"
+            )
+            return {
+                "success": False,
+                "message": f"智谱批量拜访回写 HTTP 错误: {e.response.status_code}",
+                "response_text": e.response.text,
+            }
+        except httpx.RequestError as e:
+            logger.error(f"智谱批量拜访回写失败: {e}")
+            return {"success": False, "message": f"智谱批量拜访回写失败: {e}"}
 
 
 class CrmReviewWritebackClient:
@@ -1362,12 +1394,12 @@ class CrmWritebackService:
 
         return visit_requests
 
-    def _resolve_liepin_crm_user_id(
+    def _resolve_recorder_crm_user_id(
         self, session: Session, record: CRMSalesVisitRecord
     ) -> Optional[str]:
-        """将 recorder_id 解析为猎聘 CRM 用户 ID（user_profiles.crm_user_id）。
+        """将 recorder_id 解析为 CRM 用户 ID（user_profiles.crm_user_id）。
 
-        与 CBG / 分贝通等拜访回写一致：``str(recorder_id)``（UUID 对象会变成 36 位带连字符）
+        与 CBG / 分贝通 / 猎聘 / 智谱等拜访回写一致：``str(recorder_id)``（UUID 对象会变成 36 位带连字符）
         匹配 ``user_profiles.oauth_user_id``。
         """
         if not record.recorder_id:
@@ -1386,7 +1418,7 @@ class CrmWritebackService:
                 f"记录 ID {record.id}：未找到 recorder_id {ask_id_str} 对应的 CRM 用户 ID"
             )
         except Exception as e:
-            logger.warning(f"记录 ID {record.id}：查询猎聘 CRM 用户 ID 失败: {e}")
+            logger.warning(f"记录 ID {record.id}：查询 CRM 用户 ID 失败: {e}")
         return None
 
     @staticmethod
@@ -1516,7 +1548,7 @@ class CrmWritebackService:
                     followup_object_name=object_name,
                     opportunity_id=_str_or_none(record.opportunity_id),
                     recorder=_str_or_none(record.recorder),
-                    recorder_id=self._resolve_liepin_crm_user_id(session, record),
+                    recorder_id=self._resolve_recorder_crm_user_id(session, record),
                     visit_communication_date=record.visit_communication_date.isoformat(),
                     visit_communication_method=visit_method,
                     followup_record=followup_record,
@@ -1789,6 +1821,58 @@ class CrmWritebackService:
                     contact_name=self._format_wywj_contact_name(record),
                     followup_record=followup_record,
                     next_steps=next_steps,
+                )
+            )
+
+        return visit_requests
+
+    def generate_zhipu_visit_requests(
+        self, session: Session, visit_records: List[CRMSalesVisitRecord]
+    ) -> ZhipuVisitRecordBatchCreateRequest:
+        """根据拜访记录生成智谱跟进记录回写请求。
+
+        字段对齐 ``POST /crm-fxiaoke/zhipu/sale-record``（标准字段名，网关映射纷享字段）：
+        - ``followup_record``：跟进内容（≈ CBG ``content``，拼装摘要）
+        - ``visit_communication_method``：原样透传（前端已对齐智谱枚举）
+        - ``followup_object_id`` / ``opportunity_id`` 至少填一个
+        - ``followup_object_type``：非 ``end_customer`` 时传递，默认类型由网关处理
+        - ``recorder_id``：``user_profiles.crm_user_id``
+        """
+        visit_requests = ZhipuVisitRecordBatchCreateRequest(visit_records=[])
+
+        for record in visit_records:
+            visit_method = _str_or_none(record.visit_communication_method)
+            if not visit_method:
+                logger.warning(
+                    f"记录 ID {record.id}：visit_communication_method 为空，跳过创建智谱跟进记录"
+                )
+                continue
+
+            followup_obj = resolve_followup_object_from_record(record)
+            followup_object_id = (
+                _str_or_none(followup_obj.object_id) if followup_obj else None
+            )
+            followup_object_type = None
+            if followup_obj and followup_obj.object_type != FOLLOWUP_OBJECT_TYPE_END_CUSTOMER:
+                followup_object_type = _str_or_none(followup_obj.object_type)
+            opportunity_id = _str_or_none(record.opportunity_id)
+
+            if not followup_object_id and not opportunity_id:
+                logger.warning(
+                    f"记录 ID {record.id}：followup_object_id 和 opportunity_id 均为空，"
+                    "跳过创建智谱跟进记录"
+                )
+                continue
+
+            visit_requests.visit_records.append(
+                ZhipuVisitRecordCreateRequest(
+                    source_record_id=str(record.record_id or record.id),
+                    followup_record=self.generate_visit_summary_content(record),
+                    visit_communication_method=visit_method,
+                    followup_object_id=followup_object_id,
+                    followup_object_type=followup_object_type,
+                    opportunity_id=opportunity_id,
+                    recorder_id=self._resolve_recorder_crm_user_id(session, record),
                 )
             )
 
@@ -2302,6 +2386,66 @@ class CrmWritebackService:
                     "message": (
                         f"{'成功' if ok else '失败'}处理 {len(visit_records)} 条拜访记录，"
                         f"提交 {writeback_count} 条网眼云捷回写"
+                        + ("" if ok else f"：{result.get('message', '')}")
+                    ),
+                    "processed_count": len(visit_records),
+                    "writeback_count": writeback_count,
+                    "results": return_data,
+                }
+
+            elif writeback_mode == WritebackMode.ZHIPU.value:
+                logger.info("使用智谱跟进记录回写模式")
+
+                visit_requests = self.generate_zhipu_visit_requests(
+                    session, visit_records
+                )
+
+                if not visit_requests.visit_records:
+                    logger.info("没有需要创建智谱跟进记录的拜访记录")
+                    return {
+                        "success": True,
+                        "message": "没有需要创建智谱跟进记录的拜访记录",
+                        "processed_count": len(visit_records),
+                        "writeback_count": 0,
+                    }
+
+                result = self.client.batch_zhipu_visit_create(visit_requests)
+                logger.info(
+                    f"批量智谱跟进记录回写完成: {len(visit_requests.visit_records)} 条记录"
+                )
+
+                return_data = result.get("data", {})
+                writeback_count = len(visit_requests.visit_records)
+                ok = bool(result.get("success"))
+                if isinstance(return_data, dict):
+                    created_visits = return_data.get("created", 0)
+                    updated_visits = return_data.get("updated", 0)
+                    failed_visits = return_data.get("failed", 0)
+                    return {
+                        "success": ok,
+                        "message": (
+                            f"{'成功' if ok else '失败'}处理 {len(visit_records)} 条拜访记录，"
+                            f"提交 {writeback_count} 条智谱回写"
+                            + (
+                                f"（created={created_visits}, updated={updated_visits}, "
+                                f"failed={failed_visits}）"
+                                if ok
+                                else f"：{result.get('message', '')}"
+                            )
+                        ),
+                        "processed_count": len(visit_records),
+                        "writeback_count": writeback_count,
+                        "success_count": (
+                            created_visits + updated_visits if ok else 0
+                        ),
+                        "failed_count": failed_visits if ok else writeback_count,
+                        "results": return_data,
+                    }
+                return {
+                    "success": ok,
+                    "message": (
+                        f"{'成功' if ok else '失败'}处理 {len(visit_records)} 条拜访记录，"
+                        f"提交 {writeback_count} 条智谱回写"
                         + ("" if ok else f"：{result.get('message', '')}")
                     ),
                     "processed_count": len(visit_records),

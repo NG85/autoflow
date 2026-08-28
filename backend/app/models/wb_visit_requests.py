@@ -204,3 +204,46 @@ class WywjVisitRecordBatchCreateRequest(BaseModel):
 
     visit_records: List[WywjVisitRecordCreateRequest]
     partial_fail: bool = True
+
+
+class ZhipuVisitRecordType(str, enum.Enum):
+    """智谱跟进方式（网关约定，服务端映射纷享 code）。"""
+
+    OFFLINE_VISIT = "外出拜访客户"
+    ONLINE_MEETING = "线上会议"
+    COMPANY_RECEPTION = "在公司接待客户"
+    DINING = "饭局聚会"
+    PHONE = "电话/录音"
+    WECHAT = "微信沟通"
+    OTHER = "其他"
+
+
+class ZhipuVisitRecordCreateRequest(BaseModel):
+    """智谱跟进记录创建请求（``POST /crm-fxiaoke/zhipu/sale-record``）。
+
+    使用标准字段名；网关映射为纷享跟进记录字段。
+    ``followup_object_id`` 与 ``opportunity_id`` 至少填一个。
+    """
+
+    followup_record: str = Field(..., description="跟进内容（≈ CBG content）")
+    visit_communication_method: str = Field(
+        ...,
+        description=(
+            "跟进方式：外出拜访客户 / 线上会议 / 在公司接待客户 / 饭局聚会 / "
+            "电话/录音 / 微信沟通 / 其他"
+        ),
+    )
+    followup_object_id: Optional[str] = Field(None, description="客户/线索/商机 id")
+    followup_object_type: Optional[str] = Field(
+        None, description="跟进对象类型，默认 end_customer"
+    )
+    opportunity_id: Optional[str] = Field(None, description="商机 id")
+    recorder_id: Optional[str] = Field(None, description="CRM 员工 ID（≈ CBG owner_user_id）")
+    source_record_id: Optional[str] = Field(None, description="来源记录 ID（幂等 upsert）")
+    record_id: Optional[str] = Field(None, description="来源记录 ID（与 source_record_id 二选一）")
+
+
+class ZhipuVisitRecordBatchCreateRequest(BaseModel):
+    """智谱跟进记录批量回写请求（``POST /crm-fxiaoke/zhipu/sale-record/batch``）。"""
+
+    visit_records: List[ZhipuVisitRecordCreateRequest]

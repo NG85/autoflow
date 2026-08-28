@@ -577,7 +577,9 @@ def query_review_opportunity_detail(
     - 不传 ``session_id``：在可见 review session 范围内，从 ``crm_review_opp_risk_progress`` 取该商机最新一条
       （RISK / PROGRESS / OPP_SUMMARY / OPP_REQS_INSIGHT），用其 ``session_id`` 与
       ``snapshot_period`` 作为上下文。
-      若尚无上述风险/进展类记录，则回退为仅读商机主表并返回空明细（``snapshot_period`` 可能为空）。
+      若尚无上述风险/进展类记录，则回退为仅读商机主表并返回空明细（``snapshot_period`` 可能为空）；
+      ``forecast_amount`` 取 ``crm_system_configurations`` 中 ``CalculationFieldMapping.acv_field``
+      映射的商机字段（默认 ``estimated_tcv``）。
     - ``snapshot_basic`` 含 ``opportunity_id``、``account_id``（客户）等字段。
     """
     return crm_review_service.get_opportunity_risk_progress_details_by_latest_session(
