@@ -2284,7 +2284,10 @@ class CRMReviewService:
         if not resolved_session_id:
             raise HTTPException(status_code=500, detail="review session id is empty")
 
-        if user_id:
+        # Explicit session_id: keep attendee/leader owner_ids visibility.
+        # No session_id: latest visible session is only the review context;
+        # do not shrink to the caller's own snapshots.
+        if user_id and sid:
             return self.get_opportunity_risk_progress_details(
                 db_session,
                 session_id=resolved_session_id,
