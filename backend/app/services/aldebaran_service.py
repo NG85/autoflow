@@ -480,5 +480,45 @@ class AldebaranClient:
             timeout_seconds=timeout_seconds,
         )
 
+    def trigger_local_contact_created(
+        self,
+        *,
+        contact_id: str,
+        customer_id: Optional[str] = None,
+        created_by_user_id: Optional[UUID] = None,
+        event_time: Optional[datetime] = None,
+        message_type: Optional[str] = None,
+        dedupe_key: Optional[str] = None,
+        payload: Optional[dict[str, Any]] = None,
+        trace_id: Optional[str] = None,
+        timeout_seconds: int = 30,
+    ) -> dict[str, Any]:
+        """
+        本地联系人创建事件入队 Aldebaran（POST /api/v1/messages/incoming）。
+        默认 ``crm.contact.created``；可用 ``message_type`` / ``payload`` 覆盖。
+        """
+        resolved_message_type = message_type or settings.ALDEBARAN_CONTACT_CREATED_MESSAGE_TYPE
+        resolved_dedupe_key = dedupe_key or f"{resolved_message_type}:{contact_id}:v1"
+        resolved_trace_id = trace_id or contact_id
+        if payload is not None:
+            resolved_payload = payload
+        else:
+            resolved_payload: dict[str, Any] = {"contact_id": contact_id}
+            if customer_id:
+                resolved_payload["customer_id"] = customer_id
+            if created_by_user_id is not None:
+                resolved_payload["created_by_user_id"] = str(created_by_user_id)
+
+        return self.submit_incoming_message(
+            message_type=resolved_message_type,
+            source_unique_id=contact_id,
+            source_table="local_contacts",
+            payload=resolved_payload,
+            event_time=event_time or datetime.now(timezone.utc),
+            dedupe_key=resolved_dedupe_key,
+            trace_id=resolved_trace_id,
+            timeout_seconds=timeout_seconds,
+        )
+
 
 aldebaran_client = AldebaranClient()

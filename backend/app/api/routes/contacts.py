@@ -1,6 +1,8 @@
 import logging
 from typing import Optional
+from uuid import UUID
 from app.api.deps import CurrentUserDep, SessionDep
+from app.core.config import settings
 from app.exceptions import InternalServerError
 from fastapi import APIRouter, HTTPException
 
@@ -120,6 +122,47 @@ def _contact_to_response(contact: LocalContact) -> LocalContactResponse:
     )
 
 
+def notify_aldebaran_local_contact_created(
+    contact: LocalContact,
+    *,
+    user_id: Optional[UUID] = None,
+) -> bool:
+    """
+    新建本地联系人成功后通知 Aldebaran（crm.contact.created）。
+    已存在联系人、开关关闭或入队失败不影响创建结果。
+    """
+    if getattr(contact, "is_existing", False):
+        logger.info(
+            "Skip Aldebaran contact-created notify for existing contact, contact_id=%s",
+            contact.unique_id,
+        )
+        return False
+    if not settings.ALDEBARAN_CONTACT_CREATED_ENABLED:
+        logger.info(
+            "Aldebaran contact-created notify disabled, contact_id=%s",
+            contact.unique_id,
+        )
+        return False
+    try:
+        from app.services.aldebaran_service import aldebaran_client
+
+        aldebaran_client.trigger_local_contact_created(
+            contact_id=contact.unique_id,
+            customer_id=contact.customer_id,
+            created_by_user_id=user_id or contact.created_by,
+            event_time=contact.created_at,
+        )
+        return True
+    except Exception as exc:
+        logger.error(
+            "Aldebaran contact-created notify failed, contact_id=%s: %s",
+            contact.unique_id,
+            exc,
+            exc_info=True,
+        )
+        return False
+
+
 @router.post("/contacts/local")
 def create_local_contact(
     db_session: SessionDep,
@@ -127,7 +170,7 @@ def create_local_contact(
     contact: LocalContactCreate,
 ) -> dict:
     """
-    创建本地联系人
+    创建本地联系人。新建成功后通知 Aldebaran ``crm.contact.created``（已存在则跳过）。
 
     权限要求：OAuth ``crm:contact:create`` + 对 ``customer_id`` 对应客户有数据权限
     （``POST /permission/check``，resource=crm_account）
@@ -150,7 +193,8 @@ def create_local_contact(
             contact_data=contact_data,
             user_id=user.id
         )
-        
+        notify_aldebaran_local_contact_created(new_contact, user_id=user.id)
+
         # 转换为响应格式
         response = _contact_to_response(new_contact)
         
