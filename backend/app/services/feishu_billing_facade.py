@@ -57,6 +57,18 @@ _RANDOM_TRACE_PREFIX: dict[BillingScenario, str] = {
 }
 
 
+def _pass_quota_if_allowed(ok: bool, msg: str, quota: int) -> tuple[bool, str, int]:
+    """CRM_BILLING_ALLOW_INSUFFICIENT_QUOTA 开启时，额度不足仍视为通过。"""
+    if ok or not settings.CRM_BILLING_ALLOW_INSUFFICIENT_QUOTA:
+        return ok, msg, quota
+    logger.warning(
+        "Billing quota insufficient but CRM_BILLING_ALLOW_INSUFFICIENT_QUOTA is enabled, continue. msg=%s quota=%s",
+        msg,
+        quota,
+    )
+    return True, msg, quota
+
+
 def check_billing_quota(
     scenario: Optional[BillingScenario] = None,
     *,
@@ -67,13 +79,14 @@ def check_billing_quota(
 
     优先使用 ``ai_module_key``；未传时由 ``scenario`` 映射到对应功能点，
     以便远端按该功能 ``points`` 校验剩余额度是否充足。
+    CRM_BILLING_ALLOW_INSUFFICIENT_QUOTA 为 True 时，额度不足仍返回通过。
     """
     if not settings.CRM_BILLING_ENABLED:
         return True, "billing disabled", 0
     module_key = ai_module_key
     if not module_key and scenario is not None:
         module_key = _SCENARIO_MODULE_KEY[scenario]
-    return feishu_billing_service.check_quota(ai_module_key=module_key)
+    return _pass_quota_if_allowed(*feishu_billing_service.check_quota(ai_module_key=module_key))
 
 
 def check_billing_quota_for_scenarios(
@@ -82,11 +95,12 @@ def check_billing_quota_for_scenarios(
     """
     按多个场景依次查额度（同一 ``ai_module_key`` 只查一次）。
     任一不足则返回失败；全部通过则返回最后一次成功结果。
+    CRM_BILLING_ALLOW_INSUFFICIENT_QUOTA 为 True 时，额度不足仍返回通过。
     """
     if not settings.CRM_BILLING_ENABLED:
         return True, "billing disabled", 0
     if not scenarios:
-        return feishu_billing_service.check_quota()
+        return _pass_quota_if_allowed(*feishu_billing_service.check_quota())
 
     seen_keys: set[str] = set()
     last_ok, last_msg, last_quota = True, "租户额度充足", 0
@@ -99,7 +113,7 @@ def check_billing_quota_for_scenarios(
             ai_module_key=module_key
         )
         if not last_ok:
-            return last_ok, last_msg, last_quota
+            return _pass_quota_if_allowed(last_ok, last_msg, last_quota)
     return last_ok, last_msg, last_quota
 
 

@@ -297,6 +297,8 @@ class Settings(BaseSettings):
 
     CRM_ENABLED: bool = False
     CRM_BILLING_ENABLED: bool = False
+    # True：额度预检失败仍放行业务（仍会查额度并打日志；用量上报照常）
+    CRM_BILLING_ALLOW_INSUFFICIENT_QUOTA: bool = False
     # CRM daily task configuration
     CRM_DAILY_TASK_ENABLED: bool = False
     CRM_DAILY_KB_ID: int = 2
