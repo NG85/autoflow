@@ -16,7 +16,7 @@ from app.services.platform_notification_service import platform_notification_ser
 
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
 from app.services.oauth_service import oauth_client
-from app.core.config import settings
+from app.core.config import CRMDailyReportVisitDateField, settings
 from app.services.feishu_billing_facade import (
     BillingScenario,
     report_billing_usage,
@@ -98,11 +98,41 @@ class CRMStatisticsService:
             for rid, did in dept_id_by_recorder.items()
         }
 
+    def _daily_report_visit_date_predicates(self, target_date: date) -> Optional[List[Any]]:
+        """日报拜访日期筛选条件，口径由 CRM_DAILY_REPORT_VISIT_DATE_FIELD 决定（个人/团队/公司共用）。
+
+        last_modified_time 存 UTC：将北京统计日转为当日 00:00:00~23:59:59 的 UTC 闭区间。
+        转换失败返回 None。
+        """
+        date_field = settings.CRM_DAILY_REPORT_VISIT_DATE_FIELD
+        if date_field == CRMDailyReportVisitDateField.LAST_MODIFIED_TIME:
+            from app.utils.date_utils import convert_beijing_date_to_utc_range
+
+            utc_start = convert_beijing_date_to_utc_range(target_date.isoformat(), is_start=True)
+            utc_end = convert_beijing_date_to_utc_range(target_date.isoformat(), is_start=False)
+            if utc_start is None or utc_end is None:
+                return None
+            logger.info(
+                "日报按 last_modified_time 统计，北京日 %s 对应 UTC [%s, %s]",
+                target_date,
+                utc_start,
+                utc_end,
+            )
+            return [
+                CRMSalesVisitRecord.last_modified_time >= utc_start,
+                CRMSalesVisitRecord.last_modified_time <= utc_end,
+            ]
+
+        logger.info("日报按 visit_communication_date 统计，统计日 %s", target_date)
+        return [CRMSalesVisitRecord.visit_communication_date == target_date]
+
     def get_sales_daily_statistics(self, session: Session, target_date: date) -> List[Dict]:
         """
         获取指定日期的销售日报明细和统计数据。
 
-        通过查询指定日期的拜访记录，按销售分组统计跟进对象：
+        通过查询统计日拜访记录，按销售分组统计跟进对象：
+        - 日期口径由 CRM_DAILY_REPORT_VISIT_DATE_FIELD 决定（跟进日期或最后修改时间）。
+        - last_modified_time 为 UTC，按 target_date 对应的北京自然日折算区间；recorder_id 须非空。
         - 优先使用 followup_object_type/id/name；缺失时回退旧 account_id / partner_id。
         - 客户：统计总数，并区分首次/多次（同一客户当天只要有一次首次即计入首次）。
         - 合作伙伴 / 线索：只统计去重总数，不区分首次/多次。
@@ -110,7 +140,7 @@ class CRMStatisticsService:
 
         Args:
             session: 数据库会话
-            target_date: 目标日期
+            target_date: 北京时间统计日（日历日）
 
         Returns:
             List[Dict]: 统计结果列表，每个元素包含：
@@ -127,7 +157,12 @@ class CRMStatisticsService:
                 - leads: 去重线索列表（lead_id / lead_name）
         """
         logger.info(f"开始获取 {target_date} 的销售日报统计数据")
-        
+
+        date_predicates = self._daily_report_visit_date_predicates(target_date)
+        if date_predicates is None:
+            logger.error("无法构建 %s 的销售日报日期筛选条件，跳过统计", target_date)
+            return []
+
         # 查询指定日期的拜访记录 - 仅选择后续统计所需的字段，减少无用列以提高查询效率
         query = select(
             CRMSalesVisitRecord.id,
@@ -146,7 +181,7 @@ class CRMStatisticsService:
             CRMSalesVisitRecord.visit_communication_date,
             CRMSalesVisitRecord.is_first_visit,
         ).where(
-            CRMSalesVisitRecord.visit_communication_date == target_date,
+            *date_predicates,
             CRMSalesVisitRecord.recorder_id.isnot(None)
         )
             
@@ -762,14 +797,19 @@ class CRMStatisticsService:
         """
         按部门实时统计指定日各跟进方式的拜访记录条数。
         部门归属取 recorder_department_name 快照；空方式归为「未填写」。
+        日期口径与个人/公司日报共用 CRM_DAILY_REPORT_VISIT_DATE_FIELD。
         """
+        date_predicates = self._daily_report_visit_date_predicates(target_date)
+        if date_predicates is None:
+            return {}
+
         query = (
             select(
                 CRMSalesVisitRecord.recorder_department_name,
                 CRMSalesVisitRecord.visit_communication_method,
                 func.count().label("cnt"),
             )
-            .where(CRMSalesVisitRecord.visit_communication_date == target_date)
+            .where(*date_predicates)
             .group_by(
                 CRMSalesVisitRecord.recorder_department_name,
                 CRMSalesVisitRecord.visit_communication_method,
@@ -795,13 +835,19 @@ class CRMStatisticsService:
         session: Session,
         target_date: date,
     ) -> Dict[str, int]:
-        """公司级：指定日全量拜访记录按跟进方式计条数；空方式归为「未填写」。"""
+        """公司级：指定日全量拜访记录按跟进方式计条数；空方式归为「未填写」。
+        日期口径与个人/团队日报共用 CRM_DAILY_REPORT_VISIT_DATE_FIELD。
+        """
+        date_predicates = self._daily_report_visit_date_predicates(target_date)
+        if date_predicates is None:
+            return {}
+
         query = (
             select(
                 CRMSalesVisitRecord.visit_communication_method,
                 func.count().label("cnt"),
             )
-            .where(CRMSalesVisitRecord.visit_communication_date == target_date)
+            .where(*date_predicates)
             .group_by(CRMSalesVisitRecord.visit_communication_method)
         )
         result: Dict[str, int] = {}
@@ -882,7 +928,7 @@ class CRMStatisticsService:
 
         Args:
             session: 数据库会话
-            target_date: 目标日期（拜访与已完成/逾期任务统计日）
+            target_date: 北京时间统计日（拜访日期口径见 CRM_DAILY_REPORT_VISIT_DATE_FIELD；已完成/逾期任务按预计完成日）
             incomplete_due_date: 待完成任务预计完成日，默认北京时间当日（日报定时任务执行日）
 
         Returns:
@@ -1098,7 +1144,7 @@ class CRMStatisticsService:
                 },
             }
         
-        # 查询匹配的评估记录：
+        # 查询匹配的评估记录（表由上游按与 CRM_DAILY_REPORT_VISIT_DATE_FIELD 相同口径写入）：
         # 1. assessment_date == target_date
         # 2. 商机类型：
         #    - opportunity_id 在去重商机列表中
@@ -1799,7 +1845,7 @@ class CRMStatisticsService:
         
         logger.info(f"开始从 crm_department_daily_summary 表汇总 {target_date} 的部门日报数据")
         
-        # 直接从部门/公司汇总表中查询部门级数据
+        # 汇总表由上游按与 CRM_DAILY_REPORT_VISIT_DATE_FIELD 相同口径写入，此处仍按 report_date 读取
         query = select(CRMDepartmentDailySummary).where(
             CRMDepartmentDailySummary.report_date == target_date,
             CRMDepartmentDailySummary.summary_type == "department",
@@ -1938,7 +1984,7 @@ class CRMStatisticsService:
         
         from app.core.config import settings
         
-        # 直接从部门/公司汇总表中查询公司级数据（summary_type = 'company'）
+        # 汇总表由上游按与 CRM_DAILY_REPORT_VISIT_DATE_FIELD 相同口径写入，此处仍按 report_date 读取
         query = select(CRMDepartmentDailySummary).where(
             CRMDepartmentDailySummary.report_date == target_date,
             CRMDepartmentDailySummary.summary_type == "company",
