@@ -157,22 +157,22 @@ _DEFAULT_CARD_TEMPLATES: Dict[str, Dict[str, str]] = {
 _DEFAULT_VISIT_RECORD_TEMPLATES: Dict[str, Dict[str, str]] = {
     PLATFORM_DINGTALK: {
         "form_recorder": "c218df2f-4032-4230-ac22-ce3809dbf740.schema",
-        "form_leader": "b4de9410-c8b3-4f43-bcb6-dcc30cad3b44.schema",
-        "link": "3d435332-f6d6-4ed8-accb-8bd6cf57fd72.schema",
+        "form_leader": "90d4f6e1-0ab4-40f9-9cc2-dd6dde0c41de.schema",
+        "link": "4de58997-de70-4fbf-90f7-f5a726613503.schema",
     },
     PLATFORM_FEISHU: {
         "form_simple_recorder": "AAqzQK6iUiK2k",
         "form_simple_leader": "AAqzQKvKzOW1z",
         "form_complete_recorder": "AAqtEOBYVGBGe",
-        "form_complete_leader": "AAqtEOHUJGdza",
-        "link": "AAqPY9HeRUhiU",
+        "form_complete_leader": "AAqPWqWmbmOJw",
+        "link": "AAqPWq7vsvhlu",
     },
     PLATFORM_LARK: {
         "form_simple_recorder": "AAqzQK6iUiK2k",
         "form_simple_leader": "AAqzQKvKzOW1z",
         "form_complete_recorder": "AAqtEOBYVGBGe",
-        "form_complete_leader": "AAqtEOHUJGdza",
-        "link": "AAqPY9HeRUhiU",
+        "form_complete_leader": "AAqPWqWmbmOJw",
+        "link": "AAqPWq7vsvhlu",
     },
 }
 
@@ -1619,17 +1619,16 @@ class PlatformNotificationService:
             return None
         templates = self._get_visit_record_templates_config()
         platform_tpl = templates.get(platform) or {}
+        is_recorder_card = recipient_type in ("recorder", "collaborative_participant")
+        if visit_type != "form":
+            return platform_tpl.get("link")
         if platform == PLATFORM_DINGTALK:
-            if visit_type != "form":
-                return platform_tpl.get("link")
-            key = "form_recorder" if recipient_type in ("recorder", "collaborative_participant") else "form_leader"
+            key = "form_recorder" if is_recorder_card else "form_leader"
             return platform_tpl.get(key)
         if platform in (PLATFORM_FEISHU, PLATFORM_LARK):
-            if visit_type != "form":
-                return platform_tpl.get("link")
             form_type = form_type or settings.CRM_VISIT_RECORD_FORM_TYPE.value
             prefix = "form_simple_" if form_type == "simple" else "form_complete_"
-            key = prefix + ("recorder" if recipient_type in ("recorder", "collaborative_participant") else "leader")
+            key = prefix + ("recorder" if is_recorder_card else "leader")
             return platform_tpl.get(key)
         return None
 

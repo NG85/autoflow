@@ -676,20 +676,20 @@ notification:
     default:
       dingtalk:
         form_recorder: "c218df2f-4032-4230-ac22-ce3809dbf740.schema"
-        form_leader: "b4de9410-c8b3-4f43-bcb6-dcc30cad3b44.schema"
-        link: "3d435332-f6d6-4ed8-accb-8bd6cf57fd72.schema"
+        form_leader: "90d4f6e1-0ab4-40f9-9cc2-dd6dde0c41de.schema"
+        link: "4de58997-de70-4fbf-90f7-f5a726613503.schema"
       feishu:
         form_simple_recorder: "AAqzQK6iUiK2k"
         form_simple_leader: "AAqzQKvKzOW1z"
         form_complete_recorder: "AAqtEOBYVGBGe"
-        form_complete_leader: "AAqtEOHUJGdza"
-        link: "AAqPY9HeRUhiU"
+        form_complete_leader: "AAqPWqWmbmOJw"
+        link: "AAqPWq7vsvhlu"
       lark:
         form_simple_recorder: "AAqzQK6iUiK2k"
         form_simple_leader: "AAqzQKvKzOW1z"
         form_complete_recorder: "AAqtEOBYVGBGe"
-        form_complete_leader: "AAqtEOHUJGdza"
-        link: "AAqPY9HeRUhiU"
+        form_complete_leader: "AAqPWqWmbmOJw"
+        link: "AAqPWq7vsvhlu"
     data_type: dict
     description: "拜访记录卡片模板 ID。按平台（dingtalk/feishu/lark）与变体（form_recorder/form_leader/link 或 form_simple_* /form_complete_*/link）配置。"
     client: false
