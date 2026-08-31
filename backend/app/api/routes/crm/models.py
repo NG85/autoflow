@@ -503,6 +503,18 @@ class VisitRecordFieldMappingOut(BaseModel):
     )
 
 
+class VisitRecordSortItem(BaseModel):
+    field: str = Field(description="排序字段，对应拜访记录列名或别名（如 department、customer_level）")
+    direction: Literal["asc", "desc"] = Field(default="desc", description="该字段排序方向")
+
+    @field_validator("direction", mode="before")
+    @classmethod
+    def normalize_direction(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            return v.strip().lower()
+        return v
+
+
 # 拜访记录查询请求模型
 class VisitRecordQueryRequest(BaseModel):
     # 分页参数
@@ -542,9 +554,34 @@ class VisitRecordQueryRequest(BaseModel):
     last_modified_time_end: Optional[str] = None  # 创建时间结束
     
     # 排序 - 默认按跟进日期、创建时间（录入时间 last_modified_time）降序
-    sort_by: str = "visit_communication_date"  # 排序字段
-    sort_direction: str = "desc"  # 排序方向：asc/desc
+    sorts: Optional[List[VisitRecordSortItem]] = Field(
+        default=None,
+        max_length=8,
+        description="多字段排序，顺序即优先级；未传或空则默认跟进日期、创建时间降序",
+    )
     language: Optional[str] = None # 语言，只在导出时生效
+
+    def resolved_sorts(self) -> List[tuple[str, str]]:
+        """归一化排序：sorts 非空按传入顺序；否则跟进日期、创建时间降序。"""
+        if self.sorts:
+            out: List[tuple[str, str]] = []
+            seen: set[str] = set()
+            for item in self.sorts:
+                field = (item.field or "").strip()
+                if not field or field in seen:
+                    continue
+                direction = (item.direction or "desc").strip().lower()
+                if direction not in ("asc", "desc"):
+                    direction = "desc"
+                seen.add(field)
+                out.append((field, direction))
+            if out:
+                return out
+        return [
+            ("visit_communication_date", "desc"),
+            ("last_modified_time", "desc"),
+        ]
+
 
 class VisitRecordRowPermissions(BaseModel):
     """当前页行内按钮权限（OAuth batch-check）。"""
