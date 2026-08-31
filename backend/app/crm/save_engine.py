@@ -754,9 +754,12 @@ def _notify_aldebaran_visit_record_post_process_impl(
     is_revised: bool = False,
     revision_seq: Optional[int] = None,
 ) -> bool:
+    """
+    共用实现：将卡片状态置为 pending，通知 Aldebaran 入队后处理并等待回调推卡。
+    未启用或入队失败时，降级为空任务列表本地推卡。
+    """
     from app.services.visit_record_card_push_status import (
         VisitRecordCardPushStatus,
-        update_visit_record_card_push_delivery,
         update_visit_record_card_push_status,
     )
 
@@ -804,6 +807,27 @@ def _notify_aldebaran_visit_record_post_process_impl(
             payload=payload,
             trace_id=trace_id,
         )
+    except Exception as exc:
+        logger.error(
+            "Aldebaran post-process failed, fallback local card push, record_id=%s: %s",
+            record_id,
+            exc,
+            exc_info=True,
+        )
+        return fallback_push_visit_record_card(
+            record_id,
+            db_session=db_session,
+            visit_snapshot=visit_snapshot,
+            visit_type=visit_type,
+            meeting_notes=meeting_notes,
+            risk_info=risk_info,
+            saved_time=saved_time,
+            operator_user_id=operator_user_id,
+            is_revised=is_revised,
+            revision_seq=revision_seq,
+        )
+
+    try:
         update_visit_record_card_push_status(
             db_session,
             record_id,
@@ -817,32 +841,19 @@ def _notify_aldebaran_visit_record_post_process_impl(
                 revision_seq=revision_seq,
                 status=VisitRecordCardPushStatus.AWAITING_CALLBACK,
             )
-        logger.info(
-            "Triggered Aldebaran visit post-process, record_id=%s message_type=%s",
-            record_id,
-            message_type or settings.ALDEBARAN_VISIT_RECORD_MESSAGE_TYPE,
-        )
-        return True
     except Exception as exc:
         logger.error(
-            "Aldebaran post-process failed, fallback local card push, record_id=%s: %s",
+            "Aldebaran queued but failed to set awaiting_callback, record_id=%s: %s",
             record_id,
             exc,
             exc_info=True,
         )
-
-    return fallback_push_visit_record_card(
+    logger.info(
+        "Triggered Aldebaran visit post-process, record_id=%s message_type=%s",
         record_id,
-        db_session=db_session,
-        visit_snapshot=visit_snapshot,
-        visit_type=visit_type,
-        meeting_notes=meeting_notes,
-        risk_info=risk_info,
-        saved_time=saved_time,
-        operator_user_id=operator_user_id,
-        is_revised=is_revised,
-        revision_seq=revision_seq,
+        message_type or settings.ALDEBARAN_VISIT_RECORD_MESSAGE_TYPE,
     )
+    return True
 
 
 def _notify_aldebaran_visit_record_saved_impl(
