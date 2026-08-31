@@ -295,7 +295,7 @@ class Settings(BaseSettings):
     ALDEBARAN_MESSAGE_SOURCE_SYSTEM: str = "crm"
     ALDEBARAN_VISIT_RECORD_MESSAGE_TYPE: str = "crm.visit_record.saved"
     ALDEBARAN_VISIT_RECORD_REVISED_MESSAGE_TYPE: str = "crm.visit_record.revised"
-    ALDEBARAN_CONTACT_CREATED_MESSAGE_TYPE: str = "crm.contact.created"
+    ALDEBARAN_CONTACT_CREATED_MESSAGE_TYPE: str = "local.contact.saved"
     ALDEBARAN_MESSAGE_RETRY_ATTEMPTS: int = 3
     ALDEBARAN_MESSAGE_RETRY_BASE_SECONDS: float = 0.5
     # 关闭时走本地空任务推卡降级（便于本地/联调）

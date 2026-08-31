@@ -1,6 +1,5 @@
 import logging
 from typing import Optional
-from uuid import UUID
 from app.api.deps import CurrentUserDep, SessionDep
 from app.core.config import settings
 from app.exceptions import InternalServerError
@@ -122,13 +121,9 @@ def _contact_to_response(contact: LocalContact) -> LocalContactResponse:
     )
 
 
-def notify_aldebaran_local_contact_created(
-    contact: LocalContact,
-    *,
-    user_id: Optional[UUID] = None,
-) -> bool:
+def notify_aldebaran_local_contact_created(contact: LocalContact) -> bool:
     """
-    新建本地联系人成功后通知 Aldebaran（crm.contact.created）。
+    新建本地联系人成功后通知 Aldebaran（local.contact.saved）。
     已存在联系人、开关关闭或入队失败不影响创建结果。
     """
     if getattr(contact, "is_existing", False):
@@ -148,8 +143,6 @@ def notify_aldebaran_local_contact_created(
 
         aldebaran_client.trigger_local_contact_created(
             contact_id=contact.unique_id,
-            customer_id=contact.customer_id,
-            created_by_user_id=user_id or contact.created_by,
             event_time=contact.created_at,
         )
         return True
@@ -170,7 +163,7 @@ def create_local_contact(
     contact: LocalContactCreate,
 ) -> dict:
     """
-    创建本地联系人。新建成功后通知 Aldebaran ``crm.contact.created``（已存在则跳过）。
+    创建本地联系人。新建成功后通知 Aldebaran ``local.contact.saved``（已存在则跳过）。
 
     权限要求：OAuth ``crm:contact:create`` + 对 ``customer_id`` 对应客户有数据权限
     （``POST /permission/check``，resource=crm_account）
@@ -193,7 +186,7 @@ def create_local_contact(
             contact_data=contact_data,
             user_id=user.id
         )
-        notify_aldebaran_local_contact_created(new_contact, user_id=user.id)
+        notify_aldebaran_local_contact_created(new_contact)
 
         # 转换为响应格式
         response = _contact_to_response(new_contact)
