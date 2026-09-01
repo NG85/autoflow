@@ -4,8 +4,15 @@ from app.utils import push_page_urls as urls
 
 
 def test_build_visit_list_page_url(monkeypatch):
+    from app.core.config import CRMDailyReportVisitDateField
+
     monkeypatch.setattr(urls.settings, "REVIEW_REPORT_HOST", "https://example.com")
     monkeypatch.setattr(urls.settings, "VISIT_DETAIL_PAGE_URL", "/v2/behavior")
+    monkeypatch.setattr(
+        urls.settings,
+        "CRM_DAILY_REPORT_VISIT_DATE_FIELD",
+        CRMDailyReportVisitDateField.VISIT_COMMUNICATION_DATE,
+    )
     result = urls.build_visit_list_page_url(
         start_date="2026-06-26",
         end_date="2026-06-26",
@@ -20,8 +27,15 @@ def test_build_visit_list_page_url(monkeypatch):
 
 
 def test_build_visit_list_page_url_with_recorder(monkeypatch):
+    from app.core.config import CRMDailyReportVisitDateField
+
     monkeypatch.setattr(urls.settings, "REVIEW_REPORT_HOST", "https://example.com")
     monkeypatch.setattr(urls.settings, "VISIT_DETAIL_PAGE_URL", "/v2/behavior")
+    monkeypatch.setattr(
+        urls.settings,
+        "CRM_DAILY_REPORT_VISIT_DATE_FIELD",
+        CRMDailyReportVisitDateField.VISIT_COMMUNICATION_DATE,
+    )
     result = urls.build_visit_list_page_url(
         start_date="2026-06-26",
         end_date="2026-06-26",
@@ -32,6 +46,29 @@ def test_build_visit_list_page_url_with_recorder(monkeypatch):
         "?visit_communication_date_start=2026-06-26"
         "&visit_communication_date_end=2026-06-26"
         "&recorder=%E5%BC%A0%E4%B8%89"
+    )
+
+
+def test_build_visit_list_page_url_uses_last_modified_time(monkeypatch):
+    from app.core.config import CRMDailyReportVisitDateField
+
+    monkeypatch.setattr(urls.settings, "REVIEW_REPORT_HOST", "https://example.com")
+    monkeypatch.setattr(urls.settings, "VISIT_DETAIL_PAGE_URL", "/v2/behavior")
+    monkeypatch.setattr(
+        urls.settings,
+        "CRM_DAILY_REPORT_VISIT_DATE_FIELD",
+        CRMDailyReportVisitDateField.LAST_MODIFIED_TIME,
+    )
+    result = urls.build_visit_list_page_url(
+        start_date="2026-08-30",
+        end_date="2026-08-30",
+        department_name="华东销售部",
+    )
+    assert result == (
+        "https://example.com/v2/behavior"
+        "?last_modified_time_start=2026-08-30"
+        "&last_modified_time_end=2026-08-30"
+        "&department_name=%E5%8D%8E%E4%B8%9C%E9%94%80%E5%94%AE%E9%83%A8"
     )
 
 

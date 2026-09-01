@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Optional
 from urllib.parse import quote, quote_plus
 
-from app.core.config import settings
+from app.core.config import CRMDailyReportVisitDateField, settings
 
 
 def _host() -> str:
@@ -49,10 +49,16 @@ def build_visit_list_page_url(
     base = _visit_list_base()
     if not base:
         return ""
-    query = (
-        f"visit_communication_date_start={quote(start_date, safe='')}"
-        f"&visit_communication_date_end={quote(end_date, safe='')}"
-    )
+    if settings.CRM_DAILY_REPORT_VISIT_DATE_FIELD == CRMDailyReportVisitDateField.LAST_MODIFIED_TIME:
+        query = (
+            f"last_modified_time_start={quote(start_date, safe='')}"
+            f"&last_modified_time_end={quote(end_date, safe='')}"
+        )
+    else:
+        query = (
+            f"visit_communication_date_start={quote(start_date, safe='')}"
+            f"&visit_communication_date_end={quote(end_date, safe='')}"
+        )
     dept = (department_name or "").strip()
     if dept:
         query = f"{query}&department_name={quote_plus(dept)}"

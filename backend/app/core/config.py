@@ -112,6 +112,13 @@ class CRMWeeklyFollowupWeekPreset(str, enum.Enum):
     MON_SUN = "mon_sun"  # 周一~周日
 
 
+class CRMDailyReportVisitDateField(str, enum.Enum):
+    """日报（个人/团队/公司）拜访统计的日期口径。"""
+
+    VISIT_COMMUNICATION_DATE = "visit_communication_date"  # 跟进日期
+    LAST_MODIFIED_TIME = "last_modified_time"  # 最后修改时间（UTC，按北京自然日）
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env", env_ignore_empty=True, extra="ignore"
@@ -282,16 +289,18 @@ class Settings(BaseSettings):
     ALDEBARAN_REVIEW_SESSION_RECALC_PATH: str = "/api/v1/review/performance/query"
     # 周跟进：批量查询商机 forecast_amount / expected_closing_date
     ALDEBARAN_OPPORTUNITY_QUERY_AMOUNT_PATH: str = "/api/v1/opportunity/query/amount"
-    # Aldebaran 消息队列：拜访保存事件入队（POST /api/v1/messages/incoming）
+    # Aldebaran 消息队列：拜访保存 / 联系人创建事件入队（POST /api/v1/messages/incoming）
     ALDEBARAN_MESSAGES_INCOMING_PATH: str = "/api/v1/messages/incoming"
     ALDEBARAN_MESSAGE_WEBHOOK_SECRET: str = ""
     ALDEBARAN_MESSAGE_SOURCE_SYSTEM: str = "crm"
     ALDEBARAN_VISIT_RECORD_MESSAGE_TYPE: str = "crm.visit_record.saved"
     ALDEBARAN_VISIT_RECORD_REVISED_MESSAGE_TYPE: str = "crm.visit_record.revised"
+    ALDEBARAN_CONTACT_CREATED_MESSAGE_TYPE: str = "crm.contact.created"
     ALDEBARAN_MESSAGE_RETRY_ATTEMPTS: int = 3
     ALDEBARAN_MESSAGE_RETRY_BASE_SECONDS: float = 0.5
     # 关闭时走本地空任务推卡降级（便于本地/联调）
     ALDEBARAN_VISIT_RECORD_POST_PROCESS_ENABLED: bool = True
+    ALDEBARAN_CONTACT_CREATED_ENABLED: bool = True
     
     EMBEDDING_THRESHOLD: float = 0.92
 
@@ -324,6 +333,12 @@ class Settings(BaseSettings):
     CRM_DAILY_REPORT_ENABLED: bool = False
     CRM_DAILY_REPORT_CRON: str = '30 8 * * *'  # 每天早上8:30执行
     CRM_DAILY_REPORT_FEISHU_ENABLED: bool = True  # 是否启用飞书推送
+    # 日报拜访日期口径（个人/团队/公司共用）。Autoflow 用它筛拜访记录；
+    # crm_account_opportunity_assessment / crm_department_daily_summary 由上游按同一口径写入，
+    # 本服务仍按 assessment_date / report_date 读取。
+    CRM_DAILY_REPORT_VISIT_DATE_FIELD: CRMDailyReportVisitDateField = (
+        CRMDailyReportVisitDateField.VISIT_COMMUNICATION_DATE
+    )
     
     # CRM weekly report task configuration
     CRM_WEEKLY_REPORT_ENABLED: bool = False

@@ -184,7 +184,8 @@ def generate_crm_daily_statistics(self, target_date_str=None, report_type=None):
         report_type: 报告类型，支持 'sales'（销售个人日报） / 'department'（团队日报） / 'company'（公司日报），不传则默认为所有
     
     工作流程：
-    1. 查询指定日期的拜访记录，按销售人员分组，统计客户/合作伙伴/线索并生成完整个人日报
+    1. 按 CRM_DAILY_REPORT_VISIT_DATE_FIELD（跟进日期 / 最后修改时间）查询统计日拜访记录，
+       按销售人员分组，统计客户/合作伙伴/线索并生成完整个人日报
        （客户区分首次/多次；合作伙伴与线索只统计总数；有商机与仅跟进对象分开计数）
     2. 基于客户/商机/线索评估信息，补充红黄绿灯统计与评估明细，推送销售个人日报飞书卡片给每个有数据的销售人员
     3. 从 crm_department_daily_summary 表中读取部门级汇总数据，为所有有负责人的部门生成部门日报（无跟进发短文本，有跟进发完整卡片）
