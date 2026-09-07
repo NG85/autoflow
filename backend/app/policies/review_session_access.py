@@ -12,12 +12,14 @@ from app.repositories.user_department_relation import user_department_relation_r
 from app.repositories.user_profile import user_profile_repo
 from app.services.oauth_service import oauth_client
 
-# Wave B1：周经营决策 / review session 跨范围查看权限（legacy ``review_session:all:view``）
+# Wave B1：周经营决策功能门控（legacy ``review_session:all:view``）；列表范围看 data-scope
 WEEKLY_DECISION_VIEW_PERMISSION = "biz:weekly_decision:view"
 LEGACY_REVIEW_SESSION_VIEW_PERMISSION = "review_session:all:view"
 REVIEW_SESSION_VIEW_PERMISSION = WEEKLY_DECISION_VIEW_PERMISSION
 # W3 data-scope entity（data-scope-matrix：周度经营决策）
 WEEKLY_DECISION_DATA_SCOPE_ENTITY = "biz_weekly_decision"
+# 仅组织/汇报链可抬成部门列表；linked_crm / crm_grant / self_* 都不算
+_TEAM_SOURCES = frozenset({"org_team_sub", "org_scope"})
 
 
 def _filter_explicitly_enabled(item: dict[str, Any]) -> bool:
@@ -25,8 +27,21 @@ def _filter_explicitly_enabled(item: dict[str, Any]) -> bool:
     return enabled is True or str(enabled).lower() == "true"
 
 
+def _filter_not_disabled(item: dict[str, Any]) -> bool:
+    """org_team_sub 等：缺省视为开启；仅显式 false 时跳过。"""
+    enabled = item.get("enabled")
+    if enabled is None:
+        return True
+    return enabled is True or str(enabled).lower() == "true"
+
+
+def _iter_data_scope_filters(scope: dict[str, Any]) -> list[dict[str, Any]]:
+    filters = scope.get("filters") if isinstance(scope.get("filters"), list) else []
+    return [item for item in filters if isinstance(item, dict)]
+
+
 def _user_has_review_session_view_permission(user_id: UUID) -> bool:
-    """OAuth POST /permission/check — 周经营决策跨团队/全量查看功能门控。"""
+    """OAuth POST /permission/check — 周经营决策功能门控（SALES 也有，不代表跨部门可见）。"""
     check = oauth_client.check_function_permission(
         user_id=user_id,
         permission=REVIEW_SESSION_VIEW_PERMISSION,
@@ -34,20 +49,34 @@ def _user_has_review_session_view_permission(user_id: UUID) -> bool:
     return bool(check.get("allowed"))
 
 
-def _user_has_weekly_decision_global_scope(db_session: Session, user_id: UUID) -> bool:
-    """data-scope ``biz_weekly_decision`` 含 global → 公司级可见（替代遗留 crm:company:query）。"""
+def _get_weekly_decision_data_scope(db_session: Session, user_id: UUID) -> dict[str, Any]:
     crm_user_id = user_profile_repo.get_crm_user_id_by_user_id(db_session, user_id)
-    scope = oauth_client.get_data_scope(
+    return oauth_client.get_data_scope(
         user_id=user_id,
         crm_user_id=crm_user_id,
         entity=WEEKLY_DECISION_DATA_SCOPE_ENTITY,
     )
-    filters = scope.get("filters") if isinstance(scope.get("filters"), list) else []
+
+
+def _filters_have_global_scope(filters: list[dict[str, Any]]) -> bool:
+    """data-scope 含 enabled ``global`` → 公司级可见。"""
     for item in filters:
-        if not isinstance(item, dict):
-            continue
         source = str(item.get("source") or "").strip()
         if source == "global" and _filter_explicitly_enabled(item):
+            return True
+    return False
+
+
+def _filters_have_team_scope(filters: list[dict[str, Any]]) -> bool:
+    """仅 ``org_team_sub`` / ``org_scope`` 抬升为部门列表（SALES_MANAGER）。
+
+    ``linked_crm``、``crm_grant``、``self_owner`` 等与 session 部门范围无关，即使 enabled 也不抬升。
+    """
+    for item in filters:
+        if not _filter_not_disabled(item):
+            continue
+        source = str(item.get("source") or "").strip()
+        if source in _TEAM_SOURCES:
             return True
     return False
 
@@ -67,11 +96,11 @@ def _department_or_attendee_predicate(scope: ReviewSessionViewScope, user_id: st
 @dataclass(frozen=True)
 class ReviewSessionViewScope:
     """
-    Review session 列表/详情可见范围：
-    - ``biz_weekly_decision`` data-scope 含 enabled ``global``：全公司 session
-    - 非 global（如 ``linked_crm``）+ ``biz:weekly_decision:view`` + 有主部门：
+    Review session 列表/详情可见范围（``biz:weekly_decision:view`` 只做功能门控）：
+    - data-scope 含 enabled ``global``：全公司 session
+    - 非 global 的组织范围（``org_team_sub`` / ``org_scope``）+ 有主部门：
       本部门及下属部门 session，并保留本人参会的其它部门 session
-    - 非 global 且无主部门 / 无 viewer：仅本人参会 session
+    - ``self_owner`` / ``linked_crm`` 等，或无主部门 / 无 viewer：仅本人参会 session
     """
 
     has_viewer_permission: bool
@@ -154,8 +183,9 @@ def resolve_review_session_view_scope(
     user_id: UUID,
 ) -> ReviewSessionViewScope:
     has_viewer_permission = _user_has_review_session_view_permission(user_id)
-    # 公司级范围：biz_weekly_decision data-scope global（不再用 crm:company:query）
-    is_company_admin = _user_has_weekly_decision_global_scope(db_session, user_id)
+    filters = _iter_data_scope_filters(_get_weekly_decision_data_scope(db_session, user_id))
+    is_company_admin = _filters_have_global_scope(filters)
+    has_team_scope = _filters_have_team_scope(filters)
 
     user_department_id = user_department_relation_repo.get_primary_department_by_user_ids(
         db_session,
@@ -163,7 +193,12 @@ def resolve_review_session_view_scope(
     ).get(str(user_id))
 
     subtree_department_ids: tuple[str, ...] = ()
-    if has_viewer_permission and user_department_id and not is_company_admin:
+    if (
+        has_viewer_permission
+        and has_team_scope
+        and user_department_id
+        and not is_company_admin
+    ):
         subtree_department_ids = tuple(
             department_mirror_repo.get_subtree_department_ids(db_session, user_department_id)
         )
