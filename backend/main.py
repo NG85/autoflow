@@ -15,6 +15,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from app.api.main import api_router
 from app.core.config import settings, Environment
 from app.site_settings import SiteSetting
+from app.services.feishu_billing_facade import register_billing_exception_handlers
 from app.utils.uuid6 import uuid7
 
 dictConfig(
@@ -139,6 +140,7 @@ async def legacy_logout_oauth_shadow(request: Request, call_next):
 
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
+register_billing_exception_handlers(app)
 
 # Setup Prometheus instrumentation
 Instrumentator().instrument(app).expose(

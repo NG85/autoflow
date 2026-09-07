@@ -128,6 +128,7 @@ class FeishuBillingService:
 
         传入 ``ai_module_key`` 时按该功能计费点数校验 remaining quota；
         响应可能含 ``required_points``，额度不足时 ``msg`` 会带具体点数说明。
+        查询失败（HTTP/非 200）抛异常，由门面记日志后视为充足。
         """
         params: Optional[dict[str, Any]] = None
         if ai_module_key:
@@ -135,12 +136,8 @@ class FeishuBillingService:
         data = self._get("/v1/usage_records/tenant_quota", params=params)
         code = data.get("code")
         api_msg = str(data.get("msg") or "").strip()
-        if code == 400:
-            return False, api_msg or f"计费配置无效(code={code})", 0
-        if code == 502:
-            return False, api_msg or f"查询租户 AI 额度失败(code={code})", 0
         if code != 200:
-            return False, api_msg or f"计费额度查询失败(code={code})", 0
+            raise RuntimeError(api_msg or f"计费额度查询失败(code={code})")
 
         tenant_quota = (data.get("data") or {}).get("tenant_quota") or {}
         sufficient = tenant_quota.get("sufficient")

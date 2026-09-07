@@ -35,6 +35,9 @@ from app.core.config import settings
 from app.services.feishu_billing_facade import (
     BillingScenario,
     check_billing_quota,
+    is_scenario_enabled,
+    raise_feature_not_enabled,
+    raise_insufficient_quota,
     report_billing_usage,
 )
 
@@ -64,6 +67,12 @@ _VISIT_PREP_NO_SIA_MODES = frozenset({
 # 仅生成攻略时做租户额度预检；save 只上报不预检
 _VISIT_PREP_QUOTA_MODES = frozenset({
     ChatMode.CREATE_CVG_REPORT,
+})
+
+# 生成/保存攻略均受 account_visit_prep_guide 开通开关约束
+_VISIT_PREP_FEATURE_MODES = frozenset({
+    ChatMode.CREATE_CVG_REPORT,
+    ChatMode.SAVE_CVG_REPORT,
 })
 
 
@@ -97,14 +106,16 @@ def _build_visit_prep_review_detail(chat_id: Optional[Any]) -> str:
     return build_visit_guide_page_url(str(chat_id) if chat_id else None)
 
 
+def _raise_if_scenario_disabled(scenario: BillingScenario) -> None:
+    if not is_scenario_enabled(scenario):
+        raise_feature_not_enabled(scenario)
+
+
 def _check_sia_quota_or_raise() -> None:
-    try:
-        quota_ok, quota_msg, _ = check_billing_quota(BillingScenario.SIA_CHAT)
-    except Exception as exc:
-        logger.error("SIA quota check failed before /chats: %s", exc)
-        raise HTTPException(status_code=502, detail="计费服务异常，请稍后重试")
+    _raise_if_scenario_disabled(BillingScenario.SIA_CHAT)
+    quota_ok, quota_msg, _ = check_billing_quota(BillingScenario.SIA_CHAT)
     if not quota_ok:
-        raise HTTPException(status_code=400, detail=quota_msg)
+        raise_insufficient_quota(quota_msg)
 
 
 def _report_sia_usage(user: Optional[Any], review_detail: str) -> None:
@@ -120,15 +131,12 @@ def _visit_prep_trace_key(chat_id: Any) -> str:
 
 
 def _check_visit_prep_quota_or_raise() -> None:
-    try:
-        quota_ok, quota_msg, _ = check_billing_quota(
-            BillingScenario.ACCOUNT_VISIT_PREP_GUIDE
-        )
-    except Exception as exc:
-        logger.error("Visit prep guide quota check failed before /chats: %s", exc)
-        raise HTTPException(status_code=502, detail="计费服务异常，请稍后重试")
+    _raise_if_scenario_disabled(BillingScenario.ACCOUNT_VISIT_PREP_GUIDE)
+    quota_ok, quota_msg, _ = check_billing_quota(
+        BillingScenario.ACCOUNT_VISIT_PREP_GUIDE
+    )
     if not quota_ok:
-        raise HTTPException(status_code=400, detail=quota_msg)
+        raise_insufficient_quota(quota_msg)
 
 
 def _report_visit_prep_usage(
@@ -308,8 +316,14 @@ def chats(
         )
         if should_bill_sia:
             _check_sia_quota_or_raise()
-        if needs_visit_prep_quota:
-            _check_visit_prep_quota_or_raise()
+        if (
+            chat_request.chat_type == ChatType.CLIENT_VISIT_GUIDE
+            and chat_request.chat_mode in _VISIT_PREP_FEATURE_MODES
+        ):
+            if needs_visit_prep_quota:
+                _check_visit_prep_quota_or_raise()
+            else:
+                _raise_if_scenario_disabled(BillingScenario.ACCOUNT_VISIT_PREP_GUIDE)
         incoming_cookie = request.headers.get("cookie")
         if incoming_cookie:
             logger.debug(f"Incoming cookie: {incoming_cookie}")

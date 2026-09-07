@@ -9,6 +9,11 @@ def _patch_quota(monkeypatch, *, enabled: bool, allow: bool, result: tuple[bool,
     monkeypatch.setattr(settings, "CRM_BILLING_ENABLED", enabled)
     monkeypatch.setattr(settings, "CRM_BILLING_ALLOW_INSUFFICIENT_QUOTA", allow)
     monkeypatch.setattr(
+        facade,
+        "get_sku_enabled_map",
+        lambda: {facade._SCENARIO_MODULE_KEY[scenario]: True for scenario in BillingScenario},
+    )
+    monkeypatch.setattr(
         facade.feishu_billing_service,
         "check_quota",
         lambda ai_module_key=None: result,
@@ -53,3 +58,42 @@ def test_check_billing_quota_for_scenarios_continues_when_allow_insufficient(mon
     )
     assert ok is True
     assert "额度不足" in msg
+
+
+def test_check_billing_quota_continues_when_query_raises(monkeypatch):
+    monkeypatch.setattr(settings, "CRM_BILLING_ENABLED", True)
+    monkeypatch.setattr(settings, "CRM_BILLING_ALLOW_INSUFFICIENT_QUOTA", False)
+    monkeypatch.setattr(
+        facade,
+        "get_sku_enabled_map",
+        lambda: {facade._SCENARIO_MODULE_KEY[scenario]: True for scenario in BillingScenario},
+    )
+    monkeypatch.setattr(
+        facade.feishu_billing_service,
+        "check_quota",
+        lambda ai_module_key=None: (_ for _ in ()).throw(RuntimeError("billing down")),
+    )
+    ok, msg, quota = facade.check_billing_quota(BillingScenario.SIA_CHAT)
+    assert ok is True
+    assert quota == 0
+    assert "treated as sufficient" in msg
+
+
+def test_check_billing_quota_for_scenarios_continues_when_query_raises(monkeypatch):
+    monkeypatch.setattr(settings, "CRM_BILLING_ENABLED", True)
+    monkeypatch.setattr(settings, "CRM_BILLING_ALLOW_INSUFFICIENT_QUOTA", False)
+    monkeypatch.setattr(
+        facade,
+        "get_sku_enabled_map",
+        lambda: {facade._SCENARIO_MODULE_KEY[scenario]: True for scenario in BillingScenario},
+    )
+    monkeypatch.setattr(
+        facade.feishu_billing_service,
+        "check_quota",
+        lambda ai_module_key=None: (_ for _ in ()).throw(RuntimeError("billing down")),
+    )
+    ok, msg, _ = facade.check_billing_quota_for_scenarios(
+        [BillingScenario.CRM_SALES_PERSONAL_DAILY]
+    )
+    assert ok is True
+    assert "treated as sufficient" in msg

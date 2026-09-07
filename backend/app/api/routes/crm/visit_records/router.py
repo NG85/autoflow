@@ -57,7 +57,13 @@ from app.services.visit_record_card_push_status import (
 )
 from app.tasks.dingtalk_transcribe import process_dingtalk_transcribe_visit_record
 from app.tasks.link_visit_enrichment import process_link_visit_enrichment
-from app.services.feishu_billing_facade import BillingScenario, check_billing_quota
+from app.services.feishu_billing_facade import (
+    BillingScenario,
+    check_billing_quota,
+    is_scenario_enabled,
+    raise_feature_not_enabled,
+    raise_insufficient_quota,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -160,16 +166,14 @@ def create_visit_record(
     支持简易版和完整版表单
     """
     try:
-        try:
-            quota_ok, quota_message, quota_value = check_billing_quota(
-                BillingScenario.VISIT_RECORD
-            )
-        except Exception as exc:
-            logger.error("Failed to query billing quota before visit record: %s", exc)
-            return {"code": 502, "message": "计费服务异常，请稍后重试", "data": {}}
+        if not is_scenario_enabled(BillingScenario.VISIT_RECORD):
+            raise_feature_not_enabled(BillingScenario.VISIT_RECORD)
+        quota_ok, quota_message, quota_value = check_billing_quota(
+            BillingScenario.VISIT_RECORD
+        )
         if not quota_ok:
             logger.warning("Visit record blocked by quota check: quota=%s msg=%s", quota_value, quota_message)
-            return {"code": 400, "message": quota_message, "data": {}}
+            raise_insufficient_quota(quota_message)
 
         if not record.visit_type:
             record.visit_type = "form"

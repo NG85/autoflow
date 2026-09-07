@@ -305,8 +305,9 @@ class Settings(BaseSettings):
     EMBEDDING_THRESHOLD: float = 0.92
 
     CRM_ENABLED: bool = False
+    # 租户是否使用 AI 计费包。False：不拦功能、不查额度（本地/联调）。
     CRM_BILLING_ENABLED: bool = False
-    # True：额度预检失败仍放行业务（仍会查额度并打日志；用量上报照常）
+    # 欠费/额度不足是否放行：仍会查额度并打日志，用量上报照常。
     CRM_BILLING_ALLOW_INSUFFICIENT_QUOTA: bool = False
     # CRM daily task configuration
     CRM_DAILY_TASK_ENABLED: bool = False
