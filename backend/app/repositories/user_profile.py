@@ -1,7 +1,7 @@
 from typing import Optional, List, Dict
 from uuid import UUID
 from sqlmodel import Session, select, distinct
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import selectinload
 from app.models.user_profile import UserProfile
 from app.models.user_oauth_account import UserOAuthAccount
@@ -15,6 +15,43 @@ class UserProfileRepo(BaseRepo):
         """根据用户ID获取档案"""
         query = select(UserProfile).options(selectinload(UserProfile.oauth_users)).where(UserProfile.user_id == user_id)
         return db_session.exec(query).first()
+
+    def get_inactive_owner_ids(self, db_session: Session, owner_ids: List[str]) -> set[str]:
+        """返回 owner_ids 中对应 user_profiles.is_active=false 的 user_id / crm_user_id。"""
+        unique_ids = list(dict.fromkeys(str(oid).strip() for oid in owner_ids if oid and str(oid).strip()))
+        if not unique_ids:
+            return set()
+
+        uuids: List[UUID] = []
+        crm_ids: List[str] = []
+        for oid in unique_ids:
+            try:
+                uuids.append(UUID(oid))
+            except (ValueError, TypeError):
+                crm_ids.append(oid)
+
+        conditions = []
+        if uuids:
+            conditions.append(UserProfile.user_id.in_(uuids))
+        if crm_ids:
+            conditions.append(UserProfile.crm_user_id.in_(crm_ids))
+        if not conditions:
+            return set()
+
+        rows = db_session.exec(
+            select(UserProfile.user_id, UserProfile.crm_user_id).where(
+                UserProfile.is_active == False,  # noqa: E712
+                or_(*conditions) if len(conditions) > 1 else conditions[0],
+            )
+        ).all()
+
+        inactive: set[str] = set()
+        for user_id, crm_user_id in rows:
+            if user_id:
+                inactive.add(str(user_id))
+            if crm_user_id:
+                inactive.add(str(crm_user_id))
+        return inactive
 
     def get_active_open_ids(self, db_session: Session, open_ids: List[str]) -> set[str]:
         """返回 open_id 在 oauth_accounts 中存在且对应 user_profiles.is_active 的集合。"""

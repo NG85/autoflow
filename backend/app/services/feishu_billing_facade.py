@@ -1,15 +1,28 @@
 """
 飞书计费统一门面：开关、trace 策略、上报与失败日志集中在一处。
-新增计费接入点：在 BillingScenario 增加枚举项并在此注册 ai_module_key / trace 类型即可。
+
+开通判断顺序：
+1. 租户是否使用 AI 计费包（CRM_BILLING_ENABLED）
+2. 该 SKU 是否启用（读 apt_sell_billing.status：0/NULL=在用，非0=停用；缺行或读表失败视为默认开通）
+3. 欠费是否放行（CRM_BILLING_ALLOW_INSUFFICIENT_QUOTA）；查额度失败只记错误并视为充足
+
+新增计费接入点：在 BillingScenario 增加枚举项并注册默认 ai_module_key / trace 类型。
 """
 
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from enum import Enum
 from typing import Any, Optional
 
+from fastapi import HTTPException
+from sqlmodel import Session, select
+
 from app.core.config import settings
+from app.core.db import engine
+from app.models.apt_sell_billing import AptSellBilling
 from app.services.feishu_billing_service import (
     ACCOUNT_VISIT_PREP_GUIDE_AI_MODULE_KEY,
     SALES_PERSONAL_DAILY_REPORT_AI_MODULE_KEY,
@@ -56,6 +69,193 @@ _RANDOM_TRACE_PREFIX: dict[BillingScenario, str] = {
     BillingScenario.REVIEW_SIA_CHAT: "review-sia-chat",
 }
 
+FEATURE_NOT_ENABLED_MESSAGE = "该功能尚未开通，请联系管理员"
+BILLING_CODE_FEATURE_NOT_ENABLED = "FEATURE_NOT_ENABLED"
+BILLING_CODE_INSUFFICIENT_FUNDS = "INSUFFICIENT_FUNDS"
+
+_CACHE_TTL_SECONDS = 5.0
+_cache_lock = threading.Lock()
+_sku_enabled_cache: Optional[dict[str, bool]] = None
+_cache_at: float = 0.0
+
+
+def invalidate_sku_enabled_cache() -> None:
+    global _sku_enabled_cache, _cache_at
+    with _cache_lock:
+        _sku_enabled_cache = None
+        _cache_at = 0.0
+
+
+def _is_unknown_column_error(exc: BaseException) -> bool:
+    text = str(exc)
+    return "1054" in text or "Unknown column" in text
+
+
+def _sku_status_is_active(status: Any) -> bool:
+    """0 或 NULL 为在用；非 0 为停用。"""
+    if status is None:
+        return True
+    try:
+        return int(status) == 0
+    except (TypeError, ValueError):
+        return True
+
+
+def _merge_sku_status_rows(rows: list[tuple[Any, Any]]) -> dict[str, bool]:
+    result: dict[str, bool] = {}
+    for key, status in rows:
+        key_s = str(key or "").strip()
+        if not key_s:
+            continue
+        result[key_s] = result.get(key_s, False) or _sku_status_is_active(status)
+    return result
+
+
+def load_sku_enabled_map() -> dict[str, bool]:
+    """
+    从 apt_sell_billing 读取 ai_module_key -> 是否在用。
+    缺表/读失败返回空 dict，调用方按缺行处理（默认开通）。
+    status 列尚未上线时，已有 SKU 行暂按在用处理。
+    """
+    try:
+        with Session(engine, expire_on_commit=False) as session:
+            try:
+                rows = session.exec(
+                    select(AptSellBilling.ai_module_key, AptSellBilling.status)
+                ).all()
+            except Exception as col_exc:
+                if not _is_unknown_column_error(col_exc):
+                    raise
+                logger.warning(
+                    "apt_sell_billing.status is missing, treat existing SKUs as in use: %s",
+                    col_exc,
+                )
+                session.rollback()
+                rows = [
+                    (key, 0)
+                    for key in session.exec(select(AptSellBilling.ai_module_key)).all()
+                ]
+            return _merge_sku_status_rows(list(rows))
+    except Exception as exc:
+        logger.warning(
+            "Failed to load apt_sell_billing SKU status, default all SKUs to enabled: %s",
+            exc,
+        )
+        return {}
+
+
+def get_sku_enabled_map() -> dict[str, bool]:
+    global _sku_enabled_cache, _cache_at
+    now = time.time()
+    with _cache_lock:
+        if _sku_enabled_cache is not None and (now - _cache_at) < _CACHE_TTL_SECONDS:
+            return _sku_enabled_cache
+    loaded = load_sku_enabled_map()
+    with _cache_lock:
+        _sku_enabled_cache = loaded
+        _cache_at = time.time()
+        return loaded
+
+
+def is_sku_enabled(ai_module_key: str) -> bool:
+    key = (ai_module_key or "").strip()
+    if not key:
+        return False
+    return bool(get_sku_enabled_map().get(key, True))
+
+
+def is_scenario_enabled(scenario: BillingScenario) -> bool:
+    """
+    计费点是否开通对应功能。
+
+    - 租户未使用 AI 计费包（CRM_BILLING_ENABLED=False）：不拦功能。
+    - 否则读 apt_sell_billing.status；缺行或读表失败视为默认开通，非 0 才关闭。
+      同一 ai_module_key 的场景共用同一 SKU 状态。
+    """
+    if not settings.CRM_BILLING_ENABLED:
+        return True
+    return is_sku_enabled(module_key_for(scenario))
+
+
+def module_key_for(scenario: BillingScenario) -> str:
+    """额度查询 / 用量上报 / SKU 启用状态所用的 ai_module_key。"""
+    return _SCENARIO_MODULE_KEY[scenario]
+
+
+class BillingClientError(HTTPException):
+    """HTTP 402/403，body 为结构化业务错误（code/message），不依赖 HTTP 状态码区分场景。"""
+
+    def __init__(self, status_code: int, body: dict[str, Any]):
+        self.body = body
+        super().__init__(status_code=status_code, detail=body)
+
+
+def register_billing_exception_handlers(app: Any) -> None:
+    from fastapi.responses import JSONResponse
+
+    @app.exception_handler(BillingClientError)
+    async def _billing_client_error_handler(_request: Any, exc: BillingClientError):
+        return JSONResponse(status_code=exc.status_code, content=exc.body)
+
+
+def billing_client_error_body(
+    code: str,
+    message: str,
+    *,
+    feature: Optional[str] = None,
+) -> dict[str, Any]:
+    body: dict[str, Any] = {"code": code, "message": message}
+    if feature:
+        body["feature"] = feature
+    return body
+
+
+def raise_feature_not_enabled(scenario: BillingScenario) -> None:
+    raise BillingClientError(
+        403,
+        billing_client_error_body(
+            BILLING_CODE_FEATURE_NOT_ENABLED,
+            FEATURE_NOT_ENABLED_MESSAGE,
+            feature=scenario.value,
+        ),
+    )
+
+
+def raise_insufficient_quota(message: str) -> None:
+    raise BillingClientError(
+        402,
+        billing_client_error_body(BILLING_CODE_INSUFFICIENT_FUNDS, message),
+    )
+
+
+def _query_quota(ai_module_key: Optional[str] = None) -> tuple[bool, str, int]:
+    """
+    查额度。查询失败只记错误并视为充足；额度不足仍返回 False
+    （可由 CRM_BILLING_ALLOW_INSUFFICIENT_QUOTA 放行）。
+    """
+    try:
+        ok, msg, quota = feishu_billing_service.check_quota(ai_module_key=ai_module_key)
+    except Exception as exc:
+        logger.error(
+            "Billing quota check failed, treat as sufficient and continue: %s",
+            exc,
+            exc_info=True,
+        )
+        return True, "quota check failed, treated as sufficient", 0
+    return _pass_quota_if_allowed(ok, msg, quota)
+
+
+def _pass_quota_if_allowed(ok: bool, msg: str, quota: int) -> tuple[bool, str, int]:
+    """CRM_BILLING_ALLOW_INSUFFICIENT_QUOTA 开启时，额度不足仍视为通过。"""
+    if ok or not settings.CRM_BILLING_ALLOW_INSUFFICIENT_QUOTA:
+        return ok, msg, quota
+    logger.warning(
+        "Billing quota insufficient but CRM_BILLING_ALLOW_INSUFFICIENT_QUOTA is enabled, continue. msg=%s quota=%s",
+        msg,
+        quota,
+    )
+    return True, msg, quota
+
 
 def check_billing_quota(
     scenario: Optional[BillingScenario] = None,
@@ -63,17 +263,21 @@ def check_billing_quota(
     ai_module_key: Optional[str] = None,
 ) -> tuple[bool, str, int]:
     """
-    查询租户计费额度。CRM_BILLING_ENABLED 为 False 时不请求远端，返回 (True, 'billing disabled', 0)。
+    查询租户计费额度。租户未使用 AI 计费包时不请求远端，返回 (True, 'billing disabled', 0)。
 
-    优先使用 ``ai_module_key``；未传时由 ``scenario`` 映射到对应功能点，
+    优先使用 ``ai_module_key``；未传时由 ``scenario`` 映射到对应 SKU，
     以便远端按该功能 ``points`` 校验剩余额度是否充足。
+    欠费放行（CRM_BILLING_ALLOW_INSUFFICIENT_QUOTA）为 True 时，额度不足仍返回通过。
+    查询失败只记错误并视为额度充足。
     """
     if not settings.CRM_BILLING_ENABLED:
         return True, "billing disabled", 0
+    if scenario is not None and not is_scenario_enabled(scenario):
+        return False, FEATURE_NOT_ENABLED_MESSAGE, 0
     module_key = ai_module_key
     if not module_key and scenario is not None:
-        module_key = _SCENARIO_MODULE_KEY[scenario]
-    return feishu_billing_service.check_quota(ai_module_key=module_key)
+        module_key = module_key_for(scenario)
+    return _query_quota(module_key)
 
 
 def check_billing_quota_for_scenarios(
@@ -82,22 +286,23 @@ def check_billing_quota_for_scenarios(
     """
     按多个场景依次查额度（同一 ``ai_module_key`` 只查一次）。
     任一不足则返回失败；全部通过则返回最后一次成功结果。
+    CRM_BILLING_ALLOW_INSUFFICIENT_QUOTA 为 True 时，额度不足仍返回通过。
+    查询失败只记错误并视为额度充足。
     """
     if not settings.CRM_BILLING_ENABLED:
         return True, "billing disabled", 0
-    if not scenarios:
-        return feishu_billing_service.check_quota()
+    enabled = [scenario for scenario in scenarios if is_scenario_enabled(scenario)]
+    if not enabled:
+        return False, FEATURE_NOT_ENABLED_MESSAGE, 0
 
     seen_keys: set[str] = set()
     last_ok, last_msg, last_quota = True, "租户额度充足", 0
-    for scenario in scenarios:
-        module_key = _SCENARIO_MODULE_KEY[scenario]
+    for scenario in enabled:
+        module_key = module_key_for(scenario)
         if module_key in seen_keys:
             continue
         seen_keys.add(module_key)
-        last_ok, last_msg, last_quota = feishu_billing_service.check_quota(
-            ai_module_key=module_key
-        )
+        last_ok, last_msg, last_quota = _query_quota(module_key)
         if not last_ok:
             return last_ok, last_msg, last_quota
     return last_ok, last_msg, last_quota
@@ -122,8 +327,14 @@ def report_billing_usage(
     """
     if not settings.CRM_BILLING_ENABLED:
         return True, 0, "billing disabled"
+    if not is_scenario_enabled(scenario):
+        logger.warning(
+            "Skip billing report because scenario is disabled. scenario=%s",
+            scenario.value,
+        )
+        return True, 0, "scenario disabled"
 
-    module_key = _SCENARIO_MODULE_KEY[scenario]
+    module_key = module_key_for(scenario)
     if scenario in _RANDOM_TRACE_PREFIX:
         prefix = _RANDOM_TRACE_PREFIX[scenario]
         trace_id = feishu_billing_service.new_trace_id(prefix=prefix)

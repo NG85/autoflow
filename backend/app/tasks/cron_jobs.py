@@ -34,9 +34,11 @@ from app.services.writeback_window import (
     resolve_writeback_window,
 )
 from app.services.feishu_billing_facade import (
+    FEATURE_NOT_ENABLED_MESSAGE,
     BillingScenario,
     check_billing_quota,
     check_billing_quota_for_scenarios,
+    is_scenario_enabled,
     report_billing_usage,
 )
 from app.tasks.knowledge_base import import_documents_from_kb_datasource
@@ -51,16 +53,12 @@ def _check_billing_quota_for_task(
     *,
     scenarios: list[BillingScenario] | None = None,
 ) -> tuple[bool, str]:
-    try:
-        if scenarios:
-            quota_ok, quota_message, quota_value = check_billing_quota_for_scenarios(
-                scenarios
-            )
-        else:
-            quota_ok, quota_message, quota_value = check_billing_quota(scenario)
-    except Exception as exc:
-        logger.error("Billing quota check failed before task=%s: %s", task_name, exc)
-        return False, "计费服务异常，请稍后重试"
+    if scenarios:
+        quota_ok, quota_message, quota_value = check_billing_quota_for_scenarios(
+            scenarios
+        )
+    else:
+        quota_ok, quota_message, quota_value = check_billing_quota(scenario)
     if not quota_ok:
         logger.warning(
             "Task blocked by quota check, task=%s quota=%s msg=%s",
@@ -72,19 +70,34 @@ def _check_billing_quota_for_task(
     return True, "ok"
 
 
-def _daily_statistics_quota_scenarios(report_type: Optional[str]) -> list[BillingScenario]:
-    """按日报 report_type 映射额度预检场景（同一 module_key 会去重）。"""
-    if report_type == "sales":
-        return [BillingScenario.CRM_SALES_PERSONAL_DAILY]
-    if report_type == "department":
-        return [BillingScenario.CRM_SALES_TEAM_DEPARTMENT_DAILY]
-    if report_type == "company":
-        return [BillingScenario.CRM_SALES_TEAM_COMPANY_DAILY]
-    # 不传 report_type 时跑全部：个人 + 团队（部门/公司同 module_key）
-    return [
-        BillingScenario.CRM_SALES_PERSONAL_DAILY,
-        BillingScenario.CRM_SALES_TEAM_DEPARTMENT_DAILY,
-    ]
+_DAILY_REPORT_SCENARIOS: dict[str, BillingScenario] = {
+    "sales": BillingScenario.CRM_SALES_PERSONAL_DAILY,
+    "department": BillingScenario.CRM_SALES_TEAM_DEPARTMENT_DAILY,
+    "company": BillingScenario.CRM_SALES_TEAM_COMPANY_DAILY,
+}
+
+
+def _task_skipped_because_disabled(task_name: str, **extra: Any) -> dict[str, Any]:
+    logger.warning(
+        "Task skipped because billing scenario is disabled, task=%s extra=%s",
+        task_name,
+        extra,
+    )
+    return {
+        "success": True,
+        "message": FEATURE_NOT_ENABLED_MESSAGE,
+        "skipped": True,
+        "data": {},
+        **extra,
+    }
+
+
+def _daily_report_types_to_run(report_type: Optional[str]) -> list[str]:
+    if report_type:
+        types = [report_type]
+    else:
+        types = ["sales", "department", "company"]
+    return [t for t in types if is_scenario_enabled(_DAILY_REPORT_SCENARIOS[t])]
 
 
 def _report_task_usage_once(scenario: BillingScenario, trace_key: str, review_detail: str) -> None:
@@ -194,9 +207,21 @@ def generate_crm_daily_statistics(self, target_date_str=None, report_type=None):
     
     """
     try:
+        valid_report_types = {"sales", "department", "company"}
+        if report_type is not None and report_type not in valid_report_types:
+            raise ValueError(f"invalid report_type={report_type}, valid={sorted(valid_report_types)}")
+
+        types_to_run = _daily_report_types_to_run(report_type)
+        if not types_to_run:
+            return _task_skipped_because_disabled(
+                "generate_crm_daily_statistics",
+                report_type=report_type,
+                triggered_types=[],
+            )
+
         quota_ok, quota_msg = _check_billing_quota_for_task(
             "generate_crm_daily_statistics",
-            scenarios=_daily_statistics_quota_scenarios(report_type),
+            scenarios=[_DAILY_REPORT_SCENARIOS[t] for t in types_to_run],
         )
         if not quota_ok:
             return {"success": False, "message": quota_msg, "data": {}}
@@ -215,29 +240,25 @@ def generate_crm_daily_statistics(self, target_date_str=None, report_type=None):
             logger.info(f"开始执行CRM日报数据生成任务，默认处理昨天: {target_date}")
         
         with Session(engine) as session:
-            valid_report_types = {"sales", "department", "company"}
-            if report_type is not None and report_type not in valid_report_types:
-                raise ValueError(f"invalid report_type={report_type}, valid={sorted(valid_report_types)}")
-
             triggered_types: list[str] = []
             sales_count = 0
 
             # 1. 生成并推送销售个人日报（仅在 sales_count > 0 时推送个人卡片）
-            if not report_type or report_type == "sales":
+            if "sales" in types_to_run:
                 sales_count = crm_statistics_service.generate_sales_daily_statistics(session, target_date)
                 triggered_types.append("sales")
             
             # 2. 生成并推送团队（部门）日报
             # 即使没有团队日报数据，也会为所有有负责人的部门生成日报并推送
             # （无跟进时发短文本，有跟进时发完整卡片）
-            if not report_type or report_type == "department":
+            if "department" in types_to_run:
                 crm_statistics_service._generate_and_send_department_daily_reports(session, target_date)
                 triggered_types.append("department")
             
             # 3. 生成并推送公司日报
             #    - 基于 crm_department_daily_summary 中的公司级汇总数据
             #    - 无跟进时发短文本，有跟进时发完整卡片
-            if not report_type or report_type == "company":
+            if "company" in types_to_run:
                 crm_statistics_service._generate_and_send_company_daily_report(session, target_date)
                 triggered_types.append("company")
             
@@ -291,6 +312,8 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
     4. 推送公司周报给管理团队
     """
     try:
+        if not is_scenario_enabled(BillingScenario.CRM_TEAM_WEEKLY_REPORT):
+            return _task_skipped_because_disabled("generate_crm_weekly_report")
         quota_ok, quota_msg = _check_billing_quota_for_task(
             "generate_crm_weekly_report",
             BillingScenario.CRM_TEAM_WEEKLY_REPORT,
@@ -922,6 +945,8 @@ def generate_crm_weekly_followup_summary(
     )
 
     try:
+        if not is_scenario_enabled(BillingScenario.CRM_WEEKLY_FOLLOWUP_SUMMARY):
+            return _task_skipped_because_disabled("generate_crm_weekly_followup_summary")
         quota_ok, quota_msg = _check_billing_quota_for_task(
             "generate_crm_weekly_followup_summary",
             BillingScenario.CRM_WEEKLY_FOLLOWUP_SUMMARY,

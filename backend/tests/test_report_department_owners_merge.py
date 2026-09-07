@@ -47,9 +47,13 @@ def test_oauth_base_owners_merged_with_same_day_recorders():
                 "get_sales_daily_statistics",
                 return_value=sales_stats,
             ):
-                people, alias = service._resolve_department_owners_for_todo_stats(
-                    session, DEPT, stat_date=date(2026, 7, 20)
-                )
+                with patch(
+                    "app.repositories.user_profile.UserProfileRepo.get_inactive_owner_ids",
+                    return_value=set(),
+                ):
+                    people, alias = service._resolve_department_owners_for_todo_stats(
+                        session, DEPT, stat_date=date(2026, 7, 20)
+                    )
 
     # 基础名册 ∪ 本部门当日 recorder，去重，忽略他部门
     assert set(people.keys()) == {str(LEADER), str(SUB), str(NEW)}
@@ -76,10 +80,57 @@ def test_oauth_hit_without_stat_date_keeps_base_only():
             with patch.object(
                 CRMStatisticsService, "get_sales_daily_statistics"
             ) as get_stats:
-                people, _ = service._resolve_department_owners_for_todo_stats(
-                    session, DEPT, stat_date=None
-                )
+                with patch(
+                    "app.repositories.user_profile.UserProfileRepo.get_inactive_owner_ids",
+                    return_value=set(),
+                ):
+                    people, _ = service._resolve_department_owners_for_todo_stats(
+                        session, DEPT, stat_date=None
+                    )
 
     # 无 stat_date 时不并入 recorder，也不查询当日统计
     assert set(people.keys()) == {str(LEADER)}
     get_stats.assert_not_called()
+
+
+def test_resolve_excludes_inactive_accounts_after_merge():
+    service = CRMStatisticsService()
+    session = MagicMock()
+    session.info = {}
+
+    inactive = UUID("990e8400-e29b-41d4-a716-446655440004")
+    base_people = {str(LEADER): "王经理", str(inactive): "停用"}
+    base_alias = {
+        str(LEADER): str(LEADER),
+        str(inactive): str(inactive),
+        "crm-inactive": str(inactive),
+    }
+    sales_stats = [
+        {"department": DEPT, "recorder_id": str(NEW), "recorder": "新人"},
+        {"department": DEPT, "recorder_id": str(inactive), "recorder": "停用"},
+    ]
+
+    with patch("app.services.crm_statistics_service.settings") as mock_settings:
+        mock_settings.REPORT_OAUTH_SCOPE_ENABLED = True
+        with patch(
+            "app.permissions.report_scope_service.report_scope_service.resolve_team_owners",
+            return_value=(base_people, base_alias),
+        ):
+            with patch.object(
+                CRMStatisticsService,
+                "get_sales_daily_statistics",
+                return_value=sales_stats,
+            ):
+                with patch(
+                    "app.repositories.user_profile.UserProfileRepo.get_inactive_owner_ids",
+                    return_value={str(inactive), "crm-inactive"},
+                ):
+                    people, alias = service._resolve_department_owners_for_todo_stats(
+                        session, DEPT, stat_date=date(2026, 7, 20)
+                    )
+
+    assert set(people.keys()) == {str(LEADER), str(NEW)}
+    assert str(inactive) not in people
+    assert str(inactive) not in alias
+    assert "crm-inactive" not in alias
+    assert alias[str(NEW)] == str(NEW)

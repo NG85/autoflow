@@ -295,7 +295,7 @@ class Settings(BaseSettings):
     ALDEBARAN_MESSAGE_SOURCE_SYSTEM: str = "crm"
     ALDEBARAN_VISIT_RECORD_MESSAGE_TYPE: str = "crm.visit_record.saved"
     ALDEBARAN_VISIT_RECORD_REVISED_MESSAGE_TYPE: str = "crm.visit_record.revised"
-    ALDEBARAN_CONTACT_CREATED_MESSAGE_TYPE: str = "crm.contact.created"
+    ALDEBARAN_CONTACT_CREATED_MESSAGE_TYPE: str = "local.contact.saved"
     ALDEBARAN_MESSAGE_RETRY_ATTEMPTS: int = 3
     ALDEBARAN_MESSAGE_RETRY_BASE_SECONDS: float = 0.5
     # 关闭时走本地空任务推卡降级（便于本地/联调）
@@ -305,7 +305,10 @@ class Settings(BaseSettings):
     EMBEDDING_THRESHOLD: float = 0.92
 
     CRM_ENABLED: bool = False
+    # 租户是否使用 AI 计费包。False：不拦功能、不查额度（本地/联调）。
     CRM_BILLING_ENABLED: bool = False
+    # 欠费/额度不足是否放行：仍会查额度并打日志，用量上报照常。
+    CRM_BILLING_ALLOW_INSUFFICIENT_QUOTA: bool = False
     # CRM daily task configuration
     CRM_DAILY_TASK_ENABLED: bool = False
     CRM_DAILY_KB_ID: int = 2
