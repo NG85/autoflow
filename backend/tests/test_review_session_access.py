@@ -33,6 +33,26 @@ def _linked_crm_disabled_scope() -> dict:
     return {"filters": [{"source": "linked_crm", "enabled": False}]}
 
 
+def _linked_crm_enabled_scope() -> dict:
+    """linked_crm 打开仍只表示关联 CRM，不能抬成部门 session 列表。"""
+    return {
+        "filters": [
+            {"source": "self_owner", "enabled": True},
+            {"source": "linked_crm", "enabled": True},
+        ]
+    }
+
+
+def _sales_self_owner_scope() -> dict:
+    """一线销售矩阵：SELF_OWNER + linked_crm 关闭，不可抬升为部门列表。"""
+    return {
+        "filters": [
+            {"source": "self_owner", "enabled": True},
+            {"source": "linked_crm", "enabled": False},
+        ]
+    }
+
+
 def _global_scope() -> dict:
     return {"filters": [{"source": "global", "enabled": True}]}
 
@@ -206,6 +226,64 @@ def test_resolve_review_session_view_scope_department_viewer(
     assert scope.user_department_id == DEPT_ID
     assert scope.subtree_department_ids == (DEPT_ID, "dept-sales-east")
     assert scope.list_filter_mode == "department"
+
+
+@patch("app.policies.review_session_access.department_mirror_repo")
+@patch("app.policies.review_session_access.user_department_relation_repo")
+@patch("app.policies.review_session_access.user_profile_repo")
+@patch("app.policies.review_session_access.oauth_client")
+def test_resolve_review_session_view_scope_self_owner_with_department_is_attendee(
+    mock_oauth,
+    mock_user_profile_repo,
+    mock_user_dept_repo,
+    mock_dept_mirror_repo,
+):
+    """SALES：有 view + 有主部门，但 data-scope=SELF_OWNER → 仅参会，不能看部门下全部 session。"""
+    db_session = MagicMock()
+    mock_oauth.check_function_permission.return_value = _allow_view_check()
+    mock_oauth.get_data_scope.return_value = _sales_self_owner_scope()
+    mock_user_profile_repo.get_crm_user_id_by_user_id.return_value = "crm-1"
+    mock_user_dept_repo.get_primary_department_by_user_ids.return_value = {
+        str(USER_ID): DEPT_ID,
+    }
+
+    scope = resolve_review_session_view_scope(db_session, USER_ID)
+
+    assert scope.has_viewer_permission is True
+    assert scope.is_company_admin is False
+    assert scope.user_department_id == DEPT_ID
+    assert scope.subtree_department_ids == ()
+    assert scope.list_filter_mode == "attendee"
+    assert scope.can_access_session_as_viewer(DEPT_ID) is False
+    mock_dept_mirror_repo.get_subtree_department_ids.assert_not_called()
+
+
+@patch("app.policies.review_session_access.department_mirror_repo")
+@patch("app.policies.review_session_access.user_department_relation_repo")
+@patch("app.policies.review_session_access.user_profile_repo")
+@patch("app.policies.review_session_access.oauth_client")
+def test_resolve_review_session_view_scope_linked_crm_enabled_is_still_attendee(
+    mock_oauth,
+    mock_user_profile_repo,
+    mock_user_dept_repo,
+    mock_dept_mirror_repo,
+):
+    """SALES：linked_crm=true + 有主部门 → 仍仅参会，不能看部门下全部 session。"""
+    db_session = MagicMock()
+    mock_oauth.check_function_permission.return_value = _allow_view_check()
+    mock_oauth.get_data_scope.return_value = _linked_crm_enabled_scope()
+    mock_user_profile_repo.get_crm_user_id_by_user_id.return_value = "crm-1"
+    mock_user_dept_repo.get_primary_department_by_user_ids.return_value = {
+        str(USER_ID): DEPT_ID,
+    }
+
+    scope = resolve_review_session_view_scope(db_session, USER_ID)
+
+    assert scope.is_company_admin is False
+    assert scope.list_filter_mode == "attendee"
+    assert scope.subtree_department_ids == ()
+    assert scope.can_access_session_as_viewer(DEPT_ID) is False
+    mock_dept_mirror_repo.get_subtree_department_ids.assert_not_called()
 
 
 @patch("app.policies.review_session_access.department_mirror_repo")

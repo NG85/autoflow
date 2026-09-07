@@ -260,7 +260,7 @@ def query_my_review_opp_branch_snapshots(
     """
     商机快照分页列表（不分组）。
     - 返回结构与 ``snapshot-group-data`` 一致，只是没有 ``group_by`` / ``group_key``；另含 ``forecast_type_amount_totals``、``forecast_amount_total``、``closed_won_amount``（当前筛选条件下全量金额、已成单金额，以及排除已成单后的按预测类型拆分）。
-    - session 访问：须为参会人，或有 ``biz:weekly_decision:view`` 且该 session 落于可见部门范围（``biz_weekly_decision`` data-scope global 或无部门→全公司；有主部门→本部门及下属）。
+    - session 访问：须为参会人，或有 ``biz:weekly_decision:view`` 且该 session 落于 data-scope 可见范围（global→全公司；``org_team_sub`` 等团队范围→本部门及下属；``self_owner`` 仅参会）。
     - session 内数据：普通参会成员（非 leader）仅本人；负责人看全部；非参会人以 viewer 身份进入且在可见范围内时看全部参会成员。支持筛选、排序、字段级别；``snapshot_filters`` 支持按客户筛选（``account_ids``/``account_names``，或别名 ``customer_ids``/``customer_names``）；``sorts`` 未传或空时默认：负责人 → 预测类型 → 金额（降序）。
     - 当 ``snapshot_filters.opportunity_ids`` 非空时，自动切到主表 + T2 baseline 口径查询；否则保持原 cache 可编辑口径。
     - 排序：请求体 ``sorts`` 为按优先级排列的多字段排序。
@@ -599,7 +599,7 @@ def query_my_latest_review_session(
 ) -> MyLatestReviewSessionOut:
     """
     当前用户参与的、汇报日最新的一场 review 的 session id；没有则为 null。
-    有 ``biz:weekly_decision:view`` 时：``biz_weekly_decision`` data-scope global 或无部门信息看全公司；有所在部门则看本部门及下属部门。
+    可见范围由 ``biz_weekly_decision`` data-scope 决定：global 看全公司；``org_team_sub`` 等团队范围看本部门及下属；``self_owner`` 仅本人参会。
     """
     scope_cache: Dict[str, ReviewSessionViewScope] = {}
     scope = get_cached_review_session_view_scope(db_session, user, scope_cache)
@@ -623,7 +623,7 @@ def query_my_review_session_history(
 ) -> ReviewSessionHistoryListOut:
     """
     当前用户参与过的 review 列表（分页），从新到旧。``size`` 最大 200。
-    有 ``biz:weekly_decision:view`` 时：``biz_weekly_decision`` data-scope global 或无部门信息看全公司；有所在部门则看本部门及下属部门。
+    可见范围由 ``biz_weekly_decision`` data-scope 决定：global 看全公司；``org_team_sub`` 等团队范围看本部门及下属；``self_owner`` 仅本人参会。
     """
     page = max(int(page or 1), 1)
     size = max(min(int(size or 20), 200), 1)
