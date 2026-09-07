@@ -499,6 +499,38 @@ class CRMStatisticsService:
         for oid in ids:
             alias_to_canonical[oid] = canonical
 
+    def _exclude_inactive_department_owners(
+        self,
+        session: Session,
+        people: Dict[str, str],
+        alias_to_canonical: Dict[str, str],
+    ) -> Tuple[Dict[str, str], Dict[str, str]]:
+        """去掉停用账号。仅用于任务按人拆解；拜访/跟进等统计不走这里，保持全量。"""
+        if not people:
+            return people, alias_to_canonical
+
+        from app.repositories.user_profile import UserProfileRepo
+
+        lookup_ids = list(dict.fromkeys([*people.keys(), *alias_to_canonical.keys()]))
+        inactive_ids = UserProfileRepo().get_inactive_owner_ids(session, lookup_ids)
+        if not inactive_ids:
+            return people, alias_to_canonical
+
+        inactive_canonical = {
+            alias_to_canonical.get(owner_id, owner_id) for owner_id in inactive_ids
+        }
+        people = {
+            owner_id: name
+            for owner_id, name in people.items()
+            if owner_id not in inactive_canonical
+        }
+        alias_to_canonical = {
+            alias: canonical
+            for alias, canonical in alias_to_canonical.items()
+            if canonical in people
+        }
+        return people, alias_to_canonical
+
     def _resolve_department_owners_for_todo_stats(
         self,
         session: Session,
@@ -507,7 +539,10 @@ class CRMStatisticsService:
         stat_date: Optional[date] = None,
     ) -> Tuple[Dict[str, str], Dict[str, str]]:
         """
-        解析部门成员用于任务统计。
+        解析部门成员，仅供团队日报任务按人拆解（tasks_by_owner）。
+
+        停用账号（user_profiles.is_active=false）不进入任务明细。
+        拜访/跟进等统计不使用本方法，仍按全量记录聚合，与账号是否停用无关。
 
         Returns:
             (canonical_id -> display_name, alias_owner_id -> canonical_id)
@@ -598,7 +633,9 @@ class CRMStatisticsService:
                     user_id=recorder_id,
                 )
 
-        return people, alias_to_canonical
+        # 只从任务明细里去掉停用账号。sales_stats 在此仅作「有拜访的人补进任务名册」，
+        # 不改拜访统计本身；拜访仍由 get_sales_daily_statistics / 部门汇总表全量计算。
+        return self._exclude_inactive_department_owners(session, people, alias_to_canonical)
 
     @staticmethod
     def _aggregate_todo_counts_by_canonical_owner(
@@ -692,7 +729,8 @@ class CRMStatisticsService:
         团队日报：统计日部门内 crm_todos 任务汇总。
 
         - completed_tasks_count / overdued_tasks_count：团队合计（字符串，供卡片模板）
-        - tasks_by_owner：按成员拆解（owner_name、completed_tasks_count、overdued_tasks_count），按已完成数量降序
+        - tasks_by_owner：按有效账号成员拆解（owner_name、completed_tasks_count、overdued_tasks_count），按已完成数量降序
+        - 停用账号不进入任务明细与任务合计；拜访/跟进等统计不在本方法，保持全量
         """
         people, alias_to_canonical = self._resolve_department_owners_for_todo_stats(
             session,
@@ -748,6 +786,7 @@ class CRMStatisticsService:
         *,
         stat_date: date,
     ) -> Dict[str, Any]:
+        """只补充任务字段。拜访红黄绿、跟进方式等已在部门汇总/拜访查询中全量统计，此处不按停用账号过滤。"""
         department_name = (department_report.get("department_name") or "").strip()
         if not department_name:
             department_report.update(self._empty_department_todo_task_stats())
