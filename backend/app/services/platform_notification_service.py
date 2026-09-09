@@ -156,21 +156,21 @@ _DEFAULT_CARD_TEMPLATES: Dict[str, Dict[str, str]] = {
 # 拜访记录卡片默认模板（与 default_settings.yml 中 notification.visit_record_templates 一致）
 _DEFAULT_VISIT_RECORD_TEMPLATES: Dict[str, Dict[str, str]] = {
     PLATFORM_DINGTALK: {
-        "form_recorder": "c218df2f-4032-4230-ac22-ce3809dbf740.schema",
+        "form_recorder": "4b3879c8-2a04-4044-8c05-571f4cd08c2c.schema",
         "form_leader": "90d4f6e1-0ab4-40f9-9cc2-dd6dde0c41de.schema",
         "link": "4de58997-de70-4fbf-90f7-f5a726613503.schema",
     },
     PLATFORM_FEISHU: {
         "form_simple_recorder": "AAqzQK6iUiK2k",
         "form_simple_leader": "AAqzQKvKzOW1z",
-        "form_complete_recorder": "AAqtEOBYVGBGe",
+        "form_complete_recorder": "AAqTO4Ysc2x10",
         "form_complete_leader": "AAqPWqWmbmOJw",
         "link": "AAqPWq7vsvhlu",
     },
     PLATFORM_LARK: {
         "form_simple_recorder": "AAqzQK6iUiK2k",
         "form_simple_leader": "AAqzQKvKzOW1z",
-        "form_complete_recorder": "AAqtEOBYVGBGe",
+        "form_complete_recorder": "AAqTO4Ysc2x10",
         "form_complete_leader": "AAqPWqWmbmOJw",
         "link": "AAqPWq7vsvhlu",
     },
