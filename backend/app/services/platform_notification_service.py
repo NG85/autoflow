@@ -40,6 +40,7 @@ from app.platforms.notification_types import (
     PERM_WEEKLY_REPORT_COMPANY_RECEIVE,
     PERM_WEEKLY_REPORT_TEAM_RECEIVE,
 )
+from app.utils.im_applink import rewrite_im_content_urls
 
 logger = logging.getLogger(__name__)
 
@@ -222,13 +223,14 @@ class PlatformNotificationService:
                     )
                     return
                 token = feishu_client.get_tenant_access_token(app_id=app_id, app_secret=app_secret)
+                adapted = rewrite_im_content_urls(card_content, target_platform)
 
                 for oid in open_ids:
                     try:
                         feishu_client.send_message(
                             oid,
                             token,
-                            card_content,
+                            adapted,
                             receive_id_type="open_id",
                             msg_type="interactive",
                         )
@@ -241,7 +243,7 @@ class PlatformNotificationService:
                         feishu_client.send_message(
                             cid,
                             token,
-                            card_content,
+                            adapted,
                             receive_id_type="chat_id",
                             msg_type="interactive",
                         )
@@ -264,12 +266,13 @@ class PlatformNotificationService:
                     )
                     return
                 token = dingtalk_client.get_tenant_access_token(app_id=app_id, app_secret=app_secret)
+                adapted = rewrite_im_content_urls(card_content, target_platform)
                 for uid in user_ids:
                     try:
                         dingtalk_client.send_message(
                             uid,
                             token,
-                            card_content,
+                            adapted,
                             receive_id_type="user_id",
                             msg_type="interactive",
                             robot_code=app_id,
@@ -283,7 +286,7 @@ class PlatformNotificationService:
                         dingtalk_client.send_message(
                             cid,
                             token,
-                            card_content,
+                            adapted,
                             receive_id_type="chat_id",
                             msg_type="interactive",
                             robot_code=app_id,
@@ -656,6 +659,7 @@ class PlatformNotificationService:
         receive_id_type: str = "open_id",
         **kwargs,
     ) -> Dict[str, Any]:
+        content = rewrite_im_content_urls(content, platform)
         if platform == PLATFORM_FEISHU:
             return feishu_client.send_message(open_id, token, content, receive_id_type, **kwargs)
         if platform == PLATFORM_LARK:
