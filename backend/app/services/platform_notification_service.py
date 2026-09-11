@@ -2066,15 +2066,20 @@ class PlatformNotificationService:
         *,
         report_date: Any,
         department_name: Optional[str] = None,
+        summary_missing: bool = False,
     ) -> str:
-        """无跟进时的部门/公司日报短文本。"""
+        """部门/公司日报短文本：无跟进 vs 汇总表无记录（任务未写入）。"""
         if hasattr(report_date, "isoformat"):
             date_str = report_date.isoformat()
         else:
             date_str = str(report_date or "").strip() or "--"
+        if summary_missing:
+            suffix = "未查询到当日统计数据，可能是统计任务延迟或异常。"
+        else:
+            suffix = "当日无跟进记录。"
         if department_name:
-            return f"【部门日报】{department_name}（{date_str}）：当日无跟进记录。"
-        return f"【公司日报】（{date_str}）：当日无跟进记录。"
+            return f"【部门日报】{department_name}（{date_str}）：{suffix}"
+        return f"【公司日报】（{date_str}）：{suffix}"
 
     def _send_report_text_to_department_review_groups_or_recipients(
         self,
@@ -2143,7 +2148,7 @@ class PlatformNotificationService:
         department_report_data: Dict[str, Any],
         recipients: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
-        """发送部门日报通知：有跟进发卡片，无跟进发短文本。"""
+        """发送部门日报通知：有跟进发卡片；有汇总记录但全 0 发无跟进短文本；无汇总记录发任务未写入短文本。"""
         from app.services.crm_statistics_service import CRMStatisticsService
 
         department_name = department_report_data.get("department_name")
@@ -2168,13 +2173,16 @@ class PlatformNotificationService:
             report_kind="department daily report",
         )
         if not CRMStatisticsService.daily_report_has_follow_up(department_report_data):
+            summary_missing = CRMStatisticsService.daily_report_summary_missing(department_report_data)
             message_text = self._format_empty_daily_report_text(
                 report_date=department_report_data.get("report_date"),
                 department_name=department_name,
+                summary_missing=summary_missing,
             )
             logger.info(
-                "Department daily report has no follow-up, sending text instead of card: %s",
+                "Department daily report sending text instead of card: %s reason=%s",
                 department_name,
+                "summary_missing" if summary_missing else "no_follow_up",
             )
             return self._send_report_text_to_department_review_groups_or_recipients(
                 db_session=db_session,
@@ -2254,7 +2262,7 @@ class PlatformNotificationService:
         db_session: Session,
         company_report_data: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """发送公司日报通知：有跟进发卡片，无跟进发短文本。"""
+        """发送公司日报通知：有跟进发卡片；有汇总记录但全 0 发无跟进短文本；无汇总记录发任务未写入短文本。"""
         from app.services.crm_statistics_service import CRMStatisticsService
         
         # 获取推送对象 - 根据应用ID判断推送目标
@@ -2278,10 +2286,15 @@ class PlatformNotificationService:
         )
 
         if not CRMStatisticsService.daily_report_has_follow_up(company_report_data):
+            summary_missing = CRMStatisticsService.daily_report_summary_missing(company_report_data)
             message_text = self._format_empty_daily_report_text(
                 report_date=company_report_data.get("report_date"),
+                summary_missing=summary_missing,
             )
-            logger.info("Company daily report has no follow-up, sending text instead of card")
+            logger.info(
+                "Company daily report sending text instead of card: reason=%s",
+                "summary_missing" if summary_missing else "no_follow_up",
+            )
             result = self.send_text_notification_to_recipients(
                 recipients=recipients,
                 message_text=message_text,
@@ -2531,7 +2544,9 @@ class PlatformNotificationService:
         title: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        飞书 / Lark 无模板 markdown 卡片（schema 1.0 elements）。
+        飞书 / Lark 无模板 markdown 卡片（Card JSON 2.0）。
+
+        标题 / 表格等语法仅 2.0 支持；1.0 会把 # 与 | 表格当纯文本显示。
         header 优先用 title，否则取正文首行；为空则回退「通知」。
         """
         body = (content or "").strip()
@@ -2540,14 +2555,67 @@ class PlatformNotificationService:
             header = body.split("\n", 1)[0].strip() if body else ""
         header = (header or "通知")[:50]
         return {
-            "config": {"wide_screen_mode": True},
+            "schema": "2.0",
+            "config": {
+                "wide_screen_mode": True,
+                "width_mode": "fill",
+            },
             "header": {
                 "template": "blue",
                 "title": {"tag": "plain_text", "content": header},
             },
-            "elements": [
-                {"tag": "markdown", "content": body or "--"},
-            ],
+            "body": {
+                "elements": [
+                    {"tag": "markdown", "content": body or "--"},
+                ],
+            },
+        }
+
+    @staticmethod
+    def build_feishu_post_markdown(
+        content: str,
+        *,
+        title: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        飞书 / Lark 富文本 post：用独占段落的 md 标签承载 Markdown。
+
+        官方推荐发 Markdown 时用 msg_type=post + tag=md（CommonMark + GFM）。
+        """
+        body = (content or "").strip() or "--"
+        header = (title or "").strip()
+        if not header:
+            header = body.split("\n", 1)[0].strip()
+        header = (header or "通知")[:50]
+        return {
+            "zh_cn": {
+                "title": header,
+                "content": [[{"tag": "md", "text": body}]],
+            }
+        }
+
+    @staticmethod
+    def build_feishu_post_text(
+        content: str,
+        *,
+        title: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """飞书 / Lark 富文本 post：纯文本段落（tag=text）。"""
+        body = (content or "").strip() or "--"
+        header = (title or "").strip()
+        if not header:
+            header = body.split("\n", 1)[0].strip()
+        header = (header or "通知")[:50]
+        # post 的 text 标签按行拆段，保留换行观感
+        paragraphs = [
+            [{"tag": "text", "text": line}]
+            for line in body.split("\n")
+        ] or [[{"tag": "text", "text": "--"}]]
+        return {
+            "zh_cn": {
+                "title": header,
+                "content": paragraphs,
+            }
         }
 
     def send_platform_notification(
@@ -2558,11 +2626,18 @@ class PlatformNotificationService:
         content: str,
         content_type: str = "text",
         title: Optional[str] = None,
+        delivery: str = "card",
     ) -> Dict[str, Any]:
         """
         平台通知：向单个用户推送纯文本或 Markdown。
-        - text：各平台走文本通道（钉钉内部为 sampleMarkdown）
-        - markdown：飞书/Lark 走无模板 markdown 卡片；钉钉仍走 sampleMarkdown 文本
+
+        飞书 / Lark：
+        - content_type=markdown + delivery=card：无模板 interactive 卡片（schema 2.0）
+        - content_type=markdown + delivery=post：富文本 post + md
+        - content_type=text + delivery=post：富文本 post + text
+        - content_type=text + delivery=card：普通 text 消息
+
+        钉钉：delivery 忽略；text/markdown 均走 sampleMarkdown 文本通道。
         """
         try:
             user_uuid = UUID(str(recipient_user_id))
@@ -2600,11 +2675,25 @@ class PlatformNotificationService:
                 "success_count": 0,
             }
 
-        use_markdown_card = (
-            content_type == "markdown"
-            and platform in (PLATFORM_FEISHU, PLATFORM_LARK)
-        )
-        if use_markdown_card:
+        delivery_mode = (delivery or "card").strip().lower()
+        if delivery_mode not in {"card", "post"}:
+            delivery_mode = "card"
+
+        is_feishu_family = platform in (PLATFORM_FEISHU, PLATFORM_LARK)
+        if is_feishu_family and delivery_mode == "post":
+            if content_type == "markdown":
+                payload = self.build_feishu_post_markdown(message_text, title=title)
+            else:
+                payload = self.build_feishu_post_text(message_text, title=title)
+            self._send_message(
+                open_id,
+                token,
+                payload,
+                platform,
+                receive_id_type="open_id",
+                msg_type="post",
+            )
+        elif is_feishu_family and content_type == "markdown":
             card = self.build_feishu_markdown_card(message_text, title=title)
             self._send_message(
                 open_id,
@@ -2623,7 +2712,15 @@ class PlatformNotificationService:
                 receive_id_type="open_id",
                 msg_type="text",
             )
-        return {"success": True, "message": "ok", "recipients_count": 1, "success_count": 1}
+        return {
+            "success": True,
+            "message": "ok",
+            "recipients_count": 1,
+            "success_count": 1,
+            "content_type": content_type,
+            "delivery": delivery_mode if is_feishu_family else "text",
+            "platform": platform,
+        }
     
     def _convert_weekly_report_data_for_feishu(self, db_session: Session, report_data: Dict[str, Any]) -> Dict[str, Any]:
         """
