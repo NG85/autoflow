@@ -667,6 +667,7 @@ def _handle_platform_notification_push(
 
     content_type = payload.content_type
     title = (payload.title or "").strip() or None
+    delivery = payload.delivery
 
     success_count = 0
     failed: List[dict] = []
@@ -678,6 +679,7 @@ def _handle_platform_notification_push(
                 content=content,
                 content_type=content_type,
                 title=title,
+                delivery=delivery,
             )
         except Exception as exc:
             logger.warning(
@@ -695,6 +697,8 @@ def _handle_platform_notification_push(
 
     return {
         "success": success_count > 0,
+        "content_type": content_type,
+        "delivery": delivery,
         "recipients_count": len(recipient_ids),
         "success_count": success_count,
         "failed_recipients": failed,
