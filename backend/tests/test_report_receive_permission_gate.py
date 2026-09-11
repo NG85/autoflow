@@ -151,6 +151,7 @@ def test_send_department_daily_report_empty_sends_text_not_card():
     report_data = {
         "department_name": "Sales",
         "report_date": "2026-01-04",
+        "has_summary_record": True,
         "statistics": [{"end_customer_total_follow_up": 0, "partner_total_follow_up": 0, "lead_total_follow_up": 0}],
     }
 
@@ -177,11 +178,45 @@ def test_send_department_daily_report_empty_sends_text_not_card():
     mock_card.assert_not_called()
 
 
+def test_send_department_daily_report_missing_summary_sends_task_issue_text():
+    svc = _svc()
+    recipients = [{"name": "lead", "user_id": str(USER_A), "open_id": "ou_a"}]
+    report_data = {
+        "department_name": "Sales",
+        "report_date": "2026-01-04",
+        "has_summary_record": False,
+        "statistics": [{"end_customer_total_follow_up": 0, "partner_total_follow_up": 0, "lead_total_follow_up": 0}],
+    }
+
+    with patch.object(
+        svc, "_filter_recipients_by_receive_permission", return_value=recipients
+    ), patch.object(
+        svc,
+        "_send_report_text_to_department_review_groups_or_recipients",
+        return_value={"success": True, "recipients_count": 1, "success_count": 1},
+    ) as mock_text, patch.object(
+        svc,
+        "_send_report_to_department_review_groups_or_recipients",
+    ) as mock_card:
+        result = svc.send_department_daily_report_notification(
+            MagicMock(),
+            report_data,
+            recipients=recipients,
+        )
+
+    assert result["success"] is True
+    mock_text.assert_called_once()
+    assert "未查询到当日统计数据" in mock_text.call_args.kwargs["message_text"]
+    assert "当日无跟进记录" not in mock_text.call_args.kwargs["message_text"]
+    mock_card.assert_not_called()
+
+
 def test_send_company_daily_report_empty_sends_text_not_card():
     svc = _svc()
     recipients = [{"name": "Exec", "userId": str(USER_A), "open_id": "ou_c", "platform": "feishu"}]
     report_data = {
         "report_date": "2026-01-04",
+        "has_summary_record": True,
         "statistics": [{"end_customer_total_follow_up": 0, "partner_total_follow_up": 0, "lead_total_follow_up": 0}],
     }
 
@@ -204,6 +239,33 @@ def test_send_company_daily_report_empty_sends_text_not_card():
     mock_card.assert_not_called()
 
 
+def test_send_company_daily_report_missing_summary_sends_task_issue_text():
+    svc = _svc()
+    recipients = [{"name": "Exec", "userId": str(USER_A), "open_id": "ou_c", "platform": "feishu"}]
+    report_data = {
+        "report_date": "2026-01-04",
+        "has_summary_record": False,
+        "statistics": [{"end_customer_total_follow_up": 0, "partner_total_follow_up": 0, "lead_total_follow_up": 0}],
+    }
+
+    with patch.object(
+        svc, "get_recipients_for_company_daily_report", return_value=recipients
+    ), patch.object(
+        svc,
+        "send_text_notification_to_recipients",
+        return_value={"success": True, "recipients_count": 1, "success_count": 1},
+    ) as mock_text, patch.object(
+        svc, "_send_notifications_by_platform"
+    ) as mock_card:
+        result = svc.send_company_daily_report_notification(MagicMock(), report_data)
+
+    assert result["success"] is True
+    mock_text.assert_called_once()
+    assert "未查询到当日统计数据" in mock_text.call_args.kwargs["message_text"]
+    assert "当日无跟进记录" not in mock_text.call_args.kwargs["message_text"]
+    mock_card.assert_not_called()
+
+
 def test_format_empty_daily_report_text():
     svc = _svc()
     assert (
@@ -213,6 +275,16 @@ def test_format_empty_daily_report_text():
     assert (
         svc._format_empty_daily_report_text(report_date="2026-01-04")
         == "【公司日报】（2026-01-04）：当日无跟进记录。"
+    )
+    assert (
+        svc._format_empty_daily_report_text(
+            report_date="2026-01-04", department_name="华东", summary_missing=True
+        )
+        == "【部门日报】华东（2026-01-04）：未查询到当日统计数据，可能是统计任务延迟或异常。"
+    )
+    assert (
+        svc._format_empty_daily_report_text(report_date="2026-01-04", summary_missing=True)
+        == "【公司日报】（2026-01-04）：未查询到当日统计数据，可能是统计任务延迟或异常。"
     )
 
 
