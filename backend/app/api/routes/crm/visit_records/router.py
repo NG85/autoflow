@@ -1,6 +1,5 @@
 """CRM 跟进记录与日客户跟进 HTTP 路由。"""
 
-import hashlib
 import io
 import logging
 from concurrent.futures import ThreadPoolExecutor
@@ -17,7 +16,6 @@ from sqlmodel import select
 from app.api.deps import CurrentUserDep, SessionDep
 from app.api.routes.crm.models import (
     DailyCustomerFollowupQueryRequest,
-    RecordType,
     VisitRecordCommentsUpdate,
     VisitRecordCreate,
     VisitRecordQueryRequest,
@@ -45,9 +43,15 @@ from app.repositories.visit_record import (
     visit_record_repo,
 )
 from app.services.crm_config_service import build_customer_attribute_options, get_resolved_field_mapping
-from app.utils.crm_comments import format_crm_comments_for_export
 from app.utils.crm_followup_object import FOLLOWUP_OBJECT_TYPES, resolve_followup_object_from_record
 from app.utils.excel_sanitize import sanitize_excel_row
+from app.utils.visit_record_export import (
+    UnknownVisitRecordExportColumn,
+    build_export_row,
+    get_export_headers,
+    pick_export_row_values,
+    resolve_export_columns,
+)
 from app.platforms.utils.url_parser import parse_dingtalk_transcribe_url
 from app.services.document_processing_service import document_processing_service
 from app.services.visit_record_card_push_status import (
@@ -564,10 +568,16 @@ def export_visit_records_to_xlsx(
     支持条件查询和分页
     根据当前用户的汇报关系限制数据访问权限
     支持中英文版本导出
+    可通过 export_columns 指定导出列，不传或空则导出全部列
     """
     try:
         _require_follow_up_view_gate(db_session, user)
         _require_follow_up_export_permission(db_session, user)
+
+        try:
+            export_column_keys = resolve_export_columns(request.export_columns)
+        except UnknownVisitRecordExportColumn as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
         # 创建 XLSX 内容
         wb = Workbook()
@@ -576,34 +586,7 @@ def export_visit_records_to_xlsx(
         
         # 根据语言参数确定表头和数据内容
         language = request.language or "zh"  # 默认为中文
-        
-        if language == "en":
-            # 英文版表头 - 只包含英文字段
-            headers = [
-                "ID", "Customer Level", "Follow-up Object", "Follow-up Object ID", "Follow-up Object Attribute", "First Visit", "Call High",
-                "External Collaboration Partner", "External Collaboration Partner ID",
-                "Opportunity Name", "Opportunity Number", "Opportunity ID", "Follow-up Date", "Person in Charge", "Department",
-                "Contact Position", "Contact Name", "Collaborative Participants", "Follow-up Method",
-                "Visit Purpose", "Attachment Location", "Attachment Latitude", "Attachment Longitude", "Attachment Taken At", "Follow-up Record", 
-                "AI Follow-up Record Quality Evaluation", "AI Follow-up Record Quality Evaluation Details", 
-                "Next Steps", "AI Next Steps Quality Evaluation", "AI Next Steps Quality Evaluation Details",
-                "Assessment Flag", "Record Type", "Information Source", "Remarks",
-                "Comments", "Tasks", "Created Time"
-            ]
-        else:
-            # 中文版表头（默认）- 只包含中文字段
-            headers = [
-                "ID", "客户分类", "跟进对象", "跟进对象ID", "跟进对象属性", "是否首次拜访", "是否Call High",
-                "外部协同合作伙伴", "外部协同合作伙伴ID",
-                "商机名称", "商机编号", "商机ID", "跟进日期", "负责销售", "所在团队",
-                "联系人职位", "联系人姓名", "协同参与人", "跟进方式",
-                "拜访目的", "附件地点", "附件纬度", "附件经度", "附件拍摄时间", "跟进记录", 
-                "AI对跟进记录质量评估", "AI对跟进记录质量评估详情",
-                "下一步计划", "AI对下一步计划质量评估", "AI对下一步计划质量评估详情",
-                "评估标记", "记录类型", "信息来源", "备注", "评论", "任务", "创建时间"
-            ]
-        
-        ws.append(headers)
+        ws.append(get_export_headers(export_column_keys, language))
         
         # 使用分页查询循环获取所有数据
         # 限制最大导出10000条记录
@@ -617,158 +600,6 @@ def export_visit_records_to_xlsx(
         current_page = 1
         total_exported = 0
         total_pages = 0
-        
-        # 辅助函数：将单个item转换为表格行
-        def item_to_row(item, filing_opportunity_number: str = ""):
-            # 根据语言选择对应的字段值
-            is_en = language == "en"
-            
-            # 生成基于关键字段的hash ID
-            # 使用客户名称、跟进日期、负责销售等关键字段生成唯一ID
-            # 处理联系人：优先使用contacts字段，否则使用旧字段
-            contact_names_str = ""
-            if item.contacts and len(item.contacts) > 0:
-                contact_names_str = ", ".join([c.name or "" for c in item.contacts if c.name])
-            else:
-                contact_names_str = item.contact_name or ""
-
-            followup_object_name = item.followup_object_name or ""
-
-            # 历史兼容：旧数据里 account 与 partner 同时有值、external 为空；
-            # 导出时按新语义将 partner 映射为 external 协同展示（仅导出视图，不改数据）。
-            external_collaboration_partner_name = (
-                item.external_collaboration_partner_name or ""
-            )
-            external_collaboration_partner_id = (
-                item.external_collaboration_partner_id or ""
-            )
-            if (
-                (item.account_name or item.account_id)
-                and (item.partner_name or item.partner_id)
-                and not (
-                    external_collaboration_partner_name
-                    or external_collaboration_partner_id
-                )
-            ):
-                external_collaboration_partner_name = item.partner_name or ""
-                external_collaboration_partner_id = item.partner_id or ""
-            
-            key_fields = [
-                str(item.id or ""),
-                str(followup_object_name or item.opportunity_name or ""),
-                str(item.visit_communication_date or ""),
-                str(item.recorder or ""),
-                contact_names_str,
-                str(item.last_modified_time or ""),
-            ]
-            key_string = "|".join(key_fields)
-            record_id = hashlib.md5(key_string.encode('utf-8')).hexdigest()[:12]  # 取前12位作为ID
-            
-            # 布尔值字段的本地化处理
-            first_visit_text = "Yes" if item.is_first_visit else "No" if item.is_first_visit is not None else ""
-            call_high_text = "Yes" if item.is_call_high else "No" if item.is_call_high is not None else ""
-            if not is_en:
-                first_visit_text = "是" if item.is_first_visit else "否" if item.is_first_visit is not None else ""
-                call_high_text = "是" if item.is_call_high else "否" if item.is_call_high is not None else ""
-            
-            # 多语言字段的本地化处理
-            followup_record = item.followup_record_en if is_en else item.followup_record_zh
-            followup_record = followup_record or item.followup_record or ""
-            
-            followup_quality_level = item.followup_quality_level_en if is_en else item.followup_quality_level_zh or ""
-            followup_quality_reason = item.followup_quality_reason_en if is_en else item.followup_quality_reason_zh or ""
-            
-            next_steps = item.next_steps_en if is_en else item.next_steps_zh
-            next_steps = next_steps or item.next_steps or ""
-            
-            next_steps_quality_level = item.next_steps_quality_level_en if is_en else item.next_steps_quality_level_zh or ""
-            next_steps_quality_reason = item.next_steps_quality_reason_en if is_en else item.next_steps_quality_reason_zh or ""
-
-            # 评估标记统一导出为表情符号
-            raw_assessment_flag = str(item.assessment_flag or "").strip()
-            assessment_flag_map = {
-                "red": "🔴",
-                "yellow": "🟡",
-                "green": "🟢"
-            }
-            assessment_flag = assessment_flag_map.get(raw_assessment_flag.lower(), raw_assessment_flag)
-            
-            # 处理记录类型字段的多语言显示
-            record_type = ""
-            if item.record_type:
-                record_type_enum = RecordType.from_english(item.record_type)
-                if record_type_enum:
-                    record_type = record_type_enum.english if is_en else record_type_enum.chinese
-                else:
-                    record_type = item.record_type
-            
-            # 从附件中解析位置信息和经纬度
-            attachment = getattr(item, "attachment", None)
-            if attachment:
-                # 结构化附件（VisitAttachment）
-                location = getattr(attachment, "location", None) or ""
-                latitude = getattr(attachment, "latitude", None) or ""
-                longitude = getattr(attachment, "longitude", None) or ""
-                taken_at = getattr(attachment, "taken_at", None) or ""
-            else:
-                location = ""
-                latitude = ""
-                longitude = ""
-                taken_at = ""
-            # 处理联系人信息：优先使用contacts字段，否则使用旧字段
-            contact_positions_str = ""
-            contact_names_str = ""
-            if item.contacts and len(item.contacts) > 0:
-                # 多个联系人：格式化为 "职位1, 职位2" 和 "姓名1, 姓名2"
-                positions = [c.position or "" for c in item.contacts if c.position]
-                names = [c.name or "" for c in item.contacts if c.name]
-                contact_positions_str = ", ".join(positions)
-                contact_names_str = ", ".join(names)
-            else:
-                # 兼容旧数据：使用单个联系人字段
-                contact_positions_str = item.contact_position or ""
-                contact_names_str = item.contact_name or ""
-            
-            # 构建数据行（中英版本字段顺序相同，ID列在最前面）
-            return [
-                item.record_id or record_id,
-                item.customer_level or "",
-                followup_object_name,
-                item.followup_object_id or "",
-                item.customer_attribute or "",
-                first_visit_text,
-                call_high_text,
-                external_collaboration_partner_name,
-                external_collaboration_partner_id,
-                item.opportunity_name or "",
-                filing_opportunity_number or "",
-                item.opportunity_id or "",
-                item.visit_communication_date or "",
-                item.recorder or "",
-                item.department or "",
-                contact_positions_str,
-                contact_names_str,
-                item.collaborative_participants or "",
-                item.visit_communication_method or "",
-                item.visit_purpose or "",
-                location,
-                latitude,
-                longitude,
-                taken_at,
-                followup_record,
-                followup_quality_level,
-                followup_quality_reason,
-                next_steps,
-                next_steps_quality_level,
-                next_steps_quality_reason,
-                assessment_flag,
-                record_type,
-                item.visit_type or "",
-                item.remarks or "",
-                format_crm_comments_for_export(item.comments, comment_type="comment"),
-                format_crm_comments_for_export(item.comments, comment_type="task"),
-                item.last_modified_time or ""
-            ]
         
         # 循环分页查询并写入数据
         while total_exported < max_export_count:
@@ -821,7 +652,14 @@ def export_visit_records_to_xlsx(
                     if item.opportunity_id
                     else ""
                 )
-                ws.append(sanitize_excel_row(item_to_row(item, filing_number)))
+                ws.append(
+                    sanitize_excel_row(
+                        pick_export_row_values(
+                            build_export_row(item, filing_number, language),
+                            export_column_keys,
+                        )
+                    )
+                )
                 total_exported += 1
             
             # 如果当前页数据不足一页，说明已经是最后一页
