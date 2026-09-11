@@ -10,6 +10,7 @@ from sqlmodel import select
 from app.api.deps import SessionDep
 from app.api.routes.notification_schemas import (
     DailyNoFollowupReminderPushRequest,
+    PlatformNotificationPushRequest,
     PushNotificationRequest,
     ReviewSessionPushRequest,
     SalesTaskCreatedPushRequest,
@@ -650,6 +651,56 @@ def _handle_sales_task_created_push(
     )
 
 
+def _handle_platform_notification_push(
+    db_session: SessionDep,
+    payload: PlatformNotificationPushRequest,
+) -> Dict[str, Any]:
+    from app.services.platform_notification_service import platform_notification_service
+
+    recipient_ids = _normalize_recipient_user_ids(payload.recipient_user_ids)
+    if not recipient_ids:
+        raise HTTPException(status_code=422, detail="recipient_user_ids is required")
+
+    content = (payload.content or "").strip()
+    if not content:
+        raise HTTPException(status_code=422, detail="content is required")
+
+    content_type = payload.content_type
+    title = (payload.title or "").strip() or None
+
+    success_count = 0
+    failed: List[dict] = []
+    for rid in recipient_ids:
+        try:
+            r = platform_notification_service.send_platform_notification(
+                db_session,
+                recipient_user_id=rid,
+                content=content,
+                content_type=content_type,
+                title=title,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Platform notification failed for recipient=%s: %s",
+                rid,
+                exc,
+                exc_info=True,
+            )
+            failed.append({"recipient_user_id": rid, "message": str(exc)})
+            continue
+        if r.get("success"):
+            success_count += 1
+        else:
+            failed.append({"recipient_user_id": rid, "message": r.get("message")})
+
+    return {
+        "success": success_count > 0,
+        "recipients_count": len(recipient_ids),
+        "success_count": success_count,
+        "failed_recipients": failed,
+    }
+
+
 @router.post("/push")
 async def push_notification_api(
     payload: PushNotificationRequest,
@@ -658,7 +709,8 @@ async def push_notification_api(
     """
     统一消息推送入口（请求体按 type 判别，字段见 notification_schemas）：
     weekly_followup_comment / visit_record_comment / sales_task_created /
-    review_session / visit_record_card / daily_no_followup_reminder
+    review_session / visit_record_card / daily_no_followup_reminder /
+    platform_notification
     """
     try:
         if isinstance(payload, VisitRecordCardPushRequest):
@@ -673,6 +725,8 @@ async def push_notification_api(
             result = _handle_visit_record_comment_push(db_session, payload)
         elif isinstance(payload, SalesTaskCreatedPushRequest):
             result = _handle_sales_task_created_push(db_session, payload)
+        elif isinstance(payload, PlatformNotificationPushRequest):
+            result = _handle_platform_notification_push(db_session, payload)
         else:
             raise HTTPException(status_code=422, detail="unsupported notification type")
 

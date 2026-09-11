@@ -96,6 +96,22 @@ class VisitRecordCardPushRequest(BaseModel):
     )
 
 
+class PlatformNotificationPushRequest(BaseModel):
+    """平台通知：向指定用户推送纯文本或 Markdown 消息。"""
+
+    type: Literal["platform_notification"] = "platform_notification"
+    recipient_user_ids: List[str] = Field(..., description="接收人 user_id 集合")
+    content_type: Literal["text", "markdown"] = Field(
+        ...,
+        description="text=纯文本；markdown=Markdown（飞书/Lark 走无模板 markdown 卡片）",
+    )
+    content: str = Field(..., min_length=1, description="通知正文")
+    title: Optional[str] = Field(
+        default=None,
+        description="可选标题；markdown 卡片 header 优先用此字段，否则取正文首行",
+    )
+
+
 PushNotificationRequest = Annotated[
     Union[
         WeeklyFollowupCommentPushRequest,
@@ -104,6 +120,7 @@ PushNotificationRequest = Annotated[
         ReviewSessionPushRequest,
         VisitRecordCardPushRequest,
         DailyNoFollowupReminderPushRequest,
+        PlatformNotificationPushRequest,
     ],
     Field(discriminator="type"),
 ]
