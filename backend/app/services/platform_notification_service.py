@@ -2523,6 +2523,107 @@ class PlatformNotificationService:
             recipient_user_id=recipient_user_id,
             message_text=message_text,
         )
+
+    @staticmethod
+    def build_feishu_markdown_card(
+        content: str,
+        *,
+        title: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        飞书 / Lark 无模板 markdown 卡片（schema 1.0 elements）。
+        header 优先用 title，否则取正文首行；为空则回退「通知」。
+        """
+        body = (content or "").strip()
+        header = (title or "").strip()
+        if not header:
+            header = body.split("\n", 1)[0].strip() if body else ""
+        header = (header or "通知")[:50]
+        return {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "template": "blue",
+                "title": {"tag": "plain_text", "content": header},
+            },
+            "elements": [
+                {"tag": "markdown", "content": body or "--"},
+            ],
+        }
+
+    def send_platform_notification(
+        self,
+        db_session: Session,
+        *,
+        recipient_user_id: str,
+        content: str,
+        content_type: str = "text",
+        title: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        平台通知：向单个用户推送纯文本或 Markdown。
+        - text：各平台走文本通道（钉钉内部为 sampleMarkdown）
+        - markdown：飞书/Lark 走无模板 markdown 卡片；钉钉仍走 sampleMarkdown 文本
+        """
+        try:
+            user_uuid = UUID(str(recipient_user_id))
+        except Exception:
+            return {
+                "success": False,
+                "message": "invalid recipient_user_id",
+                "recipients_count": 0,
+                "success_count": 0,
+            }
+
+        profile = user_profile_repo.get_by_user_id(db_session, user_uuid)
+        if (
+            not profile
+            or not profile.oauth_user
+            or not profile.oauth_user.open_id
+            or not profile.oauth_user.provider
+        ):
+            return {
+                "success": False,
+                "message": "recipient has no oauth open_id",
+                "recipients_count": 0,
+                "success_count": 0,
+            }
+
+        platform = profile.oauth_user.provider
+        open_id = profile.oauth_user.open_id
+        token = self._get_tenant_access_token(platform)
+        message_text = (content or "").strip()
+        if not message_text:
+            return {
+                "success": False,
+                "message": "content is empty",
+                "recipients_count": 0,
+                "success_count": 0,
+            }
+
+        use_markdown_card = (
+            content_type == "markdown"
+            and platform in (PLATFORM_FEISHU, PLATFORM_LARK)
+        )
+        if use_markdown_card:
+            card = self.build_feishu_markdown_card(message_text, title=title)
+            self._send_message(
+                open_id,
+                token,
+                card,
+                platform,
+                receive_id_type="open_id",
+                msg_type="interactive",
+            )
+        else:
+            self._send_message(
+                open_id,
+                token,
+                message_text,
+                platform,
+                receive_id_type="open_id",
+                msg_type="text",
+            )
+        return {"success": True, "message": "ok", "recipients_count": 1, "success_count": 1}
     
     def _convert_weekly_report_data_for_feishu(self, db_session: Session, report_data: Dict[str, Any]) -> Dict[str, Any]:
         """
