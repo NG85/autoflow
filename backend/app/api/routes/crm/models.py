@@ -559,7 +559,23 @@ class VisitRecordQueryRequest(BaseModel):
         max_length=8,
         description="多字段排序，顺序即优先级；未传或空则默认跟进日期、创建时间降序",
     )
-    language: Optional[str] = None # 语言，只在导出时生效
+    language: Optional[str] = None  # 语言，只在导出时生效
+    export_columns: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "导出列字段名，只在导出时生效；不传或空列表则导出全部列，顺序即导出顺序。"
+            "可选：record_id, customer_level, followup_object_name, followup_object_id, "
+            "customer_attribute, is_first_visit, is_call_high, "
+            "external_collaboration_partner_name, external_collaboration_partner_id, "
+            "opportunity_name, opportunity_number, opportunity_id, visit_communication_date, "
+            "recorder, department, contact_position, contact_name, collaborative_participants, "
+            "visit_communication_method, visit_purpose, attachment_location, attachment_latitude, "
+            "attachment_longitude, attachment_taken_at, followup_record, followup_quality_level, "
+            "followup_quality_reason, next_steps, next_steps_quality_level, "
+            "next_steps_quality_reason, assessment_flag, record_type, visit_type, remarks, "
+            "comments, tasks, last_modified_time"
+        ),
+    )
 
     def resolved_sorts(self) -> List[tuple[str, str]]:
         """归一化排序：sorts 非空按传入顺序；否则跟进日期、创建时间降序。"""
