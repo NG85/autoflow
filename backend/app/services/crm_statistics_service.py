@@ -1853,6 +1853,27 @@ class CRMStatisticsService:
         return total > 0
 
     @staticmethod
+    def weekly_report_has_data(report_data: Optional[Dict[str, Any]]) -> bool:
+        """
+        周报是否已生成 KPI（Aldebaran ``data.metadata.has_data``）。
+
+        - true：有 Review1s/Review5 KPI；数字为 0 表示真实无进展，仍计费
+        - false / 缺字段：本周未产出，不计费
+        模板重组后也可读顶层 ``has_data``。
+        """
+        if not isinstance(report_data, dict):
+            return False
+        raw = report_data.get("has_data")
+        metadata = report_data.get("metadata")
+        if isinstance(metadata, dict) and "has_data" in metadata:
+            raw = metadata.get("has_data")
+        if isinstance(raw, bool):
+            return raw
+        if isinstance(raw, (int, float)):
+            return int(raw) == 1
+        return str(raw or "").strip().lower() in {"true", "1", "yes"}
+
+    @staticmethod
     def daily_report_summary_missing(report_data: Optional[Dict[str, Any]]) -> bool:
         """
         汇总表是否缺少对应记录。

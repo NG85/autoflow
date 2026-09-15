@@ -527,6 +527,7 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                     "department_name": resolved_department,
                     "start_date": start_date,
                     "end_date": end_date,
+                    "has_data": crm_statistics_service.weekly_report_has_data(raw),
                 }
 
             def _build_empty_department_weekly_report(department: str) -> dict[str, Any]:
@@ -587,6 +588,7 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                     "department_name": department,
                     "start_date": start_date,
                     "end_date": end_date,
+                    "has_data": False,
                 }
 
             # 1) 部门 & 负责人：参照日报逻辑，优先从 OAuth 服务获取（可覆盖“无数据部门也推送”）
@@ -666,11 +668,9 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                             "error": str(e),
                         })
                         dept_report = _build_empty_department_weekly_report(department_name)
-                        dept_report["_billing_billable"] = False
                     else:
-                        # 接口返回有数据时，重组结构以适配模板
+                        # 接口返回后重组结构以适配模板；计费看 metadata.has_data
                         dept_report = _rebuild_weekly_report_for_template(dept_report, department_name)
-                        dept_report["_billing_billable"] = True
 
                     # 补齐卡片模板用的超链接变量（URL）
                     report_info_1 = crm_statistics_service._get_weekly_report_info(session, "review1s", end_date, department_name)
@@ -788,7 +788,7 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                                     f"成功发送 {department_report.get('department_name', '未知部门')} 周报通知，"
                                     f"推送成功 {result['success_count']}/{result['recipients_count']} 次"
                                 )
-                                if bool(department_report.get("_billing_billable")):
+                                if crm_statistics_service.weekly_report_has_data(department_report):
                                     _report_task_usage_once(
                                         BillingScenario.CRM_TEAM_WEEKLY_REPORT,
                                         f"weekly-department:{end_date.isoformat()}:{dept_name}",
@@ -797,7 +797,7 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                                     )
                                 else:
                                     logger.info(
-                                        "Skip weekly department billing for empty report: department=%s end_date=%s",
+                                        "Skip weekly department billing because has_data is false: department=%s end_date=%s",
                                         dept_name,
                                         end_date.isoformat(),
                                     )
@@ -837,12 +837,18 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                                     f"成功发送公司周报通知，"
                                     f"推送成功 {company_result['success_count']}/{company_result['recipients_count']} 次"
                                 )
-                                _report_task_usage_once(
-                                    BillingScenario.CRM_TEAM_WEEKLY_REPORT,
-                                    f"weekly-company:{end_date.isoformat()}",
-                                    company_weekly_report.get("weekly_review_1_page")
-                                    or settings.REVIEW_REPORT_HOST,
-                                )
+                                if crm_statistics_service.weekly_report_has_data(company_weekly_report):
+                                    _report_task_usage_once(
+                                        BillingScenario.CRM_TEAM_WEEKLY_REPORT,
+                                        f"weekly-company:{end_date.isoformat()}",
+                                        company_weekly_report.get("weekly_review_1_page")
+                                        or settings.REVIEW_REPORT_HOST,
+                                    )
+                                else:
+                                    logger.info(
+                                        "Skip weekly company billing because has_data is false: end_date=%s",
+                                        end_date.isoformat(),
+                                    )
                             else:
                                 msg = str(company_result.get("message", ""))
                                 if "No recipients found for" in msg:
