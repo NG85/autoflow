@@ -1540,7 +1540,8 @@ class CRMStatisticsService:
     def _generate_and_send_department_daily_reports(self, session: Session, target_date: date) -> None:
         """
         生成并推送部门日报。
-        有跟进数据发完整卡片；无跟进则发短文本（告知当日无跟进记录），不再推空卡片模板。
+        有跟进数据发完整卡片；汇总表有记录但全 0 发「无跟进」短文本；
+        汇总表无对应记录发「统计任务未写入」短文本（与确实无数据区分）。
         
         Args:
             session: 数据库会话
@@ -1585,8 +1586,6 @@ class CRMStatisticsService:
             if report.get("department_name")
         }
 
-        # 汇总表无行的部门：生成空报告结构（推送侧会改发短文本）
-        department_reports_no_summary = []
         all_department_reports: List[Dict[str, Any]] = []
         for department_name in department_names_to_process:
             existing_report = department_reports_with_summary_by_name.get(department_name)
@@ -1599,9 +1598,11 @@ class CRMStatisticsService:
                 target_date=target_date,
                 session=session,
             )
-            department_reports_no_summary.append(empty_report)
             all_department_reports.append(empty_report)
-            logger.info(f"为部门 {department_name} 生成空数据报告（无销售数据）")
+            logger.warning(
+                f"部门 {department_name} 在 crm_department_daily_summary 中无 {target_date} 记录，"
+                "视为统计任务未写入"
+            )
         
         if not all_department_reports:
             logger.warning(f"{target_date} 没有找到任何部门，跳过部门日报推送")
@@ -1616,6 +1617,7 @@ class CRMStatisticsService:
         successful_departments = 0
         with_follow_up_count = 0
         without_follow_up_count = 0
+        missing_summary_count = 0
 
         for department_report in all_department_reports:
             try:
@@ -1628,12 +1630,15 @@ class CRMStatisticsService:
                     continue
 
                 has_follow_up = self.daily_report_has_follow_up(department_report)
+                summary_missing = self.daily_report_summary_missing(department_report)
                 if has_follow_up:
                     with_follow_up_count += 1
+                elif summary_missing:
+                    missing_summary_count += 1
                 else:
                     without_follow_up_count += 1
                 # 有配置 review 群则推送到群（无论是否有负责人）；无群时推送给负责人
-                # 无跟进时 notification 层改为短文本，有跟进仍发完整卡片
+                # 有跟进发完整卡片；有记录但全 0 发无跟进短文本；无记录发任务未写入短文本
                 result = platform_notification_service.send_department_daily_report_notification(
                     db_session=session,
                     department_report_data=department_report,
@@ -1643,7 +1648,12 @@ class CRMStatisticsService:
                 
                 if result["success"]:
                     successful_departments += 1
-                    data_status = "有跟进(卡片)" if has_follow_up else "无跟进(文本)"
+                    if has_follow_up:
+                        data_status = "有跟进(卡片)"
+                    elif summary_missing:
+                        data_status = "无汇总行(文本)"
+                    else:
+                        data_status = "无跟进(文本)"
                     logger.info(
                         f"成功为部门 {department_report['department_name']} ({data_status}) 发送日报飞书通知，"
                         f"推送 {result['success_count']}/{result['recipients_count']} 次"
@@ -1682,7 +1692,7 @@ class CRMStatisticsService:
         logger.info(
             f"CRM部门日报飞书通知发送完成: {successful_departments}/{total_departments} 个部门的通知发送成功 "
             f"(有跟进: {with_follow_up_count}, 无跟进: {without_follow_up_count}, "
-            f"无汇总行: {len(department_reports_no_summary)})"
+            f"无汇总行: {missing_summary_count})"
         )
 
     def send_department_daily_report_for_department(
@@ -1693,7 +1703,8 @@ class CRMStatisticsService:
     ) -> Dict[str, Any]:
         """
         仅针对指定部门生成并推送一次部门日报（用于补发/重推）。
-        有跟进发完整卡片，无跟进发短文本；推送路由与定时任务一致（review 群或负责人）。
+        有跟进发完整卡片；有汇总记录但全 0 发无跟进短文本；无汇总记录发任务未写入短文本。
+        推送路由与定时任务一致（review 群或负责人）。
         """
         from app.core.config import settings
 
@@ -1738,7 +1749,8 @@ class CRMStatisticsService:
     def _generate_and_send_company_daily_report(self, session: Session, target_date: date) -> None:
         """
         生成并推送公司日报。
-        有跟进数据发完整卡片；无跟进则发短文本（告知当日无跟进记录）。
+        有跟进数据发完整卡片；汇总表有记录但全 0 发「无跟进」短文本；
+        汇总表无公司级记录发「统计任务未写入」短文本。
         
         Args:
             session: 数据库会话
@@ -1758,13 +1770,19 @@ class CRMStatisticsService:
         
         try:
             has_follow_up = self.daily_report_has_follow_up(company_report)
+            summary_missing = self.daily_report_summary_missing(company_report)
             result = platform_notification_service.send_company_daily_report_notification(
                 db_session=session,
                 company_report_data=company_report
             )
             
             if result["success"]:
-                push_kind = "卡片" if has_follow_up else "文本"
+                if has_follow_up:
+                    push_kind = "有跟进(卡片)"
+                elif summary_missing:
+                    push_kind = "无汇总行(文本)"
+                else:
+                    push_kind = "无跟进(文本)"
                 logger.info(
                     f"成功发送公司日报飞书通知（{push_kind}），"
                     f"推送成功 {result['success_count']}/{result['recipients_count']} 次"
@@ -1833,6 +1851,37 @@ class CRMStatisticsService:
             + int(stats.get("lead_total_follow_up") or 0)
         )
         return total > 0
+
+    @staticmethod
+    def weekly_report_has_data(report_data: Optional[Dict[str, Any]]) -> bool:
+        """
+        周报是否已生成 KPI（Aldebaran ``data.metadata.has_data``）。
+
+        - true：有 Review1s/Review5 KPI；数字为 0 表示真实无进展，仍计费
+        - false / 缺字段：本周未产出，不计费
+        模板重组后也可读顶层 ``has_data``。
+        """
+        if not isinstance(report_data, dict):
+            return False
+        raw = report_data.get("has_data")
+        metadata = report_data.get("metadata")
+        if isinstance(metadata, dict) and "has_data" in metadata:
+            raw = metadata.get("has_data")
+        if isinstance(raw, bool):
+            return raw
+        if isinstance(raw, (int, float)):
+            return int(raw) == 1
+        return str(raw or "").strip().lower() in {"true", "1", "yes"}
+
+    @staticmethod
+    def daily_report_summary_missing(report_data: Optional[Dict[str, Any]]) -> bool:
+        """
+        汇总表是否缺少对应记录。
+        True：任务未写入/延迟（与「有记录但全 0」区分）；缺省字段视为已有记录。
+        """
+        if report_data is None:
+            return True
+        return report_data.get("has_summary_record") is False
 
     @classmethod
     def _statistics_from_department_summary(
@@ -1919,6 +1968,7 @@ class CRMStatisticsService:
             department_report = {
                 "department_name": department_name,
                 "report_date": record.report_date,
+                "has_summary_record": True,
                 # 统计数组：供卡片模板展示数值类指标
                 "statistics": [total_stats],
                 # 红黄绿灯评估汇总内容
@@ -1962,8 +2012,8 @@ class CRMStatisticsService:
         session: Optional[Session] = None,
     ) -> Dict[str, Any]:
         """
-        为没有任何数据的部门生成空的部门日报结构（数值为0，文案为空）。
-        该结构与 aggregate_department_reports 返回的元素保持一致，便于直接用于卡片推送。
+        为汇总表无对应行的部门生成空的部门日报结构（数值为 0，标记 has_summary_record=False）。
+        该结构与 aggregate_department_reports 返回的元素保持一致，推送侧据此发任务未写入短文本。
         """
         # 统计字段格式需与 aggregate_department_reports 中保持一致
         total_stats = self._empty_department_or_company_statistics()
@@ -1980,6 +2030,7 @@ class CRMStatisticsService:
         department_report: Dict[str, Any] = {
             "department_name": department_name,
             "report_date": target_date,
+            "has_summary_record": False,
             "statistics": [total_stats],
             "red_assessment": [empty_assessment.copy()],
             "yellow_assessment": [empty_assessment.copy()],
@@ -2031,8 +2082,12 @@ class CRMStatisticsService:
         record: Optional[CRMDepartmentDailySummary] = session.exec(query).first()
         
         # 统计字段和结构与部门日报保持一致，便于共享同一飞书模板
+        has_summary_record = record is not None
         if not record:
-            logger.warning(f"{target_date} 在 crm_department_daily_summary 中没有找到公司级日报数据，将返回空统计")
+            logger.warning(
+                f"{target_date} 在 crm_department_daily_summary 中没有找到公司级日报数据，"
+                "视为统计任务未写入"
+            )
             total_stats = self._empty_department_or_company_statistics()
             summary_red = ""
             summary_yellow = ""
@@ -2055,6 +2110,7 @@ class CRMStatisticsService:
         # - red/yellow/green_assessment: 公司层面的红黄绿灯评估汇总文案
         company_report = {
             "report_date": target_date,
+            "has_summary_record": has_summary_record,
             "statistics": [total_stats],
             "visit_detail_page": visit_detail_page,
             "red_assessment": [

@@ -30,3 +30,22 @@ def test_daily_report_has_follow_up_false_when_empty_or_zero():
             ]
         }
     )
+
+
+def test_daily_report_summary_missing():
+    assert CRMStatisticsService.daily_report_summary_missing(None)
+    assert CRMStatisticsService.daily_report_summary_missing({"has_summary_record": False})
+    assert not CRMStatisticsService.daily_report_summary_missing({})
+    assert not CRMStatisticsService.daily_report_summary_missing({"has_summary_record": True})
+    assert not CRMStatisticsService.daily_report_summary_missing(
+        {
+            "has_summary_record": True,
+            "statistics": [
+                {
+                    "end_customer_total_follow_up": 0,
+                    "partner_total_follow_up": 0,
+                    "lead_total_follow_up": 0,
+                }
+            ],
+        }
+    )

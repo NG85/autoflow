@@ -40,6 +40,7 @@ from app.platforms.notification_types import (
     PERM_WEEKLY_REPORT_COMPANY_RECEIVE,
     PERM_WEEKLY_REPORT_TEAM_RECEIVE,
 )
+from app.utils.im_applink import rewrite_im_content_urls
 
 logger = logging.getLogger(__name__)
 
@@ -222,13 +223,14 @@ class PlatformNotificationService:
                     )
                     return
                 token = feishu_client.get_tenant_access_token(app_id=app_id, app_secret=app_secret)
+                adapted = rewrite_im_content_urls(card_content, target_platform)
 
                 for oid in open_ids:
                     try:
                         feishu_client.send_message(
                             oid,
                             token,
-                            card_content,
+                            adapted,
                             receive_id_type="open_id",
                             msg_type="interactive",
                         )
@@ -241,7 +243,7 @@ class PlatformNotificationService:
                         feishu_client.send_message(
                             cid,
                             token,
-                            card_content,
+                            adapted,
                             receive_id_type="chat_id",
                             msg_type="interactive",
                         )
@@ -264,12 +266,13 @@ class PlatformNotificationService:
                     )
                     return
                 token = dingtalk_client.get_tenant_access_token(app_id=app_id, app_secret=app_secret)
+                adapted = rewrite_im_content_urls(card_content, target_platform)
                 for uid in user_ids:
                     try:
                         dingtalk_client.send_message(
                             uid,
                             token,
-                            card_content,
+                            adapted,
                             receive_id_type="user_id",
                             msg_type="interactive",
                             robot_code=app_id,
@@ -283,7 +286,7 @@ class PlatformNotificationService:
                         dingtalk_client.send_message(
                             cid,
                             token,
-                            card_content,
+                            adapted,
                             receive_id_type="chat_id",
                             msg_type="interactive",
                             robot_code=app_id,
@@ -656,6 +659,7 @@ class PlatformNotificationService:
         receive_id_type: str = "open_id",
         **kwargs,
     ) -> Dict[str, Any]:
+        content = rewrite_im_content_urls(content, platform)
         if platform == PLATFORM_FEISHU:
             return feishu_client.send_message(open_id, token, content, receive_id_type, **kwargs)
         if platform == PLATFORM_LARK:
@@ -2077,6 +2081,33 @@ class PlatformNotificationService:
             return f"【部门日报】{department_name}（{date_str}）：{suffix}"
         return f"【公司日报】（{date_str}）：{suffix}"
 
+    @staticmethod
+    def _format_report_date_value(value: Any) -> str:
+        if hasattr(value, "isoformat"):
+            try:
+                return value.isoformat()
+            except Exception:
+                return str(value).strip()
+        return str(value or "").strip()
+
+    @staticmethod
+    def _format_ungenerated_weekly_report_text(
+        *,
+        start_date: Any = None,
+        end_date: Any = None,
+        department_name: Optional[str] = None,
+    ) -> str:
+        """部门/公司周报短文本：Aldebaran has_data=false（本周未生成 KPI）。"""
+        start = PlatformNotificationService._format_report_date_value(start_date)
+        end = PlatformNotificationService._format_report_date_value(end_date)
+        if start and end:
+            period = f"{start} ~ {end}"
+        else:
+            period = start or end or "--"
+        if department_name:
+            return f"【部门周报】{department_name}（{period}）：未查询到周报数据，可能是任务延迟或异常。"
+        return f"【公司周报】（{period}）：未查询到周报数据，可能是任务延迟或异常。"
+
     def _send_report_text_to_department_review_groups_or_recipients(
         self,
         db_session: Session,
@@ -2319,7 +2350,9 @@ class PlatformNotificationService:
         department_report_data: Dict[str, Any],
         recipients: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
-        """发送部门周报飞书卡片通知"""
+        """发送部门周报：has_data 发卡片；未生成发短文本。"""
+        from app.services.crm_statistics_service import CRMStatisticsService
+
         department_name = department_report_data.get("department_name")
         if not department_name:
             logger.warning("Department weekly report data missing department name")
@@ -2341,6 +2374,23 @@ class PlatformNotificationService:
             PERM_WEEKLY_REPORT_TEAM_RECEIVE,
             report_kind="department weekly report",
         )
+        if not CRMStatisticsService.weekly_report_has_data(department_report_data):
+            message_text = self._format_ungenerated_weekly_report_text(
+                start_date=department_report_data.get("start_date"),
+                end_date=department_report_data.get("end_date"),
+                department_name=department_name,
+            )
+            logger.info(
+                "Department weekly report sending text instead of card: %s reason=not_generated",
+                department_name,
+            )
+            return self._send_report_text_to_department_review_groups_or_recipients(
+                db_session=db_session,
+                department_name=department_name,
+                recipients=recipients,
+                message_text=message_text,
+                report_kind="department weekly report",
+            )
         template_vars = self._convert_weekly_report_data_for_feishu(db_session, department_report_data)
         template_id_by_platform = self._get_template_id_by_platform("department_weekly_report")
         return self._send_report_to_department_review_groups_or_recipients(
@@ -2413,8 +2463,9 @@ class PlatformNotificationService:
         db_session: Session,
         company_weekly_report_data: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """发送公司周报飞书卡片通知"""
-        
+        """发送公司周报：has_data 发卡片；未生成发短文本。"""
+        from app.services.crm_statistics_service import CRMStatisticsService
+
         # 获取推送对象
         all_recipients = self.get_recipients_for_company_weekly_report(db_session)
         
@@ -2426,6 +2477,18 @@ class PlatformNotificationService:
                 "recipients_count": 0,
                 "success_count": 0
             }
+
+        if not CRMStatisticsService.weekly_report_has_data(company_weekly_report_data):
+            message_text = self._format_ungenerated_weekly_report_text(
+                start_date=company_weekly_report_data.get("start_date"),
+                end_date=company_weekly_report_data.get("end_date"),
+            )
+            logger.info("Company weekly report sending text instead of card: reason=not_generated")
+            return self.send_text_notification_to_recipients(
+                recipients=all_recipients,
+                message_text=message_text,
+                notification_type="company weekly report empty text",
+            )
         
         template_vars = self._convert_weekly_report_data_for_feishu(db_session, company_weekly_report_data)
         template_id_by_platform = self._get_template_id_by_platform("company_weekly_report")
