@@ -1,5 +1,5 @@
 """
-User registration: oauth-first with local fallback; bootstrap admin provisioning.
+User registration: oauth-first with local fallback; bootstrap admin / system provisioning.
 """
 
 from __future__ import annotations
@@ -251,6 +251,62 @@ async def ensure_admin_user_account(
             raise
         if not existing.is_superuser:
             await _promote_to_superuser(session, existing)
+        return existing
+
+
+async def ensure_system_user_account(
+    session: AsyncSession,
+    *,
+    email: str,
+    password: str | None = None,
+) -> User:
+    """
+    Create bootstrap system user for machine / API-key use.
+
+    Never promotes to superuser. Existing rows are returned as-is (password
+    is not rotated). When OAUTH_BOOTSTRAP_VIA_OAUTH=true, register via oauth
+    first so the user_id exists for later permission assignment.
+    """
+    password = password or secrets.token_urlsafe(32)
+
+    if settings.OAUTH_BOOTSTRAP_VIA_OAUTH:
+        oauth_result = oauth_registration_client.register_user(
+            user_id=email,
+            password=password,
+            name="SIA",
+            email=email,
+        )
+        if oauth_result is not None:
+            lookup_email = oauth_result.email or email
+            user = await _find_local_user_after_external_write(
+                session,
+                user_id=oauth_result.user_id,
+                email=lookup_email,
+            )
+            if user:
+                return user
+            logger.error(
+                "OAuth bootstrap registered system user %s (user_id=%s) but users row not found after commit",
+                lookup_email,
+                oauth_result.user_id,
+            )
+            raise RuntimeError(
+                f"OAuth bootstrap succeeded for {lookup_email} but local users row is missing"
+            )
+
+    try:
+        return await create_user(
+            session,
+            email=email,
+            password=password,
+            is_active=True,
+            is_verified=True,
+            is_superuser=False,
+        )
+    except UserAlreadyExists:
+        existing = await _find_local_user_after_external_write(session, email=email)
+        if existing is None:
+            raise
         return existing
 
 

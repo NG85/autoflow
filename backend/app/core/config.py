@@ -268,6 +268,8 @@ class Settings(BaseSettings):
     OAUTH_REGISTER_ENABLED: bool = True
     OAUTH_REGISTER_CHANNEL: str = "siaweb"
     OAUTH_BOOTSTRAP_VIA_OAUTH: bool = False
+    # Reserved non-superuser account for machine / API-key use (bootstrap).
+    SYSTEM_USER_EMAIL: str = "sia@aptsell.ai"
     # After POST /auth/login succeeds, issue oauth_access_token via session/issue
     AUTH_LEGACY_OAUTH_SHADOW_ENABLED: bool = True
     OAUTH_LOGIN_CHANNEL: str = ""  # empty → OAUTH_REGISTER_CHANNEL (default siaweb)

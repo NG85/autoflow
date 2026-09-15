@@ -133,5 +133,53 @@ class ApiKeyManager:
             api_key.is_active = False
             await session.commit()
 
+    async def get_latest_active_api_key(
+        self, session: AsyncSession, user_id
+    ) -> Optional[ApiKey]:
+        result = await session.exec(
+            select(ApiKey)
+            .where(ApiKey.user_id == user_id, ApiKey.is_active == True)
+            .order_by(ApiKey.created_at.desc())
+        )
+        return result.first()
+
+    async def deactivate_active_api_keys(
+        self, session: AsyncSession, user_id
+    ) -> int:
+        result = await session.exec(
+            select(ApiKey).where(
+                ApiKey.user_id == user_id,
+                ApiKey.is_active == True,
+            )
+        )
+        keys = result.all()
+        count = 0
+        for api_key in keys:
+            api_key.is_active = False
+            session.add(api_key)
+            count += 1
+        if count:
+            await session.commit()
+        return count
+
+    async def ensure_api_key_for_user(
+        self,
+        session: AsyncSession,
+        user: User,
+        *,
+        description: str,
+        reset: bool = False,
+    ) -> Tuple[ApiKey, Optional[str]]:
+        """Return (api_key, raw_secret). raw_secret is None when an existing key is reused."""
+        if reset:
+            await self.deactivate_active_api_keys(session, user.id)
+        else:
+            existing = await self.get_latest_active_api_key(session, user.id)
+            if existing:
+                return existing, None
+        return await self.acreate_api_key(session, user, description)
+
+
+BOOTSTRAP_SYSTEM_API_KEY_DESCRIPTION = "bootstrap system"
 
 api_key_manager = ApiKeyManager()

@@ -241,3 +241,132 @@ async def test_ensure_admin_oauth_bootstrap_does_not_create_duplicate(monkeypatc
                     )
 
     create_user.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ensure_system_user_creates_non_superuser(monkeypatch):
+    monkeypatch.setattr(settings, "OAUTH_BOOTSTRAP_VIA_OAUTH", False)
+    session = AsyncMock()
+    created = _user_model()
+    created.email = "system@example.com"
+
+    with patch(
+        "app.auth.registration.create_user",
+        new_callable=AsyncMock,
+        return_value=created,
+    ) as create:
+        from app.auth.registration import ensure_system_user_account
+
+        user = await ensure_system_user_account(session, email="system@example.com")
+
+    assert user == created
+    kwargs = create.await_args.kwargs
+    assert kwargs["email"] == "system@example.com"
+    assert kwargs["is_superuser"] is False
+    assert kwargs["is_active"] is True
+    assert kwargs["is_verified"] is True
+
+
+@pytest.mark.asyncio
+async def test_ensure_system_user_returns_existing_without_promote(monkeypatch):
+    monkeypatch.setattr(settings, "OAUTH_BOOTSTRAP_VIA_OAUTH", False)
+    session = AsyncMock()
+    existing = _user_model()
+
+    with patch(
+        "app.auth.registration.create_user",
+        new_callable=AsyncMock,
+        side_effect=UserAlreadyExists(),
+    ):
+        with patch(
+            "app.auth.registration._find_local_user_after_external_write",
+            new_callable=AsyncMock,
+            return_value=existing,
+        ):
+            with patch(
+                "app.auth.registration._promote_to_superuser",
+                new_callable=AsyncMock,
+            ) as promote:
+                from app.auth.registration import ensure_system_user_account
+
+                user = await ensure_system_user_account(
+                    session, email="system@example.com"
+                )
+
+    assert user == existing
+    promote.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ensure_system_user_oauth_bootstrap_does_not_promote(monkeypatch):
+    monkeypatch.setattr(settings, "OAUTH_BOOTSTRAP_VIA_OAUTH", True)
+    session = AsyncMock()
+    existing = _user_model()
+    oauth_result = OAuthRegisterResult(
+        user_id=str(USER_ID),
+        email="system@example.com",
+    )
+
+    with patch(
+        "app.auth.registration.oauth_registration_client.register_user",
+        return_value=oauth_result,
+    ):
+        with patch(
+            "app.auth.registration._find_local_user_after_external_write",
+            new_callable=AsyncMock,
+            return_value=existing,
+        ):
+            with patch(
+                "app.auth.registration._promote_to_superuser",
+                new_callable=AsyncMock,
+            ) as promote:
+                with patch(
+                    "app.auth.registration.update_user_password",
+                    new_callable=AsyncMock,
+                ) as update_password:
+                    with patch(
+                        "app.auth.registration.create_user",
+                        new_callable=AsyncMock,
+                    ) as create_user:
+                        from app.auth.registration import ensure_system_user_account
+
+                        user = await ensure_system_user_account(
+                            session, email="system@example.com"
+                        )
+
+    assert user == existing
+    promote.assert_not_awaited()
+    update_password.assert_not_awaited()
+    create_user.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ensure_system_user_oauth_bootstrap_missing_local_row(monkeypatch):
+    monkeypatch.setattr(settings, "OAUTH_BOOTSTRAP_VIA_OAUTH", True)
+    session = AsyncMock()
+    oauth_result = OAuthRegisterResult(
+        user_id=str(USER_ID),
+        email="system@example.com",
+    )
+
+    with patch(
+        "app.auth.registration.oauth_registration_client.register_user",
+        return_value=oauth_result,
+    ):
+        with patch(
+            "app.auth.registration._find_local_user_after_external_write",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            with patch(
+                "app.auth.registration.create_user",
+                new_callable=AsyncMock,
+            ) as create_user:
+                from app.auth.registration import ensure_system_user_account
+
+                with pytest.raises(RuntimeError, match="local users row is missing"):
+                    await ensure_system_user_account(
+                        session, email="system@example.com"
+                    )
+
+    create_user.assert_not_awaited()
