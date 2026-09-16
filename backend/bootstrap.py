@@ -60,6 +60,7 @@ async def _resolve_system_user(session: AsyncSession) -> User | None:
             )
             return None
         print(Fore.YELLOW + "System user already exists, skipping...")
+        _ensure_existing_system_oauth(email)
         return existing
 
     user = await ensure_system_user_account(session, email=email)
@@ -69,6 +70,23 @@ async def _resolve_system_user(session: AsyncSession) -> User | None:
         + Style.RESET_ALL
     )
     return user
+
+
+def _ensure_existing_system_oauth(email: str) -> None:
+    from app.auth.registration import register_system_user_via_oauth
+
+    oauth_result = register_system_user_via_oauth(email=email)
+    if oauth_result is None:
+        print(Fore.YELLOW + f"System user oauth register failed for {email}")
+        return
+    if oauth_result.already_existed:
+        print(Fore.YELLOW + f"System user oauth account already exists for {email}")
+        return
+    print(
+        Fore.GREEN
+        + f"System user registered via oauth: {email}"
+        + Style.RESET_ALL
+    )
 
 
 async def ensure_system_api_key(

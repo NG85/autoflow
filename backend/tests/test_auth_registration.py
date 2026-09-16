@@ -166,10 +166,8 @@ async def test_register_legacy_user_already_exists(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ensure_admin_oauth_bootstrap_promotes_existing_user(monkeypatch):
-    monkeypatch.setattr(settings, "OAUTH_BOOTSTRAP_VIA_OAUTH", True)
+async def test_ensure_admin_oauth_bootstrap_promotes_existing_user():
     session = AsyncMock()
-    session.commit = AsyncMock()
     existing = _user_model()
 
     oauth_result = OAuthRegisterResult(
@@ -187,21 +185,26 @@ async def test_ensure_admin_oauth_bootstrap_promotes_existing_user(monkeypatch):
             return_value=existing,
         ) as find_user:
             with patch(
-                "app.auth.registration._promote_to_superuser",
+                "app.auth.registration.update_user_password",
                 new_callable=AsyncMock,
                 return_value=existing,
-            ) as promote:
+            ):
                 with patch(
-                    "app.auth.registration.create_user",
+                    "app.auth.registration._promote_to_superuser",
                     new_callable=AsyncMock,
-                ) as create_user:
-                    from app.auth.registration import ensure_admin_user_account
+                    return_value=existing,
+                ) as promote:
+                    with patch(
+                        "app.auth.registration.create_user",
+                        new_callable=AsyncMock,
+                    ) as create_user:
+                        from app.auth.registration import ensure_admin_user_account
 
-                    admin = await ensure_admin_user_account(
-                        session,
-                        email="admin@example.com",
-                        password="secret",
-                    )
+                        admin = await ensure_admin_user_account(
+                            session,
+                            email="admin@example.com",
+                            password="secret",
+                        )
 
     assert admin == existing
     find_user.assert_awaited_once()
@@ -210,8 +213,7 @@ async def test_ensure_admin_oauth_bootstrap_promotes_existing_user(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ensure_admin_oauth_bootstrap_does_not_create_duplicate(monkeypatch):
-    monkeypatch.setattr(settings, "OAUTH_BOOTSTRAP_VIA_OAUTH", True)
+async def test_ensure_admin_oauth_bootstrap_does_not_create_duplicate():
     session = AsyncMock()
     oauth_result = OAuthRegisterResult(
         user_id=str(USER_ID),
@@ -244,67 +246,103 @@ async def test_ensure_admin_oauth_bootstrap_does_not_create_duplicate(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_ensure_system_user_creates_non_superuser(monkeypatch):
-    monkeypatch.setattr(settings, "OAUTH_BOOTSTRAP_VIA_OAUTH", False)
+async def test_ensure_admin_oauth_failure_falls_back_to_local_create():
     session = AsyncMock()
     created = _user_model()
-    created.email = "system@example.com"
+    created.is_superuser = True
 
     with patch(
-        "app.auth.registration.create_user",
-        new_callable=AsyncMock,
-        return_value=created,
-    ) as create:
-        from app.auth.registration import ensure_system_user_account
+        "app.auth.registration.oauth_registration_client.register_user",
+        return_value=None,
+    ) as oauth_register:
+        with patch(
+            "app.auth.registration.create_user",
+            new_callable=AsyncMock,
+            return_value=created,
+        ) as create:
+            from app.auth.registration import ensure_admin_user_account
 
-        user = await ensure_system_user_account(session, email="system@example.com")
+            admin = await ensure_admin_user_account(
+                session,
+                email="admin@example.com",
+                password="secret",
+            )
+
+    assert admin == created
+    oauth_register.assert_called_once()
+    assert create.await_args.kwargs["is_superuser"] is True
+
+
+@pytest.mark.asyncio
+async def test_ensure_system_user_creates_non_superuser_when_oauth_fails():
+    session = AsyncMock()
+    created = _user_model()
+    created.email = "sia@aptsell.ai"
+
+    with patch(
+        "app.auth.registration.oauth_registration_client.register_user",
+        return_value=None,
+    ) as oauth_register:
+        with patch(
+            "app.auth.registration.create_user",
+            new_callable=AsyncMock,
+            return_value=created,
+        ) as create:
+            from app.auth.registration import ensure_system_user_account
+
+            user = await ensure_system_user_account(session, email="sia@aptsell.ai")
 
     assert user == created
+    oauth_register.assert_called_once()
+    assert oauth_register.call_args.kwargs["name"] == "SIA"
+    assert oauth_register.call_args.kwargs["email"] == "sia@aptsell.ai"
     kwargs = create.await_args.kwargs
-    assert kwargs["email"] == "system@example.com"
+    assert kwargs["email"] == "sia@aptsell.ai"
     assert kwargs["is_superuser"] is False
     assert kwargs["is_active"] is True
     assert kwargs["is_verified"] is True
 
 
 @pytest.mark.asyncio
-async def test_ensure_system_user_returns_existing_without_promote(monkeypatch):
-    monkeypatch.setattr(settings, "OAUTH_BOOTSTRAP_VIA_OAUTH", False)
+async def test_ensure_system_user_returns_existing_without_promote():
     session = AsyncMock()
     existing = _user_model()
 
     with patch(
-        "app.auth.registration.create_user",
-        new_callable=AsyncMock,
-        side_effect=UserAlreadyExists(),
+        "app.auth.registration.oauth_registration_client.register_user",
+        return_value=None,
     ):
         with patch(
-            "app.auth.registration._find_local_user_after_external_write",
+            "app.auth.registration.create_user",
             new_callable=AsyncMock,
-            return_value=existing,
+            side_effect=UserAlreadyExists(),
         ):
             with patch(
-                "app.auth.registration._promote_to_superuser",
+                "app.auth.registration._find_local_user_after_external_write",
                 new_callable=AsyncMock,
-            ) as promote:
-                from app.auth.registration import ensure_system_user_account
+                return_value=existing,
+            ):
+                with patch(
+                    "app.auth.registration._promote_to_superuser",
+                    new_callable=AsyncMock,
+                ) as promote:
+                    from app.auth.registration import ensure_system_user_account
 
-                user = await ensure_system_user_account(
-                    session, email="system@example.com"
-                )
+                    user = await ensure_system_user_account(
+                        session, email="sia@aptsell.ai"
+                    )
 
     assert user == existing
     promote.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_ensure_system_user_oauth_bootstrap_does_not_promote(monkeypatch):
-    monkeypatch.setattr(settings, "OAUTH_BOOTSTRAP_VIA_OAUTH", True)
+async def test_ensure_system_user_oauth_register_does_not_promote():
     session = AsyncMock()
     existing = _user_model()
     oauth_result = OAuthRegisterResult(
         user_id=str(USER_ID),
-        email="system@example.com",
+        email="sia@aptsell.ai",
     )
 
     with patch(
@@ -331,7 +369,7 @@ async def test_ensure_system_user_oauth_bootstrap_does_not_promote(monkeypatch):
                         from app.auth.registration import ensure_system_user_account
 
                         user = await ensure_system_user_account(
-                            session, email="system@example.com"
+                            session, email="sia@aptsell.ai"
                         )
 
     assert user == existing
@@ -341,12 +379,11 @@ async def test_ensure_system_user_oauth_bootstrap_does_not_promote(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ensure_system_user_oauth_bootstrap_missing_local_row(monkeypatch):
-    monkeypatch.setattr(settings, "OAUTH_BOOTSTRAP_VIA_OAUTH", True)
+async def test_ensure_system_user_oauth_register_missing_local_row():
     session = AsyncMock()
     oauth_result = OAuthRegisterResult(
         user_id=str(USER_ID),
-        email="system@example.com",
+        email="sia@aptsell.ai",
     )
 
     with patch(
@@ -366,7 +403,7 @@ async def test_ensure_system_user_oauth_bootstrap_missing_local_row(monkeypatch)
 
                 with pytest.raises(RuntimeError, match="local users row is missing"):
                     await ensure_system_user_account(
-                        session, email="system@example.com"
+                        session, email="sia@aptsell.ai"
                     )
 
     create_user.assert_not_awaited()

@@ -267,7 +267,6 @@ class Settings(BaseSettings):
     # Registration: prefer oauth; fallback to local UserRepository.create
     OAUTH_REGISTER_ENABLED: bool = True
     OAUTH_REGISTER_CHANNEL: str = "siaweb"
-    OAUTH_BOOTSTRAP_VIA_OAUTH: bool = False
     # Reserved non-superuser account for machine / API-key use (bootstrap).
     SYSTEM_USER_EMAIL: str = "sia@aptsell.ai"
     # After POST /auth/login succeeds, issue oauth_access_token via session/issue

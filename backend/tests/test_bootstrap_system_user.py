@@ -52,15 +52,21 @@ async def test_ensure_system_user_reuses_account_and_issues_key(monkeypatch, cap
         new_callable=AsyncMock,
     ) as create_account:
         with patch(
-            "app.auth.api_keys.api_key_manager.ensure_api_key_for_user",
-            new_callable=AsyncMock,
-            return_value=(_api_key(), raw),
-        ) as ensure_key:
-            from bootstrap import ensure_system_user
+            "app.auth.registration.register_system_user_via_oauth",
+            return_value=None,
+        ) as oauth_register:
+            with patch(
+                "app.auth.api_keys.api_key_manager.ensure_api_key_for_user",
+                new_callable=AsyncMock,
+                return_value=(_api_key(), raw),
+            ) as ensure_key:
+                from bootstrap import ensure_system_user
 
-            await ensure_system_user(session)
+                await ensure_system_user(session)
 
     create_account.assert_not_awaited()
+    oauth_register.assert_called_once()
+    assert oauth_register.call_args.kwargs["email"] == SYSTEM_EMAIL
     ensure_key.assert_awaited_once()
     assert ensure_key.await_args.args[1] is existing
     assert ensure_key.await_args.kwargs["reset"] is False
@@ -79,14 +85,18 @@ async def test_ensure_system_user_skips_superuser_collision(monkeypatch, capsys)
         new_callable=AsyncMock,
     ) as create_account:
         with patch(
-            "app.auth.api_keys.api_key_manager.ensure_api_key_for_user",
-            new_callable=AsyncMock,
-        ) as ensure_key:
-            from bootstrap import ensure_system_user
+            "app.auth.registration.register_system_user_via_oauth",
+        ) as oauth_register:
+            with patch(
+                "app.auth.api_keys.api_key_manager.ensure_api_key_for_user",
+                new_callable=AsyncMock,
+            ) as ensure_key:
+                from bootstrap import ensure_system_user
 
-            await ensure_system_user(session)
+                await ensure_system_user(session)
 
     create_account.assert_not_awaited()
+    oauth_register.assert_not_called()
     ensure_key.assert_not_awaited()
     assert "already belongs to a superuser" in capsys.readouterr().out
 
@@ -131,9 +141,13 @@ async def test_ensure_system_user_skips_existing_key(monkeypatch, capsys):
         new_callable=AsyncMock,
         return_value=(_api_key(display=display), None),
     ):
-        from bootstrap import ensure_system_user
+        with patch(
+            "app.auth.registration.register_system_user_via_oauth",
+            return_value=None,
+        ):
+            from bootstrap import ensure_system_user
 
-        await ensure_system_user(session)
+            await ensure_system_user(session)
 
     out = capsys.readouterr().out
     assert f"System API key already exists ({display})" in out
@@ -150,9 +164,13 @@ async def test_ensure_system_user_rotates_key(monkeypatch, capsys):
         new_callable=AsyncMock,
         return_value=(_api_key(), raw),
     ) as ensure_key:
-        from bootstrap import ensure_system_user
+        with patch(
+            "app.auth.registration.register_system_user_via_oauth",
+            return_value=None,
+        ):
+            from bootstrap import ensure_system_user
 
-        await ensure_system_user(session, reset_api_key=True)
+            await ensure_system_user(session, reset_api_key=True)
 
     assert ensure_key.await_args.kwargs["reset"] is True
     out = capsys.readouterr().out
