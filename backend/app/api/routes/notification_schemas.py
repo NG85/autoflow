@@ -12,6 +12,10 @@ class ReviewSessionContext(BaseModel):
 
     stage: str = Field(..., description="CRMReviewSession.stage，如 initial_edit / lead_review")
     session_id: str = Field(..., description="CRM review session_id")
+    session_type: Optional[str] = Field(
+        default=None,
+        description="sales_update | lead_analysis | cxo | legacy_long",
+    )
 
 
 class DailyNoFollowupReminderPushRequest(BaseModel):
