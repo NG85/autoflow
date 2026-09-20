@@ -41,6 +41,56 @@ class NotifyTosUploadRequest(BaseModel):
     meta: dict
 
 
+class MatchPreviewRequest(BaseModel):
+    upload_ids: List[int] = Field(..., min_length=1)
+    knowledge_base_id: Optional[int] = None
+
+
+class MatchCandidateOut(BaseModel):
+    document_id: int
+    document_name: str
+    knowledge_base_id: Optional[int] = None
+    match_type: str
+    already_linked: bool = False
+    linked_upload_id: Optional[int] = None
+
+
+class UploadMatchPreviewOut(BaseModel):
+    upload_id: int
+    upload_name: str
+    status: str
+    candidates: List[MatchCandidateOut] = Field(default_factory=list)
+    linked_document_id: Optional[int] = None
+
+
+class MatchPreviewResponse(BaseModel):
+    items: List[UploadMatchPreviewOut]
+
+
+class MatchConfirmItem(BaseModel):
+    upload_id: int
+    document_id: int
+
+
+class MatchConfirmRequest(BaseModel):
+    links: List[MatchConfirmItem] = Field(..., min_length=1)
+
+
+class DocumentSourceLinkOut(BaseModel):
+    document_id: int
+    document_name: str
+    knowledge_base_id: Optional[int] = None
+    upload_id: int
+    upload_name: str
+    upload_path: str
+    confirmed_by: str
+    confirmed_at: Optional[str] = None
+
+
+class MatchConfirmResponse(BaseModel):
+    links: List[DocumentSourceLinkOut]
+
+
 # Local Contact Models
 class LocalContactCreate(BaseModel):
     """创建本地联系人请求模型"""

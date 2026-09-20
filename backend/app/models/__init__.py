@@ -27,6 +27,7 @@ from .chat import (
 )
 from .chat_message import ChatMessage
 from .document import Document, DocIndexTaskStatus, DocumentCategory, DocumentMetadata
+from .document_source_file import DocumentSourceFile
 from .chunk import KgIndexStatus, get_kb_chunk_model, PlaybookKgIndexStatus, CrmKgIndexStatus
 from .auth import User
 from .api_key import ApiKey, PublicApiKey

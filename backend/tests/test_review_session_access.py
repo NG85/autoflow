@@ -127,6 +127,41 @@ def test_has_full_session_data_view_non_attendee_viewer_sees_all():
     assert scope.has_full_session_data_view(OTHER_DEPT_ID, is_leader=False, is_attendee=False) is False
 
 
+def test_review_session_list_type_predicate_includes_lead_analysis_and_open_sales_update():
+    from sqlmodel import select
+
+    from app.models.crm_review import CRMReviewSession
+    from app.policies.review_session_access import review_session_list_type_predicate
+
+    sql = str(
+        select(CRMReviewSession)
+        .where(review_session_list_type_predicate(_scope(has_viewer=True, is_admin=False)))
+        .compile(compile_kwargs={"literal_binds": True})
+    ).lower()
+    assert "lead_analysis" in sql
+    assert "legacy_long" in sql
+    assert "sales_update" in sql
+    assert "completed" in sql
+    assert "cxo" not in sql
+
+
+def test_review_session_list_type_predicate_includes_cxo_for_global_scope():
+    from sqlmodel import select
+
+    from app.models.crm_review import CRMReviewSession
+    from app.policies.review_session_access import review_session_list_type_predicate
+
+    sql = str(
+        select(CRMReviewSession)
+        .where(review_session_list_type_predicate(_scope(has_viewer=True, is_admin=True)))
+        .compile(compile_kwargs={"literal_binds": True})
+    ).lower()
+    assert "lead_analysis" in sql
+    assert "cxo" in sql
+    assert "sales_update" not in sql
+    assert "legacy_long" not in sql
+
+
 def test_department_list_filter_includes_attendee_sessions_outside_subtree():
     """部门 viewer：列表 = 子树 ∪ 本人参会，避免跨部门参会被滤掉。"""
     from sqlmodel import select

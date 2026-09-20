@@ -1,5 +1,5 @@
 """
-User registration: oauth-first with local fallback; bootstrap admin provisioning.
+User registration: oauth-first with local fallback; bootstrap admin / system provisioning.
 """
 
 from __future__ import annotations
@@ -204,38 +204,42 @@ async def ensure_admin_user_account(
     password: str,
 ) -> User:
     """
-    Create bootstrap admin. When OAUTH_BOOTSTRAP_VIA_OAUTH=true, register via oauth first,
-    sync users.hashed_password to the provided password, then promote to superuser.
+    Create bootstrap admin. Always attempts oauth register first, syncs
+    users.hashed_password to the provided password, then promotes to superuser.
+    Falls back to local create_user if oauth register fails.
     """
-    if settings.OAUTH_BOOTSTRAP_VIA_OAUTH:
-        oauth_result = oauth_registration_client.register_user(
-            user_id=email,
-            password=password,
-            name="Admin",
-            email=email,
+    oauth_result = oauth_registration_client.register_user(
+        user_id=email,
+        password=password,
+        name="Admin",
+        email=email,
+    )
+    if oauth_result is not None:
+        lookup_email = oauth_result.email or email
+        admin = await _find_local_user_after_external_write(
+            session,
+            user_id=oauth_result.user_id,
+            email=lookup_email,
         )
-        if oauth_result is not None:
-            lookup_email = oauth_result.email or email
-            admin = await _find_local_user_after_external_write(
-                session,
-                user_id=oauth_result.user_id,
-                email=lookup_email,
-            )
-            if admin:
-                # Sync users.hashed_password with bootstrap form password.
-                admin = await update_user_password(session, admin.id, password)
-                if not admin.is_superuser:
-                    await _promote_to_superuser(session, admin)
-                return admin
-            logger.error(
-                "OAuth bootstrap registered %s (user_id=%s) but users row not found after commit",
-                lookup_email,
-                oauth_result.user_id,
-            )
-            raise RuntimeError(
-                f"OAuth bootstrap succeeded for {lookup_email} but local users row is missing"
-            )
+        if admin:
+            # Sync users.hashed_password with bootstrap form password.
+            admin = await update_user_password(session, admin.id, password)
+            if not admin.is_superuser:
+                await _promote_to_superuser(session, admin)
+            return admin
+        logger.error(
+            "OAuth bootstrap registered %s (user_id=%s) but users row not found after commit",
+            lookup_email,
+            oauth_result.user_id,
+        )
+        raise RuntimeError(
+            f"OAuth bootstrap succeeded for {lookup_email} but local users row is missing"
+        )
 
+    logger.warning(
+        "OAuth register failed for admin %s, falling back to local create_user",
+        email,
+    )
     try:
         return await create_user(
             session,
@@ -251,6 +255,84 @@ async def ensure_admin_user_account(
             raise
         if not existing.is_superuser:
             await _promote_to_superuser(session, existing)
+        return existing
+
+
+SYSTEM_USER_OAUTH_NAME = "SIA"
+
+
+def register_system_user_via_oauth(
+    *,
+    email: str,
+    password: str | None = None,
+) -> Optional[OAuthRegisterResult]:
+    """Always register the SIA system user with oauth."""
+    password = password or secrets.token_urlsafe(32)
+    result = oauth_registration_client.register_user(
+        user_id=email,
+        password=password,
+        name=SYSTEM_USER_OAUTH_NAME,
+        email=email,
+    )
+    if result is None:
+        logger.warning("OAuth register failed for system user %s", email)
+    elif result.already_existed:
+        logger.info("OAuth account already exists for system user %s", email)
+    else:
+        logger.info(
+            "OAuth registered system user %s user_id=%s",
+            email,
+            result.user_id,
+        )
+    return result
+
+
+async def ensure_system_user_account(
+    session: AsyncSession,
+    *,
+    email: str,
+    password: str | None = None,
+) -> User:
+    """
+    Create bootstrap system user for machine / API-key use.
+
+    Always attempts oauth register so the user_id exists for later permission
+    assignment. Never promotes to superuser. Existing local rows are returned
+    as-is (password is not rotated).
+    """
+    password = password or secrets.token_urlsafe(32)
+    oauth_result = register_system_user_via_oauth(email=email, password=password)
+    if oauth_result is not None:
+        lookup_email = oauth_result.email or email
+        user = await _find_local_user_after_external_write(
+            session,
+            user_id=oauth_result.user_id,
+            email=lookup_email,
+        )
+        if user:
+            return user
+        logger.error(
+            "OAuth bootstrap registered system user %s (user_id=%s) but users row not found after commit",
+            lookup_email,
+            oauth_result.user_id,
+        )
+        raise RuntimeError(
+            f"OAuth bootstrap succeeded for {lookup_email} but local users row is missing"
+        )
+
+    try:
+        return await create_user(
+            session,
+            email=email,
+            password=password,
+            is_active=True,
+            is_verified=True,
+            is_superuser=False,
+        )
+    except UserAlreadyExists:
+        existing = await _find_local_user_after_external_write(session, email=email)
+        if existing is None:
+            raise
         return existing
 
 

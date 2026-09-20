@@ -11,9 +11,24 @@ from sqlmodel import and_, select
 from app.api.deps import CurrentUserDep, SessionDep
 from app.core.config import settings, StorageType
 from app.utils import sts
-from app.api.routes.models import NotifyTosUploadRequest
-from app.models.data_source import DataSource
+from app.api.routes.models import (
+    DocumentSourceLinkOut,
+    MatchConfirmRequest,
+    MatchConfirmResponse,
+    MatchPreviewRequest,
+    MatchPreviewResponse,
+    MatchCandidateOut,
+    NotifyTosUploadRequest,
+    UploadMatchPreviewOut,
+)
 from app.models.upload import Upload
+from app.services.document_source_match import MatchCandidate, UploadMatchPreview
+from app.services.document_source_service import (
+    confirm_matches,
+    list_matches,
+    preview_matches,
+    unbind_match,
+)
 from app.types import MimeTypes
 
 logger = logging.getLogger(__name__)
@@ -223,3 +238,103 @@ def list_uploads(
     except Exception as e:
         logger.error(f"Failed to list {settings.STORAGE_TYPE} uploads: {e}")
         raise HTTPException(status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail="Failed to retrieve uploads")
+
+
+def _candidate_out(candidate: MatchCandidate) -> MatchCandidateOut:
+    return MatchCandidateOut(
+        document_id=candidate.document_id,
+        document_name=candidate.document_name,
+        knowledge_base_id=candidate.knowledge_base_id,
+        match_type=candidate.match_type,
+        already_linked=candidate.already_linked,
+        linked_upload_id=candidate.linked_upload_id,
+    )
+
+
+def _preview_out(item: UploadMatchPreview) -> UploadMatchPreviewOut:
+    return UploadMatchPreviewOut(
+        upload_id=item.upload_id,
+        upload_name=item.upload_name,
+        status=item.status,
+        candidates=[_candidate_out(candidate) for candidate in item.candidates],
+        linked_document_id=item.linked_document_id,
+    )
+
+
+def _link_out(document, upload, confirmed_by, confirmed_at) -> DocumentSourceLinkOut:
+    return DocumentSourceLinkOut(
+        document_id=document.id,
+        document_name=document.name,
+        knowledge_base_id=document.knowledge_base_id,
+        upload_id=upload.id,
+        upload_name=upload.name,
+        upload_path=upload.path,
+        confirmed_by=str(confirmed_by),
+        confirmed_at=confirmed_at.isoformat() if confirmed_at else None,
+    )
+
+
+@router.post("/uploads/match-preview", response_model=MatchPreviewResponse)
+def match_upload_preview(
+    session: SessionDep,
+    user: CurrentUserDep,
+    request: MatchPreviewRequest,
+) -> MatchPreviewResponse:
+    """Preview filename matches between original uploads and documents.
+
+    Exact filename matches are ready to confirm. Names that only share a stem
+    (extension stripped) are returned as suggested matches. When
+    ``knowledge_base_id`` is omitted, documents are matched globally.
+    """
+    items = preview_matches(
+        session,
+        user.id,
+        request.upload_ids,
+        knowledge_base_id=request.knowledge_base_id,
+    )
+    return MatchPreviewResponse(items=[_preview_out(item) for item in items])
+
+
+@router.post("/uploads/match-confirm", response_model=MatchConfirmResponse)
+def match_upload_confirm(
+    session: SessionDep,
+    user: CurrentUserDep,
+    request: MatchConfirmRequest,
+) -> MatchConfirmResponse:
+    """Persist user-confirmed original-upload to document links."""
+    confirmed = confirm_matches(
+        session,
+        user.id,
+        [(item.upload_id, item.document_id) for item in request.links],
+    )
+    return MatchConfirmResponse(
+        links=[
+            _link_out(document, upload, link.confirmed_by, link.created_at)
+            for link, document, upload in confirmed
+        ]
+    )
+
+
+@router.get("/uploads/matches", response_model=list[DocumentSourceLinkOut])
+def list_upload_matches(
+    session: SessionDep,
+    user: CurrentUserDep,
+    knowledge_base_id: Optional[int] = Query(
+        None, description="Optional knowledge base filter"
+    ),
+) -> list[DocumentSourceLinkOut]:
+    rows = list_matches(session, user.id, knowledge_base_id=knowledge_base_id)
+    return [
+        _link_out(document, upload, link.confirmed_by, link.created_at)
+        for link, document, upload in rows
+    ]
+
+
+@router.delete("/uploads/matches/{document_id}")
+def delete_upload_match(
+    session: SessionDep,
+    user: CurrentUserDep,
+    document_id: int,
+) -> dict:
+    unbind_match(session, user.id, document_id)
+    return {"ok": True}

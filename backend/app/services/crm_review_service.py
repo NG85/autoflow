@@ -350,6 +350,7 @@ def _build_forecast_recalc_out_from_aldebaran(
     *,
     recalc_scope: str,
     session_id: str,
+    session_type: Optional[str] = None,
 ) -> Dict[str, Any]:
     """将 Aldebaran 返回统一归一化为固定结构：total + attendees + pagination。"""
     node = _aldebaran_performance_payload_root(body)
@@ -420,6 +421,7 @@ def _build_forecast_recalc_out_from_aldebaran(
 
     return {
         "session_id": sid,
+        "session_type": session_type,
         "fy_quarter": (str(node.get("fy_quarter")).strip() if node.get("fy_quarter") is not None else None),
         "recalc_scope": recalc_scope,
         "total": total,
@@ -1009,6 +1011,7 @@ class CRMReviewService:
                 else None
             ),
             "review_phase": session.review_phase,
+            "session_type": session.session_type,
             "department_id": (str(session.department_id or "").strip() or None),
             "department_name": (str(session.department_name or "").strip() or None),
         }
@@ -3099,6 +3102,7 @@ class CRMReviewService:
                 resp,
                 recalc_scope=recalc_scope,
                 session_id=str(session.unique_id),
+                session_type=session.session_type,
             )
         except ValueError as e:
             raise HTTPException(status_code=502, detail=str(e)) from e
