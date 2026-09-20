@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, Optional
 from uuid import UUID
 
-from sqlmodel import Session, distinct, func, or_, select
+from sqlmodel import Session, and_, distinct, func, or_, select
 
 from app.models.crm_review import CRMReviewAttendee, CRMReviewSession
 from app.repositories.department_mirror import department_mirror_repo
@@ -83,6 +83,27 @@ def _filters_have_team_scope(filters: list[dict[str, Any]]) -> bool:
 
 def _attendee_session_ids_subquery(user_id: str):
     return select(CRMReviewAttendee.session_id).where(CRMReviewAttendee.user_id == str(user_id))
+
+
+def review_session_list_type_predicate(scope: ReviewSessionViewScope):
+    """列表查询可见的 session 类型。
+
+    - company（global / CXO）：``lead_analysis`` + ``cxo``
+    - 其它范围：``lead_analysis`` / ``legacy_long`` 全部，以及 ``sales_update`` 且未 completed
+    """
+    if scope.list_filter_mode == "company":
+        return or_(
+            CRMReviewSession.session_type == "lead_analysis",
+            CRMReviewSession.session_type == "cxo",
+        )
+    return or_(
+        CRMReviewSession.session_type == "lead_analysis",
+        CRMReviewSession.session_type == "legacy_long",
+        and_(
+            CRMReviewSession.session_type == "sales_update",
+            CRMReviewSession.stage != "completed",
+        ),
+    )
 
 
 def _department_or_attendee_predicate(scope: ReviewSessionViewScope, user_id: str):
@@ -229,33 +250,35 @@ def count_review_sessions_matching_scope(
     db_session: Session,
     scope: ReviewSessionViewScope,
     user_id: str,
+    extra_where=None,
 ) -> int:
     mode = scope.list_filter_mode
     if mode == "company":
-        return int(
-            db_session.exec(select(func.count()).select_from(CRMReviewSession)).one() or 0
-        )
+        stmt = select(func.count()).select_from(CRMReviewSession)
+        if extra_where is not None:
+            stmt = stmt.where(extra_where)
+        return int(db_session.exec(stmt).one() or 0)
     if mode == "department":
-        return int(
-            db_session.exec(
-                select(func.count())
-                .select_from(CRMReviewSession)
-                .where(_department_or_attendee_predicate(scope, user_id))
-            ).one()
-            or 0
-        )
-    return int(
-        db_session.exec(
-            select(func.count(distinct(CRMReviewSession.unique_id)))
+        stmt = (
+            select(func.count())
             .select_from(CRMReviewSession)
-            .join(
-                CRMReviewAttendee,
-                CRMReviewAttendee.session_id == CRMReviewSession.unique_id,
-            )
-            .where(CRMReviewAttendee.user_id == str(user_id))
-        ).one()
-        or 0
+            .where(_department_or_attendee_predicate(scope, user_id))
+        )
+        if extra_where is not None:
+            stmt = stmt.where(extra_where)
+        return int(db_session.exec(stmt).one() or 0)
+    stmt = (
+        select(func.count(distinct(CRMReviewSession.unique_id)))
+        .select_from(CRMReviewSession)
+        .join(
+            CRMReviewAttendee,
+            CRMReviewAttendee.session_id == CRMReviewSession.unique_id,
+        )
+        .where(CRMReviewAttendee.user_id == str(user_id))
     )
+    if extra_where is not None:
+        stmt = stmt.where(extra_where)
+    return int(db_session.exec(stmt).one() or 0)
 
 
 def apply_review_session_list_filter(stmt, scope: ReviewSessionViewScope, user_id: str):

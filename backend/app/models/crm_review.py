@@ -124,13 +124,13 @@ class CRMReviewSession(SQLModel, table=True):
     session_name: Optional[str] = Field(
         default=None,
         sa_column=Column(String(255)),
-        description="Display name",
+        description='Display name (e.g., "W10 通用事业部 复盘")',
     )
 
     # Scope: Each session is bound to one department (with sub-depts)
     department_id: str = Field(
         sa_column=Column(String(255), nullable=False),
-        description="FK → crm_department.unique_id",
+        description="FK → crm_department.unique_id (review scope)",
     )
     department_name: Optional[str] = Field(
         default=None,
@@ -154,20 +154,12 @@ class CRMReviewSession(SQLModel, table=True):
     )
     period: str = Field(
         sa_column=Column(String(32), nullable=False),
-        description="Period identifier (e.g., 2026-W10)",
-    )
-    period_start: date = Field(
-        sa_column=Column(Date, nullable=False),
-        description="Period start date",
-    )
-    period_end: date = Field(
-        sa_column=Column(Date, nullable=False),
-        description="Period end date",
+        description="Period identifier (e.g., FY26Q3, 2026-W10)",
     )
     fiscal_year: Optional[str] = Field(
         default=None,
         sa_column=Column(String(16)),
-        description="Fiscal year",
+        description="Fiscal year (e.g., 2026/2027)",
     )
 
     # Lifecycle
@@ -183,121 +175,141 @@ class CRMReviewSession(SQLModel, table=True):
         ),
     )
     review_phase: Optional[str] = Field(
-        default=None,
-        sa_column=Column(String(32)),
+        default="not_started",
+        sa_column=Column(String(32), default="not_started"),
         description="not_started/edit/closed - controls if attendees can edit",
     )
 
     # T1-T4 configurable times
     t1_time: datetime = Field(
         sa_column=Column(DateTime, nullable=False),
-        description="T1: Session launch",
+        description="T1: When initial edit window opens (snapshot created)",
     )
     t2_time: datetime = Field(
         sa_column=Column(DateTime, nullable=False),
-        description="T2: First calc",
+        description="T2: When initial edit window closes (first calc starts)",
     )
     t3_time: datetime = Field(
         sa_column=Column(DateTime, nullable=False),
-        description="T3: Open to lead",
+        description="T3: When review opens to lead",
     )
     t4_time: datetime = Field(
         sa_column=Column(DateTime, nullable=False),
-        description="T4: Second calc",
+        description="T4: System deadline (force finalize + second calc)",
     )
 
     # Phase tracking
     initial_window_open_time: Optional[datetime] = Field(
         default=None,
         sa_column=Column(DateTime),
-        description="When initial edit window opened",
+        description="When initial edit window opened (T1)",
     )
     initial_window_close_time: Optional[datetime] = Field(
         default=None,
         sa_column=Column(DateTime),
-        description="When initial edit window closed",
+        description="When initial edit window closed (T2)",
     )
     first_calc_start_time: Optional[datetime] = Field(
         default=None,
         sa_column=Column(DateTime),
+        description="When first calculation started",
     )
     first_calc_end_time: Optional[datetime] = Field(
         default=None,
         sa_column=Column(DateTime),
+        description="When first calculation completed",
     )
     first_calc_execution_id: Optional[str] = Field(
         default=None,
         sa_column=Column(String(255)),
+        description="Workflow execution ID for first calc",
     )
     meeting_opened_by: Optional[str] = Field(
         default=None,
         sa_column=Column(String(255)),
+        description="User who last opened review",
     )
     meeting_opened_by_id: Optional[str] = Field(
         default=None,
         sa_column=Column(String(255)),
+        description="User ID who last opened",
     )
     meeting_opened_at: Optional[datetime] = Field(
         default=None,
         sa_column=Column(DateTime),
+        description="When review was last opened",
     )
     meeting_closed_at: Optional[datetime] = Field(
         default=None,
         sa_column=Column(DateTime),
+        description="When review was last closed",
     )
     meeting_open_count: Optional[int] = Field(
         default=0,
         sa_column=Column(Integer, default=0),
+        description="How many times review was opened",
     )
     meeting_total_duration_minutes: Optional[int] = Field(
         default=0,
         sa_column=Column(Integer, default=0),
+        description="Total minutes review was open",
     )
     second_calc_start_time: Optional[datetime] = Field(
         default=None,
         sa_column=Column(DateTime),
+        description="When second calculation started (T4)",
     )
     second_calc_end_time: Optional[datetime] = Field(
         default=None,
         sa_column=Column(DateTime),
+        description="When second calculation completed",
     )
     second_calc_execution_id: Optional[str] = Field(
         default=None,
         sa_column=Column(String(255)),
+        description="Workflow execution ID for second calc",
     )
 
     # Launcher
     launched_by: Optional[str] = Field(
         default=None,
         sa_column=Column(String(255)),
+        description="User who launched",
     )
     launched_by_id: Optional[str] = Field(
         default=None,
         sa_column=Column(String(255)),
+        description="User ID who launched",
     )
     plan_id: Optional[str] = Field(
         default=None,
         sa_column=Column(String(255)),
+        description="Workflow plan ID",
     )
 
     # Time dimensions
     report_date: date = Field(
         sa_column=Column(Date, nullable=False),
+        description="The reporting date for this review",
     )
     report_week_of_year: Optional[int] = Field(
         default=None,
         sa_column=Column(Integer),
+        description="Week number (1-53)",
     )
     report_month_of_year: Optional[int] = Field(
         default=None,
         sa_column=Column(Integer),
+        description="Month (1-12)",
     )
     report_quarter_of_year: Optional[int] = Field(
         default=None,
         sa_column=Column(Integer),
+        description="Quarter (1-4)",
     )
     report_year: int = Field(
         sa_column=Column(Integer, nullable=False),
+        description="Year",
     )
 
     create_time: Optional[datetime] = Field(
@@ -317,20 +329,78 @@ class CRMReviewSession(SQLModel, table=True):
         ),
         description="更新时间",
     )
+    period_start: date = Field(
+        sa_column=Column(Date, nullable=False),
+        description="复盘周期开始日期 (周一)",
+    )
+    period_end: date = Field(
+        sa_column=Column(Date, nullable=False),
+        description="复盘周期结束日期 (周日)",
+    )
+    report_fy_quarter: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(10)),
+        description="报告所属财季 (如 FY26Q1)，用于快速查询",
+    )
+    created_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(
+            DateTime, nullable=False, server_default=func.now()
+        ),
+        description="创建时间",
+    )
+    updated_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(
+            DateTime,
+            nullable=False,
+            server_default=func.now(),
+            onupdate=func.now(),
+        ),
+        description="更新时间",
+    )
+    session_type: str = Field(
+        default="legacy_long",
+        sa_column=Column(
+            String(32),
+            nullable=False,
+            default="legacy_long",
+        ),
+        description="sales_update | lead_analysis | cxo | legacy_long",
+    )
+    snapshot_date: Optional[date] = Field(
+        default=None,
+        sa_column=Column(Date),
+        description="Branch snapshot_date this session reads (report_date)",
+    )
 
     __table_args__ = (
-        Index("idx_review_session_unique_id", "unique_id"),
-        Index("idx_review_session_stage", "stage"),
-        Index(
-            "idx_review_session_report_year_week",
-            "report_year",
-            "report_week_of_year",
+        UniqueConstraint(
+            "review_type",
+            "period",
+            "department_id",
+            name="uq_period_dept",
         ),
-        Index("idx_review_session_department_id", "department_id"),
-        Index("idx_review_session_t1_time", "t1_time"),
-        Index("idx_review_session_t2_time", "t2_time"),
-        Index("idx_review_session_t3_time", "t3_time"),
-        Index("idx_review_session_t4_time", "t4_time"),
+        Index("idx_department_id", "department_id"),
+        Index("idx_period_end", "period_end"),
+        Index("idx_period_start", "period_start"),
+        Index("idx_report_fy_quarter", "report_fy_quarter"),
+        Index("idx_report_year_week", "report_year", "report_week_of_year"),
+        Index("idx_review_phase", "review_phase"),
+        Index(
+            "idx_review_session_type_period_dept_date",
+            "review_type",
+            "session_type",
+            "period",
+            "department_id",
+            "snapshot_date",
+        ),
+        Index("idx_stage", "stage"),
+        Index("idx_t1_time", "t1_time"),
+        Index("idx_t2_time", "t2_time"),
+        Index("idx_t3_time", "t3_time"),
+        Index("idx_t4_time", "t4_time"),
+        Index("idx_unique_id", "unique_id"),
     )
 
 

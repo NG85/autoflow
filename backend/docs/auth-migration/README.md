@@ -16,7 +16,7 @@
 | 登录 | `POST /auth/login` → `oauth_access_token` Cookie |
 | 鉴权 | 仅 `oauth_access_token` 或 `ta-...` API Key 通过 |
 | 注册 | `POST /users/register` 优先 oauth，失败 fallback 本地 create |
-| Bootstrap | `OAUTH_BOOTSTRAP_VIA_OAUTH=true` 时先 oauth 注册再提权 superuser |
+| Bootstrap | 始终先 oauth 注册；admin 提权 superuser，sia 保持非超管 |
 
 ## 关键配置
 
@@ -29,8 +29,6 @@ OAUTH_PERMISSION_API_TOKEN=<服务间调用 /permission/* 的 Bearer token>
 ```
 
 本地无 oauth 时可关闭：`AUTH_LEGACY_OAUTH_SHADOW_ENABLED=false`、`OAUTH_REGISTER_ENABLED=false`。
-
-可选：`OAUTH_BOOTSTRAP_VIA_OAUTH=true`（新环境 bootstrap admin 走 oauth）。
 
 ## 文档
 

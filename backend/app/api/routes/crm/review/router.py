@@ -80,6 +80,7 @@ from app.policies.review_session_access import (
     apply_review_session_list_filter,
     count_review_sessions_matching_scope,
     get_cached_review_session_view_scope,
+    review_session_list_type_predicate,
 )
 
 logger = logging.getLogger(__name__)
@@ -599,19 +600,26 @@ def query_my_latest_review_session(
 ) -> MyLatestReviewSessionOut:
     """
     当前用户参与的、汇报日最新的一场 review 的 session id；没有则为 null。
+    返回 ``lead_analysis`` / ``legacy_long`` 全部，以及 ``sales_update`` 且 stage 不等于 completed 的记录；
+    可见范围为 global 时只返回 ``lead_analysis`` 与 ``cxo``。
     可见范围由 ``biz_weekly_decision`` data-scope 决定：global 看全公司；``org_team_sub`` 等团队范围看本部门及下属；``self_owner`` 仅本人参会。
     """
     scope_cache: Dict[str, ReviewSessionViewScope] = {}
     scope = get_cached_review_session_view_scope(db_session, user, scope_cache)
     stmt = apply_review_session_list_filter(
-        select(CRMReviewSession.unique_id),
+        select(CRMReviewSession),
         scope,
         str(user.id),
-    )
+    ).where(review_session_list_type_predicate(scope))
     row = db_session.exec(
         stmt.order_by(CRMReviewSession.report_date.desc(), CRMReviewSession.create_time.desc()).limit(1)
     ).first()
-    return MyLatestReviewSessionOut(review_session_id=str(row) if row else None)
+    if not row:
+        return MyLatestReviewSessionOut(review_session_id=None, session_type=None)
+    return MyLatestReviewSessionOut(
+        review_session_id=str(row.unique_id),
+        session_type=row.session_type,
+    )
 
 
 @router.get("/crm/review/my/sessions/history")
@@ -623,6 +631,8 @@ def query_my_review_session_history(
 ) -> ReviewSessionHistoryListOut:
     """
     当前用户参与过的 review 列表（分页），从新到旧。``size`` 最大 200。
+    返回 ``lead_analysis`` / ``legacy_long`` 全部，以及 ``sales_update`` 且 stage 不等于 completed 的记录；
+    可见范围为 global 时只返回 ``lead_analysis`` 与 ``cxo``。
     可见范围由 ``biz_weekly_decision`` data-scope 决定：global 看全公司；``org_team_sub`` 等团队范围看本部门及下属；``self_owner`` 仅本人参会。
     """
     page = max(int(page or 1), 1)
@@ -635,8 +645,13 @@ def query_my_review_session_history(
         select(CRMReviewSession),
         scope,
         str(user.id),
+    ).where(review_session_list_type_predicate(scope))
+    total = count_review_sessions_matching_scope(
+        db_session,
+        scope,
+        str(user.id),
+        extra_where=review_session_list_type_predicate(scope),
     )
-    total = count_review_sessions_matching_scope(db_session, scope, str(user.id))
     rows = db_session.exec(
         base_stmt.order_by(
             CRMReviewSession.report_date.desc(),
@@ -658,6 +673,7 @@ def query_my_review_session_history(
             review_phase=r.review_phase,
             report_date=r.report_date,
             create_time=r.create_time.strftime("%Y-%m-%d %H:%M:%S") if r.create_time else None,
+            session_type=r.session_type,
         )
         for r in rows
     ]
@@ -879,6 +895,7 @@ def update_review_session_phase(
     db_session.refresh(session)
     return {
         "session_id": str(session.unique_id),
+        "session_type": session.session_type,
         "stage": str(session.stage),
         "review_phase": str(session.review_phase or ""),
     }
@@ -945,6 +962,7 @@ def query_review_session_kpi_metrics(
 
     return ReviewSessionKpiMetricsOut(
         session_id=session_id,
+        session_type=session.session_type,
         total=len(items),
         items=items,
     )
@@ -1056,6 +1074,7 @@ def query_review_session_insights(
         ]
         return ReviewSessionInsightsOut(
             session_id=session_id,
+            session_type=session.session_type,
             scope_type="department",
             risk_total=len(risk_items),
             progress_total=progress_total,
@@ -1071,6 +1090,7 @@ def query_review_session_insights(
     ]
     return ReviewSessionInsightsBasicOut(
         session_id=session_id,
+        session_type=session.session_type,
         scope_type="department",
         risk_total=len(risk_items),
         progress_total=progress_total,
@@ -1230,6 +1250,7 @@ def query_review_session_insight_risk_opportunities(
     return ReviewSessionInsightDetailOut(
         insight_unique_id=insight_unique_id,
         session_id=session_id,
+        session_type=session.session_type,
         scope_type="department",
         record_type=insight_record_type,
         type_code=str(insight.type_code),

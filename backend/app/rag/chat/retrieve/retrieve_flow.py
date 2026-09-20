@@ -23,6 +23,7 @@ from app.rag.retrievers.knowledge_graph.schema import (
 )
 from app.rag.retrievers.chunk.fusion_retriever import ChunkFusionRetriever
 from app.repositories import document_repo
+from app.repositories.document_source_file import document_source_file_repo
 from app.rag.types import ChatMessageSate
 from app.rag.chat.crm_authority import (
     CRMAuthority,
@@ -37,6 +38,9 @@ class SourceDocument(BaseModel):
     id: int
     name: str
     source_uri: Optional[str] = None
+    original_file_id: Optional[int] = None
+    original_name: Optional[str] = None
+    original_source_uri: Optional[str] = None
 
 
 class RetrieveFlow:
@@ -189,14 +193,23 @@ class RetrieveFlow:
         self, nodes: List[NodeWithScore]
     ) -> List[SourceDocument]:
         documents = self.get_documents_from_nodes(nodes)
-        return [
-            SourceDocument(
-                id=doc.id,
-                name=doc.name,
-                source_uri=doc.source_uri,
+        originals = document_source_file_repo.fetch_uploads_by_document_ids(
+            self.db_session, [doc.id for doc in documents]
+        )
+        source_documents = []
+        for doc in documents:
+            original = originals.get(doc.id)
+            source_documents.append(
+                SourceDocument(
+                    id=doc.id,
+                    name=doc.name,
+                    source_uri=doc.source_uri,
+                    original_file_id=original.id if original else None,
+                    original_name=original.name if original else None,
+                    original_source_uri=original.path if original else None,
+                )
             )
-            for doc in documents
-        ]
+        return source_documents
 
 
     def filter_knowledge_graph_by_authority(

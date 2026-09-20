@@ -1482,6 +1482,10 @@ class ReviewSessionMetaOut(BaseModel):
     report_date: date
     create_time: Optional[str] = None
     review_phase: Optional[str] = None
+    session_type: Optional[str] = Field(
+        None,
+        description="sales_update | lead_analysis | cxo | legacy_long",
+    )
     department_id: Optional[str] = Field(
         None,
         description="复盘会话所属部门 ID（crm_review_session.department_id）",
@@ -1567,6 +1571,10 @@ class ReviewSessionKpiMetricOut(BaseModel):
 
 class ReviewSessionKpiMetricsOut(BaseModel):
     session_id: str
+    session_type: Optional[str] = Field(
+        None,
+        description="sales_update | lead_analysis | cxo | legacy_long",
+    )
     total: int
     items: List[ReviewSessionKpiMetricOut]
 
@@ -1607,6 +1615,10 @@ class ReviewSessionProgressCategoryGroupOut(ReviewSessionProgressCategoryGroupBa
 
 class ReviewSessionInsightsBasicOut(BaseModel):
     session_id: str
+    session_type: Optional[str] = Field(
+        None,
+        description="sales_update | lead_analysis | cxo | legacy_long",
+    )
     scope_type: Literal["department"] = "department"
     risk_total: int = 0
     progress_total: int = 0
@@ -1635,6 +1647,10 @@ class ReviewSessionInsightRiskOpportunityOut(BaseModel):
 class ReviewSessionInsightDetailBasicOut(BaseModel):
     insight_unique_id: str
     session_id: str
+    session_type: Optional[str] = Field(
+        None,
+        description="sales_update | lead_analysis | cxo | legacy_long",
+    )
     scope_type: Literal["department"] = "department"
     record_type: Literal[
         "RISK", "RISK_PART", "PROGRESS", "OPP_SUMMARY", "OPP_REQS_INSIGHT"
@@ -1714,6 +1730,10 @@ class ReviewSessionForecastRecalcOut(BaseModel):
     """
 
     session_id: str
+    session_type: Optional[str] = Field(
+        None,
+        description="sales_update | lead_analysis | cxo | legacy_long",
+    )
     fy_quarter: Optional[str] = None
     recalc_scope: Literal["full_session", "self_only"]
     total: ReviewPerformanceMetricsOut = Field(default_factory=ReviewPerformanceMetricsOut)
@@ -1772,6 +1792,7 @@ class ReviewSnapshotFilterEnumsOut(BaseModel):
 
 class MyLatestReviewSessionOut(BaseModel):
     review_session_id: Optional[str] = None
+    session_type: Optional[str] = None
 
 
 class ReviewSessionHistoryItemOut(BaseModel):
@@ -1785,6 +1806,7 @@ class ReviewSessionHistoryItemOut(BaseModel):
     review_phase: Optional[str] = None
     report_date: date
     create_time: Optional[str] = None
+    session_type: Optional[str] = None
 
 
 class ReviewSessionHistoryListOut(BaseModel):
