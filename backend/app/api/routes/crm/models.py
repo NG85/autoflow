@@ -1216,6 +1216,10 @@ class WeeklyFollowupSummaryItemOut(BaseModel):
     week_start: date
     week_end: date
     summary_type: str
+    report_kind: str = Field(
+        default="followup",
+        description="followup=周跟进总结，visit_report=周拜访报告",
+    )
     department_id: str = ""
     department_name: str = ""
     title: str = ""

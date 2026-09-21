@@ -36,7 +36,10 @@ from app.api.routes.crm.models import (
 )
 from app.models.crm_weekly_followup_entity_summary import CRMWeeklyFollowupEntitySummary
 from app.models.crm_weekly_followup_leader_engagement import CRMWeeklyFollowupLeaderEngagement
-from app.models.crm_weekly_followup_summary import CRMWeeklyFollowupSummary
+from app.models.crm_weekly_followup_summary import (
+    CRMWeeklyFollowupSummary,
+    REPORT_KIND_FOLLOWUP,
+)
 from app.repositories.crm_account import crm_account_repo
 from app.repositories.department_mirror import department_mirror_repo
 from app.repositories.user_department_relation import user_department_relation_repo
@@ -452,6 +455,7 @@ def get_weekly_followup_detail(
             CRMWeeklyFollowupSummary.week_start == week_start,
             CRMWeeklyFollowupSummary.week_end == week_end,
             CRMWeeklyFollowupSummary.summary_type == ("company" if scope == "company" else "department"),
+            CRMWeeklyFollowupSummary.report_kind == REPORT_KIND_FOLLOWUP,
         )
         if scope == "company":
             stmt = stmt.where(CRMWeeklyFollowupSummary.department_name == "")
@@ -471,6 +475,7 @@ def get_weekly_followup_detail(
                 week_start=s.week_start,
                 week_end=s.week_end,
                 summary_type=s.summary_type,
+                report_kind=s.report_kind or REPORT_KIND_FOLLOWUP,
                 department_id=s.department_id,
                 department_name=s.department_name,
                 title=s.title or "",
@@ -831,6 +836,7 @@ def list_weekly_followup_weekly_summaries(
     if scope in {"company", "department"}:
         conds = [
             CRMWeeklyFollowupSummary.summary_type == ("company" if scope == "company" else "department"),
+            CRMWeeklyFollowupSummary.report_kind == REPORT_KIND_FOLLOWUP,
         ]
         if scope == "company":
             conds.append(CRMWeeklyFollowupSummary.department_name == "")
@@ -884,6 +890,8 @@ def get_weekly_followup_summary_reviewed_status(
     summary = db_session.exec(select(CRMWeeklyFollowupSummary).where(CRMWeeklyFollowupSummary.id == summary_id)).first()
     if summary is None:
         raise HTTPException(status_code=404, detail="未找到相关周总结")
+    if (summary.report_kind or REPORT_KIND_FOLLOWUP) != REPORT_KIND_FOLLOWUP:
+        raise HTTPException(status_code=400, detail="仅支持周跟进总结的已阅状态查询")
     if (summary.summary_type or "").strip() != "department":
         raise HTTPException(status_code=400, detail="仅支持团队/部门级周总结的已阅状态查询")
 
@@ -929,6 +937,8 @@ def mark_weekly_followup_summary_reviewed(
     summary = db_session.exec(select(CRMWeeklyFollowupSummary).where(CRMWeeklyFollowupSummary.id == summary_id)).first()
     if summary is None:
         raise HTTPException(status_code=404, detail="未找到相关周总结")
+    if (summary.report_kind or REPORT_KIND_FOLLOWUP) != REPORT_KIND_FOLLOWUP:
+        raise HTTPException(status_code=400, detail="仅支持周跟进总结的已阅确认")
     if (summary.summary_type or "").strip() != "department":
         raise HTTPException(status_code=400, detail="仅支持团队/部门级周总结的已阅确认")
 
@@ -1042,6 +1052,7 @@ def save_weekly_followup_comments(
                         CRMWeeklyFollowupSummary.week_end == entity.week_end,
                         CRMWeeklyFollowupSummary.summary_type == "department",
                         CRMWeeklyFollowupSummary.department_name == (entity.department_name or ""),
+                        CRMWeeklyFollowupSummary.report_kind == REPORT_KIND_FOLLOWUP,
                     )
                 ).first()
                 if summary is not None:
