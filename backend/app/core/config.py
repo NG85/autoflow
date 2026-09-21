@@ -302,6 +302,12 @@ class Settings(BaseSettings):
     # 关闭时走本地空任务推卡降级（便于本地/联调）
     ALDEBARAN_VISIT_RECORD_POST_PROCESS_ENABLED: bool = True
     ALDEBARAN_CONTACT_CREATED_ENABLED: bool = True
+    # 共库只读：Aldebaran 实体洞察表。拜访复盘 entity_type=VISIT、entity_id=record_id。
+    ALDEBARAN_ENTITY_INSIGHT_TABLE: str = "crm_entity_insight"
+    ALDEBARAN_VISIT_INSIGHT_ENTITY_TYPE: str = "VISIT"
+    # 同一拜访两条复盘：销售视角 / 上级视角
+    ALDEBARAN_VISIT_INSIGHT_SALES_TYPE: str = "POSTVISIT_REVIEW_SALES_VIEW"
+    ALDEBARAN_VISIT_INSIGHT_LEADER_TYPE: str = "POSTVISIT_REVIEW_LEADER_VIEW"
     
     EMBEDDING_THRESHOLD: float = 0.92
 

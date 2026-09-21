@@ -1106,6 +1106,21 @@ class VisitRecordRepo(BaseRepo):
             followup_extra=followup_extra if isinstance(followup_extra, dict) else None,
         )
 
+    def get_collaborative_participants_raw(
+        self,
+        session: Session,
+        record_id: str,
+    ) -> Optional[str]:
+        """详情响应会把协同人收成姓名串；复盘视角匹配需要库内原始 JSON。"""
+        rid = (record_id or "").strip()
+        if not rid:
+            return None
+        return session.exec(
+            select(CRMSalesVisitRecord.collaborative_participants).where(
+                CRMSalesVisitRecord.record_id == rid
+            )
+        ).first()
+
     def update_visit_record_comments(
         self,
         session: Session,

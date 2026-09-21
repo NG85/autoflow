@@ -33,6 +33,20 @@ from app.services.visit_record_card_push_status import (
     resolve_card_push_status_from_notification_result,
 )
 from app.services.visit_record_push_errors import split_failed_recipients_by_retryable
+from app.services.visit_record_push_policy import (
+    CARD_RECAP_LITE,
+    DEFAULT_VISIT_RECORD_PUSH_POLICY,
+    VisitRecordPushPolicy,
+    filter_recipients_by_policy,
+    load_visit_record_push_policy,
+)
+from app.services.visit_record_recap_card import RecapLiteCard, build_recap_lite_card
+from app.services.visit_record_insight_reader import (
+    RECAP_VIEW_LEADER,
+    RECAP_VIEW_SALES,
+    load_visit_record_insights_by_view,
+    recap_view_for_role,
+)
 from app.platforms.notification_types import (
     PERM_DAILY_REPORT_COMPANY_RECEIVE,
     PERM_DAILY_REPORT_PERSONAL_RECEIVE,
@@ -1643,16 +1657,86 @@ class PlatformNotificationService:
         "collaborative_participant": 3,
     }
 
+    def _recap_card_for_role(
+        self,
+        role: Optional[str],
+        *,
+        recap_cards_by_view: Optional[Dict[str, RecapLiteCard]] = None,
+        recap_card: Optional[RecapLiteCard] = None,
+        is_group: bool = False,
+    ) -> Optional[RecapLiteCard]:
+        if recap_cards_by_view:
+            return recap_cards_by_view.get(recap_view_for_role(role, is_group=is_group))
+        return recap_card
+
+    def _recap_lite_send_payload(
+        self,
+        platform: str,
+        recap_card: RecapLiteCard,
+    ) -> Tuple[Any, str]:
+        """按平台返回轻量复盘卡的消息体与 msg_type。"""
+        if platform in (PLATFORM_FEISHU, PLATFORM_LARK):
+            return (
+                self.build_feishu_markdown_card(
+                    recap_card.feishu_body,
+                    title=recap_card.title,
+                    header_template=recap_card.header_template,
+                ),
+                "interactive",
+            )
+        return recap_card.dingtalk_text, "text"
+
+    def _visit_record_card_payload_for_recipient(
+        self,
+        recipient_type: str,
+        platform: str,
+        visit_type: str,
+        form_type: Optional[str],
+        base_template_vars: Dict[str, Any],
+        policy: VisitRecordPushPolicy,
+        recap_card: Optional[RecapLiteCard],
+        recap_cards_by_view: Optional[Dict[str, RecapLiteCard]] = None,
+    ) -> Tuple[Any, str, Optional[str]]:
+        """返回 (content, msg_type, error)。error 非空表示无法构建该角色的卡片。"""
+        card = policy.recipient_card(recipient_type)
+        lite_card = self._recap_card_for_role(
+            recipient_type,
+            recap_cards_by_view=recap_cards_by_view,
+            recap_card=recap_card,
+        )
+        if card == CARD_RECAP_LITE and lite_card is not None:
+            content, msg_type = self._recap_lite_send_payload(platform, lite_card)
+            return content, msg_type, None
+        if card == CARD_RECAP_LITE and lite_card is None:
+            logger.warning(
+                "Visit record recap_lite requested for %s on %s but card payload missing; fall back to legacy",
+                recipient_type,
+                platform,
+            )
+        template_id = self._get_visit_record_template_id(recipient_type, platform, visit_type, form_type)
+        if not template_id:
+            return None, "interactive", "No template available for platform"
+        content = {
+            "type": "template",
+            "data": {"template_id": template_id, "template_variable": base_template_vars},
+        }
+        return content, "interactive", None
+
     def _send_visit_record_to_individual_recipients(
         self,
         recipients_by_platform: Dict[str, List[Dict[str, Any]]],
         base_template_vars: Dict[str, Any],
         visit_type: str,
         visit_record: Optional[Dict[str, Any]],
+        *,
+        policy: Optional[VisitRecordPushPolicy] = None,
+        recap_card: Optional[RecapLiteCard] = None,
+        recap_cards_by_view: Optional[Dict[str, RecapLiteCard]] = None,
     ) -> Tuple[int, List[Dict[str, Any]]]:
         """向个人接收者发送拜访记录卡片，返回 (成功数, 失败列表)。"""
         if not recipients_by_platform:
             return 0, []
+        policy = policy or DEFAULT_VISIT_RECORD_PUSH_POLICY
         platforms = [p for p in recipients_by_platform.keys() if p]
         platform_tokens = self._get_platform_tokens(platforms)
         success_count = 0
@@ -1675,10 +1759,19 @@ class PlatformNotificationService:
             )
             sent_recipient_keys: set[tuple[str, str]] = set()
             for recipient in sorted_recipients:
-                template_id = self._get_visit_record_template_id(recipient["type"], platform, visit_type, form_type)
-                if not template_id:
+                card_content, msg_type, payload_error = self._visit_record_card_payload_for_recipient(
+                    recipient["type"],
+                    platform,
+                    visit_type,
+                    form_type,
+                    base_template_vars,
+                    policy,
+                    recap_card,
+                    recap_cards_by_view,
+                )
+                if payload_error:
                     failed_recipients.append(
-                        self._create_failed_recipient_record(recipient, platform, "No template available for platform")
+                        self._create_failed_recipient_record(recipient, platform, payload_error)
                     )
                     continue
                 dedup_key = (platform, recipient["open_id"])
@@ -1693,7 +1786,6 @@ class PlatformNotificationService:
                     )
                     continue
                 sent_recipient_keys.add(dedup_key)
-                card_content = {"type": "template", "data": {"template_id": template_id, "template_variable": base_template_vars}}
                 try:
                     self._send_message(
                         recipient["open_id"],
@@ -1701,13 +1793,16 @@ class PlatformNotificationService:
                         card_content,
                         platform,
                         receive_id_type=recipient.get("receive_id_type", "open_id"),
-                        msg_type="interactive",
+                        msg_type=msg_type,
                         platform_tokens=platform_tokens,
                     )
                     success_count += 1
                     logger.info(
-                        "Pushed visit record to %s (%s) on %s",
-                        recipient.get("name"), recipient.get("type"), platform,
+                        "Pushed visit record to %s (%s/%s) on %s",
+                        recipient.get("name"),
+                        recipient.get("type"),
+                        policy.recipient_card(recipient.get("type")),
+                        platform,
                     )
                 except Exception as e:
                     failed_record = self._create_failed_recipient_record(recipient, platform, e)
@@ -1736,18 +1831,43 @@ class PlatformNotificationService:
         base_template_vars: Dict[str, Any],
         visit_type: str,
         visit_record: Optional[Dict[str, Any]],
+        *,
+        policy: Optional[VisitRecordPushPolicy] = None,
+        recap_card: Optional[RecapLiteCard] = None,
+        recap_cards_by_view: Optional[Dict[str, RecapLiteCard]] = None,
     ) -> None:
         """将上级/管理层卡片推送到部门 review 群。"""
         if not department_groups_review:
             return
+        policy = policy or DEFAULT_VISIT_RECORD_PUSH_POLICY
+        if not policy.group_enabled("review"):
+            return
+        lite_card = self._recap_card_for_role(
+            "leader",
+            recap_cards_by_view=recap_cards_by_view,
+            recap_card=recap_card,
+            is_group=True,
+        )
         by_platform = defaultdict(list)
         for g in department_groups_review:
             p = g.get("platform")
             if p:
                 by_platform[p].append(g)
         form_type = (visit_record or {}).get("form_type") if visit_record else None
+        use_recap_lite = policy.group_card("review") == CARD_RECAP_LITE and lite_card is not None
         for platform, group_chats in by_platform.items():
             if not self._validate_platform_support(platform):
+                continue
+            if use_recap_lite:
+                content, msg_type = self._recap_lite_send_payload(platform, lite_card)
+                n = self._send_content_to_group_chats(
+                    platform=platform,
+                    group_chats=group_chats,
+                    content=content,
+                    msg_type=msg_type,
+                )
+                if n:
+                    logger.info("Visit record review group push: sent recap_lite card to %s groups on %s", n, platform)
                 continue
             template_id = self._get_visit_record_template_id("leader", platform, visit_type, form_type)
             if template_id:
@@ -1761,6 +1881,47 @@ class PlatformNotificationService:
                 if n:
                     logger.info("Visit record review group push: sent leader card to %s groups on %s", n, platform)
 
+    def _send_content_to_group_chats(
+        self,
+        platform: str,
+        group_chats: List[Dict[str, Any]],
+        content: Any,
+        msg_type: str,
+    ) -> int:
+        """向群列表发送已构建好的消息体。失败仅打日志。"""
+        if not group_chats:
+            return 0
+        if not self._validate_platform_support(platform):
+            logger.warning("_send_content_to_group_chats: unsupported platform %s", platform)
+            return 0
+        try:
+            token = self._get_tenant_access_token(platform)
+        except Exception as e:
+            logger.warning("_send_content_to_group_chats: get token failed for %s: %s", platform, e)
+            return 0
+        platform_tokens = {platform: token}
+        success = 0
+        for group in group_chats:
+            chat_id = group.get("chat_id")
+            name = group.get("name") or chat_id or "group"
+            if not chat_id:
+                continue
+            try:
+                self._send_message(
+                    chat_id,
+                    platform_tokens[platform],
+                    content,
+                    platform,
+                    receive_id_type="chat_id",
+                    msg_type=msg_type,
+                    platform_tokens=platform_tokens,
+                )
+                success += 1
+                logger.info("Sent content to group %s on %s", name, platform)
+            except Exception as e:
+                logger.warning("Failed to send content to group %s on %s: %s", name, platform, e)
+        return success
+
     def _send_visit_record_to_brief_groups(
         self,
         department_groups_brief: List[Dict[str, Any]],
@@ -1768,24 +1929,48 @@ class PlatformNotificationService:
         visit_record: Optional[Dict[str, Any]],
         *,
         is_revised: bool = False,
+        policy: Optional[VisitRecordPushPolicy] = None,
+        recap_card: Optional[RecapLiteCard] = None,
+        recap_cards_by_view: Optional[Dict[str, RecapLiteCard]] = None,
     ) -> None:
         """向部门简报群发送拜访记录文本。"""
         if not department_groups_brief:
             return
+        policy = policy or DEFAULT_VISIT_RECORD_PUSH_POLICY
+        if not policy.group_enabled("brief"):
+            return
+        lite_card = self._recap_card_for_role(
+            "leader",
+            recap_cards_by_view=recap_cards_by_view,
+            recap_card=recap_card,
+            is_group=True,
+        )
         by_platform = defaultdict(list)
         for g in department_groups_brief:
             p = g.get("platform")
             if p:
                 by_platform[p].append(g)
-        message_text = self._format_visit_record_group_message(
-            recorder_name, visit_record, is_revised=is_revised
-        )
+        use_recap_lite = policy.group_card("brief") == CARD_RECAP_LITE and lite_card is not None
+        message_text = None
+        if not use_recap_lite:
+            message_text = self._format_visit_record_group_message(
+                recorder_name, visit_record, is_revised=is_revised
+            )
         for platform, group_chats in by_platform.items():
             if not self._validate_platform_support(platform):
                 continue
-            n = self._send_text_to_group_chats(platform=platform, group_chats=group_chats, text=message_text)
+            if use_recap_lite:
+                content, msg_type = self._recap_lite_send_payload(platform, lite_card)
+                n = self._send_content_to_group_chats(
+                    platform=platform,
+                    group_chats=group_chats,
+                    content=content,
+                    msg_type=msg_type,
+                )
+            else:
+                n = self._send_text_to_group_chats(platform=platform, group_chats=group_chats, text=message_text)
             if n:
-                logger.info("Visit record group push: sent text to %s groups on %s", n, platform)
+                logger.info("Visit record group push: sent %s to %s groups on %s", "recap_lite" if use_recap_lite else "text", n, platform)
 
     # 发送拜访记录通知 - 实时推送给记录人、直属上级、部门负责人
     def send_visit_record_notification(
@@ -1823,6 +2008,33 @@ class PlatformNotificationService:
                     db_session, recorder_name, recorder_id, visit_record
                 )
             )
+        policy = load_visit_record_push_policy()
+        recipients_by_platform = filter_recipients_by_policy(recipients_by_platform, policy)
+        if not policy.group_enabled("review"):
+            department_groups_review = []
+        if not policy.group_enabled("brief"):
+            department_groups_brief = []
+        recap_cards_by_view: Optional[Dict[str, RecapLiteCard]] = None
+        if policy.uses_recap_lite():
+            insights = load_visit_record_insights_by_view(db_session, record_id)
+            recap_cards_by_view = {
+                RECAP_VIEW_SALES: build_recap_lite_card(
+                    record_id,
+                    visit_record,
+                    recorder_name=recorder_name,
+                    recap_detail_query=policy.recap_detail_query,
+                    is_revised=is_revised,
+                    insight=insights.get(RECAP_VIEW_SALES),
+                ),
+                RECAP_VIEW_LEADER: build_recap_lite_card(
+                    record_id,
+                    visit_record,
+                    recorder_name=recorder_name,
+                    recap_detail_query=policy.recap_detail_query,
+                    is_revised=is_revised,
+                    insight=insights.get(RECAP_VIEW_LEADER),
+                ),
+            }
         base_template_vars = self._prepare_visit_record_template_vars(
             record_id,
             recorder_name,
@@ -1852,14 +2064,29 @@ class PlatformNotificationService:
             }
 
         total_success_count, total_failed_recipients = self._send_visit_record_to_individual_recipients(
-            recipients_by_platform, base_template_vars, visit_type, visit_record
+            recipients_by_platform,
+            base_template_vars,
+            visit_type,
+            visit_record,
+            policy=policy,
+            recap_cards_by_view=recap_cards_by_view,
         )
         if not skip_group_notifications:
             self._send_visit_record_to_review_groups(
-                department_groups_review, base_template_vars, visit_type, visit_record
+                department_groups_review,
+                base_template_vars,
+                visit_type,
+                visit_record,
+                policy=policy,
+                recap_cards_by_view=recap_cards_by_view,
             )
             self._send_visit_record_to_brief_groups(
-                department_groups_brief, recorder_name, visit_record, is_revised=is_revised
+                department_groups_brief,
+                recorder_name,
+                visit_record,
+                is_revised=is_revised,
+                policy=policy,
+                recap_cards_by_view=recap_cards_by_view,
             )
 
         platforms_used = [str(p) for p in recipients_by_platform.keys() if p]
@@ -2601,18 +2828,21 @@ class PlatformNotificationService:
         content: str,
         *,
         title: Optional[str] = None,
+        header_template: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         飞书 / Lark 无模板 markdown 卡片（Card JSON 2.0）。
 
         标题 / 表格等语法仅 2.0 支持；1.0 会把 # 与 | 表格当纯文本显示。
         header 优先用 title，否则取正文首行；为空则回退「通知」。
+        header_template 为飞书色板（green/blue/orange 等），缺省 blue。
         """
         body = (content or "").strip()
         header = (title or "").strip()
         if not header:
             header = body.split("\n", 1)[0].strip() if body else ""
         header = (header or "通知")[:50]
+        color = (header_template or "blue").strip() or "blue"
         return {
             "schema": "2.0",
             "config": {
@@ -2620,7 +2850,7 @@ class PlatformNotificationService:
                 "width_mode": "fill",
             },
             "header": {
-                "template": "blue",
+                "template": color,
                 "title": {"tag": "plain_text", "content": header},
             },
             "body": {

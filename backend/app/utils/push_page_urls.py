@@ -77,6 +77,25 @@ def build_visit_record_page_url(record_id: str) -> str:
     return f"{host}/v2/behavior/{quote(rid, safe='')}"
 
 
+def build_visit_record_recap_page_url(
+    record_id: str,
+    *,
+    query: str = "panel=recap",
+) -> str:
+    """轻量复盘卡跳转：先落到拜访详情，query 默认 panel=recap。
+
+    前端复盘入口若改 query，改 SiteSetting recap_detail_query 即可；
+    若改成独立 path，再改本函数。
+    """
+    base = build_visit_record_page_url(record_id)
+    if not base:
+        return ""
+    extra = (query or "").strip().lstrip("?")
+    if not extra:
+        return base
+    return f"{base}?{extra}"
+
+
 def build_visit_record_add_comment_page_url(record_id: str) -> str:
     """拜访卡片内「添加评论/任务」页。"""
     host = _host()

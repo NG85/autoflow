@@ -693,3 +693,30 @@ notification:
     data_type: dict
     description: "拜访记录卡片模板 ID。按平台（dingtalk/feishu/lark）与变体（form_recorder/form_leader/link 或 form_simple_* /form_complete_*/link）配置。"
     client: false
+  # 按接收角色选择是否推送、以及推 legacy 原模板卡还是 recap_lite 轻量复盘卡。各环境可配不同组合。
+  visit_record_push_policy:
+    default:
+      recipients:
+        recorder:
+          enabled: true
+          card: legacy
+        leader:
+          enabled: true
+          card: legacy
+        configured_cc:
+          enabled: true
+          card: legacy
+        collaborative_participant:
+          enabled: true
+          card: legacy
+      groups:
+        review:
+          enabled: true
+          card: legacy
+        brief:
+          enabled: true
+          card: legacy
+      recap_detail_query: "panel=recap"
+    data_type: dict
+    description: "拜访卡片按接收角色配置。每个角色 {enabled, card}，card 为 legacy（原模板卡）或 recap_lite（轻量复盘卡）。也可用简写 recorder: recap_lite 或 leader: false。未写明的角色默认 enabled=true、card=legacy；顶层 strategy 可作为未写 card 的默认类型。不同环境可配不同组合。"
+    client: false
