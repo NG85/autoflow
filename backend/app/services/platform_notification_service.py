@@ -2157,13 +2157,28 @@ class PlatformNotificationService:
         
         # 从日报数据中提取部门信息
         department_name = daily_report_data.get("department_name")
-        
-        # 获取推送对象 - 个人日报只推送给销售本人
+
+        from app.services.notification_delivery_preference import filter_opted_out_recipients
+        from app.services.notification_scene_catalog import SCENE_SALES_DAILY, VARIANT_KPI_CARD
+        from app.services.report_push_policy import skip_kpi_card_result
+
+        skipped = skip_kpi_card_result(SCENE_SALES_DAILY)
+        if skipped:
+            logger.info("Skip sales daily report push: kpi_card disabled")
+            return skipped
+
         recipients = self.get_recipients_for_sales_daily_report(
             db_session=db_session,
             recorder_name=recorder_name,
             recorder_id=recorder_id,
             department_name=department_name
+        )
+        recipients = filter_opted_out_recipients(
+            db_session,
+            recipients,
+            scene=SCENE_SALES_DAILY,
+            variant=VARIANT_KPI_CARD,
+            department_ids=[""],
         )
         
         if not recipients:
@@ -2221,6 +2236,77 @@ class PlatformNotificationService:
             logger.warning(f"No department manager found for department: {department_name}")
         
         return recipients
+
+    def resolve_department_report_recipients(
+        self,
+        db_session: Session,
+        department_name: str,
+        recipients: Optional[List[Dict[str, Any]]] = None,
+    ) -> List[Dict[str, Any]]:
+        """部门日/周报个人资格：调用方传入优先，否则 OAuth 部门负责人，再回退档案负责人。"""
+        if recipients:
+            return list(recipients)
+        try:
+            oauth_map = oauth_client.get_departments_with_leaders() or {}
+            oauth_recipients = oauth_map.get(department_name)
+            if oauth_recipients:
+                return list(oauth_recipients)
+        except Exception as exc:
+            logger.warning(
+                "OAuth departments/leaders failed for %s, fallback to profile: %s",
+                department_name,
+                exc,
+            )
+        return self.get_recipients_for_department_report_from_profile(
+            db_session, department_name
+        )
+
+    def recipients_from_user_ids(
+        self,
+        db_session: Session,
+        user_ids: List[str],
+        *,
+        recipient_type: str = "variant_override",
+    ) -> List[Dict[str, Any]]:
+        """按 user_id 解析可推送个人（覆盖资格集）。"""
+        uuids: List[UUID] = []
+        seen: set[str] = set()
+        ordered: List[str] = []
+        for raw in user_ids or []:
+            uid = str(raw or "").strip()
+            if not uid or uid in seen:
+                continue
+            seen.add(uid)
+            ordered.append(uid)
+            try:
+                uuids.append(UUID(uid))
+            except (TypeError, ValueError):
+                continue
+        profiles = user_profile_repo.get_by_user_ids(db_session, uuids)
+        by_uid = {str(p.user_id): p for p in profiles if p.user_id}
+        out: List[Dict[str, Any]] = []
+        for uid in ordered:
+            profile = by_uid.get(uid)
+            if not profile:
+                continue
+            oauth_account = select_latest_oauth_account(list(profile.oauth_users or []))
+            if not oauth_account or not oauth_account.open_id or not oauth_account.provider:
+                continue
+            if not self._validate_platform_support(oauth_account.provider):
+                continue
+            out.append(
+                {
+                    "open_id": oauth_account.open_id,
+                    "name": profile.name or "Unknown",
+                    "type": recipient_type,
+                    "department": profile.department,
+                    "receive_id_type": "open_id",
+                    "platform": oauth_account.provider,
+                    "user_id": uid,
+                    "userId": uid,
+                }
+            )
+        return out
 
     def _send_report_to_department_review_groups_or_recipients(
         self,
@@ -2414,17 +2500,32 @@ class PlatformNotificationService:
                 "recipients_count": 0,
                 "success_count": 0
             }
-        if not recipients:
-            recipients = self.get_recipients_for_department_report_from_profile(
-                db_session=db_session,
-                department_name=department_name
-            )
+        from app.services.notification_delivery_preference import filter_opted_out_recipients
+        from app.services.notification_scene_catalog import SCENE_DEPARTMENT_DAILY, VARIANT_KPI_CARD
+        from app.services.report_push_policy import skip_kpi_card_result
+
+        skipped = skip_kpi_card_result(SCENE_DEPARTMENT_DAILY)
+        if skipped:
+            logger.info("Skip department daily report push: kpi_card disabled")
+            return skipped
+
+        recipients = self.resolve_department_report_recipients(
+            db_session, department_name, recipients
+        )
         # 个人负责人需过 team receive 资格；department_review 群推送不校验
         recipients = self._filter_recipients_by_receive_permission(
             db_session,
             recipients,
             PERM_DAILY_REPORT_TEAM_RECEIVE,
             report_kind="department daily report",
+        )
+        dept_ids = department_mirror_repo.get_department_ids_by_name(db_session, department_name)
+        recipients = filter_opted_out_recipients(
+            db_session,
+            recipients,
+            scene=SCENE_DEPARTMENT_DAILY,
+            variant=VARIANT_KPI_CARD,
+            department_ids=dept_ids,
         )
         if not CRMStatisticsService.daily_report_has_follow_up(department_report_data):
             summary_missing = CRMStatisticsService.daily_report_summary_missing(department_report_data)
@@ -2488,6 +2589,7 @@ class PlatformNotificationService:
                 logger.warning(f"Company-report user platform {platform} not supported, skipping")
                 continue
 
+            uid = str(user.get("userId") or user.get("user_id") or "").strip()
             recipients.append(
                 {
                     "open_id": open_id,
@@ -2495,7 +2597,8 @@ class PlatformNotificationService:
                     "type": "company_executive",
                     "receive_id_type": "open_id",
                     "platform": platform,
-                    "userId": user.get("userId") or user.get("user_id") or "",
+                    "userId": uid,
+                    "user_id": uid,
                 }
             )
             logger.info(
@@ -2510,6 +2613,23 @@ class PlatformNotificationService:
             )
 
         return recipients
+
+    def get_recipients_for_company_highlights(self, db_session: Session) -> List[Dict[str, Any]]:
+        """公司今日重点：仅 report_push_policy 指定的接收人，不走 OAuth、不复用公司日报名单。"""
+        from app.services.notification_scene_catalog import (
+            SCENE_COMPANY_HIGHLIGHTS,
+            VARIANT_TODAY_HIGHLIGHTS,
+        )
+        from app.services.report_push_policy import load_report_push_policy
+
+        user_ids = load_report_push_policy().override_user_ids(
+            SCENE_COMPANY_HIGHLIGHTS, VARIANT_TODAY_HIGHLIGHTS
+        )
+        if not user_ids:
+            return []
+        return self.recipients_from_user_ids(
+            db_session, user_ids, recipient_type="named_recipient"
+        )
     
     def send_company_daily_report_notification(
         self,
@@ -2519,9 +2639,24 @@ class PlatformNotificationService:
         """发送公司日报通知：有跟进发卡片；有汇总记录但全 0 发无跟进短文本；无汇总记录发任务未写入短文本。"""
         from app.services.crm_statistics_service import CRMStatisticsService
         
-        # 获取推送对象 - 根据应用ID判断推送目标
+        from app.services.notification_delivery_preference import filter_opted_out_recipients
+        from app.services.notification_scene_catalog import SCENE_COMPANY_DAILY, VARIANT_KPI_CARD
+        from app.services.report_push_policy import skip_kpi_card_result
+
+        skipped = skip_kpi_card_result(SCENE_COMPANY_DAILY)
+        if skipped:
+            logger.info("Skip company daily report push: kpi_card disabled")
+            return skipped
+
         recipients = self.get_recipients_for_company_daily_report(db_session)
-        
+        recipients = filter_opted_out_recipients(
+            db_session,
+            recipients,
+            scene=SCENE_COMPANY_DAILY,
+            variant=VARIANT_KPI_CARD,
+            department_ids=[""],
+        )
+
         if not recipients:
             logger.warning(f"No recipients found for company daily report")
             return {
@@ -2589,17 +2724,32 @@ class PlatformNotificationService:
                 "recipients_count": 0,
                 "success_count": 0
             }
-        if not recipients:
-            recipients = self.get_recipients_for_department_report_from_profile(
-                db_session=db_session,
-                department_name=department_name,
-            )
+        from app.services.notification_delivery_preference import filter_opted_out_recipients
+        from app.services.notification_scene_catalog import SCENE_DEPARTMENT_WEEKLY, VARIANT_KPI_CARD
+        from app.services.report_push_policy import skip_kpi_card_result
+
+        skipped = skip_kpi_card_result(SCENE_DEPARTMENT_WEEKLY)
+        if skipped:
+            logger.info("Skip department weekly report push: kpi_card disabled")
+            return skipped
+
+        recipients = self.resolve_department_report_recipients(
+            db_session, department_name, recipients
+        )
         # 个人负责人需过 team receive 资格；department_review 群推送不校验
         recipients = self._filter_recipients_by_receive_permission(
             db_session,
             recipients,
             PERM_WEEKLY_REPORT_TEAM_RECEIVE,
             report_kind="department weekly report",
+        )
+        dept_ids = department_mirror_repo.get_department_ids_by_name(db_session, department_name)
+        recipients = filter_opted_out_recipients(
+            db_session,
+            recipients,
+            scene=SCENE_DEPARTMENT_WEEKLY,
+            variant=VARIANT_KPI_CARD,
+            department_ids=dept_ids,
         )
         if not CRMStatisticsService.weekly_report_has_data(department_report_data):
             message_text = self._format_ungenerated_weekly_report_text(
@@ -2670,6 +2820,8 @@ class PlatformNotificationService:
                     "department": "管理团队",
                     "receive_id_type": "open_id",
                     "platform": platform,
+                    "userId": user.get("userId") or user.get("user_id") or "",
+                    "user_id": user.get("userId") or user.get("user_id") or "",
                 }
             )
             logger.info(
@@ -2693,9 +2845,24 @@ class PlatformNotificationService:
         """发送公司周报：has_data 发卡片；未生成发短文本。"""
         from app.services.crm_statistics_service import CRMStatisticsService
 
-        # 获取推送对象
+        from app.services.notification_delivery_preference import filter_opted_out_recipients
+        from app.services.notification_scene_catalog import SCENE_COMPANY_WEEKLY, VARIANT_KPI_CARD
+        from app.services.report_push_policy import skip_kpi_card_result
+
+        skipped = skip_kpi_card_result(SCENE_COMPANY_WEEKLY)
+        if skipped:
+            logger.info("Skip company weekly report push: kpi_card disabled")
+            return skipped
+
         all_recipients = self.get_recipients_for_company_weekly_report(db_session)
-        
+        all_recipients = filter_opted_out_recipients(
+            db_session,
+            all_recipients,
+            scene=SCENE_COMPANY_WEEKLY,
+            variant=VARIANT_KPI_CARD,
+            department_ids=[""],
+        )
+
         if not all_recipients:
             logger.warning(f"No recipients found for company weekly report")
             return {

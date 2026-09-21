@@ -100,6 +100,35 @@ class VisitRecordCardPushRequest(BaseModel):
     )
 
 
+class ReportReadyPushRequest(BaseModel):
+    """周拜访报告就绪：落库 visit_report 并按 report_push_policy 发送。"""
+
+    type: Literal["report_ready"] = "report_ready"
+    scene: str = Field(
+        ...,
+        description="company_weekly | department_weekly",
+    )
+    variant: str = Field(default="visit_report", description="目前仅 visit_report")
+    week_start: str = Field(..., description="周开始日期 YYYY-MM-DD")
+    week_end: str = Field(..., description="周结束日期 YYYY-MM-DD")
+    content: str = Field(..., min_length=1, description="Markdown 正文")
+    title: Optional[str] = None
+    department_id: Optional[str] = None
+    department_name: Optional[str] = None
+    delivery: Literal["card", "post"] = Field(
+        default="card",
+        description="飞书/Lark：card=无模板卡片，post=富文本；钉钉忽略",
+    )
+
+
+class NotificationPreferenceUpdateRequest(BaseModel):
+    scene: str
+    receive: bool
+    variant: str = ""
+    department_id: Optional[str] = None
+    department_name: Optional[str] = None
+
+
 class PlatformNotificationPushRequest(BaseModel):
     """平台通知：向指定用户推送纯文本或 Markdown 消息。"""
 
@@ -134,6 +163,7 @@ PushNotificationRequest = Annotated[
         VisitRecordCardPushRequest,
         DailyNoFollowupReminderPushRequest,
         PlatformNotificationPushRequest,
+        ReportReadyPushRequest,
     ],
     Field(discriminator="type"),
 ]

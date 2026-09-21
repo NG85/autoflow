@@ -720,3 +720,27 @@ notification:
     data_type: dict
     description: "拜访卡片按接收角色配置。每个角色 {enabled, card}，card 为 legacy（原模板卡）或 recap_lite（轻量复盘卡）。也可用简写 recorder: recap_lite 或 leader: false。未写明的角色默认 enabled=true、card=legacy；顶层 strategy 可作为未写 card 的默认类型。不同环境可配不同组合。"
     client: false
+  report_push_policy:
+    default:
+      sales_daily:
+        kpi_card: true
+        today_highlights: false
+      company_daily:
+        kpi_card: true
+      department_daily:
+        kpi_card: true
+      company_highlights:
+        today_highlights:
+          enabled: false
+          recipient_user_ids: []
+      department_highlights:
+        today_highlights: false
+      company_weekly:
+        kpi_card: true
+        visit_report: false
+      department_weekly:
+        kpi_card: true
+        visit_report: false
+    data_type: dict
+    description: "推送变体开关。报告槽位 sales_daily/company_daily/department_daily/company_weekly/department_weekly（亦接受 *_report 旧别名）。今日重点独立槽位 company_highlights/department_highlights；sales_daily 仍可开 today_highlights 变体。变体 kpi_card（统计卡）；today_highlights（今日重点）；visit_report（周拜访报告，仅周报）。各变体独立 enabled。报告槽位可写 {enabled, recipient_user_ids} 覆盖资格名单；company_highlights 的 recipient_user_ids 即资格集本身。未配置时报告槽位仅 kpi_card=true，今日重点默认关闭。"
+    client: false

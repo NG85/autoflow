@@ -497,6 +497,9 @@ class CRMWeeklyFollowupService:
             session.refresh(existing)
             return existing
 
+    def upsert_summary(self, session: Session, obj: CRMWeeklyFollowupSummary) -> CRMWeeklyFollowupSummary:
+        return self._upsert_summary(session, obj)
+
     def _upsert_summary(self, session: Session, obj: CRMWeeklyFollowupSummary) -> CRMWeeklyFollowupSummary:
         """
         幂等键：week_start/week_end/summary_type/department_name/report_kind

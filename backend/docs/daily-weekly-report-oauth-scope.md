@@ -32,10 +32,21 @@
 | 个人日报 | `notification:daily_report_personal:receive` | 路由=本人；推送前 `check_function_permission` |
 | 团队日报 | `notification:daily_report_team:receive` | 路由=部门负责人；个人接收者过滤；**`department_review` 群推送不校验** |
 | 公司日报 | `notification:daily_report_company:receive` | `get_users_by_permission` 直接作为收件人名单 |
+| 公司今日重点 | （无 receive 码） | `report_push_policy.company_highlights` 的 `recipient_user_ids` 指定接收人 |
+| 部门今日重点 | （无新 receive 码） | 部门负责人身份；不进群、不过 `daily_report_team:receive` |
 | 部门周报 | `notification:weekly_report_team:receive` | 同团队日报：负责人过滤；**群推送不校验** |
 | 公司周报 | `notification:weekly_report_company:receive` | `get_users_by_permission` 直接作为收件人名单 |
 
 落点：`platform_notification_service`（常量见 `platforms/notification_types.py`）。
+
+### 场景目录 / 资格预览（已接入）
+
+| 权限码 | 接口 | 含义 |
+|--------|------|------|
+| `notification:scenes:view` | `GET /notification/scenes` | 看场景目录（槽位、形态、是否开启） |
+| `notification:scenes:preview` | `GET /notification/preview` | 看资格 / 实发 / 已关掉名单 |
+
+功能门控，**不是** receive。有 `*:receive` 不代表能调这两条接口。落点：`app/api/routes/notification.py`。
 
 ---
 
