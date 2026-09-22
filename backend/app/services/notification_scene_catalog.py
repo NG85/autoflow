@@ -35,6 +35,7 @@ VARIANT_VISIT_CARD = "visit_card"
 VARIANT_RECAP_LITE = "recap_lite"
 VARIANT_VISIT_REPORT = "visit_report"
 VARIANT_TODAY_HIGHLIGHTS = "today_highlights"
+VARIANT_SUMMARY_MD = "summary_md"
 
 REPORT_SLOTS = (
     SCENE_SALES_DAILY,
@@ -56,6 +57,8 @@ TODAY_HIGHLIGHTS_SLOTS = (
     SCENE_COMPANY_HIGHLIGHTS,
     SCENE_DEPARTMENT_HIGHLIGHTS,
 )
+
+SUMMARY_MD_SLOTS = (SCENE_COMPANY_DAILY, SCENE_DEPARTMENT_DAILY)
 
 REPORT_SLOT_ALIASES = {
     "sales_daily_report": SCENE_SALES_DAILY,
@@ -102,10 +105,10 @@ SCENES: Dict[str, SceneSpec] = {
         title="部门日报",
         routing=ROUTING_ELIGIBLE_SET,
         preference=PREF_ELIGIBLE_OPT_OUT,
-        variants=(VARIANT_KPI_CARD,),
+        variants=(VARIANT_KPI_CARD, VARIANT_SUMMARY_MD),
         requires_department=True,
         includes_groups=True,
-        description="部门负责人 + department_review 群",
+        description="部门负责人 + department_review 群；summary_md 为日拜访报告 Markdown，读 crm_department_daily_summary.summary_content",
     ),
     SCENE_DEPARTMENT_HIGHLIGHTS: SceneSpec(
         scene=SCENE_DEPARTMENT_HIGHLIGHTS,
@@ -124,15 +127,15 @@ SCENES: Dict[str, SceneSpec] = {
         variants=(VARIANT_KPI_CARD, VARIANT_VISIT_REPORT),
         requires_department=True,
         includes_groups=True,
-        description="部门负责人 + department_review 群；visit_report 为周拜访报告",
+        description="部门负责人 + department_review 群；visit_report 为周拜访报告 Markdown，读 crm_weekly_followup_summary.report_kind=visit_report",
     ),
     SCENE_COMPANY_DAILY: SceneSpec(
         scene=SCENE_COMPANY_DAILY,
         title="公司日报",
         routing=ROUTING_ELIGIBLE_SET,
         preference=PREF_ELIGIBLE_OPT_OUT,
-        variants=(VARIANT_KPI_CARD,),
-        description="OAuth notification:daily_report_company:receive",
+        variants=(VARIANT_KPI_CARD, VARIANT_SUMMARY_MD),
+        description="OAuth notification:daily_report_company:receive（kpi_card）；summary_md 为日拜访报告 Markdown，读 crm_department_daily_summary.summary_content，资格为 recipient_user_ids",
     ),
     SCENE_COMPANY_HIGHLIGHTS: SceneSpec(
         scene=SCENE_COMPANY_HIGHLIGHTS,
@@ -148,7 +151,7 @@ SCENES: Dict[str, SceneSpec] = {
         routing=ROUTING_ELIGIBLE_SET,
         preference=PREF_ELIGIBLE_OPT_OUT,
         variants=(VARIANT_KPI_CARD, VARIANT_VISIT_REPORT),
-        description="OAuth notification:weekly_report_company:receive；visit_report 为周拜访报告",
+        description="OAuth notification:weekly_report_company:receive；visit_report 为周拜访报告 Markdown，读 crm_weekly_followup_summary.report_kind=visit_report"
     ),
     SCENE_REVIEW_SESSION: SceneSpec(
         scene=SCENE_REVIEW_SESSION,

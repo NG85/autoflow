@@ -100,20 +100,62 @@ class VisitRecordCardPushRequest(BaseModel):
     )
 
 
-class ReportReadyPushRequest(BaseModel):
-    """周拜访报告就绪：落库 visit_report 并按 report_push_policy 发送。"""
+class DailyVisitReportPushRequest(BaseModel):
+    """公司/部门日拜访报告 Markdown：读 crm_department_daily_summary.summary_content。"""
 
-    type: Literal["report_ready"] = "report_ready"
+    type: Literal["daily_visit_report"] = "daily_visit_report"
+    scene: str = Field(
+        default="company_daily",
+        description="company_daily | department_daily",
+    )
+    variant: str = Field(default="summary_md", description="目前仅 summary_md")
+    report_date: Optional[str] = Field(
+        default=None,
+        description="YYYY-MM-DD；不传则昨天（北京日期，与日报 cron 一致）",
+    )
+    title: Optional[str] = Field(
+        default=None,
+        description="可选标题；默认「APTSell 销售经营日报｜{date}」",
+    )
+    department_id: Optional[str] = Field(
+        default=None,
+        description="部门日报：部门 ID；与 department_name 都空则推该日全部部门",
+    )
+    department_name: Optional[str] = Field(
+        default=None,
+        description="部门日报：部门名称",
+    )
+    delivery: Literal["card", "post"] = Field(
+        default="card",
+        description="飞书/Lark：card=无模板卡片，post=富文本；钉钉忽略",
+    )
+
+
+class WeeklyVisitReportPushRequest(BaseModel):
+    """公司/部门周拜访报告 Markdown：读 crm_weekly_followup_summary（report_kind=visit_report）。"""
+
+    type: Literal["weekly_visit_report"] = "weekly_visit_report"
     scene: str = Field(
         ...,
         description="company_weekly | department_weekly",
     )
     variant: str = Field(default="visit_report", description="目前仅 visit_report")
-    week_start: str = Field(..., description="周开始日期 YYYY-MM-DD")
-    week_end: str = Field(..., description="周结束日期 YYYY-MM-DD")
-    content: str = Field(..., min_length=1, description="Markdown 正文")
-    title: Optional[str] = None
-    department_id: Optional[str] = None
+    week_start: Optional[str] = Field(
+        default=None,
+        description="周开始日期 YYYY-MM-DD；与 week_end 都空则上一完整周",
+    )
+    week_end: Optional[str] = Field(
+        default=None,
+        description="周结束日期 YYYY-MM-DD",
+    )
+    title: Optional[str] = Field(
+        default=None,
+        description="可选标题；默认「APTSell 销售经营周报｜{week_start}至{week_end}」",
+    )
+    department_id: Optional[str] = Field(
+        default=None,
+        description="部门周报：部门 ID；与 department_name 都空则推该周全部部门",
+    )
     department_name: Optional[str] = None
     delivery: Literal["card", "post"] = Field(
         default="card",
@@ -163,7 +205,8 @@ PushNotificationRequest = Annotated[
         VisitRecordCardPushRequest,
         DailyNoFollowupReminderPushRequest,
         PlatformNotificationPushRequest,
-        ReportReadyPushRequest,
+        WeeklyVisitReportPushRequest,
+        DailyVisitReportPushRequest,
     ],
     Field(discriminator="type"),
 ]

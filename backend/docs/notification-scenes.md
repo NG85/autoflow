@@ -8,7 +8,8 @@
 - 日周报变体：`app/services/report_push_policy.py`（SiteSetting `report_push_policy`）
 - 预览：`GET /notification/scenes`（`notification:scenes:view`）、`GET /notification/preview`（`notification:scenes:preview`）
 - 用户开关：`GET/PUT /notification/preferences`
-- 周拜访报告就绪：`POST /notification/push` `type=report_ready`
+- 日拜访报告 Markdown：`POST /notification/push` `type=daily_visit_report`（读 `crm_department_daily_summary`；公司/部门）
+- 周拜访报告 Markdown：`POST /notification/push` `type=weekly_visit_report`（读 `crm_weekly_followup_summary.report_kind=visit_report`；公司/部门）
 - 偏好表：`notification_delivery_preferences`
 
 拜访卡、未参加的 review 仍是实例路由，不加这种偏好层。旁观继续走 `notification_cc_rules`。群聊不走个人 opt-out。
@@ -21,7 +22,9 @@
 |-------|---------|------------|----------|----------------|
 | `sales_daily` | instance | eligible_opt_out | 本人（OAuth `notification:daily_report_personal:receive`） | 关掉/打开自己的日报（含今日重点变体） |
 | `department_daily` / `department_weekly` | eligible_set | eligible_opt_out | 该部门 leader + team receive；群走 `department_group_chats` | 只对自己负责的部门关/开 |
-| `company_daily` / `company_weekly` | eligible_set | eligible_opt_out | OAuth `*:company:receive` | 关掉/打开自己的公司日或周 |
+| `company_daily` / `company_weekly` | eligible_set | eligible_opt_out | OAuth `*:company:receive`（`kpi_card`） | 关掉/打开自己的公司日或周 |
+| `company_daily` 的 `summary_md` | eligible_set | eligible_opt_out | `report_push_policy.company_daily.summary_md.recipient_user_ids`（指定人，**不是** OAuth 公司日报名单） | 关掉/打开这份 Markdown |
+| `department_daily` 的 `summary_md` | 同部门日报 | eligible_opt_out | 该部门 leader + team receive；群走 `department_review`；`recipient_user_ids` 可覆盖 | 同上 |
 | `department_highlights` | eligible_set | eligible_opt_out | 该部门负责人（不进群、不过 team receive） | 只对自己负责的部门关/开今日重点 |
 | `company_highlights` | eligible_set | eligible_opt_out | `report_push_policy` 的 `recipient_user_ids`（指定接收人，**不是**公司日报名单） | 关掉/打开公司今日重点 |
 | `today_highlights`（`sales_daily` 的变体） | 同销售日报 | eligible_opt_out | 本人 | 同上 |
@@ -31,7 +34,7 @@
 
 实际个人收件人 = **资格名单 − 该 scene/variant/部门上 opted_out 的人**。无资格的 toggle 返回 403。
 
-变体上的 `recipient_user_ids`：报告槽位是管理员 **覆盖** 资格集（预览 `reasons` 含 `variant_override`）；`company_highlights` 上这就是资格集本身（预览 `named_recipient`）。名单上的人默认接收，同样可以关掉。未指定则无人有资格。
+变体上的 `recipient_user_ids`：报告槽位的 `kpi_card` / `visit_report` / `department_daily.summary_md` 是管理员 **覆盖** 资格集（预览 `reasons` 含 `variant_override`）；`company_highlights` 与 `company_daily.summary_md` 上这就是资格集本身（预览 `named_recipient`）。名单上的人默认接收，同样可以关掉。未指定则无人有资格。
 
 ---
 
@@ -40,6 +43,8 @@
 ```
 GET /notification/preview?scene=sales_daily&variant=kpi_card
 GET /notification/preview?scene=company_weekly&variant=kpi_card
+GET /notification/preview?scene=company_daily&variant=summary_md
+GET /notification/preview?scene=department_daily&variant=summary_md&department_id=...
 GET /notification/preview?scene=department_weekly&variant=visit_report&department_id=...
 GET /notification/preview?scene=company_highlights
 GET /notification/preview?scene=department_highlights&department_id=...
@@ -59,7 +64,7 @@ GET /notification/preview?scene=visit_record&variant=visit_card&record_id=...
 - `variant` 空：该 scene 下全部变体
 - `department_id` 空：公司级；部门 scene 上表示关掉自己负责的全部部门
 
-`GET /notification/preferences` 只列出 **自己有资格** 的项（销售只出现自己的日报及今日重点变体；部门 leader 会出现部门日/周报和 `department_highlights`；写进 `company_highlights.recipient_user_ids` 的人才出现公司今日重点）。`PUT` 无资格 403。
+`GET /notification/preferences` 只列出 **自己有资格** 的项（销售只出现自己的日报及今日重点变体；部门 leader 会出现部门日/周报和 `department_highlights`；写进 `company_highlights.recipient_user_ids` 的人才出现公司今日重点；写进 `company_daily.summary_md.recipient_user_ids` 的人才出现公司日拜访报告 Markdown）。`PUT` 无资格 403。
 
 发送销售个人日报、公司/部门日周报的个人通道时会扣掉 opted_out；部门群仍按群配置发。
 
@@ -78,6 +83,12 @@ report_push_policy:
     today_highlights: false
   company_daily:
     kpi_card: true
+    summary_md:
+      enabled: true
+      recipient_user_ids: ["<admin_user_uuid>"]
+  department_daily:
+    kpi_card: true
+    summary_md: false
   company_highlights:
     today_highlights:
       enabled: true
@@ -100,9 +111,19 @@ report_push_policy:
   - 部门：独立 scene `department_highlights`，只推部门负责人，**不进** `department_review` 群。
   - 公司：独立 scene `company_highlights`，资格仅为配置的 `recipient_user_ids`，**不走** OAuth、**不复用**公司日报名单。未指定接收人则谁都不发。
   - 发送路径后续再接；目录与策略已预留，默认 `enabled: false`。
-- `visit_report` 仅周报槽位。外部服务 `POST /notification/push` `type=report_ready` 落库 `crm_weekly_followup_summary.report_kind=visit_report`，再按策略发 Markdown（飞书无模板卡 / post）。**没有**独立的 `agent_markdown` 通道。
+- `visit_report` 仅周报槽位。Cronicle / 外部服务 `POST /notification/push` `type=weekly_visit_report`：服务端按 `week_start`/`week_end`（都空则上一完整周）读 `crm_weekly_followup_summary`（`report_kind=visit_report`）的 `summary_content`，再按策略发 Markdown（飞书无模板卡 / post）。部门不传 `department_id`/`department_name` 时推该周全部部门行。无内容 / 无名单 / 变体关闭会 skip（HTTP 仍 200）。**没有**独立的 `agent_markdown` 通道。
+- `summary_md` 仅日报槽位（`company_daily` / `department_daily`）。Cronicle 调 `POST /notification/push` `type=daily_visit_report`：服务端按 `report_date`（默认北京时间昨天）读 `crm_department_daily_summary` 的 `summary_content`。公司走该变体 `recipient_user_ids`（不是 OAuth 公司日报名单）；部门走负责人 + `department_review` 群（`recipient_user_ids` 可覆盖）。部门不传部门字段则推该日全部部门行。无内容 / 无名单 / 变体关闭会 skip。
 - 变体关了谁都不发；变体开了再按资格 ∩ 未关掉。
 
 销售个人日报：形态开关与个人偏好正交——关统计卡则本人也收不到卡；开着统计卡时，本人仍可把自己的日报（或今日重点）关掉。公司/部门今日重点与对应日报的关订互不影响。
 
-`report_ready` 字段：`scene`（company_weekly / department_weekly）、`week_start`、`week_end`、`content`，部门加 `department_id` 或 `department_name`。即使变体关闭也会落库。
+`weekly_visit_report` 字段：`scene`（company_weekly / department_weekly）、可选 `week_start`/`week_end`（都空则上一完整周），部门可选 `department_id` 或 `department_name`。不落库，只读已有 `visit_report` 行。
+
+`daily_visit_report` 字段：`scene`（company_daily / department_daily）、`variant`（默认 `summary_md`）、可选 `report_date`（YYYY-MM-DD，默认北京昨天）、可选 `title` / `delivery` / 部门字段。Cronicle 示例：
+
+```json
+{"type": "daily_visit_report", "scene": "company_daily"}
+{"type": "daily_visit_report", "scene": "department_daily"}
+{"type": "weekly_visit_report", "scene": "company_weekly"}
+{"type": "weekly_visit_report", "scene": "department_weekly"}
+```

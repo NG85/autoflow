@@ -1,146 +1,124 @@
-"""周拜访报告 Markdown：读 crm_weekly_followup_summary（report_kind=visit_report）再推送。"""
+"""日拜访报告 Markdown：读 crm_department_daily_summary.summary_content 再推送。"""
 
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
 
 from sqlmodel import Session, select
 
-from app.models.crm_weekly_followup_summary import (
-    CRMWeeklyFollowupSummary,
-    REPORT_KIND_VISIT_REPORT,
-)
+from app.models.crm_department_daily_summary import CRMDepartmentDailySummary
 from app.services.notification_scene_catalog import (
-    SCENE_COMPANY_WEEKLY,
-    VARIANT_VISIT_REPORT,
+    SCENE_COMPANY_DAILY,
+    VARIANT_SUMMARY_MD,
     normalize_scene,
 )
 from app.services.report_markdown_dispatch import (
-    WEEKLY_SCENES,
+    DAILY_SCENES,
     empty_push_result,
-    parse_iso_date,
     resolve_department,
     resolve_markdown_targets,
     send_markdown_messages,
 )
 from app.services.report_push_policy import load_report_push_policy
-from app.utils.crm_weekly_followup_week_boundary import resolve_weekly_followup_week_range
 from app.utils.date_utils import beijing_today_date
 
 logger = logging.getLogger(__name__)
 
 
-def _resolve_week_range(
-    week_start: Optional[date | str],
-    week_end: Optional[date | str],
-) -> tuple[date, date]:
-    start_raw = week_start if isinstance(week_start, date) else str(week_start or "").strip()
-    end_raw = week_end if isinstance(week_end, date) else str(week_end or "").strip()
-    has_start = bool(start_raw)
-    has_end = bool(end_raw)
-    if has_start and has_end:
-        start = week_start if isinstance(week_start, date) else parse_iso_date(week_start, field="week_start")
-        end = week_end if isinstance(week_end, date) else parse_iso_date(week_end, field="week_end")
-        return start, end
-    if has_start or has_end:
-        raise ValueError("week_start and week_end must be provided together")
-    return resolve_weekly_followup_week_range(
-        beijing_today_date(), week_range_mode="completed"
-    )
+def _parse_report_date(value: Any) -> date:
+    if value is None or str(value).strip() == "":
+        return beijing_today_date() - timedelta(days=1)
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value).strip())
 
 
-def _default_title(
-    *,
-    title: Optional[str],
-    week_start: date,
-    week_end: date,
-) -> str:
+def _default_title(*, report_date: date, title: Optional[str]) -> str:
     explicit = str(title or "").strip()
     if explicit:
         return explicit
-    week_part = f"{week_start.isoformat()}至{week_end.isoformat()}"
-    return f"APTSell 销售经营周报｜{week_part}"
+    return f"APTSell 销售经营日报｜{report_date.isoformat()}"
 
 
-def _load_weekly_rows(
+def _load_daily_rows(
     db_session: Session,
     *,
-    week_start: date,
-    week_end: date,
+    target: date,
     company: bool,
     department_id: str,
     department_name: str,
-) -> List[CRMWeeklyFollowupSummary]:
-    stmt = select(CRMWeeklyFollowupSummary).where(
-        CRMWeeklyFollowupSummary.week_start == week_start,
-        CRMWeeklyFollowupSummary.week_end == week_end,
-        CRMWeeklyFollowupSummary.summary_type == ("company" if company else "department"),
-        CRMWeeklyFollowupSummary.report_kind == REPORT_KIND_VISIT_REPORT,
+) -> List[CRMDepartmentDailySummary]:
+    stmt = select(CRMDepartmentDailySummary).where(
+        CRMDepartmentDailySummary.report_date == target,
+        CRMDepartmentDailySummary.summary_type == ("company" if company else "department"),
     )
+    if not company:
+        if department_id:
+            stmt = stmt.where(CRMDepartmentDailySummary.department_id == department_id)
+        elif department_name:
+            stmt = stmt.where(CRMDepartmentDailySummary.department_name == department_name)
+    rows = list(db_session.exec(stmt).all())
     if company:
-        row = db_session.exec(stmt).first()
-        return [row] if row else []
-    if department_id:
-        stmt = stmt.where(CRMWeeklyFollowupSummary.department_id == department_id)
-    elif department_name:
-        stmt = stmt.where(CRMWeeklyFollowupSummary.department_name == department_name)
-    return list(db_session.exec(stmt).all())
+        return rows[:1]
+
+    by_key: Dict[tuple[str, str], CRMDepartmentDailySummary] = {}
+    for row in rows:
+        key = (str(row.department_id or "").strip(), str(row.department_name or "").strip())
+        content = str(row.summary_content or "").strip()
+        existing = by_key.get(key)
+        if existing is None or (content and not str(existing.summary_content or "").strip()):
+            by_key[key] = row
+    return list(by_key.values())
 
 
-def handle_report_ready(
+def handle_daily_summary(
     db_session: Session,
     *,
-    scene: str,
-    variant: str = VARIANT_VISIT_REPORT,
-    week_start: Optional[date | str] = None,
-    week_end: Optional[date | str] = None,
-    department_id: Optional[str] = None,
-    department_name: Optional[str] = None,
+    scene: str = SCENE_COMPANY_DAILY,
+    variant: str = VARIANT_SUMMARY_MD,
+    report_date: Optional[date | str] = None,
     title: Optional[str] = None,
     delivery: str = "card",
+    department_id: Optional[str] = None,
+    department_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     scene_key = normalize_scene(scene)
-    variant_key = str(variant or VARIANT_VISIT_REPORT).strip() or VARIANT_VISIT_REPORT
-    if scene_key not in WEEKLY_SCENES:
-        raise ValueError("weekly_visit_report only supports company_weekly / department_weekly")
-    if variant_key != VARIANT_VISIT_REPORT:
-        raise ValueError("weekly_visit_report only supports variant=visit_report")
+    variant_key = str(variant or VARIANT_SUMMARY_MD).strip() or VARIANT_SUMMARY_MD
+    if scene_key not in DAILY_SCENES:
+        raise ValueError("daily_visit_report only supports scene=company_daily / department_daily")
+    if variant_key != VARIANT_SUMMARY_MD:
+        raise ValueError("daily_visit_report only supports variant=summary_md")
 
-    start, end = _resolve_week_range(week_start, week_end)
-    extra = {
-        "week_start": start.isoformat(),
-        "week_end": end.isoformat(),
-    }
+    target = _parse_report_date(report_date)
+    extra = {"report_date": target.isoformat()}
     base = empty_push_result(scene=scene_key, variant=variant_key, extra=extra)
 
     policy = load_report_push_policy()
-    if not policy.variant_enabled(scene_key, VARIANT_VISIT_REPORT):
-        logger.info("visit_report disabled: scene=%s", scene_key)
+    if not policy.variant_enabled(scene_key, VARIANT_SUMMARY_MD):
+        logger.info("daily summary_md disabled: scene=%s", scene_key)
         return {**base, "skipped": True, "skip_reason": "variant_disabled"}
 
-    company = scene_key == SCENE_COMPANY_WEEKLY
+    company = scene_key == SCENE_COMPANY_DAILY
     dept_id, dept_name = ("", "")
     if not company:
         dept_id, dept_name = resolve_department(
             db_session, department_id=department_id, department_name=department_name
         )
 
-    rows = _load_weekly_rows(
+    rows = _load_daily_rows(
         db_session,
-        week_start=start,
-        week_end=end,
+        target=target,
         company=company,
         department_id=dept_id,
         department_name=dept_name,
     )
     if not rows:
         logger.info(
-            "weekly visit_report row missing: scene=%s week=%s..%s dept=%s",
+            "daily summary row missing: scene=%s report_date=%s dept=%s",
             scene_key,
-            start,
-            end,
+            target,
             dept_name or dept_id,
         )
         return {**base, "skipped": True, "skip_reason": "summary_not_found"}
@@ -159,7 +137,6 @@ def handle_report_ready(
         item_extra = {
             "department_id": row_dept_id,
             "department_name": row_dept_name,
-            "summary_id": str(row.id) if getattr(row, "id", None) else None,
         }
         if not content_text:
             skip_reasons.append("empty_content")
@@ -169,7 +146,7 @@ def handle_report_ready(
         recipients, groups, skip_reason = resolve_markdown_targets(
             db_session,
             scene=scene_key,
-            variant=VARIANT_VISIT_REPORT,
+            variant=VARIANT_SUMMARY_MD,
             department_id=row_dept_id,
             department_name=row_dept_name,
         )
@@ -179,9 +156,8 @@ def handle_report_ready(
             continue
 
         header = _default_title(
+            report_date=target,
             title=title,
-            week_start=start,
-            week_end=end,
         )
         sent = send_markdown_messages(
             db_session,
@@ -207,14 +183,8 @@ def handle_report_ready(
         )
 
     if company:
-        summary_id = items[0].get("summary_id") if items else None
         if not any_sent and skip_reasons:
-            return {
-                **base,
-                "skipped": True,
-                "skip_reason": skip_reasons[0],
-                "summary_id": summary_id,
-            }
+            return {**base, "skipped": True, "skip_reason": skip_reasons[0]}
         return {
             **base,
             "skipped": False,
@@ -223,7 +193,6 @@ def handle_report_ready(
             "success_count": success_count,
             "recipients_count": recipients_count,
             "failed_recipients": failed,
-            "summary_id": summary_id,
         }
 
     if not any_sent and skip_reasons and all(item.get("skipped") for item in items):

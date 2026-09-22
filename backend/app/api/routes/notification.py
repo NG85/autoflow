@@ -10,15 +10,16 @@ from sqlmodel import select
 from app.api.deps import CurrentUserDep, SessionDep
 from app.api.routes.notification_schemas import (
     DailyNoFollowupReminderPushRequest,
+    DailyVisitReportPushRequest,
     NotificationPreferenceUpdateRequest,
     PlatformNotificationPushRequest,
     PushNotificationRequest,
-    ReportReadyPushRequest,
     ReviewSessionPushRequest,
     SalesTaskCreatedPushRequest,
     VisitRecordCardPushRequest,
     VisitRecordCommentPushRequest,
     WeeklyFollowupCommentPushRequest,
+    WeeklyVisitReportPushRequest,
 )
 from app.core.config import settings
 from app.repositories.user_profile import user_profile_repo
@@ -707,9 +708,9 @@ def _handle_platform_notification_push(
     }
 
 
-def _handle_report_ready_push(
+def _handle_weekly_visit_report_push(
     db_session: SessionDep,
-    payload: ReportReadyPushRequest,
+    payload: WeeklyVisitReportPushRequest,
 ) -> Dict[str, Any]:
     from app.services.report_ready_push import handle_report_ready
 
@@ -720,7 +721,27 @@ def _handle_report_ready_push(
             variant=payload.variant,
             week_start=payload.week_start,
             week_end=payload.week_end,
-            content=payload.content,
+            title=payload.title,
+            department_id=payload.department_id,
+            department_name=payload.department_name,
+            delivery=payload.delivery,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _handle_daily_visit_report_push(
+    db_session: SessionDep,
+    payload: DailyVisitReportPushRequest,
+) -> Dict[str, Any]:
+    from app.services.daily_summary_push import handle_daily_summary
+
+    try:
+        return handle_daily_summary(
+            db_session,
+            scene=payload.scene,
+            variant=payload.variant,
+            report_date=payload.report_date,
             title=payload.title,
             department_id=payload.department_id,
             department_name=payload.department_name,
@@ -763,7 +784,7 @@ def preview_notification_recipients(
     scene: str = Query(..., description="visit_record / company_weekly / department_daily 等"),
     variant: str = Query(
         default="",
-        description="kpi_card / visit_card / recap_lite / visit_report / today_highlights；空则取该 scene 的默认变体",
+        description="kpi_card / visit_card / recap_lite / visit_report / today_highlights / summary_md；空则取该 scene 的默认变体",
     ),
     department_id: Optional[str] = Query(default=None),
     department_name: Optional[str] = Query(default=None),
@@ -866,7 +887,7 @@ async def push_notification_api(
     统一消息推送入口（请求体按 type 判别，字段见 notification_schemas）：
     weekly_followup_comment / visit_record_comment / sales_task_created /
     review_session / visit_record_card / daily_no_followup_reminder /
-    platform_notification / report_ready
+    platform_notification / weekly_visit_report / daily_visit_report
     """
     try:
         if isinstance(payload, VisitRecordCardPushRequest):
@@ -883,8 +904,10 @@ async def push_notification_api(
             result = _handle_sales_task_created_push(db_session, payload)
         elif isinstance(payload, PlatformNotificationPushRequest):
             result = _handle_platform_notification_push(db_session, payload)
-        elif isinstance(payload, ReportReadyPushRequest):
-            result = _handle_report_ready_push(db_session, payload)
+        elif isinstance(payload, WeeklyVisitReportPushRequest):
+            result = _handle_weekly_visit_report_push(db_session, payload)
+        elif isinstance(payload, DailyVisitReportPushRequest):
+            result = _handle_daily_visit_report_push(db_session, payload)
         else:
             raise HTTPException(status_code=422, detail="unsupported notification type")
 

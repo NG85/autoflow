@@ -13,6 +13,7 @@ from app.services.notification_scene_catalog import (
     SCENE_SALES_DAILY,
     SCENE_VISIT_RECORD,
     VARIANT_KPI_CARD,
+    VARIANT_SUMMARY_MD,
     VARIANT_TODAY_HIGHLIGHTS,
     VARIANT_VISIT_CARD,
     VARIANT_VISIT_REPORT,
@@ -44,6 +45,9 @@ def test_visit_report_variant_only_on_weekly_slots():
     assert scene_allows_variant(SCENE_COMPANY_WEEKLY, VARIANT_VISIT_REPORT)
     assert not scene_allows_variant(SCENE_COMPANY_DAILY, VARIANT_VISIT_REPORT)
     assert scene_allows_variant(SCENE_COMPANY_DAILY, VARIANT_KPI_CARD)
+    assert scene_allows_variant(SCENE_COMPANY_DAILY, VARIANT_SUMMARY_MD)
+    assert scene_allows_variant(SCENE_DEPARTMENT_DAILY, VARIANT_SUMMARY_MD)
+    assert not scene_allows_variant(SCENE_COMPANY_WEEKLY, VARIANT_SUMMARY_MD)
     assert scene_allows_variant(SCENE_VISIT_RECORD, VARIANT_VISIT_CARD)
     assert not scene_allows_variant(SCENE_VISIT_RECORD, VARIANT_KPI_CARD)
     assert not scene_allows_variant(SCENE_COMPANY_DAILY, VARIANT_VISIT_CARD)

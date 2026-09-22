@@ -2,7 +2,7 @@
 
 未配置或无法解析时，各报告槽位仅 kpi_card 开启，与历史「只发统计卡」一致。
 今日重点：sales_daily 仍是日报变体；company_highlights / department_highlights 为独立槽位。
-visit_report 仅周报槽位。
+visit_report 仅周报槽位。summary_md 仅日报槽位（公司/部门）。
 """
 
 from __future__ import annotations
@@ -15,8 +15,10 @@ from app.services.notification_scene_catalog import (
     POLICY_SLOTS,
     REPORT_SLOT_ALIASES,
     REPORT_SLOTS,
+    SUMMARY_MD_SLOTS,
     TODAY_HIGHLIGHTS_SLOTS,
     VARIANT_KPI_CARD,
+    VARIANT_SUMMARY_MD,
     VARIANT_TODAY_HIGHLIGHTS,
     VARIANT_VISIT_REPORT,
     normalize_scene,
@@ -26,10 +28,16 @@ from app.site_settings import SiteSetting
 _FALSE_TOKENS = frozenset({"false", "off", "disabled", "none", "0", "no"})
 _TRUE_TOKENS = frozenset({"true", "on", "enabled", "1", "yes"})
 
-REPORT_VARIANTS = (VARIANT_KPI_CARD, VARIANT_VISIT_REPORT, VARIANT_TODAY_HIGHLIGHTS)
+REPORT_VARIANTS = (
+    VARIANT_KPI_CARD,
+    VARIANT_VISIT_REPORT,
+    VARIANT_TODAY_HIGHLIGHTS,
+    VARIANT_SUMMARY_MD,
+)
 HIGHLIGHTS_VARIANTS = (VARIANT_TODAY_HIGHLIGHTS,)
 VISIT_REPORT_SLOTS = frozenset({"company_weekly", "department_weekly"})
 TODAY_HIGHLIGHTS_SLOT_SET = frozenset(TODAY_HIGHLIGHTS_SLOTS)
+SUMMARY_MD_SLOT_SET = frozenset(SUMMARY_MD_SLOTS)
 HIGHLIGHTS_SLOT_SET = frozenset(HIGHLIGHTS_SLOTS)
 
 
@@ -58,6 +66,8 @@ class ReportPushPolicy:
         if variant == VARIANT_VISIT_REPORT and slot_key not in VISIT_REPORT_SLOTS:
             return False
         if variant == VARIANT_TODAY_HIGHLIGHTS and slot_key not in TODAY_HIGHLIGHTS_SLOT_SET:
+            return False
+        if variant == VARIANT_SUMMARY_MD and slot_key not in SUMMARY_MD_SLOT_SET:
             return False
         if variant == VARIANT_KPI_CARD and slot_key in HIGHLIGHTS_SLOT_SET:
             return False
@@ -133,11 +143,14 @@ def _default_slot_variants(slot: str) -> Dict[str, VariantSpec]:
         VARIANT_KPI_CARD: VariantSpec(enabled=True),
         VARIANT_VISIT_REPORT: VariantSpec(enabled=False),
         VARIANT_TODAY_HIGHLIGHTS: VariantSpec(enabled=False),
+        VARIANT_SUMMARY_MD: VariantSpec(enabled=False),
     }
     if slot not in TODAY_HIGHLIGHTS_SLOT_SET:
         variants[VARIANT_TODAY_HIGHLIGHTS] = VariantSpec(enabled=False)
     if slot not in VISIT_REPORT_SLOTS:
         variants[VARIANT_VISIT_REPORT] = VariantSpec(enabled=False)
+    if slot not in SUMMARY_MD_SLOT_SET:
+        variants[VARIANT_SUMMARY_MD] = VariantSpec(enabled=False)
     return variants
 
 
@@ -211,6 +224,8 @@ def parse_report_push_policy(raw: Any) -> ReportPushPolicy:
             variants[VARIANT_VISIT_REPORT] = VariantSpec(enabled=False)
         if slot not in TODAY_HIGHLIGHTS_SLOT_SET:
             variants[VARIANT_TODAY_HIGHLIGHTS] = VariantSpec(enabled=False)
+        if slot not in SUMMARY_MD_SLOT_SET:
+            variants[VARIANT_SUMMARY_MD] = VariantSpec(enabled=False)
         slots[slot] = variants
     return ReportPushPolicy(slots=slots)
 

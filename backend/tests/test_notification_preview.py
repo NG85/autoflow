@@ -5,11 +5,13 @@ from uuid import uuid4
 
 from app.services.notification_preview import preview_notification, user_is_eligible
 from app.services.notification_scene_catalog import (
+    SCENE_COMPANY_DAILY,
     SCENE_COMPANY_HIGHLIGHTS,
     SCENE_COMPANY_WEEKLY,
     SCENE_DEPARTMENT_HIGHLIGHTS,
     SCENE_VISIT_RECORD,
     VARIANT_KPI_CARD,
+    VARIANT_SUMMARY_MD,
     VARIANT_TODAY_HIGHLIGHTS,
     VARIANT_VISIT_REPORT,
 )
@@ -271,3 +273,61 @@ def test_department_highlights_skips_groups_and_team_receive_filter():
     assert [p["user_id"] for p in data["eligible"]] == [uid]
     service._get_group_chats_by_department.assert_not_called()
     service._filter_recipients_by_receive_permission.assert_not_called()
+
+
+def test_company_daily_summary_md_uses_named_recipients_not_oauth():
+    uid = str(uuid4())
+    service = MagicMock()
+    service.recipients_from_user_ids.return_value = [
+        {
+            "user_id": uid,
+            "name": "Admin",
+            "open_id": "ou_admin",
+            "platform": "feishu",
+            "type": "named_recipient",
+        }
+    ]
+    service.get_recipients_for_company_daily_report.return_value = [
+        {
+            "user_id": str(uuid4()),
+            "name": "OAuth",
+            "open_id": "ou_oauth",
+            "platform": "feishu",
+            "type": "company_executive",
+        }
+    ]
+    policy = parse_report_push_policy(
+        {
+            "company_daily": {
+                "kpi_card": True,
+                "summary_md": {
+                    "enabled": True,
+                    "recipient_user_ids": [uid],
+                },
+            }
+        }
+    )
+    with (
+        patch(
+            "app.services.platform_notification_service.platform_notification_service",
+            service,
+        ),
+        patch(
+            "app.services.notification_preview.load_report_push_policy",
+            return_value=policy,
+        ),
+        patch("app.services.notification_preview.is_opted_out", return_value=False),
+    ):
+        data = preview_notification(
+            MagicMock(),
+            scene=SCENE_COMPANY_DAILY,
+            variant=VARIANT_SUMMARY_MD,
+        )
+
+    assert data["enabled"] is True
+    assert data["policy"]["summary_md"] is True
+    assert [p["user_id"] for p in data["eligible"]] == [uid]
+    assert "named_recipient" in (data["eligible"][0].get("reasons") or [])
+    service.recipients_from_user_ids.assert_called_once()
+    assert service.recipients_from_user_ids.call_args.kwargs["recipient_type"] == "named_recipient"
+    service.get_recipients_for_company_daily_report.assert_not_called()

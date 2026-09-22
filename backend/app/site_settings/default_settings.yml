@@ -727,8 +727,10 @@ notification:
         today_highlights: false
       company_daily:
         kpi_card: true
+        summary_md: false
       department_daily:
         kpi_card: true
+        summary_md: false
       company_highlights:
         today_highlights:
           enabled: false
@@ -742,5 +744,5 @@ notification:
         kpi_card: true
         visit_report: false
     data_type: dict
-    description: "推送变体开关。报告槽位 sales_daily/company_daily/department_daily/company_weekly/department_weekly（亦接受 *_report 旧别名）。今日重点独立槽位 company_highlights/department_highlights；sales_daily 仍可开 today_highlights 变体。变体 kpi_card（统计卡）；today_highlights（今日重点）；visit_report（周拜访报告，仅周报）。各变体独立 enabled。报告槽位可写 {enabled, recipient_user_ids} 覆盖资格名单；company_highlights 的 recipient_user_ids 即资格集本身。未配置时报告槽位仅 kpi_card=true，今日重点默认关闭。"
+    description: "推送变体开关。报告槽位 sales_daily/company_daily/department_daily/company_weekly/department_weekly（亦接受 *_report 旧别名）。今日重点独立槽位 company_highlights/department_highlights；sales_daily 仍可开 today_highlights 变体。变体 kpi_card（统计卡）；today_highlights（今日重点）；visit_report（周拜访报告 Markdown，仅周报，读 crm_weekly_followup_summary.report_kind=visit_report）；summary_md（日拜访报告 Markdown，公司/部门日报，读 crm_department_daily_summary）。各变体独立 enabled。报告槽位可写 {enabled, recipient_user_ids} 覆盖资格名单；company_highlights 与 company_daily.summary_md 的 recipient_user_ids 即资格集本身。未配置时报告槽位仅 kpi_card=true，今日重点与 summary_md 默认关闭。"
     client: false

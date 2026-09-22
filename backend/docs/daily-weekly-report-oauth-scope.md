@@ -31,7 +31,9 @@
 |------|--------|------|
 | 个人日报 | `notification:daily_report_personal:receive` | 路由=本人；推送前 `check_function_permission` |
 | 团队日报 | `notification:daily_report_team:receive` | 路由=部门负责人；个人接收者过滤；**`department_review` 群推送不校验** |
-| 公司日报 | `notification:daily_report_company:receive` | `get_users_by_permission` 直接作为收件人名单 |
+| 公司日报 | `notification:daily_report_company:receive` | `get_users_by_permission` 直接作为收件人名单（`kpi_card`） |
+| 公司日拜访报告 Markdown | （无 receive 码） | `report_push_policy.company_daily.summary_md` 的 `recipient_user_ids`；Cronicle 调 `POST /notification/push` `type=daily_visit_report` `scene=company_daily` |
+| 部门日拜访报告 Markdown | `notification:daily_report_team:receive` | 同团队日报：负责人过滤；群不校验；`type=daily_visit_report` `scene=department_daily` |
 | 公司今日重点 | （无 receive 码） | `report_push_policy.company_highlights` 的 `recipient_user_ids` 指定接收人 |
 | 部门今日重点 | （无新 receive 码） | 部门负责人身份；不进群、不过 `daily_report_team:receive` |
 | 部门周报 | `notification:weekly_report_team:receive` | 同团队日报：负责人过滤；**群推送不校验** |

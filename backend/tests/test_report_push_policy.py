@@ -10,6 +10,7 @@ from app.services.notification_scene_catalog import (
     SCENE_DEPARTMENT_HIGHLIGHTS,
     SCENE_SALES_DAILY,
     VARIANT_KPI_CARD,
+    VARIANT_SUMMARY_MD,
     VARIANT_TODAY_HIGHLIGHTS,
     VARIANT_VISIT_REPORT,
 )
@@ -25,6 +26,7 @@ def test_empty_config_only_kpi_card():
     assert policy.variant_enabled(SCENE_DEPARTMENT_DAILY, VARIANT_KPI_CARD) is True
     assert policy.variant_enabled(SCENE_COMPANY_WEEKLY, VARIANT_VISIT_REPORT) is False
     assert policy.variant_enabled(SCENE_COMPANY_DAILY, VARIANT_TODAY_HIGHLIGHTS) is False
+    assert policy.variant_enabled(SCENE_COMPANY_DAILY, VARIANT_SUMMARY_MD) is False
     assert policy.variant_enabled(SCENE_COMPANY_HIGHLIGHTS, VARIANT_TODAY_HIGHLIGHTS) is False
     assert policy.variant_enabled(SCENE_DEPARTMENT_HIGHLIGHTS, VARIANT_TODAY_HIGHLIGHTS) is False
     assert policy.override_user_ids(SCENE_COMPANY_WEEKLY, VARIANT_VISIT_REPORT) == []
@@ -125,6 +127,25 @@ def test_get_recipients_for_company_highlights_empty_without_ids(monkeypatch):
     svc.recipients_from_user_ids = MagicMock()
     assert svc.get_recipients_for_company_highlights(MagicMock()) == []
     svc.recipients_from_user_ids.assert_not_called()
+
+
+def test_summary_md_on_daily_slots_only():
+    policy = parse_report_push_policy(
+        {
+            "company_daily": {
+                "summary_md": {
+                    "enabled": True,
+                    "recipient_user_ids": ["u1", "u1", "u2"],
+                }
+            },
+            "department_daily": {"summary_md": True},
+            "company_weekly": {"summary_md": True},
+        }
+    )
+    assert policy.variant_enabled(SCENE_COMPANY_DAILY, VARIANT_SUMMARY_MD) is True
+    assert policy.override_user_ids(SCENE_COMPANY_DAILY, VARIANT_SUMMARY_MD) == ["u1", "u2"]
+    assert policy.variant_enabled(SCENE_DEPARTMENT_DAILY, VARIANT_SUMMARY_MD) is True
+    assert policy.variant_enabled(SCENE_COMPANY_WEEKLY, VARIANT_SUMMARY_MD) is False
 
 
 def test_visit_report_cannot_enable_on_daily_slots():

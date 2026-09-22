@@ -33,8 +33,10 @@ from app.services.notification_scene_catalog import (
     SCENE_REVIEW_SESSION,
     SCENE_SALES_DAILY,
     SCENE_VISIT_RECORD,
+    SUMMARY_MD_SLOTS,
     VARIANT_KPI_CARD,
     VARIANT_RECAP_LITE,
+    VARIANT_SUMMARY_MD,
     VARIANT_TODAY_HIGHLIGHTS,
     VARIANT_VISIT_CARD,
     VARIANT_VISIT_REPORT,
@@ -255,6 +257,10 @@ def preview_notification(
                 policy_payload["today_highlights"] = policy.variant_enabled(
                     scene_key, VARIANT_TODAY_HIGHLIGHTS
                 )
+            if scene_key in SUMMARY_MD_SLOTS:
+                policy_payload["summary_md"] = policy.variant_enabled(
+                    scene_key, VARIANT_SUMMARY_MD
+                )
             base["policy"] = policy_payload
         if scene_key == SCENE_SALES_DAILY:
             base["skip_reason"] = base["skip_reason"] or "preview_requires_no_bulk_sales_list"
@@ -343,8 +349,19 @@ def _preview_report(
             ]
         extra_reason = None
     elif scene == SCENE_COMPANY_DAILY:
-        recipients = service.get_recipients_for_company_daily_report(db_session)
-        extra_reason = None
+        if variant == VARIANT_SUMMARY_MD:
+            named_ids = policy.override_user_ids(scene, variant)
+            recipients = (
+                service.recipients_from_user_ids(
+                    db_session, named_ids, recipient_type="named_recipient"
+                )
+                if named_ids
+                else []
+            )
+            extra_reason = "named_recipient"
+        else:
+            recipients = service.get_recipients_for_company_daily_report(db_session)
+            extra_reason = None
     elif scene == SCENE_COMPANY_HIGHLIGHTS:
         recipients = service.get_recipients_for_company_highlights(db_session)
         extra_reason = "named_recipient"
@@ -352,7 +369,11 @@ def _preview_report(
         recipients = service.get_recipients_for_company_weekly_report(db_session)
         extra_reason = None
 
-    if override_ids and scene != SCENE_COMPANY_HIGHLIGHTS:
+    if (
+        override_ids
+        and scene != SCENE_COMPANY_HIGHLIGHTS
+        and not (scene == SCENE_COMPANY_DAILY and variant == VARIANT_SUMMARY_MD)
+    ):
         recipients = service.recipients_from_user_ids(
             db_session, override_ids, recipient_type="variant_override"
         )
