@@ -693,3 +693,56 @@ notification:
     data_type: dict
     description: "拜访记录卡片模板 ID。按平台（dingtalk/feishu/lark）与变体（form_recorder/form_leader/link 或 form_simple_* /form_complete_*/link）配置。"
     client: false
+  # 按接收角色选择是否推送、以及推 legacy 原模板卡还是 recap_lite 轻量复盘卡。各环境可配不同组合。
+  visit_record_push_policy:
+    default:
+      recipients:
+        recorder:
+          enabled: true
+          card: legacy
+        leader:
+          enabled: true
+          card: legacy
+        configured_cc:
+          enabled: true
+          card: legacy
+        collaborative_participant:
+          enabled: true
+          card: legacy
+      groups:
+        review:
+          enabled: true
+          card: legacy
+        brief:
+          enabled: true
+          card: legacy
+      recap_detail_query: "panel=recap"
+    data_type: dict
+    description: "拜访卡片按接收角色配置。每个角色 {enabled, card}，card 为 legacy（原模板卡）或 recap_lite（轻量复盘卡）。也可用简写 recorder: recap_lite 或 leader: false。未写明的角色默认 enabled=true、card=legacy；顶层 strategy 可作为未写 card 的默认类型。不同环境可配不同组合。"
+    client: false
+  report_push_policy:
+    default:
+      sales_daily:
+        kpi_card: true
+        today_highlights: false
+      company_daily:
+        kpi_card: true
+        summary_md: false
+      department_daily:
+        kpi_card: true
+        summary_md: false
+      company_highlights:
+        today_highlights:
+          enabled: false
+          recipient_user_ids: []
+      department_highlights:
+        today_highlights: false
+      company_weekly:
+        kpi_card: true
+        visit_report: false
+      department_weekly:
+        kpi_card: true
+        visit_report: false
+    data_type: dict
+    description: "推送变体开关。报告槽位 sales_daily/company_daily/department_daily/company_weekly/department_weekly（亦接受 *_report 旧别名）。今日重点独立槽位 company_highlights/department_highlights；sales_daily 仍可开 today_highlights 变体。变体 kpi_card（统计卡）；today_highlights（今日重点）；visit_report（周拜访报告 Markdown，仅周报，读 crm_weekly_followup_summary.report_kind=visit_report）；summary_md（日拜访报告 Markdown，公司/部门日报，读 crm_department_daily_summary）。各变体独立 enabled。报告槽位可写 {enabled, recipient_user_ids} 覆盖资格名单；company_highlights 与 company_daily.summary_md 的 recipient_user_ids 即资格集本身。未配置时报告槽位仅 kpi_card=true，今日重点与 summary_md 默认关闭。"
+    client: false

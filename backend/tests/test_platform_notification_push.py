@@ -27,7 +27,17 @@ def test_build_feishu_markdown_card_uses_explicit_title():
     assert card["schema"] == "2.0"
     assert card["config"]["width_mode"] == "fill"
     assert card["header"]["title"]["content"] == "系统通知"
+    assert card["header"]["template"] == "blue"
     assert card["body"]["elements"] == [{"tag": "markdown", "content": "**正文**\n第二行"}]
+
+
+def test_build_feishu_markdown_card_uses_header_template():
+    card = PlatformNotificationService.build_feishu_markdown_card(
+        "正文",
+        title="正常 · 9月20日 · 星辰科技",
+        header_template="green",
+    )
+    assert card["header"]["template"] == "green"
 
 
 def test_build_feishu_markdown_card_falls_back_to_first_line():

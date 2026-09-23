@@ -79,6 +79,32 @@ class UserDepartmentRelationRepo(BaseRepo):
         ).all()
         return {str(did).strip() for did in rows if did and str(did).strip()}
 
+    def list_leader_departments_for_user(
+        self,
+        db_session: Session,
+        user_id: str,
+    ) -> list[tuple[str, str]]:
+        """用户作为 is_leader 的有效部门 (department_id, user_name占位)。名称由调用方补。"""
+        uid = str(user_id or "").strip()
+        if not uid:
+            return []
+        rows = db_session.exec(
+            select(UserDepartmentRelation).where(
+                UserDepartmentRelation.user_id == uid,
+                UserDepartmentRelation.is_leader == True,  # noqa: E712
+                UserDepartmentRelation.is_active == True,  # noqa: E712
+            )
+        ).all()
+        seen: set[str] = set()
+        result: list[tuple[str, str]] = []
+        for row in rows:
+            dept_id = str(row.department_id or "").strip()
+            if not dept_id or dept_id in seen:
+                continue
+            seen.add(dept_id)
+            result.append((dept_id, str(row.user_name or "").strip()))
+        return result
+
     def get_primary_department_by_user_ids(
         self,
         db_session: Session,

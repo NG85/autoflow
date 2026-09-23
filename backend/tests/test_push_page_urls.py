@@ -92,6 +92,10 @@ def test_build_visit_record_page_and_billing_url(monkeypatch):
         == "https://example.com/v2/behavior/form_20260618_080952_666_1f16aed1/add-comment"
     )
     assert urls.build_visit_record_billing_page_url("form_abc") == "https://example.com/v2/behavior?form_abc"
+    assert (
+        urls.build_visit_record_recap_page_url("form_abc")
+        == "https://example.com/v2/behavior/form_abc?panel=recap"
+    )
 
 
 def test_build_task_list_page_url(monkeypatch):
