@@ -237,3 +237,74 @@ def test_collaborator_who_is_also_leader_gets_leader_recap_card():
     payload = mock_send.call_args.args[2]
     assert payload["header"]["title"]["content"] == "需关注 · 9月20日 · 星辰科技"
     assert payload["body"]["elements"][0]["content"] == "上级视角摘要"
+
+
+def _capture_recap_cards(insights):
+    svc = PlatformNotificationService()
+    recipients = {
+        "feishu": [
+            {
+                "open_id": "ou_recorder",
+                "name": "销售",
+                "type": "recorder",
+                "receive_id_type": "open_id",
+            }
+        ]
+    }
+    captured: list[dict] = []
+
+    def _capture_build(*_args, **kwargs):
+        captured.append(kwargs)
+        return _recap_card()
+
+    policy = parse_visit_record_push_policy({"recipients": {"recorder": "recap_lite"}})
+    extract_loader = patch(
+        "app.services.platform_notification_service.load_visit_record_extract_response",
+        return_value={
+            "card_links": [{"key": "follow_ups", "title": "待我跟进", "count": 1}]
+        },
+    )
+    with patch.object(
+        svc,
+        "_collect_visit_record_recipients_and_groups",
+        return_value=(recipients, [], []),
+    ), patch(
+        "app.services.platform_notification_service.load_visit_record_push_policy",
+        return_value=policy,
+    ), patch(
+        "app.services.platform_notification_service.load_visit_record_insights_by_view",
+        return_value=insights,
+    ), extract_loader as mock_extract, patch(
+        "app.services.platform_notification_service.build_recap_lite_card",
+        side_effect=_capture_build,
+    ), patch.object(
+        svc, "_send_visit_record_to_individual_recipients", return_value=(1, [])
+    ), patch.object(svc, "_send_visit_record_to_review_groups"), patch.object(
+        svc, "_send_visit_record_to_brief_groups"
+    ):
+        svc.send_visit_record_notification(
+            db_session=None,
+            record_id="rec-1",
+            recorder_name="销售",
+            visit_record={"recorder": "销售"},
+        )
+    return captured, mock_extract
+
+
+def test_send_notification_attaches_extract_links_to_sales_lite_only():
+    captured, mock_extract = _capture_recap_cards({"sales": object(), "leader": None})
+
+    assert mock_extract.called
+    assert len(captured) == 2
+    sales_call = next(item for item in captured if item.get("extract_links"))
+    leader_call = next(item for item in captured if not item.get("extract_links"))
+    assert sales_call["extract_links"][0]["key"] == "follow_ups"
+    assert leader_call.get("extract_links") is None
+
+
+def test_send_notification_skips_extract_when_no_recap_insight():
+    captured, mock_extract = _capture_recap_cards({"sales": None, "leader": None})
+
+    assert mock_extract.called is False
+    assert captured
+    assert all(not item.get("extract_links") for item in captured)

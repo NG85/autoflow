@@ -758,9 +758,8 @@ def get_visit_record_by_id(
 ):
     """
     根据ID获取单个跟进记录详情。
-    按当前用户的 OAuth follow_up 权限限制访问。有复盘才按当前用户返回对应视角
-    （记录人：sales；本条记录人汇报上级含协同人：leader；其余协同人：sales）；
-    无复盘不查汇报链、不返回 insight 字段。
+    按当前用户的 OAuth follow_up 权限限制访问。不返回复盘洞察；
+    复盘用 GET /crm/visit_records/{record_id}/recap。
     """
     try:
         record = visit_record_repo.get_visit_record_by_id(
@@ -802,91 +801,47 @@ def get_visit_record_by_id(
             # 文档信息加载失败不影响主流程，只记录日志
             logger.warning(f"加载文档信息（问答对和风险信息）失败: record_id={record_id}, error={e}")
 
-        try:
-            from app.services.oauth_service import oauth_client
-            from app.services.visit_record_insight_reader import (
-                collect_profile_open_ids,
-                load_visit_record_insights_by_view,
-                recap_view_for_viewer,
-                resolve_visit_record_detail_recap,
-                viewer_is_leader_of_recorder,
-                viewer_is_recorder,
-            )
+        return {
+            "code": 0,
+            "message": "success",
+            "data": data,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(e)
+        raise InternalServerError()
 
-            recorder_id = getattr(record, "recorder_id", None)
-            visit_record_id = getattr(record, "record_id", None) or record_id
-            insights = load_visit_record_insights_by_view(db_session, visit_record_id)
 
-            def _resolve_non_recorder_recap_view() -> str:
-                viewer_profile = UserProfileRepo().get_by_user_id(db_session, user.id)
-                recorder_profile = (
-                    UserProfileRepo().get_by_recorder_id(db_session, str(recorder_id))
-                    if recorder_id
-                    else None
-                )
-                viewer_oauth_user_id = (
-                    getattr(viewer_profile, "oauth_user_id", None) if viewer_profile else None
-                )
-                viewer_open_ids = collect_profile_open_ids(viewer_profile)
-                reporting_chain_leader_open_ids: list[str] = []
-                base_user_id = None
-                if recorder_profile is not None:
-                    if getattr(recorder_profile, "user_id", None):
-                        base_user_id = str(recorder_profile.user_id)
-                    else:
-                        for account in getattr(recorder_profile, "oauth_users", None) or []:
-                            if getattr(account, "user_id", None):
-                                base_user_id = str(account.user_id)
-                                break
-                if base_user_id:
-                    try:
-                        reporting_chain_leader_open_ids = [
-                            str(leader.get("open_id")).strip()
-                            for leader in oauth_client.get_reporting_chain_leaders(
-                                base_user_id=base_user_id,
-                                max_levels=1,
-                            )
-                            if leader.get("open_id")
-                        ]
-                    except Exception as chain_error:
-                        logger.warning(
-                            "拜访复盘详情查询汇报链失败: record_id=%s error=%s",
-                            record_id,
-                            chain_error,
-                        )
-                return recap_view_for_viewer(
-                    viewer_user_id=user.id,
-                    recorder_id=recorder_id,
-                    viewer_oauth_user_id=viewer_oauth_user_id,
-                    collaborative_participants=visit_record_repo.get_collaborative_participants_raw(
-                        db_session, visit_record_id
-                    ),
-                    is_leader=viewer_is_leader_of_recorder(
-                        viewer_user_id=user.id,
-                        viewer_oauth_user_id=viewer_oauth_user_id,
-                        viewer_open_ids=viewer_open_ids,
-                        recorder_direct_manager_id=(
-                            getattr(recorder_profile, "direct_manager_id", None)
-                            if recorder_profile
-                            else None
-                        ),
-                        reporting_chain_leader_open_ids=reporting_chain_leader_open_ids,
-                    ),
-                )
+@router.get("/crm/visit_records/{record_id}/recap")
+def get_visit_record_recap(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    record_id: str,
+):
+    """当前用户视角的拜访复盘。
 
-            resolved = resolve_visit_record_detail_recap(
-                insights,
-                viewer_is_recorder=viewer_is_recorder(user.id, recorder_id),
-                resolve_non_recorder_view=_resolve_non_recorder_recap_view,
-            )
-            if resolved:
-                view, picked = resolved
-                data["insight_view"] = view
-                if picked:
-                    data["insight"] = picked.to_public_dict()
-        except Exception as e:
-            logger.warning("加载拜访复盘洞察失败: record_id=%s error=%s", record_id, e)
-        
+    权限与详情 GET 相同。没有复盘不查汇报链、不读抽取表。
+    销售视角返回洞察和结构化抽取；上级视角只有洞察，extract 为空。
+    洞察或抽取读取失败时对应字段为空，仍返回 200。
+    """
+    from app.services.visit_record_recap import load_visit_record_recap_response
+
+    try:
+        record = visit_record_repo.get_visit_record_by_id(
+            session=db_session,
+            record_id=record_id,
+            current_user_id=user.id,
+        )
+        if not record:
+            raise HTTPException(status_code=404, detail="跟进记录不存在或无权限访问")
+
+        data = load_visit_record_recap_response(
+            db_session,
+            visit_record_id=getattr(record, "record_id", None) or record_id,
+            recorder_id=getattr(record, "recorder_id", None),
+            viewer_user_id=user.id,
+        )
         return {
             "code": 0,
             "message": "success",

@@ -105,3 +105,57 @@ def test_build_recap_lite_card_uses_insight_summary_not_followup_record(monkeypa
     assert "更长的完整复盘" not in card.feishu_body
     assert card.title.startswith("需关注 · ")
     assert card.header_template == "orange"
+
+
+def test_sales_lite_card_appends_extract_links(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.visit_record_recap_card.build_visit_record_recap_page_url",
+        lambda record_id, query="panel=recap": f"https://app.example/v2/behavior/{record_id}?{query}",
+    )
+    monkeypatch.setattr(
+        "app.utils.push_page_urls.build_visit_record_extract_section_url",
+        lambda record_id, section, recap_query="panel=recap": (
+            f"https://app.example/v2/behavior/{record_id}?{recap_query}&extract={section}"
+        ),
+    )
+    card = build_recap_lite_card(
+        "rec-1",
+        {
+            "visit_communication_date": "2026-09-20",
+            "last_modified_time": "2026-09-20 19:05:00",
+            "followup_object_name": "星辰科技",
+            "recorder": "李华",
+        },
+        recorder_name="李华",
+        insight={"severity": "LOW", "summary": "客户确认下季度扩容。"},
+        extract_links=[
+            {
+                "key": "follow_ups",
+                "title": "待我跟进",
+                "count": 2,
+                "preview": "周五报价",
+            },
+            {
+                "key": "key_issues",
+                "title": "当前最关键问题",
+                "count": 1,
+            },
+        ],
+    )
+    assert "[查看详情](https://app.example/v2/behavior/rec-1?panel=recap)" in card.feishu_body
+    assert "[待我跟进（2）](https://app.example/v2/behavior/rec-1?panel=recap&extract=follow_ups)" in card.feishu_body
+    assert "[当前最关键问题](https://app.example/v2/behavior/rec-1?panel=recap&extract=key_issues)" in card.feishu_body
+    assert "extract=follow_ups" in card.dingtalk_text
+    leader = build_recap_lite_card(
+        "rec-1",
+        {
+            "visit_communication_date": "2026-09-20",
+            "last_modified_time": "2026-09-20 19:05:00",
+            "followup_object_name": "星辰科技",
+            "recorder": "李华",
+        },
+        recorder_name="李华",
+        insight={"severity": "HIGH", "summary": "上级视角摘要"},
+    )
+    assert "extract=" not in leader.feishu_body
+    assert "待我跟进" not in leader.feishu_body

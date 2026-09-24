@@ -41,9 +41,11 @@ from app.services.visit_record_push_policy import (
     load_visit_record_push_policy,
 )
 from app.services.visit_record_recap_card import RecapLiteCard, build_recap_lite_card
+from app.services.visit_record_extract_reader import load_visit_record_extract_response
 from app.services.visit_record_insight_reader import (
     RECAP_VIEW_LEADER,
     RECAP_VIEW_SALES,
+    has_visit_recap_insight,
     load_visit_record_insights_by_view,
     recap_view_for_role,
 )
@@ -2017,6 +2019,12 @@ class PlatformNotificationService:
         recap_cards_by_view: Optional[Dict[str, RecapLiteCard]] = None
         if policy.uses_recap_lite():
             insights = load_visit_record_insights_by_view(db_session, record_id)
+            extract_links = None
+            if has_visit_recap_insight(insights):
+                extract_links = (
+                    load_visit_record_extract_response(db_session, record_id).get("card_links")
+                    or []
+                )
             recap_cards_by_view = {
                 RECAP_VIEW_SALES: build_recap_lite_card(
                     record_id,
@@ -2025,6 +2033,7 @@ class PlatformNotificationService:
                     recap_detail_query=policy.recap_detail_query,
                     is_revised=is_revised,
                     insight=insights.get(RECAP_VIEW_SALES),
+                    extract_links=extract_links,
                 ),
                 RECAP_VIEW_LEADER: build_recap_lite_card(
                     record_id,

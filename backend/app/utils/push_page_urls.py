@@ -96,6 +96,21 @@ def build_visit_record_recap_page_url(
     return f"{base}?{extra}"
 
 
+def build_visit_record_extract_section_url(
+    record_id: str,
+    section: str,
+    *,
+    recap_query: str = "panel=recap",
+) -> str:
+    """销售轻量卡后处理入口：复盘页 + extract={card_links.key}。"""
+    base = build_visit_record_recap_page_url(record_id, query=recap_query)
+    key = (section or "").strip()
+    if not base or not key:
+        return base
+    sep = "&" if "?" in base else "?"
+    return f"{base}{sep}extract={quote(key, safe='')}"
+
+
 def build_visit_record_add_comment_page_url(record_id: str) -> str:
     """拜访卡片内「添加评论/任务」页。"""
     host = _host()

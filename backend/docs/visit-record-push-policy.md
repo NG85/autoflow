@@ -36,7 +36,7 @@ card: recap_lite       # recap_lite | legacy
 
 lite 卡跳转先按详情页：`/v2/behavior/{record_id}?panel=recap`。前端入口未定时维持这个约定；只改 query 时改 `recap_detail_query`，改成独立 path 时再改 `build_visit_record_recap_page_url`。链接里不要带 `view=`，视角由打开页的登录人决定。
 
-详情 GET 不读这项配置。没有 `crm_entity_insight` 复盘行时不装配 `insight` / `insight_view`，也不查 OAuth 汇报链。有复盘才按身份选视角：记录人始终 sales（UUID 连字符忽略）；**本条**记录人汇报链上级（含同时是协同人）走 leader；其余协同人 sales；其他人 leader。协同人匹配用库内原始 JSON（ask_id/user_id），不用详情里拼好的姓名。汇报链有结果时不再用档案直属上级。
+详情 GET 不读这项配置，也不返回复盘。复盘用 `GET /crm/visit_records/{record_id}/recap`。没有 `crm_entity_insight` 复盘行时不返回 `insight`，也不查 OAuth 汇报链、不读抽取表。有复盘才按身份选视角：记录人始终 sales（UUID 连字符忽略）；**本条**记录人汇报链上级（含同时是协同人）走 leader；其余协同人 sales；其他人 leader。销售视角另附抽取；上级视角 `extract` 为空。协同人匹配用库内原始 JSON（ask_id/user_id），不用详情里拼好的姓名。汇报链有结果时不再用档案直属上级。
 
 ---
 
@@ -240,3 +240,4 @@ lite 卡跳转先按详情页：`/v2/behavior/{record_id}?panel=recap`。前端�
 3. 推卡发生在 Aldebaran 复盘完成回调之后，lite 卡读当时已写入的 `crm_entity_insight`。
 4. 复盘链接暂定为详情 `?panel=recap`；前端改 query 只改配置，改 path 再动代码。
 5. 列表 data-scope 与推送名单不是同一套，不要靠扩列表来配合这张卡。
+6. 销售视角 lite 卡会在「查看详情」下追加抽取 `card_links`（待我跟进 / 下次见面 / 当前最关键问题 / 潜在新商机，有数据才出现），跳转 `?panel=recap&extract={key}`。没有 `crm_entity_insight` 复盘行时不读抽取表、不加这些入口，与 `GET /recap` 一致。领导/群 lite 不加这些入口。抽取表缺失或为空时卡片与现在一样，只有 summary + 查看详情。

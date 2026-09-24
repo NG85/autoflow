@@ -304,6 +304,8 @@ class Settings(BaseSettings):
     ALDEBARAN_CONTACT_CREATED_ENABLED: bool = True
     # 共库只读：Aldebaran 实体洞察表。拜访复盘 entity_type=VISIT、entity_id=record_id。
     ALDEBARAN_ENTITY_INSIGHT_TABLE: str = "crm_entity_insight"
+    # 共库只读：销售视角复盘结构化抽取。visit_id = crm_sales_visit_records.record_id。
+    ALDEBARAN_POSTVISIT_EXTRACT_TABLE: str = "crm_postvisit_extract_items"
     ALDEBARAN_VISIT_INSIGHT_ENTITY_TYPE: str = "VISIT"
     # 同一拜访两条复盘：销售视角 / 上级视角
     ALDEBARAN_VISIT_INSIGHT_SALES_TYPE: str = "POSTVISIT_REVIEW_SALES_VIEW"
