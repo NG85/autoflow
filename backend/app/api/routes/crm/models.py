@@ -1480,6 +1480,10 @@ class ReviewSessionMetaOut(BaseModel):
     period_end: date
     stage: str
     report_date: date
+    snapshot_date: Optional[date] = Field(
+        None,
+        description="Branch snapshot_date this session reads (report_date for short sessions)",
+    )
     create_time: Optional[str] = None
     review_phase: Optional[str] = None
     session_type: Optional[str] = Field(
