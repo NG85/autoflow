@@ -7,6 +7,7 @@ structured context objects that can be serialized into LLM-readable text.
 import logging
 import re
 from collections import defaultdict
+from datetime import date
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -500,6 +501,21 @@ class ReviewDataContext(BaseModel):
 class ReviewDataRetriever:
     """Retrieves structured data from CRM review tables based on intent parameters."""
 
+    def __init__(self) -> None:
+        # Set for the duration of retrieve(); scopes branch reads to short-session cut date.
+        self._active_snapshot_date: Optional[date] = None
+
+    def _apply_branch_snapshot_date(self, stmt: Any, model: Any) -> Any:
+        if self._active_snapshot_date is not None and hasattr(model, "snapshot_date"):
+            return stmt.where(model.snapshot_date == self._active_snapshot_date)
+        return stmt
+
+    def _branch_period_date_filters(self, model: Any, snapshot_period: str) -> List[Any]:
+        filters: List[Any] = [model.snapshot_period == snapshot_period]
+        if self._active_snapshot_date is not None and hasattr(model, "snapshot_date"):
+            filters.append(model.snapshot_date == self._active_snapshot_date)
+        return filters
+
     @staticmethod
     def _build_opportunity_list_preview(
         rows: List[Dict[str, Any]],
@@ -665,6 +681,7 @@ class ReviewDataRetriever:
 
         session_id = review_session.unique_id
         snapshot_period = review_session.period
+        self._active_snapshot_date = getattr(review_session, "snapshot_date", None)
         question = user_question or ""
         plan = intent.query_plan or {}
         template_id = plan.get("template_id") if isinstance(plan, dict) else None
@@ -1174,7 +1191,7 @@ class ReviewDataRetriever:
         limit: int = 200,
     ) -> List[Dict[str, Any]]:
         S = CRMReviewOppBranchSnapshot
-        stmt = select(S).where(S.snapshot_period == snapshot_period)
+        stmt = select(S).where(*self._branch_period_date_filters(S, snapshot_period))
         if department_id:
             stmt = stmt.where(S.owner_department_id == department_id)
         if scope_owner_id:
@@ -1261,7 +1278,7 @@ class ReviewDataRetriever:
         rows = list(db_session.exec(stmt).all())
         if not rows and department_id:
             # fallback to full scope to reduce false negatives from dept slicing
-            stmt2 = select(S).where(S.snapshot_period == snapshot_period)
+            stmt2 = select(S).where(*self._branch_period_date_filters(S, snapshot_period))
             if scope_owner_id:
                 stmt2 = stmt2.where(S.owner_id == scope_owner_id)
             if owner_name:
@@ -1519,7 +1536,7 @@ class ReviewDataRetriever:
             S = CRMReviewOppBranchSnapshot
             opp_rows = db_session.exec(
                 select(S).where(
-                    S.snapshot_period == snapshot_period,
+                    *self._branch_period_date_filters(S, snapshot_period),
                     S.opportunity_id.in_(opportunity_ids),
                 )
             ).all()
@@ -1553,7 +1570,7 @@ class ReviewDataRetriever:
         S = CRMReviewOppBranchSnapshot
         row = db_session.exec(
             select(S).where(
-                S.snapshot_period == snapshot_period,
+                *self._branch_period_date_filters(S, snapshot_period),
                 S.owner_name == owner_name,
             )
         ).first()
@@ -1594,7 +1611,7 @@ class ReviewDataRetriever:
         sales_col = getattr(S, sales_field)
         ai_col = getattr(S, ai_field)
         stmt = select(S).where(
-            S.snapshot_period == snapshot_period,
+            *self._branch_period_date_filters(S, snapshot_period),
             sales_col.is_not(None),
             ai_col.is_not(None),
             sales_col != ai_col,
@@ -1610,7 +1627,7 @@ class ReviewDataRetriever:
             stmt2 = (
                 select(S)
                 .where(
-                    S.snapshot_period == snapshot_period,
+                    *self._branch_period_date_filters(S, snapshot_period),
                     sales_col.is_not(None),
                     ai_col.is_not(None),
                     sales_col != ai_col,
@@ -1645,7 +1662,7 @@ class ReviewDataRetriever:
     ) -> Optional[CRMReviewOppBranchSnapshot]:
         S = CRMReviewOppBranchSnapshot
         stmt = select(S).where(
-            S.snapshot_period == snapshot_period,
+            *self._branch_period_date_filters(S, snapshot_period),
             S.opportunity_id == opportunity_id,
         )
         if department_id:
@@ -1655,7 +1672,7 @@ class ReviewDataRetriever:
             return row
         return db_session.exec(
             select(S).where(
-                S.snapshot_period == snapshot_period,
+                *self._branch_period_date_filters(S, snapshot_period),
                 S.opportunity_id == opportunity_id,
             )
         ).first()
@@ -1671,7 +1688,7 @@ class ReviewDataRetriever:
         pattern = f"%{_escape_like(keyword)}%"
         stmt = (
             select(S)
-            .where(S.snapshot_period == snapshot_period)
+            .where(*self._branch_period_date_filters(S, snapshot_period))
             .where(
                 or_(
                     S.opportunity_name.like(pattern),
@@ -1686,7 +1703,7 @@ class ReviewDataRetriever:
         if not rows and department_id:
             stmt2 = (
                 select(S)
-                .where(S.snapshot_period == snapshot_period)
+                .where(*self._branch_period_date_filters(S, snapshot_period))
                 .where(
                     or_(
                         S.opportunity_name.like(pattern),
@@ -1745,13 +1762,13 @@ class ReviewDataRetriever:
                     func.count().label("count"),
                     func.sum(S.forecast_amount).label("total_amount"),
                 )
-                .where(S.snapshot_period == snapshot_period)
+                .where(*self._branch_period_date_filters(S, snapshot_period))
                 .where(S.owner_id == intent.scope_id)
                 .group_by(group_col)
             )
         elif intent.opportunity_id and not skip_opportunity_detail:
             stmt = select(S).where(
-                S.snapshot_period == snapshot_period,
+                *self._branch_period_date_filters(S, snapshot_period),
                 S.opportunity_id == intent.opportunity_id,
             )
             row = db_session.exec(stmt).first()
@@ -1776,7 +1793,7 @@ class ReviewDataRetriever:
                     func.count().label("count"),
                     func.sum(S.forecast_amount).label("total_amount"),
                 )
-                .where(S.snapshot_period == snapshot_period)
+                .where(*self._branch_period_date_filters(S, snapshot_period))
                 .group_by(group_col)
             )
 
@@ -1995,7 +2012,7 @@ class ReviewDataRetriever:
             S = CRMReviewOppBranchSnapshot
             opp_rows = db_session.exec(
                 select(S).where(
-                    S.snapshot_period == snapshot_period,
+                    *self._branch_period_date_filters(S, snapshot_period),
                     S.opportunity_id.in_(opportunity_ids),
                 )
             ).all()
