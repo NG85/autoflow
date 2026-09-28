@@ -995,9 +995,54 @@ class CRMReviewService:
         }
 
     @staticmethod
+    def _normalize_session_snapshot_date(session: Any) -> Optional[date]:
+        """Return session.snapshot_date when set; None keeps legacy period-only reads."""
+        raw = getattr(session, "snapshot_date", None)
+        if raw is None:
+            return None
+        if isinstance(raw, datetime):
+            return raw.date()
+        if isinstance(raw, date):
+            return raw
+        return None
+
+    @staticmethod
+    def _require_branch_snapshot_date(session: Any) -> Optional[date]:
+        """
+        Short sessions must bind branch reads to snapshot_date.
+
+        legacy_long / missing date → None (period-only, backward compatible).
+        """
+        snapshot_date = CRMReviewService._normalize_session_snapshot_date(session)
+        session_type = str(getattr(session, "session_type", "") or "").strip()
+        if snapshot_date is None and session_type in {
+            "sales_update",
+            "lead_analysis",
+            "cxo",
+        }:
+            raise HTTPException(
+                status_code=422,
+                detail="review session snapshot_date is empty for short session",
+            )
+        return snapshot_date
+
+    @staticmethod
+    def _append_branch_snapshot_date_filter(
+        where: List[Any],
+        snap_cls: Any,
+        snapshot_date: Optional[date],
+    ) -> None:
+        if snapshot_date is None:
+            return
+        col = getattr(snap_cls, "snapshot_date", None)
+        if col is not None:
+            where.append(col == snapshot_date)
+
+    @staticmethod
     def _review_session_meta_dict(scope: dict) -> dict:
         """构建 ReviewSessionMetaOut 对应字段（部门来自 crm_review_session）。"""
         session = scope["session"]
+        snapshot_date = scope.get("snapshot_date")
         return {
             "session_id": str(session.unique_id),
             "period": str(session.period or ""),
@@ -1005,6 +1050,7 @@ class CRMReviewService:
             "period_end": session.period_end,
             "stage": str(session.stage or ""),
             "report_date": session.report_date,
+            "snapshot_date": snapshot_date,
             "create_time": (
                 session.create_time.strftime("%Y-%m-%d %H:%M:%S")
                 if session.create_time
@@ -1073,6 +1119,7 @@ class CRMReviewService:
         snapshot_period = str(session.period or "").strip()
         if not snapshot_period:
             raise HTTPException(status_code=500, detail="review session period is empty")
+        snapshot_date = self._require_branch_snapshot_date(session)
 
         submit_stats = crm_review_attendee_repo.get_submit_stats(db_session, session_id=session_id)
         if not full_data_view and attendee is not None:
@@ -1091,6 +1138,7 @@ class CRMReviewService:
             "is_leader": is_leader,
             "owner_ids": owner_ids,
             "snapshot_period": snapshot_period,
+            "snapshot_date": snapshot_date,
             "submit_stats": submit_stats,
             "editable": editable,
         }
@@ -1478,12 +1526,14 @@ class CRMReviewService:
         if not owner_ids:
             raise HTTPException(status_code=422, detail="no attendee crm_user_id in this review session")
         snapshot_period = scope["snapshot_period"]
+        snapshot_date = scope.get("snapshot_date")
         normalized_filters = self._normalize_snapshot_filters(snapshot_filters)
         snap = snapshot_cls
         base_where: List[Any] = [
             snap.owner_id.in_(owner_ids),
             snap.snapshot_period == snapshot_period,
         ]
+        self._append_branch_snapshot_date_filter(base_where, snap, snapshot_date)
         self._append_snapshot_unique_id_filter(base_where, snap, snapshot_unique_ids)
         self._append_snapshot_filters(
             base_where,
@@ -1756,6 +1806,9 @@ class CRMReviewService:
             snap.owner_id.in_(scope["owner_ids"]),
             snap.snapshot_period == scope["snapshot_period"],
         ]
+        self._append_branch_snapshot_date_filter(
+            base_where, snap, scope.get("snapshot_date")
+        )
         self._append_snapshot_unique_id_filter(base_where, snap, snapshot_unique_ids)
         self._append_snapshot_filters(
             base_where,
@@ -1852,6 +1905,9 @@ class CRMReviewService:
             snap.owner_id.in_(scope["owner_ids"]),
             snap.snapshot_period == scope["snapshot_period"],
         ]
+        self._append_branch_snapshot_date_filter(
+            base_where, snap, scope.get("snapshot_date")
+        )
         self._append_snapshot_unique_id_filter(base_where, snap, snapshot_unique_ids)
         gb, field_col, _ = self._group_field_and_label(
             group_by, snapshot_cls=snap, use_baseline_business_fields=use_baseline_business_fields
@@ -1931,17 +1987,22 @@ class CRMReviewService:
     ) -> dict:
         scope = self._resolve_session_scope(db_session, session_id=session_id, user_id=user_id)
         snapshot_period = scope["snapshot_period"]
+        snapshot_date = scope.get("snapshot_date")
         opportunity_id = str(opportunity_id or "").strip()
         if not opportunity_id:
             raise HTTPException(status_code=422, detail="opportunity_id is required")
 
+        visible_where: List[Any] = [
+            CRMReviewOppBranchSnapshot.owner_id.in_(scope["owner_ids"]),
+            CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
+            CRMReviewOppBranchSnapshot.opportunity_id == opportunity_id,
+        ]
+        self._append_branch_snapshot_date_filter(
+            visible_where, CRMReviewOppBranchSnapshot, snapshot_date
+        )
         visible = db_session.exec(
             select(CRMReviewOppBranchSnapshot.unique_id)
-            .where(
-                CRMReviewOppBranchSnapshot.owner_id.in_(scope["owner_ids"]),
-                CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
-                CRMReviewOppBranchSnapshot.opportunity_id == opportunity_id,
-            )
+            .where(*visible_where)
             .limit(1)
         ).first()
         if not visible:
@@ -1952,6 +2013,7 @@ class CRMReviewService:
             session_id=session_id,
             snapshot_period=snapshot_period,
             opportunity_id=opportunity_id,
+            snapshot_date=snapshot_date,
         )
 
     def _resolve_snapshot_unique_id_for_opportunity(
@@ -1961,14 +2023,19 @@ class CRMReviewService:
         snapshot_period: str,
         opportunity_id: str,
         owner_ids: List[str],
+        snapshot_date: Optional[date] = None,
     ) -> Optional[str]:
+        where: List[Any] = [
+            CRMReviewOppBranchSnapshot.owner_id.in_(owner_ids),
+            CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
+            CRMReviewOppBranchSnapshot.opportunity_id == opportunity_id,
+        ]
+        self._append_branch_snapshot_date_filter(
+            where, CRMReviewOppBranchSnapshot, snapshot_date
+        )
         unique_id = db_session.exec(
             select(CRMReviewOppBranchSnapshot.unique_id)
-            .where(
-                CRMReviewOppBranchSnapshot.owner_id.in_(owner_ids),
-                CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
-                CRMReviewOppBranchSnapshot.opportunity_id == opportunity_id,
-            )
+            .where(*where)
             .limit(1)
         ).first()
         snapshot_unique_id = str(unique_id or "").strip()
@@ -2038,6 +2105,7 @@ class CRMReviewService:
             snapshot_period=snapshot_period,
             opportunity_id=opportunity_id,
             owner_ids=scope["owner_ids"],
+            snapshot_date=scope.get("snapshot_date"),
         )
         if not snapshot_unique_id:
             raise HTTPException(status_code=404, detail="opportunity not found in current review scope")
@@ -2069,17 +2137,22 @@ class CRMReviewService:
     ) -> dict:
         scope = self._resolve_session_scope(db_session, session_id=session_id, user_id=user_id)
         snapshot_period = scope["snapshot_period"]
+        snapshot_date = scope.get("snapshot_date")
         snapshot_unique_id = str(snapshot_unique_id or "").strip()
         if not snapshot_unique_id:
             raise HTTPException(status_code=422, detail="snapshot_unique_id is required")
 
+        visible_where: List[Any] = [
+            CRMReviewOppBranchSnapshot.owner_id.in_(scope["owner_ids"]),
+            CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
+            CRMReviewOppBranchSnapshot.unique_id == snapshot_unique_id,
+        ]
+        self._append_branch_snapshot_date_filter(
+            visible_where, CRMReviewOppBranchSnapshot, snapshot_date
+        )
         visible = db_session.exec(
             select(CRMReviewOppBranchSnapshot.unique_id)
-            .where(
-                CRMReviewOppBranchSnapshot.owner_id.in_(scope["owner_ids"]),
-                CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
-                CRMReviewOppBranchSnapshot.unique_id == snapshot_unique_id,
-            )
+            .where(*visible_where)
             .limit(1)
         ).first()
         if not visible:
@@ -2105,13 +2178,18 @@ class CRMReviewService:
         session_id: str,
         snapshot_period: str,
         opportunity_id: str,
+        snapshot_date: Optional[date] = None,
     ) -> dict:
+        snap_where: List[Any] = [
+            CRMReviewOppBranchSnapshot.opportunity_id == opportunity_id,
+            CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
+        ]
+        self._append_branch_snapshot_date_filter(
+            snap_where, CRMReviewOppBranchSnapshot, snapshot_date
+        )
         snapshot = db_session.exec(
             select(CRMReviewOppBranchSnapshot)
-            .where(
-                CRMReviewOppBranchSnapshot.opportunity_id == opportunity_id,
-                CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
-            )
+            .where(*snap_where)
             .order_by(
                 CRMReviewOppBranchSnapshot.update_time.desc(),
                 CRMReviewOppBranchSnapshot.create_time.desc(),
@@ -2278,10 +2356,12 @@ class CRMReviewService:
         if resolved_session is not None:
             snapshot_period = str(resolved_session.period or "").strip()
             resolved_session_id = str(resolved_session.unique_id or "").strip()
+            snapshot_date = self._normalize_session_snapshot_date(resolved_session)
         else:
             assert latest_risk is not None
             snapshot_period = str(latest_risk.snapshot_period or "").strip()
             resolved_session_id = str(latest_risk.session_id or "").strip()
+            snapshot_date = None
         if not snapshot_period:
             raise HTTPException(status_code=500, detail="review session period is empty")
         if not resolved_session_id:
@@ -2303,6 +2383,7 @@ class CRMReviewService:
             session_id=resolved_session_id,
             snapshot_period=snapshot_period,
             opportunity_id=opportunity_id,
+            snapshot_date=snapshot_date,
         )
 
     def submit_my_snapshot_changes(
@@ -2331,6 +2412,7 @@ class CRMReviewService:
             raise HTTPException(status_code=409, detail="review session is not editable")
 
         snapshot_period = session.period
+        snapshot_date = self._require_branch_snapshot_date(session)
         owner_crm_user_id = attendee.crm_user_id
         is_leader = bool(getattr(attendee, "is_leader", False))
 
@@ -2428,6 +2510,7 @@ class CRMReviewService:
                 owner_crm_user_ids=owner_crm_user_ids,
                 snapshot_period=snapshot_period,
                 snapshot_unique_ids=snapshot_unique_ids,
+                snapshot_date=snapshot_date,
             )
         else:
             rows = snap_repo.get_by_owner_period_and_snapshot_unique_ids(
@@ -2435,6 +2518,7 @@ class CRMReviewService:
                 owner_crm_user_id=owner_crm_user_id,
                 snapshot_period=snapshot_period,
                 snapshot_unique_ids=snapshot_unique_ids,
+                snapshot_date=snapshot_date,
             )
         rows_by_snapshot_unique_id = {r.unique_id: r for r in rows}
         if not rows_by_snapshot_unique_id:
@@ -2520,25 +2604,35 @@ class CRMReviewService:
                     if str(getattr(r, "opportunity_id", "") or "").strip()
                 }
             )
-            main_by_key: dict[tuple[str, str], CRMReviewOppBranchSnapshot] = {}
+            main_by_key: dict[tuple[str, str, Optional[date]], CRMReviewOppBranchSnapshot] = {}
             if opp_ids:
+                main_where: List[Any] = [
+                    CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
+                    CRMReviewOppBranchSnapshot.opportunity_id.in_(opp_ids),
+                ]
+                self._append_branch_snapshot_date_filter(
+                    main_where, CRMReviewOppBranchSnapshot, snapshot_date
+                )
                 for m in db_session.exec(
-                    select(CRMReviewOppBranchSnapshot).where(
-                        CRMReviewOppBranchSnapshot.snapshot_period == snapshot_period,
-                        CRMReviewOppBranchSnapshot.opportunity_id.in_(opp_ids),
-                    )
+                    select(CRMReviewOppBranchSnapshot).where(*main_where)
                 ).all():
                     oi = str(getattr(m, "opportunity_id", "") or "").strip()
                     pi = str(getattr(m, "snapshot_period", "") or "").strip()
+                    di = getattr(m, "snapshot_date", None)
                     if oi and pi:
-                        main_by_key[(oi, pi)] = m
+                        main_by_key[(oi, pi, di)] = m
 
             crm_ops: List[Dict[str, Any]] = []
             now_wb = datetime.now(timezone.utc)
             for row, patch, client_version, db_version, before_fields, after_fields, sid in pending_field_updates:
                 oid = str(getattr(row, "opportunity_id", "") or "").strip()
                 per = str(getattr(row, "snapshot_period", "") or "").strip()
-                main_row = main_by_key.get((oid, per)) if oid and per else None
+                row_date = getattr(row, "snapshot_date", None)
+                main_row = (
+                    main_by_key.get((oid, per, row_date))
+                    if oid and per
+                    else None
+                )
                 before_submit = {f: getattr(row, f) for f in _MERGE_SUBMIT_SYNC_FIELD_NAMES}
                 after_submit = dict(before_submit)
                 after_submit["update_time"] = now_wb
@@ -2577,7 +2671,12 @@ class CRMReviewService:
             for row, patch, before_fields, after_fields, _sid in pending_writeback_only_updates:
                 oid = str(getattr(row, "opportunity_id", "") or "").strip()
                 per = str(getattr(row, "snapshot_period", "") or "").strip()
-                main_row = main_by_key.get((oid, per)) if oid and per else None
+                row_date = getattr(row, "snapshot_date", None)
+                main_row = (
+                    main_by_key.get((oid, per, row_date))
+                    if oid and per
+                    else None
+                )
                 crm_ops.append(
                     {
                         "op": "update",
@@ -2738,8 +2837,9 @@ class CRMReviewService:
         """
         Session leader only: cache mirrors main; sales change submit-whitelisted fields
         and submit metadata on cache. This merge copies those columns from cache → main
-        by (opportunity_id, snapshot_period). Each cache row should have a matching main
-        row; rows without a match are skipped and logged at error level (no HTTP error).
+        by (opportunity_id, snapshot_period, snapshot_date). Each cache row should have a
+        matching main row; rows without a match are skipped and logged at error level
+        (no HTTP error).
 
         Cache rows are read in batches (keyset on cache PK ``id``) to avoid loading the full
         result set at once when data volume is large.
@@ -2759,6 +2859,7 @@ class CRMReviewService:
         snapshot_period = str(session.period or "").strip()
         if not snapshot_period:
             raise HTTPException(status_code=422, detail="review session period is empty")
+        snapshot_date = self._require_branch_snapshot_date(session)
 
         owner_ids = [
             str(x).strip()
@@ -2773,7 +2874,7 @@ class CRMReviewService:
         Cache = CRMReviewOppBranchSnapshotCache
         Main = CRMReviewOppBranchSnapshot
 
-        missing_keys: list[tuple[str, str]] = []
+        missing_keys: list[tuple[str, str, Optional[date]]] = []
         main_updated = 0
         audit_ops: List[Dict[str, Any]] = []
         now = datetime.now(timezone.utc)
@@ -2785,6 +2886,7 @@ class CRMReviewService:
                 Cache.snapshot_period == snapshot_period,
                 Cache.owner_id.in_(owner_ids),
             ]
+            self._append_branch_snapshot_date_filter(batch_where, Cache, snapshot_date)
             if last_cache_id:
                 batch_where.append(Cache.id > last_cache_id)
             batch = list(
@@ -2803,9 +2905,10 @@ class CRMReviewService:
             if not batch_ids_int:
                 logger.error(
                     "merge cache→main: cache batch rows missing integer id, cannot keyset-paginate. "
-                    "session_id=%s snapshot_period=%s batch_size=%s",
+                    "session_id=%s snapshot_period=%s snapshot_date=%s batch_size=%s",
                     session_id,
                     snapshot_period,
+                    snapshot_date.isoformat() if snapshot_date else None,
                     len(batch),
                 )
                 break
@@ -2818,31 +2921,35 @@ class CRMReviewService:
                     if str(getattr(c, "opportunity_id", "") or "").strip()
                 }
             )
-            main_by_opp_period: dict[tuple[str, str], Any] = {}
+            main_by_opp_period_date: dict[tuple[str, str, Optional[date]], Any] = {}
             if opp_ids:
+                main_where: List[Any] = [
+                    Main.snapshot_period == snapshot_period,
+                    Main.opportunity_id.in_(opp_ids),
+                ]
+                self._append_branch_snapshot_date_filter(main_where, Main, snapshot_date)
                 main_rows = list(
                     db_session.exec(
                         select(Main)
                         .options(load_only(*_MERGE_MAIN_LOAD_COLUMNS))
-                        .where(
-                            Main.snapshot_period == snapshot_period,
-                            Main.opportunity_id.in_(opp_ids),
-                        )
+                        .where(*main_where)
                     ).all()
                 )
                 for m in main_rows:
                     oid_m = str(getattr(m, "opportunity_id", "") or "").strip()
                     per_m = str(getattr(m, "snapshot_period", "") or "").strip()
+                    date_m = getattr(m, "snapshot_date", None)
                     if oid_m and per_m:
-                        main_by_opp_period[(oid_m, per_m)] = m
+                        main_by_opp_period_date[(oid_m, per_m, date_m)] = m
 
             for c in batch:
                 oid = str(getattr(c, "opportunity_id", "") or "").strip()
                 per = str(getattr(c, "snapshot_period", "") or "").strip()
+                date_c = getattr(c, "snapshot_date", None)
                 if not oid or not per:
                     continue
-                key = (oid, per)
-                target = main_by_opp_period.get(key)
+                key = (oid, per, date_c)
+                target = main_by_opp_period_date.get(key)
                 if target is None:
                     missing_keys.append(key)
                     continue
