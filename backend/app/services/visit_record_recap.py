@@ -1,7 +1,7 @@
-"""拜访复盘查询：按当前用户选视角，销售视角再附结构化抽取。
+"""拜访复盘查询：按当前用户选视角，记录人再附结构化抽取。
 
 洞察来自 crm_entity_insight，抽取来自 crm_postvisit_extract_items。
-没有复盘行时不查汇报链、不读抽取表。上级视角不返回抽取。
+没有复盘行时不查汇报链、不读抽取表。抽取仅记录人本人可见；协同人/上级等只看对应视角复盘。
 任一侧读取失败时该侧为空，不把异常抛给调用方。
 """
 
@@ -19,7 +19,6 @@ from app.services.visit_record_extract_reader import (
     load_visit_record_extract_response,
 )
 from app.services.visit_record_insight_reader import (
-    RECAP_VIEW_SALES,
     VisitRecordInsight,
     collect_profile_open_ids,
     load_visit_record_insights_by_view,
@@ -117,6 +116,14 @@ def resolve_viewer_recap(
     )
 
 
+def viewer_can_see_extract(
+    viewer_user_id: Any,
+    recorder_id: Any,
+) -> bool:
+    """结构化抽取（含赞踩/采纳）仅记录人本人可看、可写。"""
+    return viewer_is_recorder(viewer_user_id, recorder_id)
+
+
 def load_visit_record_recap_response(
     session: Session,
     *,
@@ -124,7 +131,7 @@ def load_visit_record_recap_response(
     recorder_id: Any,
     viewer_user_id: Any,
 ) -> dict[str, Any]:
-    """当前用户的复盘。销售视角附带 items 与 card_links；其余情况抽取为空。"""
+    """当前用户的复盘。记录人附带 items 与 card_links；其他人抽取为空。"""
     rid = (visit_record_id or "").strip()
     empty = empty_recap_response(rid)
     try:
@@ -141,8 +148,12 @@ def load_visit_record_recap_response(
         return empty
     view, picked = resolved
     extract = empty_extract_response(rid)
-    if view == RECAP_VIEW_SALES:
-        extract = load_visit_record_extract_response(session, rid)
+    if viewer_can_see_extract(viewer_user_id, recorder_id):
+        extract = load_visit_record_extract_response(
+            session,
+            rid,
+            viewer_user_id=viewer_user_id,
+        )
     return {
         "visit_id": rid,
         "view": view,

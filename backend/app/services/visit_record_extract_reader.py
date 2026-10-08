@@ -1,6 +1,9 @@
-"""只读 Aldebaran crm_postvisit_extract_items：销售视角复盘结构化抽取。
+"""Aldebaran crm_postvisit_extract_items：销售视角复盘结构化抽取。
 
-表由 Aldebaran 落库，Autoflow 只 SELECT。查询失败返回空结果，不抬 500。
+抽取正文由 Aldebaran 写入。查询和赞踩、采纳/拒绝都走 CRMPostvisitExtractItem。查询失败返回空结果，不抬 500。
+赞踩写入 feedback 四列，采纳/拒绝写入 status、adopted_todo_id、reject_reason。
+行上只保留最新一次交互，变更前后写入应用日志。
+查询只返回当前用户自己的赞或踩；采纳/拒绝是条目状态，随抽取一起返回。
 card_links 以抽取行上的 YAML 快照为准；CARD_LINKS_BY_PROFILE 仅作无快照时的兜底。
 """
 
@@ -8,21 +11,28 @@ from __future__ import annotations
 
 import json
 import logging
-import re
+from datetime import datetime, timezone
 from typing import Any, Mapping, Optional, Sequence
 
-from sqlalchemy import text
-from sqlmodel import Session
+from sqlmodel import Session, select
 
-from app.core.config import settings
+from app.models.crm_postvisit_extract_items import CRMPostvisitExtractItem
 
 logger = logging.getLogger(__name__)
 
-_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
+EXTRACT_STATUS_PENDING = "PENDING"
 EXTRACT_STATUS_SUPERSEDED = "SUPERSEDED"
+EXTRACT_STATUS_ADOPTED = "ADOPTED"
+EXTRACT_STATUS_REJECTED = "REJECTED"
 VIEWER_ROLE_SALES = "sales"
 DEFAULT_PROFILE_ID = "postvisit_sales_v1_0"
+FEEDBACK_UP = "up"
+FEEDBACK_DOWN = "down"
+DECISION_ADOPT = "adopt"
+DECISION_REJECT = "reject"
+_FEEDBACK_COMMENT_MAX = 500
+_REJECT_REASON_MAX = 1000
+_DECISION_BATCH_MAX = 100
 
 # 仅当行上没有 card_links 快照时使用（历史数据 / 列尚未加上）。
 # 新抽取以 Aldebaran sales_extract.yaml 落库快照为准，不要在这里改入口。
@@ -36,7 +46,7 @@ CARD_LINKS_BY_PROFILE: dict[str, list[dict[str, Any]]] = {
         },
         {
             "key": "next_visit",
-            "title": "下次见面",
+            "title": "下次沟通",
             "item_types": ["NEXT_VISIT_PLAN"],
             "show_if_any": True,
         },
@@ -64,11 +74,26 @@ def _text(value: Any) -> str:
     return str(value).strip()
 
 
-def _quote_ident(name: str) -> str:
-    raw = (name or "").strip()
-    if not _IDENT_RE.fullmatch(raw):
-        raise ValueError(f"invalid sql identifier: {name!r}")
-    return f"`{raw}`"
+def _feedback_at_text(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    text = str(value).strip()
+    return text or None
+
+
+def _normalize_feedback_comment(comment: Optional[str]) -> Optional[str]:
+    text = str(comment or "").strip()
+    if not text:
+        return None
+    return text[:_FEEDBACK_COMMENT_MAX]
+
+
+def _value(row: Any, name: str) -> Any:
+    if isinstance(row, Mapping):
+        return row.get(name)
+    return getattr(row, name, None)
 
 
 def _parse_json_value(value: Any) -> Any:
@@ -105,10 +130,25 @@ def resolve_card_link_specs(
     return card_links_for_profile(profile_id)
 
 
-def serialize_extract_item(row: Mapping[str, Any]) -> dict[str, Any]:
+def _same_user(left: Any, right: Any) -> bool:
+    def _token(value: Any) -> str:
+        return str(value or "").strip().lower().replace("-", "")
+
+    viewer = _token(left)
+    owner = _token(right)
+    return bool(viewer and owner and viewer == owner)
+
+
+def serialize_extract_item(
+    row: Mapping[str, Any],
+    *,
+    viewer_user_id: Any = None,
+) -> dict[str, Any]:
     payload = _parse_payload(row.get("payload"))
     reserved = {"claim", "why", "evidence", "confidence"}
     extras = {k: v for k, v in payload.items() if k not in reserved}
+    owner = _text(row.get("feedback_user_id")) or None
+    visible = _same_user(viewer_user_id, owner)
     data: dict[str, Any] = {
         "unique_id": _text(row.get("unique_id")),
         "item_type": _text(row.get("item_type")),
@@ -119,6 +159,12 @@ def serialize_extract_item(row: Mapping[str, Any]) -> dict[str, Any]:
         "confidence": payload.get("confidence"),
         "severity": _text(row.get("severity")) or None,
         "status": _text(row.get("status")),
+        "adopted_todo_id": _text(row.get("adopted_todo_id")) or None,
+        "reject_reason": _text(row.get("reject_reason")) or None,
+        "feedback": (_text(row.get("feedback")) or None) if visible else None,
+        "feedback_comment": (_text(row.get("feedback_comment")) or None) if visible else None,
+        "feedback_user_id": owner if visible else None,
+        "feedback_at": _feedback_at_text(row.get("feedback_at")) if visible else None,
     }
     data.update(extras)
     return data
@@ -201,8 +247,11 @@ def build_extract_response(
     visit_id: str,
     rows: Sequence[Mapping[str, Any]],
     profile_id: Optional[str] = None,
+    viewer_user_id: Any = None,
 ) -> dict[str, Any]:
-    serialized = [serialize_extract_item(row) for row in rows]
+    serialized = [
+        serialize_extract_item(row, viewer_user_id=viewer_user_id) for row in rows
+    ]
     grouped = group_extract_items(serialized)
     pid = profile_id or DEFAULT_PROFILE_ID
     if rows:
@@ -215,55 +264,43 @@ def build_extract_response(
     }
 
 
+def _as_mapping(row: Any) -> dict[str, Any]:
+    if isinstance(row, Mapping):
+        return dict(row)
+    return row.model_dump()
+
+
+def _active_extract_statement(
+    visit_id: str,
+    *,
+    viewer_role: str = VIEWER_ROLE_SALES,
+    unique_ids: Optional[Sequence[str]] = None,
+):
+    statement = select(CRMPostvisitExtractItem).where(
+        CRMPostvisitExtractItem.visit_id == visit_id,
+        CRMPostvisitExtractItem.viewer_role == viewer_role,
+        CRMPostvisitExtractItem.is_deleted == 0,
+        CRMPostvisitExtractItem.status != EXTRACT_STATUS_SUPERSEDED,
+    )
+    if unique_ids is not None:
+        statement = statement.where(CRMPostvisitExtractItem.unique_id.in_(unique_ids))
+    return statement
+
+
 def _query_extract_rows(
     session: Session,
     visit_id: str,
     viewer_role: str = VIEWER_ROLE_SALES,
 ) -> Optional[list[Mapping[str, Any]]]:
-    table_name = (
-        getattr(settings, "ALDEBARAN_POSTVISIT_EXTRACT_TABLE", None)
-        or "crm_postvisit_extract_items"
-    ).strip()
     try:
-        table_sql = _quote_ident(table_name)
-    except ValueError:
-        logger.warning("Skip visit extract read: invalid table name %r", table_name)
-        return None
-
-    sql = text(
-        f"""
-        SELECT
-            unique_id,
-            visit_id,
-            item_type,
-            extract_key,
-            payload,
-            severity,
-            profile_id,
-            card_links,
-            status
-        FROM {table_sql}
-        WHERE visit_id = :visit_id
-          AND viewer_role = :viewer_role
-          AND is_deleted = 0
-          AND status <> :superseded
-        """
-    )
-    try:
-        result = session.execute(
-            sql,
-            {
-                "visit_id": visit_id,
-                "viewer_role": viewer_role,
-                "superseded": EXTRACT_STATUS_SUPERSEDED,
-            },
-        )
-        return list(result.mappings().all())
+        rows = session.exec(
+            _active_extract_statement(visit_id, viewer_role=viewer_role)
+        ).all()
+        return [_as_mapping(row) for row in rows]
     except Exception as exc:
         logger.warning(
-            "Failed to load visit extract items, visit_id=%s table=%s: %s",
+            "Failed to load visit extract items, visit_id=%s: %s",
             visit_id,
-            table_name,
             exc,
         )
         return None
@@ -274,8 +311,12 @@ def load_visit_record_extract_response(
     record_id: str,
     *,
     viewer_role: str = VIEWER_ROLE_SALES,
+    viewer_user_id: Any = None,
 ) -> dict[str, Any]:
-    """读取拜访销售视角有效抽取条目，组装 items + card_links。"""
+    """读取拜访销售视角有效抽取条目，组装 items + card_links。
+
+    赞或踩只在 feedback_user_id 是当前用户时返回。
+    """
     rid = (record_id or "").strip()
     empty = empty_extract_response(rid)
     if session is None or not rid:
@@ -283,4 +324,190 @@ def load_visit_record_extract_response(
     rows = _query_extract_rows(session, rid, viewer_role=viewer_role)
     if not rows:
         return empty
-    return build_extract_response(visit_id=rid, rows=rows)
+    return build_extract_response(visit_id=rid, rows=rows, viewer_user_id=viewer_user_id)
+
+
+def _log_extract_interaction(
+    *,
+    visit_id: str,
+    unique_id: str,
+    user_id: str,
+    kind: str,
+    before: Mapping[str, Any],
+    after: Mapping[str, Any],
+) -> None:
+    logger.info(
+        "visit_extract_interaction visit_id=%s unique_id=%s user_id=%s kind=%s before=%s after=%s",
+        visit_id,
+        unique_id,
+        user_id,
+        kind,
+        json.dumps(before, ensure_ascii=False, default=str),
+        json.dumps(after, ensure_ascii=False, default=str),
+    )
+
+
+def _feedback_snapshot(row: Any) -> dict[str, Any]:
+    if row is None:
+        return {
+            "feedback": None,
+            "feedback_comment": None,
+            "feedback_user_id": None,
+            "feedback_at": None,
+        }
+    return {
+        "feedback": _text(_value(row, "feedback")) or None,
+        "feedback_comment": _text(_value(row, "feedback_comment")) or None,
+        "feedback_user_id": _text(_value(row, "feedback_user_id")) or None,
+        "feedback_at": _feedback_at_text(_value(row, "feedback_at")),
+    }
+
+
+def _decision_snapshot(row: Any) -> dict[str, Any]:
+    if row is None:
+        return {"status": None, "adopted_todo_id": None, "reject_reason": None}
+    return {
+        "status": _text(_value(row, "status")) or None,
+        "adopted_todo_id": _text(_value(row, "adopted_todo_id")) or None,
+        "reject_reason": _text(_value(row, "reject_reason")) or None,
+    }
+
+
+def save_visit_record_extract_feedback(
+    session: Session,
+    *,
+    visit_id: str,
+    unique_id: str,
+    feedback: Optional[str],
+    feedback_comment: Optional[str],
+    user_id: str,
+) -> Optional[dict[str, Any]]:
+    """更新一条有效抽取的点赞点踩。找不到行时返回 None。"""
+    rid = (visit_id or "").strip()
+    item_id = (unique_id or "").strip()
+    voter = (user_id or "").strip()
+    if not rid or not item_id or not voter:
+        return None
+    if feedback not in (None, FEEDBACK_UP, FEEDBACK_DOWN):
+        raise ValueError(f"unsupported feedback: {feedback}")
+
+    vote = feedback
+    note = _normalize_feedback_comment(feedback_comment) if vote else None
+    voted_at = datetime.now(timezone.utc).replace(tzinfo=None) if vote else None
+    voted_by = voter if vote else None
+
+    current = session.exec(
+        _active_extract_statement(rid, unique_ids=[item_id])
+    ).first()
+    if current is None:
+        return None
+
+    before = _feedback_snapshot(current)
+    current.feedback = vote
+    current.feedback_comment = note
+    current.feedback_user_id = voted_by
+    current.feedback_at = voted_at
+    session.add(current)
+    after = {
+        "feedback": vote,
+        "feedback_comment": note,
+        "feedback_user_id": voted_by,
+        "feedback_at": voted_at.isoformat() if voted_at else None,
+    }
+    session.commit()
+    _log_extract_interaction(
+        visit_id=rid,
+        unique_id=item_id,
+        user_id=voter,
+        kind="feedback",
+        before=before,
+        after=after,
+    )
+    return {"unique_id": item_id, "visit_id": rid, **after}
+
+
+def _normalize_decision_item(item: Mapping[str, Any]) -> dict[str, Any]:
+    action = _text(item.get("action"))
+    if action not in (DECISION_ADOPT, DECISION_REJECT):
+        raise ValueError(f"unsupported decision: {action}")
+    adopted_todo_id = _text(item.get("adopted_todo_id")) or None
+    reject_reason = _text(item.get("reject_reason")) or None
+    if reject_reason:
+        reject_reason = reject_reason[:_REJECT_REASON_MAX]
+    if action == DECISION_ADOPT:
+        return {
+            "unique_id": _text(item.get("unique_id")),
+            "action": action,
+            "status": EXTRACT_STATUS_ADOPTED,
+            "adopted_todo_id": adopted_todo_id,
+            "reject_reason": None,
+        }
+    return {
+        "unique_id": _text(item.get("unique_id")),
+        "action": action,
+        "status": EXTRACT_STATUS_REJECTED,
+        "adopted_todo_id": None,
+        "reject_reason": reject_reason,
+    }
+
+
+def save_visit_record_extract_decisions(
+    session: Session,
+    *,
+    visit_id: str,
+    user_id: str,
+    items: Sequence[Mapping[str, Any]],
+) -> Optional[dict[str, Any]]:
+    """批量采纳或拒绝。行上只留最新决定，每条变更写入日志。
+
+    找不到的条目记为未成功，其余照常提交。
+    """
+    rid = (visit_id or "").strip()
+    actor = (user_id or "").strip()
+    if not rid or not actor:
+        return None
+    if not items or len(items) > _DECISION_BATCH_MAX:
+        raise ValueError("decision batch size must be 1..100")
+
+    normalized = [_normalize_decision_item(item) for item in items]
+    ids = [item["unique_id"] for item in normalized]
+    if any(not item_id for item_id in ids) or len(ids) != len(set(ids)):
+        raise ValueError("unique_id must be present and unique")
+
+    found_rows = session.exec(
+        _active_extract_statement(rid, unique_ids=ids)
+    ).all()
+    found = {_text(_value(row, "unique_id")): row for row in found_rows}
+
+    results: list[dict[str, Any]] = []
+    applied: list[tuple[dict[str, Any], str, dict[str, Any], str]] = []
+    for item in normalized:
+        current = found.get(item["unique_id"])
+        if current is None:
+            results.append({"unique_id": item["unique_id"], "ok": False})
+            continue
+        before = _decision_snapshot(current)
+        after = {
+            "status": item["status"],
+            "adopted_todo_id": item["adopted_todo_id"],
+            "reject_reason": item["reject_reason"],
+        }
+        current.status = after["status"]
+        current.adopted_todo_id = after["adopted_todo_id"]
+        current.reject_reason = after["reject_reason"]
+        session.add(current)
+        applied.append((before, item["action"], after, item["unique_id"]))
+        results.append({"unique_id": item["unique_id"], "ok": True, **after})
+
+    if applied:
+        session.commit()
+        for before, kind, after, item_id in applied:
+            _log_extract_interaction(
+                visit_id=rid,
+                unique_id=item_id,
+                user_id=actor,
+                kind=kind,
+                before=before,
+                after=after,
+            )
+    return {"visit_id": rid, "results": results}

@@ -107,6 +107,9 @@ def test_same_person_keeps_recorder_lite_not_cc_legacy():
     payload = mock_send.call_args.args[2]
     assert payload["schema"] == "2.0"
     assert payload["header"]["template"] == "green"
+    assert payload["body"]["elements"] == [
+        {"tag": "markdown", "content": _recap_card().feishu_body},
+    ]
 
 
 def test_dingtalk_recap_lite_uses_text_channel():
@@ -291,20 +294,21 @@ def _capture_recap_cards(insights):
     return captured, mock_extract
 
 
-def test_send_notification_attaches_extract_links_to_sales_lite_only():
+def test_send_notification_attaches_extract_links_to_recorder_lite_only():
     captured, mock_extract = _capture_recap_cards({"sales": object(), "leader": None})
 
     assert mock_extract.called
-    assert len(captured) == 2
-    sales_call = next(item for item in captured if item.get("extract_links"))
-    leader_call = next(item for item in captured if not item.get("extract_links"))
-    assert sales_call["extract_links"][0]["key"] == "follow_ups"
-    assert leader_call.get("extract_links") is None
+    assert len(captured) == 3
+    with_extract = [item for item in captured if item.get("extract_links")]
+    without_extract = [item for item in captured if not item.get("extract_links")]
+    assert len(with_extract) == 1
+    assert len(without_extract) == 2
+    assert with_extract[0]["extract_links"][0]["key"] == "follow_ups"
 
 
 def test_send_notification_skips_extract_when_no_recap_insight():
     captured, mock_extract = _capture_recap_cards({"sales": None, "leader": None})
 
     assert mock_extract.called is False
-    assert captured
+    assert len(captured) == 2
     assert all(not item.get("extract_links") for item in captured)

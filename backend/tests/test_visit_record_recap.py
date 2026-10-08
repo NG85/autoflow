@@ -67,15 +67,21 @@ def test_no_recap_skips_extract_and_reporting_chain(monkeypatch):
     assert data["extract"] == empty_extract_response("rec-1")
 
 
-def test_sales_view_includes_insight_and_extract(monkeypatch):
+def test_recorder_includes_insight_and_extract(monkeypatch):
     sales = _insight(RECAP_VIEW_SALES, "客户确认下季度扩容。")
     monkeypatch.setattr(
         "app.services.visit_record_recap.resolve_viewer_recap",
         lambda *args, **kwargs: (RECAP_VIEW_SALES, sales),
     )
+    seen = {}
+
+    def _load_extract(*args, **kwargs):
+        seen["viewer_user_id"] = kwargs.get("viewer_user_id")
+        return _extract()
+
     monkeypatch.setattr(
         "app.services.visit_record_recap.load_visit_record_extract_response",
-        lambda *args, **kwargs: _extract(),
+        _load_extract,
     )
 
     data = load_visit_record_recap_response(
@@ -85,9 +91,37 @@ def test_sales_view_includes_insight_and_extract(monkeypatch):
         viewer_user_id="recorder",
     )
 
+    assert seen["viewer_user_id"] == "recorder"
     assert data["view"] == RECAP_VIEW_SALES
     assert data["insight"]["summary"] == "客户确认下季度扩容。"
     assert data["extract"]["card_links"][0]["key"] == "follow_ups"
+
+
+def test_collaborator_sales_view_omits_extract(monkeypatch):
+    """协同人可走 sales 复盘视角，但不附带抽取。"""
+    sales = _insight(RECAP_VIEW_SALES, "协同人看销售视角摘要")
+    monkeypatch.setattr(
+        "app.services.visit_record_recap.resolve_viewer_recap",
+        lambda *args, **kwargs: (RECAP_VIEW_SALES, sales),
+    )
+    called = []
+    monkeypatch.setattr(
+        "app.services.visit_record_recap.load_visit_record_extract_response",
+        lambda *args, **kwargs: called.append("extract") or _extract(),
+    )
+
+    data = load_visit_record_recap_response(
+        MagicMock(),
+        visit_record_id="rec-1",
+        recorder_id="recorder",
+        viewer_user_id="collaborator",
+    )
+
+    assert called == []
+    assert data["view"] == RECAP_VIEW_SALES
+    assert data["insight"]["summary"] == "协同人看销售视角摘要"
+    assert data["extract"]["items"] == {}
+    assert data["extract"]["card_links"] == []
 
 
 def test_leader_view_omits_extract_items(monkeypatch):

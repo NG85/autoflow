@@ -6,12 +6,19 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Mapping, Optional, Sequence
 
-from app.utils.push_page_urls import build_visit_record_recap_page_url
+from app.utils.push_page_urls import (
+    build_visit_record_page_url,
+    build_visit_record_recap_page_url,
+)
 
 DINGTALK_PARAGRAPH_GAP = "\u00a0"
 _RECAP_BODY_MAX_CHARS = 800
 _TITLE_MAX_LEN = 50
 _REVISED_NOTICE = "【修改后】"
+_VISIT_DETAIL_LABEL = "查看行为详情"
+_RECAP_REPORT_LABEL = "完整复盘报告"
+_EXTRACT_SECTION_LEAD = "接下来可以看看这些："
+_EMPTY_MARKERS = frozenset({"--", "-", "—", "－"})
 
 _QUALITY_BY_SEVERITY = {
     "low": ("正常", "green"),
@@ -34,6 +41,14 @@ def _text(value: Any) -> str:
     if isinstance(value, str):
         return value.strip()
     return str(value).strip()
+
+
+def _display_text(value: Any) -> str:
+    """空值和占位符（如 --）视为没有内容。"""
+    text = _text(value)
+    if text in _EMPTY_MARKERS:
+        return ""
+    return text
 
 
 def _first_text(*values: Any) -> str:
@@ -189,20 +204,18 @@ def _meta_lines(
     recorder_name: str,
     entry_time: str,
     opportunity: str,
-    narrow: bool,
+    detail_url: str = "",
 ) -> list[str]:
-    items: list[str] = []
+    lines: list[str] = []
     if recorder_name:
-        items.append(f"记录人：{recorder_name}")
+        lines.append(f"跟进人：{recorder_name}")
     if entry_time:
-        items.append(f"跟进时间：{entry_time}")
+        lines.append(f"创建时间：{entry_time}")
     if opportunity:
-        items.append(f"商机：{opportunity}")
-    if not items:
-        return []
-    if narrow:
-        return items
-    return [" · ".join(items)]
+        lines.append(f"商机：{opportunity}")
+    if detail_url:
+        lines.append(f"[{_VISIT_DETAIL_LABEL}]({detail_url})")
+    return lines
 
 
 def format_extract_card_lines(
@@ -233,6 +246,13 @@ def format_extract_card_lines(
     return lines
 
 
+def _summary_with_report_link(recap_text: str, detail_url: str) -> str:
+    body = recap_text or "--"
+    if not detail_url:
+        return body
+    return f"{body}\n[{_RECAP_REPORT_LABEL}]({detail_url})"
+
+
 def _feishu_body(
     *,
     is_revised: bool,
@@ -246,10 +266,9 @@ def _feishu_body(
         blocks.append(_REVISED_NOTICE)
     if meta_lines:
         blocks.append("\n".join(meta_lines))
-    blocks.append(recap_text or "--")
-    if detail_url:
-        blocks.append(f"[查看详情]({detail_url})")
+    blocks.append(_summary_with_report_link(recap_text, detail_url))
     if extract_lines:
+        blocks.append(_EXTRACT_SECTION_LEAD)
         blocks.append("\n".join(extract_lines))
     return "\n\n".join(blocks)
 
@@ -268,10 +287,9 @@ def _dingtalk_text(
         parts.extend([DINGTALK_PARAGRAPH_GAP, _REVISED_NOTICE])
     if meta_lines:
         parts.extend([DINGTALK_PARAGRAPH_GAP, "\n".join(meta_lines)])
-    parts.extend([DINGTALK_PARAGRAPH_GAP, recap_text or "--"])
-    if detail_url:
-        parts.extend([DINGTALK_PARAGRAPH_GAP, f"[查看详情]({detail_url})"])
+    parts.extend([DINGTALK_PARAGRAPH_GAP, _summary_with_report_link(recap_text, detail_url)])
     if extract_lines:
+        parts.extend([DINGTALK_PARAGRAPH_GAP, _EXTRACT_SECTION_LEAD])
         parts.extend([DINGTALK_PARAGRAPH_GAP, "\n".join(extract_lines)])
     return "\n".join(parts)
 
@@ -294,8 +312,9 @@ def build_recap_lite_card(
     account = resolve_account_name(record)
     title = compose_recap_title(quality, visit_date, account)
     entry_time = format_entry_time(record.get("last_modified_time") or record.get("visit_communication_date"))
-    opportunity = _text(record.get("opportunity_name"))
+    opportunity = _display_text(record.get("opportunity_name"))
     recap_text = resolve_recap_body_text(record, insight=insight)
+    visit_detail_url = build_visit_record_page_url(record_id)
     detail_url = build_visit_record_recap_page_url(record_id, query=recap_detail_query)
     recorder = _text(recorder_name) or _text(record.get("recorder"))
     extract_lines = format_extract_card_lines(
@@ -303,15 +322,16 @@ def build_recap_lite_card(
         record_id=record_id,
         recap_detail_query=recap_detail_query,
     )
+    meta_lines = _meta_lines(
+        recorder_name=recorder,
+        entry_time=entry_time,
+        opportunity=opportunity,
+        detail_url=visit_detail_url,
+    )
 
     feishu_body = _feishu_body(
         is_revised=is_revised,
-        meta_lines=_meta_lines(
-            recorder_name=recorder,
-            entry_time=entry_time,
-            opportunity=opportunity,
-            narrow=False,
-        ),
+        meta_lines=meta_lines,
         recap_text=recap_text,
         detail_url=detail_url,
         extract_lines=extract_lines,
@@ -319,12 +339,7 @@ def build_recap_lite_card(
     dingtalk_text = _dingtalk_text(
         title=title,
         is_revised=is_revised,
-        meta_lines=_meta_lines(
-            recorder_name=recorder,
-            entry_time=entry_time,
-            opportunity=opportunity,
-            narrow=True,
-        ),
+        meta_lines=meta_lines,
         recap_text=recap_text,
         detail_url=detail_url,
         extract_lines=extract_lines,

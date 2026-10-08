@@ -40,6 +40,10 @@ def test_title_keeps_quality_date_account_and_truncates():
 
 def test_build_recap_lite_card_feishu_and_dingtalk(monkeypatch):
     monkeypatch.setattr(
+        "app.services.visit_record_recap_card.build_visit_record_page_url",
+        lambda record_id: f"https://app.example/v2/behavior/{record_id}",
+    )
+    monkeypatch.setattr(
         "app.services.visit_record_recap_card.build_visit_record_recap_page_url",
         lambda record_id, query="panel=recap": f"https://app.example/v2/behavior/{record_id}?{query}",
     )
@@ -57,21 +61,61 @@ def test_build_recap_lite_card_feishu_and_dingtalk(monkeypatch):
         recorder_name="李华",
         insight={"severity": "LOW", "summary": "客户确认下季度扩容，下周出方案。"},
     )
+    visit_detail = "[查看行为详情](https://app.example/v2/behavior/rec-1)"
+    report = "[完整复盘报告](https://app.example/v2/behavior/rec-1?panel=recap)"
     assert card.title == "正常 · 9月20日 · 星辰科技"
     assert card.header_template == "green"
-    assert "记录人：李华 · 跟进时间：9月20日 19:05 · 商机：年度续约" in card.feishu_body
+    assert (
+        "跟进人：李华\n创建时间：9月20日 19:05\n商机：年度续约\n" + visit_detail
+    ) in card.feishu_body
+    assert visit_detail in card.feishu_body
+    assert "panel=recap" not in visit_detail
     assert "客户确认下季度扩容" in card.feishu_body
-    assert "[查看详情](https://app.example/v2/behavior/rec-1?panel=recap)" in card.feishu_body
+    assert report in card.feishu_body
+    assert card.feishu_body.index(visit_detail) < card.feishu_body.index("客户确认下季度扩容")
+    assert card.feishu_body.index("客户确认下季度扩容") < card.feishu_body.index("完整复盘报告")
+    assert "接下来可以看看这些：" not in card.feishu_body
     assert card.dingtalk_text.startswith("### 正常 · 9月20日 · 星辰科技")
     assert DINGTALK_PARAGRAPH_GAP in card.dingtalk_text
-    assert "记录人：李华" in card.dingtalk_text
-    assert "跟进时间：9月20日 19:05" in card.dingtalk_text
-    assert "商机：年度续约" in card.dingtalk_text
-    # 钉钉窄屏：字段分行，不挤在同一行
-    assert "跟进时间：9月20日 19:05 · 商机" not in card.dingtalk_text
+    assert (
+        "跟进人：李华\n创建时间：9月20日 19:05\n商机：年度续约\n" + visit_detail
+    ) in card.dingtalk_text
+
+
+def test_blank_opportunity_is_omitted_from_lite_card(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.visit_record_recap_card.build_visit_record_page_url",
+        lambda record_id: f"https://app.example/v2/behavior/{record_id}",
+    )
+    monkeypatch.setattr(
+        "app.services.visit_record_recap_card.build_visit_record_recap_page_url",
+        lambda record_id, query="panel=recap": f"https://app.example/v2/behavior/{record_id}?{query}",
+    )
+    record = {
+        "visit_communication_date": "2026-09-24",
+        "last_modified_time": "2026-09-24 15:17:00",
+        "followup_object_name": "易慧生物技术（杭州）有限公司",
+        "followup_record": "本次拜访确认客户微服务链路追踪存在延迟。",
+        "recorder": "高娜",
+    }
+    visit_detail = "[查看行为详情](https://app.example/v2/behavior/rec-1)"
+    for opportunity_name in (None, "", "  ", "--"):
+        card = build_recap_lite_card(
+            "rec-1",
+            {**record, "opportunity_name": opportunity_name},
+            recorder_name="高娜",
+            insight={"severity": "LOW", "summary": "本次拜访确认客户微服务链路追踪存在延迟。"},
+        )
+        assert "商机" not in card.feishu_body
+        assert "商机" not in card.dingtalk_text
+        assert f"跟进人：高娜\n创建时间：9月24日 15:17\n{visit_detail}" in card.feishu_body
 
 
 def test_build_recap_lite_card_uses_insight_summary_not_followup_record(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.visit_record_recap_card.build_visit_record_page_url",
+        lambda record_id: f"https://app.example/v2/behavior/{record_id}",
+    )
     monkeypatch.setattr(
         "app.services.visit_record_recap_card.build_visit_record_recap_page_url",
         lambda record_id, query="panel=recap": f"https://app.example/v2/behavior/{record_id}?{query}",
@@ -109,6 +153,10 @@ def test_build_recap_lite_card_uses_insight_summary_not_followup_record(monkeypa
 
 def test_sales_lite_card_appends_extract_links(monkeypatch):
     monkeypatch.setattr(
+        "app.services.visit_record_recap_card.build_visit_record_page_url",
+        lambda record_id: f"https://app.example/v2/behavior/{record_id}",
+    )
+    monkeypatch.setattr(
         "app.services.visit_record_recap_card.build_visit_record_recap_page_url",
         lambda record_id, query="panel=recap": f"https://app.example/v2/behavior/{record_id}?{query}",
     )
@@ -142,10 +190,20 @@ def test_sales_lite_card_appends_extract_links(monkeypatch):
             },
         ],
     )
-    assert "[查看详情](https://app.example/v2/behavior/rec-1?panel=recap)" in card.feishu_body
-    assert "[待我跟进（2）](https://app.example/v2/behavior/rec-1?panel=recap&extract=follow_ups)" in card.feishu_body
+    visit_detail = "[查看行为详情](https://app.example/v2/behavior/rec-1)"
+    report = "[完整复盘报告](https://app.example/v2/behavior/rec-1?panel=recap)"
+    follow_ups = "[待我跟进（2）](https://app.example/v2/behavior/rec-1?panel=recap&extract=follow_ups)"
+    assert visit_detail in card.feishu_body
+    assert report in card.feishu_body
+    assert "接下来可以看看这些：" in card.feishu_body
+    assert follow_ups in card.feishu_body
     assert "[当前最关键问题](https://app.example/v2/behavior/rec-1?panel=recap&extract=key_issues)" in card.feishu_body
+    assert card.feishu_body.index(visit_detail) < card.feishu_body.index("客户确认下季度扩容")
+    assert card.feishu_body.index("客户确认下季度扩容") < card.feishu_body.index(report)
+    assert card.feishu_body.index(report) < card.feishu_body.index("接下来可以看看这些：")
+    assert card.feishu_body.index("接下来可以看看这些：") < card.feishu_body.index(follow_ups)
     assert "extract=follow_ups" in card.dingtalk_text
+    assert "接下来可以看看这些：" in card.dingtalk_text
     leader = build_recap_lite_card(
         "rec-1",
         {
@@ -159,3 +217,5 @@ def test_sales_lite_card_appends_extract_links(monkeypatch):
     )
     assert "extract=" not in leader.feishu_body
     assert "待我跟进" not in leader.feishu_body
+    assert "接下来可以看看这些：" not in leader.feishu_body
+    assert "[完整复盘报告](https://app.example/v2/behavior/rec-1?panel=recap)" in leader.feishu_body

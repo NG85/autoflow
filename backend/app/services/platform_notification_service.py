@@ -1680,6 +1680,9 @@ class PlatformNotificationService:
         is_group: bool = False,
     ) -> Optional[RecapLiteCard]:
         if recap_cards_by_view:
+            # 抽取入口只挂在记录人卡上；协同人等同销售视角但不带 extract。
+            if role == "recorder" and "recorder" in recap_cards_by_view:
+                return recap_cards_by_view["recorder"]
             return recap_cards_by_view.get(recap_view_for_role(role, is_group=is_group))
         return recap_card
 
@@ -2037,8 +2040,24 @@ class PlatformNotificationService:
                     load_visit_record_extract_response(db_session, record_id).get("card_links")
                     or []
                 )
-            recap_cards_by_view = {
-                RECAP_VIEW_SALES: build_recap_lite_card(
+            sales_card = build_recap_lite_card(
+                record_id,
+                visit_record,
+                recorder_name=recorder_name,
+                recap_detail_query=policy.recap_detail_query,
+                is_revised=is_revised,
+                insight=insights.get(RECAP_VIEW_SALES),
+            )
+            leader_card = build_recap_lite_card(
+                record_id,
+                visit_record,
+                recorder_name=recorder_name,
+                recap_detail_query=policy.recap_detail_query,
+                is_revised=is_revised,
+                insight=insights.get(RECAP_VIEW_LEADER),
+            )
+            recorder_card = (
+                build_recap_lite_card(
                     record_id,
                     visit_record,
                     recorder_name=recorder_name,
@@ -2046,15 +2065,14 @@ class PlatformNotificationService:
                     is_revised=is_revised,
                     insight=insights.get(RECAP_VIEW_SALES),
                     extract_links=extract_links,
-                ),
-                RECAP_VIEW_LEADER: build_recap_lite_card(
-                    record_id,
-                    visit_record,
-                    recorder_name=recorder_name,
-                    recap_detail_query=policy.recap_detail_query,
-                    is_revised=is_revised,
-                    insight=insights.get(RECAP_VIEW_LEADER),
-                ),
+                )
+                if extract_links is not None
+                else sales_card
+            )
+            recap_cards_by_view = {
+                RECAP_VIEW_SALES: sales_card,
+                RECAP_VIEW_LEADER: leader_card,
+                "recorder": recorder_card,
             }
         base_template_vars = self._prepare_visit_record_template_vars(
             record_id,
