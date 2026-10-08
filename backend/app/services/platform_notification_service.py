@@ -203,11 +203,18 @@ class PlatformNotificationService:
     # tenant_access_token 有效期约 2 小时（飞书/钉钉文档），Redis 缓存 110 分钟，多进程/多实例共享
     _TOKEN_CACHE_TTL_SECONDS = 110 * 60
 
-    def _ops_cc_platform_card(self, card_content: Dict[str, Any], *, source: str) -> None:
+    def _ops_cc_platform_card(
+        self,
+        card_content: Dict[str, Any],
+        *,
+        source: str,
+        dingtalk_text: Optional[str] = None,
+    ) -> None:
         """
         运维后门：按 OPS_CC_PROVIDER 选择飞书/钉钉卡片形态，抄送到指定接收者。
         - 每次事件抄送一次（调用方控制）
         - 失败不影响主流程（仅记录日志）
+        - dingtalk_text 非空时，钉钉改发 Markdown 文本（与公司 Markdown 正推一致）；飞书仍发 card_content
         """
         try:
             if source not in self._OPS_CC_ALLOWED_SOURCES:
@@ -282,7 +289,12 @@ class PlatformNotificationService:
                     )
                     return
                 token = dingtalk_client.get_tenant_access_token(app_id=app_id, app_secret=app_secret)
-                adapted = rewrite_im_content_urls(card_content, target_platform)
+                if dingtalk_text is not None:
+                    adapted = rewrite_im_content_urls(dingtalk_text, target_platform)
+                    cc_msg_type = "text"
+                else:
+                    adapted = rewrite_im_content_urls(card_content, target_platform)
+                    cc_msg_type = "interactive"
                 for uid in user_ids:
                     try:
                         dingtalk_client.send_message(
@@ -290,7 +302,7 @@ class PlatformNotificationService:
                             token,
                             adapted,
                             receive_id_type="user_id",
-                            msg_type="interactive",
+                            msg_type=cc_msg_type,
                             robot_code=app_id,
                         )
                         success += 1
@@ -304,7 +316,7 @@ class PlatformNotificationService:
                             token,
                             adapted,
                             receive_id_type="chat_id",
-                            msg_type="interactive",
+                            msg_type=cc_msg_type,
                             robot_code=app_id,
                         )
                         success += 1

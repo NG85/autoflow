@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, timedelta
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
 from sqlmodel import Session, select
@@ -16,7 +17,9 @@ from app.services.notification_scene_catalog import (
 )
 from app.services.report_markdown_dispatch import (
     DAILY_SCENES,
+    department_names_for_report_push,
     empty_push_result,
+    no_record_message,
     resolve_department,
     resolve_markdown_targets,
     send_markdown_messages,
@@ -102,10 +105,14 @@ def handle_daily_summary(
 
     company = scene_key == SCENE_COMPANY_DAILY
     dept_id, dept_name = ("", "")
+    allowed_names: set[str] = set()
     if not company:
         dept_id, dept_name = resolve_department(
             db_session, department_id=department_id, department_name=department_name
         )
+        allowed_names = department_names_for_report_push(db_session, weekly=False)
+        if (dept_id or dept_name) and dept_name not in allowed_names:
+            return {**base, "skipped": True, "skip_reason": "department_not_in_scope"}
 
     rows = _load_daily_rows(
         db_session,
@@ -114,14 +121,36 @@ def handle_daily_summary(
         department_id=dept_id,
         department_name=dept_name,
     )
-    if not rows:
-        logger.info(
-            "daily summary row missing: scene=%s report_date=%s dept=%s",
-            scene_key,
-            target,
-            dept_name or dept_id,
-        )
-        return {**base, "skipped": True, "skip_reason": "summary_not_found"}
+    if not company:
+        scoped_rows = [
+            row
+            for row in rows
+            if str(row.department_name or "").strip() in allowed_names
+        ]
+        rows = list(scoped_rows)
+        covered = {str(row.department_name or "").strip() for row in rows}
+        target_names = [dept_name] if dept_name else sorted(allowed_names)
+        for name in target_names:
+            if name and name not in covered:
+                rows.append(
+                    SimpleNamespace(
+                        department_id=dept_id if name == dept_name else "",
+                        department_name=name,
+                        summary_content="",
+                        summary_missing=True,
+                    )
+                )
+        if not rows:
+            return {**base, "skipped": True, "skip_reason": "no_departments"}
+    elif not rows:
+        rows = [
+            SimpleNamespace(
+                department_id="",
+                department_name="",
+                summary_content="",
+                summary_missing=True,
+            )
+        ]
 
     items: List[Dict[str, Any]] = []
     failed: List[Dict[str, Any]] = []
@@ -134,14 +163,19 @@ def handle_daily_summary(
         row_dept_id = str(row.department_id or "").strip() or dept_id
         row_dept_name = str(row.department_name or "").strip() or dept_name
         content_text = str(row.summary_content or "").strip()
+        summary_missing = getattr(row, "summary_missing", False) is True
         item_extra = {
             "department_id": row_dept_id,
             "department_name": row_dept_name,
         }
-        if not content_text:
-            skip_reasons.append("empty_content")
-            items.append({**item_extra, "skipped": True, "skip_reason": "empty_content", "sent": False})
-            continue
+        placeholder = not content_text
+        if placeholder:
+            content_text = no_record_message(
+                weekly=False,
+                report_date=target,
+                department_name="" if company else row_dept_name,
+                summary_missing=summary_missing,
+            )
 
         recipients, groups, skip_reason = resolve_markdown_targets(
             db_session,
@@ -166,6 +200,7 @@ def handle_daily_summary(
             delivery=delivery,
             recipients=recipients,
             groups=groups,
+            ops_cc_source=None if placeholder else ("company daily report" if company else None),
         )
         success_count += int(sent["success_count"] or 0)
         recipients_count += int(sent["recipients_count"] or 0)

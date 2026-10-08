@@ -135,7 +135,7 @@ SCENES: Dict[str, SceneSpec] = {
         routing=ROUTING_ELIGIBLE_SET,
         preference=PREF_ELIGIBLE_OPT_OUT,
         variants=(VARIANT_KPI_CARD, VARIANT_SUMMARY_MD),
-        description="OAuth notification:daily_report_company:receive（kpi_card）；summary_md 为日拜访报告 Markdown，读 crm_department_daily_summary.summary_content，资格为 recipient_user_ids",
+        description="OAuth notification:daily_report_company:receive（kpi_card 与未指定收件人的 summary_md）；summary_md 写了 recipient_user_ids 时只发给指定人。正文读 crm_department_daily_summary.summary_content",
     ),
     SCENE_COMPANY_HIGHLIGHTS: SceneSpec(
         scene=SCENE_COMPANY_HIGHLIGHTS,

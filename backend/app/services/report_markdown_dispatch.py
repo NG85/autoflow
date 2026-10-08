@@ -33,6 +33,32 @@ DAILY_SCENES = frozenset({SCENE_COMPANY_DAILY, SCENE_DEPARTMENT_DAILY})
 WEEKLY_SCENES = frozenset({SCENE_COMPANY_WEEKLY, SCENE_DEPARTMENT_WEEKLY})
 
 
+def no_record_message(
+    *,
+    weekly: bool,
+    report_date: Optional[date] = None,
+    week_start: Optional[date] = None,
+    week_end: Optional[date] = None,
+    department_name: str = "",
+    summary_missing: bool = False,
+) -> str:
+    """与定时任务短文本一致：没有 Markdown 正文时仍发一条无记录说明。"""
+    from app.services.platform_notification_service import PlatformNotificationService
+
+    dept = (department_name or "").strip() or None
+    if weekly:
+        return PlatformNotificationService._format_ungenerated_weekly_report_text(
+            start_date=week_start,
+            end_date=week_end,
+            department_name=dept,
+        )
+    return PlatformNotificationService._format_empty_daily_report_text(
+        report_date=report_date,
+        department_name=dept,
+        summary_missing=summary_missing,
+    )
+
+
 def parse_iso_date(value: Any, *, field: str) -> date:
     if isinstance(value, date):
         return value
@@ -43,6 +69,48 @@ def parse_iso_date(value: Any, *, field: str) -> date:
         return date.fromisoformat(raw)
     except ValueError as exc:
         raise ValueError(f"{field} must be YYYY-MM-DD") from exc
+
+
+def _weekly_profile_leader_department_names(db_session: Session) -> set[str]:
+    """周报定时任务在 OAuth 部门负责人为空时的档案回退。"""
+    from app.repositories.user_profile import user_profile_repo
+
+    names: set[str] = set()
+    dept_managers = user_profile_repo.get_all_departments_with_managers(db_session)
+    for dept_name, manager in (dept_managers or {}).items():
+        name = str(dept_name or "").strip()
+        if not name or manager is None:
+            continue
+        oauth_user = getattr(manager, "oauth_user", None)
+        open_id = getattr(oauth_user, "open_id", None)
+        platform = getattr(oauth_user, "provider", None)
+        if open_id and platform:
+            names.add(name)
+    return names
+
+
+def department_names_for_report_push(db_session: Session, *, weekly: bool) -> set[str]:
+    """与部门日/周报定时任务相同的部门名称集合：有负责人，或配置了部门日报群。"""
+    from app.services.oauth_service import oauth_client
+    from app.services.platform_notification_service import platform_notification_service
+
+    leaders = oauth_client.get_departments_with_leaders() or {}
+    if weekly and not leaders:
+        names = _weekly_profile_leader_department_names(db_session)
+    elif weekly:
+        names = {str(name).strip() for name in leaders if str(name or "").strip()}
+    else:
+        names = {
+            str(name).strip()
+            for name, managers in leaders.items()
+            if str(name or "").strip() and managers
+        }
+
+    groups = platform_notification_service.get_department_names_with_review_group(
+        db_session=db_session
+    )
+    names.update(str(name).strip() for name in groups if str(name or "").strip())
+    return names
 
 
 def resolve_department(
@@ -74,11 +142,6 @@ def department_ids_for_opt_out(
     return [""]
 
 
-def named_ids_are_eligibility(scene: str, variant: str) -> bool:
-    """公司日报 summary_md：recipient_user_ids 即资格集；其余槽位上是覆盖名单。"""
-    return scene == SCENE_COMPANY_DAILY and variant == VARIANT_SUMMARY_MD
-
-
 def resolve_markdown_targets(
     db_session: Session,
     *,
@@ -94,13 +157,8 @@ def resolve_markdown_targets(
     named_ids = policy.override_user_ids(scene, variant)
     groups: List[Dict[str, Any]] = []
 
-    if named_ids_are_eligibility(scene, variant):
-        if not named_ids:
-            return [], [], "no_named_recipients"
-        recipients = platform_notification_service.recipients_from_user_ids(
-            db_session, named_ids, recipient_type="named_recipient"
-        )
-    elif named_ids:
+    # 指定了 recipient_user_ids 就只发给这些人，不再走定时任务的默认资格，也不改发部门群。
+    if named_ids:
         recipients = platform_notification_service.recipients_from_user_ids(
             db_session, named_ids, recipient_type="variant_override"
         )
@@ -162,11 +220,22 @@ def send_markdown_messages(
     delivery: str,
     recipients: List[Dict[str, Any]],
     groups: List[Dict[str, Any]],
+    ops_cc_source: Optional[str] = None,
 ) -> Dict[str, Any]:
     from app.services.platform_notification_service import platform_notification_service
 
     delivery_mode = (delivery or "card").strip().lower() or "card"
     failed: List[Dict[str, Any]] = []
+    if ops_cc_source:
+        try:
+            card = platform_notification_service.build_feishu_markdown_card(content, title=title)
+            platform_notification_service._ops_cc_platform_card(
+                card,
+                source=ops_cc_source,
+                dingtalk_text=content,
+            )
+        except Exception as exc:
+            logger.warning("Ops CC markdown failed source=%s: %s", ops_cc_source, exc, exc_info=True)
     if groups:
         success_count = _send_markdown_to_groups(
             platform_notification_service,

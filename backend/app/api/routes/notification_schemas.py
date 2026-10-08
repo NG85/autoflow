@@ -119,7 +119,7 @@ class DailyVisitReportPushRequest(BaseModel):
     )
     department_id: Optional[str] = Field(
         default=None,
-        description="部门日报：部门 ID；与 department_name 都空则推该日全部部门",
+        description="部门日报：部门 ID；与 department_name 都空则推该日有负责人或配置了部门日报群的部门",
     )
     department_name: Optional[str] = Field(
         default=None,
@@ -154,7 +154,7 @@ class WeeklyVisitReportPushRequest(BaseModel):
     )
     department_id: Optional[str] = Field(
         default=None,
-        description="部门周报：部门 ID；与 department_name 都空则推该周全部部门",
+        description="部门周报：部门 ID；与 department_name 都空则推该周有负责人或配置了部门日报群的部门",
     )
     department_name: Optional[str] = None
     delivery: Literal["card", "post"] = Field(

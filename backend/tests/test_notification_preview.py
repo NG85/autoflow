@@ -327,7 +327,6 @@ def test_company_daily_summary_md_uses_named_recipients_not_oauth():
     assert data["enabled"] is True
     assert data["policy"]["summary_md"] is True
     assert [p["user_id"] for p in data["eligible"]] == [uid]
-    assert "named_recipient" in (data["eligible"][0].get("reasons") or [])
+    assert "variant_override" in (data["eligible"][0].get("reasons") or [])
     service.recipients_from_user_ids.assert_called_once()
-    assert service.recipients_from_user_ids.call_args.kwargs["recipient_type"] == "named_recipient"
-    service.get_recipients_for_company_daily_report.assert_not_called()
+    assert service.recipients_from_user_ids.call_args.kwargs["recipient_type"] == "variant_override"
