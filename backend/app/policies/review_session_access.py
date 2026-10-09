@@ -20,6 +20,8 @@ REVIEW_SESSION_VIEW_PERMISSION = WEEKLY_DECISION_VIEW_PERMISSION
 WEEKLY_DECISION_DATA_SCOPE_ENTITY = "biz_weekly_decision"
 # 仅组织/汇报链可抬成部门列表；linked_crm / crm_grant / self_* 都不算
 _TEAM_SOURCES = frozenset({"org_team_sub", "org_scope"})
+# global 可见的公司级 CXO session
+COMPANY_CXO_DEPARTMENT_ID = "__COMPANY__"
 
 
 def _filter_explicitly_enabled(item: dict[str, Any]) -> bool:
@@ -88,13 +90,16 @@ def _attendee_session_ids_subquery(user_id: str):
 def review_session_list_type_predicate(scope: ReviewSessionViewScope):
     """列表查询可见的 session 类型。
 
-    - company（global / CXO）：``lead_analysis`` + ``cxo``
+    - company（global / CXO）：``lead_analysis``，以及 ``cxo`` 且 ``department_id`` 为 ``__COMPANY__``
     - 其它范围：``lead_analysis`` / ``legacy_long`` 全部，以及 ``sales_update`` 且未 completed
     """
     if scope.list_filter_mode == "company":
         return or_(
             CRMReviewSession.session_type == "lead_analysis",
-            CRMReviewSession.session_type == "cxo",
+            and_(
+                CRMReviewSession.session_type == "cxo",
+                CRMReviewSession.department_id == COMPANY_CXO_DEPARTMENT_ID,
+            ),
         )
     return or_(
         CRMReviewSession.session_type == "lead_analysis",

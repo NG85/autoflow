@@ -25,6 +25,7 @@ from app.api.routes.crm.models import (
     MyLatestReviewSessionOut,
     ReviewBranchSnapshotMergeFromCacheOut,
     ReviewBranchSnapshotSubmitIn,
+    ReviewCxoReportOut,
     ReviewBranchSnapshotSubmitOut,
     ReviewOppBranchSnapshotsQueryIn,
     ReviewSessionForecastRecalcOut,
@@ -64,6 +65,7 @@ from app.rag.chat.chat_flow import ChatFlow
 from app.rag.chat.chat_service import get_final_chat_result
 from app.rag.types import CrmDataType
 from app.repositories.crm_review_attendee import crm_review_attendee_repo
+from app.repositories.crm_review_cxo_report import crm_review_cxo_report_repo
 from app.repositories.crm_review_kpi_metrics import crm_review_kpi_metrics_repo
 from app.repositories.crm_review_session import crm_review_session_repo
 from app.services.crm_review_service import crm_review_service
@@ -601,7 +603,7 @@ def query_my_latest_review_session(
     """
     当前用户参与的、汇报日最新的一场 review 的 session id；没有则为 null。
     返回 ``lead_analysis`` / ``legacy_long`` 全部，以及 ``sales_update`` 且 stage 不等于 completed 的记录；
-    可见范围为 global 时只返回 ``lead_analysis`` 与 ``cxo``。
+    可见范围为 global 时只返回 ``lead_analysis``，以及 ``cxo`` 且 ``department_id`` 为 ``__COMPANY__`` 的记录。
     可见范围由 ``biz_weekly_decision`` data-scope 决定：global 看全公司；``org_team_sub`` 等团队范围看本部门及下属；``self_owner`` 仅本人参会。
     """
     scope_cache: Dict[str, ReviewSessionViewScope] = {}
@@ -632,7 +634,7 @@ def query_my_review_session_history(
     """
     当前用户参与过的 review 列表（分页），从新到旧。``size`` 最大 200。
     返回 ``lead_analysis`` / ``legacy_long`` 全部，以及 ``sales_update`` 且 stage 不等于 completed 的记录；
-    可见范围为 global 时只返回 ``lead_analysis`` 与 ``cxo``。
+    可见范围为 global 时只返回 ``lead_analysis``，以及 ``cxo`` 且 ``department_id`` 为 ``__COMPANY__`` 的记录。
     可见范围由 ``biz_weekly_decision`` data-scope 决定：global 看全公司；``org_team_sub`` 等团队范围看本部门及下属；``self_owner`` 仅本人参会。
     """
     page = max(int(page or 1), 1)
@@ -899,6 +901,47 @@ def update_review_session_phase(
         "stage": str(session.stage),
         "review_phase": str(session.review_phase or ""),
     }
+
+
+@router.get("/crm/review/sessions/{session_id}/cxo-report")
+def query_review_session_cxo_report(
+    session_id: str,
+    db_session: SessionDep,
+    user: CurrentUserDep,
+) -> ReviewCxoReportOut:
+    """
+    查询一场 review 的 CXO 报告。``report_format`` 为格式（如 html / markdown），``report_content`` 为正文。
+    仅 ``biz_weekly_decision`` data-scope 为 global 的用户可调用。
+    一场 session 至多一条报告；没有则 404。
+    """
+    scope = get_cached_review_session_view_scope(db_session, user)
+    if scope.list_filter_mode != "company":
+        raise HTTPException(status_code=403, detail="only global review scope can view cxo report")
+
+    session = crm_review_session_repo.get_by_unique_id(db_session, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="review session not found")
+
+    report = crm_review_cxo_report_repo.get_by_session_id(db_session, session_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="cxo report not found")
+
+    return ReviewCxoReportOut(
+        unique_id=str(report.unique_id),
+        session_id=str(report.session_id),
+        report_name=report.report_name,
+        report_level=str(report.report_level),
+        department_id=str(report.department_id),
+        department_name=report.department_name,
+        period=str(report.period),
+        snapshot_date=report.snapshot_date,
+        report_date=report.report_date,
+        report_status=str(report.report_status),
+        report_format=str(report.report_format or ""),
+        report_content=report.report_content,
+        summary=report.summary,
+        version=int(report.version or 1),
+    )
 
 
 @router.get("/crm/review/sessions/{session_id}/kpi-metrics")
