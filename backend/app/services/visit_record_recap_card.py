@@ -239,7 +239,6 @@ def format_extract_card_actions(
     card_links: Optional[Sequence[Mapping[str, Any]]],
     *,
     record_id: str,
-    recap_detail_query: str,
 ) -> list[tuple[str, str]]:
     """有数据的 card_links → (文案, url)。count=1 不展示数量。"""
     from app.utils.push_page_urls import build_visit_record_extract_section_url
@@ -252,9 +251,7 @@ def format_extract_card_actions(
         title = _text(link.get("title")) or key
         if not key or not title:
             continue
-        url = build_visit_record_extract_section_url(
-            record_id, key, recap_query=recap_detail_query
-        )
+        url = build_visit_record_extract_section_url(record_id, key)
         if not url:
             continue
         count = link.get("count")
@@ -267,7 +264,6 @@ def format_extract_card_lines(
     card_links: Optional[Sequence[Mapping[str, Any]]],
     *,
     record_id: str,
-    recap_detail_query: str,
 ) -> list[str]:
     """钉钉等纯文本渠道：markdown 链接，一行一个。"""
     return [
@@ -275,7 +271,6 @@ def format_extract_card_lines(
         for label, url in format_extract_card_actions(
             card_links,
             record_id=record_id,
-            recap_detail_query=recap_detail_query,
         )
     ]
 
@@ -327,7 +322,6 @@ def build_recap_lite_card(
     visit_record: Optional[Mapping[str, Any]] = None,
     *,
     recorder_name: Optional[str] = None,
-    recap_detail_query: str = "panel=recap",
     is_revised: bool = False,
     insight: Any = None,
     extract_links: Optional[Sequence[Mapping[str, Any]]] = None,
@@ -343,12 +337,11 @@ def build_recap_lite_card(
     opportunity = _display_text(record.get("opportunity_name"))
     recap_text = resolve_recap_body_text(record, insight=insight)
     visit_detail_url = build_visit_record_page_url(record_id)
-    detail_url = build_visit_record_recap_page_url(record_id, query=recap_detail_query)
+    detail_url = build_visit_record_recap_page_url(record_id)
     recorder = _text(recorder_name) or _text(record.get("recorder"))
     extract_actions = format_extract_card_actions(
         extract_links,
         record_id=record_id,
-        recap_detail_query=recap_detail_query,
     )
     extract_lines = [f"[{label}]({url})" for label, url in extract_actions]
     meta_lines = _meta_lines(

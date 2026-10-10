@@ -716,7 +716,6 @@ notification:
         brief:
           enabled: true
           card: legacy
-      recap_detail_query: "panel=recap"
     data_type: dict
     description: "拜访卡片按接收角色配置。每个角色 {enabled, card}，card 为 legacy（原模板卡）或 recap_lite（轻量复盘卡）。也可用简写 recorder: recap_lite 或 leader: false。未写明的角色默认 enabled=true、card=legacy；顶层 strategy 可作为未写 card 的默认类型。不同环境可配不同组合。"
     client: false

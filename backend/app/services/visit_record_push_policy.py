@@ -29,7 +29,6 @@ GROUP_TYPES = ("review", "brief")
 
 _FALSE_TOKENS = frozenset({"false", "off", "disabled", "none", "0", "no"})
 _TRUE_TOKENS = frozenset({"true", "on", "enabled", "1", "yes"})
-_DEFAULT_RECAP_QUERY = "panel=recap"
 
 
 @dataclass(frozen=True)
@@ -42,7 +41,6 @@ class RolePushSpec:
 class VisitRecordPushPolicy:
     recipients: Dict[str, RolePushSpec]
     groups: Dict[str, RolePushSpec]
-    recap_detail_query: str = _DEFAULT_RECAP_QUERY
 
     def recipient_spec(self, role: Optional[str]) -> RolePushSpec:
         if role and role in self.recipients:
@@ -84,7 +82,6 @@ def _all_legacy_policy() -> VisitRecordPushPolicy:
     return VisitRecordPushPolicy(
         recipients={role: legacy for role in RECIPIENT_TYPES},
         groups={role: legacy for role in GROUP_TYPES},
-        recap_detail_query=_DEFAULT_RECAP_QUERY,
     )
 
 
@@ -164,16 +161,9 @@ def parse_visit_record_push_policy(raw: Any) -> VisitRecordPushPolicy:
         for role in GROUP_TYPES
     }
 
-    query = raw.get("recap_detail_query")
-    if isinstance(query, str) and query.strip():
-        recap_query = query.strip().lstrip("?")
-    else:
-        recap_query = _DEFAULT_RECAP_QUERY
-
     return VisitRecordPushPolicy(
         recipients=recipients,
         groups=groups,
-        recap_detail_query=recap_query,
     )
 
 

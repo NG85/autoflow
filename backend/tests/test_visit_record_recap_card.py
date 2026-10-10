@@ -45,7 +45,7 @@ def test_build_recap_lite_card_feishu_and_dingtalk(monkeypatch):
     )
     monkeypatch.setattr(
         "app.services.visit_record_recap_card.build_visit_record_recap_page_url",
-        lambda record_id, query="panel=recap": f"https://app.example/v2/behavior/{record_id}?{query}",
+        lambda record_id: f"https://app.example/v2/behavior/{record_id}/recap",
     )
     card = build_recap_lite_card(
         "rec-1",
@@ -62,13 +62,13 @@ def test_build_recap_lite_card_feishu_and_dingtalk(monkeypatch):
         insight={"severity": "LOW", "summary": "客户确认下季度扩容，下周出方案。"},
     )
     visit_detail = "[查看行为详情](https://app.example/v2/behavior/rec-1)"
-    report = "[完整复盘报告](https://app.example/v2/behavior/rec-1?panel=recap)"
+    report = "[完整复盘报告](https://app.example/v2/behavior/rec-1/recap)"
     assert card.title == "正常 · 9月20日 · 星辰科技"
     assert card.header_template == "green"
     assert card.feishu_body == "跟进人：李华\n创建时间：9月20日 19:05\n商机：年度续约"
     assert card.feishu_summary == "客户确认下季度扩容，下周出方案。"
     assert card.feishu_action_links == f"{visit_detail}  {report}"
-    assert "panel=recap" not in visit_detail
+    assert "/recap" in report
     assert "客户确认下季度扩容" in card.dingtalk_text
     assert f"{visit_detail}  {report}" in card.dingtalk_text
     assert card.dingtalk_text.index("客户确认下季度扩容") < card.dingtalk_text.index(visit_detail)
@@ -85,7 +85,7 @@ def test_blank_opportunity_is_omitted_from_lite_card(monkeypatch):
     )
     monkeypatch.setattr(
         "app.services.visit_record_recap_card.build_visit_record_recap_page_url",
-        lambda record_id, query="panel=recap": f"https://app.example/v2/behavior/{record_id}?{query}",
+        lambda record_id: f"https://app.example/v2/behavior/{record_id}/recap",
     )
     record = {
         "visit_communication_date": "2026-09-24",
@@ -114,7 +114,7 @@ def test_build_recap_lite_card_uses_insight_summary_not_followup_record(monkeypa
     )
     monkeypatch.setattr(
         "app.services.visit_record_recap_card.build_visit_record_recap_page_url",
-        lambda record_id, query="panel=recap": f"https://app.example/v2/behavior/{record_id}?{query}",
+        lambda record_id: f"https://app.example/v2/behavior/{record_id}/recap",
     )
     insight = VisitRecordInsight(
         unique_id="ins-1",
@@ -154,12 +154,12 @@ def test_sales_lite_card_appends_extract_links(monkeypatch):
     )
     monkeypatch.setattr(
         "app.services.visit_record_recap_card.build_visit_record_recap_page_url",
-        lambda record_id, query="panel=recap": f"https://app.example/v2/behavior/{record_id}?{query}",
+        lambda record_id: f"https://app.example/v2/behavior/{record_id}/recap",
     )
     monkeypatch.setattr(
         "app.utils.push_page_urls.build_visit_record_extract_section_url",
-        lambda record_id, section, recap_query="panel=recap": (
-            f"https://app.example/v2/behavior/{record_id}?{recap_query}&extract={section}"
+        lambda record_id, section: (
+            f"https://app.example/v2/behavior/{record_id}/extract?tab={section}"
         ),
     )
     card = build_recap_lite_card(
@@ -187,16 +187,16 @@ def test_sales_lite_card_appends_extract_links(monkeypatch):
         ],
     )
     visit_detail = "[查看行为详情](https://app.example/v2/behavior/rec-1)"
-    report = "[完整复盘报告](https://app.example/v2/behavior/rec-1?panel=recap)"
-    follow_ups_url = "https://app.example/v2/behavior/rec-1?panel=recap&extract=follow_ups"
-    key_issues_url = "https://app.example/v2/behavior/rec-1?panel=recap&extract=key_issues"
+    report = "[完整复盘报告](https://app.example/v2/behavior/rec-1/recap)"
+    follow_ups_url = "https://app.example/v2/behavior/rec-1/extract?tab=follow_ups"
+    key_issues_url = "https://app.example/v2/behavior/rec-1/extract?tab=key_issues"
     follow_ups = f"[待我跟进（2）]({follow_ups_url})"
     key_issues = f"[当前最关键问题]({key_issues_url})"
     extract_row = f"{follow_ups}\n{key_issues}"
     assert card.feishu_summary == "客户确认下季度扩容。"
     assert card.feishu_action_links == f"{visit_detail}  {report}"
-    assert "extract=" not in card.feishu_body
-    assert "extract=" not in card.feishu_action_links
+    assert "extract?tab=" not in card.feishu_body
+    assert "extract?tab=" not in card.feishu_action_links
     assert card.feishu_extract_actions == (
         ("待我跟进（2）", follow_ups_url),
         ("当前最关键问题", key_issues_url),

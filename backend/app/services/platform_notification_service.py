@@ -2049,7 +2049,6 @@ class PlatformNotificationService:
                 record_id,
                 visit_record,
                 recorder_name=recorder_name,
-                recap_detail_query=policy.recap_detail_query,
                 is_revised=is_revised,
                 insight=insights.get(RECAP_VIEW_SALES),
             )
@@ -2057,7 +2056,6 @@ class PlatformNotificationService:
                 record_id,
                 visit_record,
                 recorder_name=recorder_name,
-                recap_detail_query=policy.recap_detail_query,
                 is_revised=is_revised,
                 insight=insights.get(RECAP_VIEW_LEADER),
             )
@@ -2066,7 +2064,6 @@ class PlatformNotificationService:
                     record_id,
                     visit_record,
                     recorder_name=recorder_name,
-                    recap_detail_query=policy.recap_detail_query,
                     is_revised=is_revised,
                     insight=insights.get(RECAP_VIEW_SALES),
                     extract_links=extract_links,
