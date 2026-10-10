@@ -240,4 +240,4 @@ lite 卡拜访区链到详情页 `/v2/behavior/{record_id}`；复盘区链到同
 3. 推卡发生在 Aldebaran 复盘完成回调之后，lite 卡读当时已写入的 `crm_entity_insight`。
 4. 复盘链接暂定为详情 `?panel=recap`；前端改 query 只改配置，改 path 再动代码。
 5. 列表 data-scope 与推送名单不是同一套，不要靠扩列表来配合这张卡。
-6. 记录人 lite 卡在复盘摘要后放「完整复盘报告」，有抽取时再用「接下来可以看看这些：」隔开 `card_links`（待我跟进 / 下次沟通 / 当前最关键问题 / 潜在新商机，有数据才出现），跳转 `?panel=recap&extract={key}`。没有 `crm_entity_insight` 复盘行时不读抽取表、不加这些入口，与 `GET /recap` 一致。协同人/领导/群 lite 不加这些入口。抽取表缺失或为空时卡片与现在一样，只有 summary + 完整复盘报告。
+6. 记录人 lite 卡在复盘摘要后放「完整复盘报告」，有抽取时飞书用 default 小按钮（`open_url`）挂 `card_links`（待我跟进 / 下次沟通 / 当前最关键问题 / 潜在新商机，有数据才出现），钉钉仍为 markdown 链接；跳转 `?panel=recap&extract={key}`。没有 `crm_entity_insight` 复盘行时不读抽取表、不加这些入口，与 `GET /recap` 一致。协同人/领导/群 lite 不加这些入口。抽取表缺失或为空时卡片与现在一样，只有 summary + 完整复盘报告。

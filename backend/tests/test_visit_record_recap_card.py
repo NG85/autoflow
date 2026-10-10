@@ -65,21 +65,17 @@ def test_build_recap_lite_card_feishu_and_dingtalk(monkeypatch):
     report = "[完整复盘报告](https://app.example/v2/behavior/rec-1?panel=recap)"
     assert card.title == "正常 · 9月20日 · 星辰科技"
     assert card.header_template == "green"
-    assert (
-        "跟进人：李华\n创建时间：9月20日 19:05\n商机：年度续约\n" + visit_detail
-    ) in card.feishu_body
-    assert visit_detail in card.feishu_body
+    assert card.feishu_body == "跟进人：李华\n创建时间：9月20日 19:05\n商机：年度续约"
+    assert card.feishu_summary == "客户确认下季度扩容，下周出方案。"
+    assert card.feishu_action_links == f"{visit_detail}  {report}"
     assert "panel=recap" not in visit_detail
-    assert "客户确认下季度扩容" in card.feishu_body
-    assert report in card.feishu_body
-    assert card.feishu_body.index(visit_detail) < card.feishu_body.index("客户确认下季度扩容")
-    assert card.feishu_body.index("客户确认下季度扩容") < card.feishu_body.index("完整复盘报告")
-    assert "接下来可以看看这些：" not in card.feishu_body
+    assert "客户确认下季度扩容" in card.dingtalk_text
+    assert f"{visit_detail}  {report}" in card.dingtalk_text
+    assert card.dingtalk_text.index("客户确认下季度扩容") < card.dingtalk_text.index(visit_detail)
+    assert card.dingtalk_text.index(visit_detail) < card.dingtalk_text.index(report)
     assert card.dingtalk_text.startswith("### 正常 · 9月20日 · 星辰科技")
     assert DINGTALK_PARAGRAPH_GAP in card.dingtalk_text
-    assert (
-        "跟进人：李华\n创建时间：9月20日 19:05\n商机：年度续约\n" + visit_detail
-    ) in card.dingtalk_text
+    assert "跟进人：李华\n创建时间：9月20日 19:05\n商机：年度续约" in card.dingtalk_text
 
 
 def test_blank_opportunity_is_omitted_from_lite_card(monkeypatch):
@@ -98,7 +94,6 @@ def test_blank_opportunity_is_omitted_from_lite_card(monkeypatch):
         "followup_record": "本次拜访确认客户微服务链路追踪存在延迟。",
         "recorder": "高娜",
     }
-    visit_detail = "[查看行为详情](https://app.example/v2/behavior/rec-1)"
     for opportunity_name in (None, "", "  ", "--"):
         card = build_recap_lite_card(
             "rec-1",
@@ -108,7 +103,8 @@ def test_blank_opportunity_is_omitted_from_lite_card(monkeypatch):
         )
         assert "商机" not in card.feishu_body
         assert "商机" not in card.dingtalk_text
-        assert f"跟进人：高娜\n创建时间：9月24日 15:17\n{visit_detail}" in card.feishu_body
+        assert card.feishu_body == "跟进人：高娜\n创建时间：9月24日 15:17"
+        assert "[查看行为详情](https://app.example/v2/behavior/rec-1)" in card.feishu_action_links
 
 
 def test_build_recap_lite_card_uses_insight_summary_not_followup_record(monkeypatch):
@@ -144,9 +140,9 @@ def test_build_recap_lite_card_uses_insight_summary_not_followup_record(monkeypa
         recorder_name="李华",
         insight=insight,
     )
-    assert "客户确认下季度扩容，下周出方案。" in card.feishu_body
-    assert "销售自己填的跟进原文" not in card.feishu_body
-    assert "更长的完整复盘" not in card.feishu_body
+    assert card.feishu_summary == "客户确认下季度扩容，下周出方案。"
+    assert "销售自己填的跟进原文" not in card.feishu_summary
+    assert "更长的完整复盘" not in card.feishu_summary
     assert card.title.startswith("需关注 · ")
     assert card.header_template == "orange"
 
@@ -192,18 +188,21 @@ def test_sales_lite_card_appends_extract_links(monkeypatch):
     )
     visit_detail = "[查看行为详情](https://app.example/v2/behavior/rec-1)"
     report = "[完整复盘报告](https://app.example/v2/behavior/rec-1?panel=recap)"
-    follow_ups = "[待我跟进（2）](https://app.example/v2/behavior/rec-1?panel=recap&extract=follow_ups)"
-    assert visit_detail in card.feishu_body
-    assert report in card.feishu_body
-    assert "接下来可以看看这些：" in card.feishu_body
-    assert follow_ups in card.feishu_body
-    assert "[当前最关键问题](https://app.example/v2/behavior/rec-1?panel=recap&extract=key_issues)" in card.feishu_body
-    assert card.feishu_body.index(visit_detail) < card.feishu_body.index("客户确认下季度扩容")
-    assert card.feishu_body.index("客户确认下季度扩容") < card.feishu_body.index(report)
-    assert card.feishu_body.index(report) < card.feishu_body.index("接下来可以看看这些：")
-    assert card.feishu_body.index("接下来可以看看这些：") < card.feishu_body.index(follow_ups)
-    assert "extract=follow_ups" in card.dingtalk_text
-    assert "接下来可以看看这些：" in card.dingtalk_text
+    follow_ups_url = "https://app.example/v2/behavior/rec-1?panel=recap&extract=follow_ups"
+    key_issues_url = "https://app.example/v2/behavior/rec-1?panel=recap&extract=key_issues"
+    follow_ups = f"[待我跟进（2）]({follow_ups_url})"
+    key_issues = f"[当前最关键问题]({key_issues_url})"
+    extract_row = f"{follow_ups}\n{key_issues}"
+    assert card.feishu_summary == "客户确认下季度扩容。"
+    assert card.feishu_action_links == f"{visit_detail}  {report}"
+    assert "extract=" not in card.feishu_body
+    assert "extract=" not in card.feishu_action_links
+    assert card.feishu_extract_actions == (
+        ("待我跟进（2）", follow_ups_url),
+        ("当前最关键问题", key_issues_url),
+    )
+    assert extract_row in card.dingtalk_text
+    assert card.dingtalk_text.index(report) < card.dingtalk_text.index(follow_ups)
     leader = build_recap_lite_card(
         "rec-1",
         {
@@ -215,7 +214,7 @@ def test_sales_lite_card_appends_extract_links(monkeypatch):
         recorder_name="李华",
         insight={"severity": "HIGH", "summary": "上级视角摘要"},
     )
-    assert "extract=" not in leader.feishu_body
-    assert "待我跟进" not in leader.feishu_body
-    assert "接下来可以看看这些：" not in leader.feishu_body
-    assert "[完整复盘报告](https://app.example/v2/behavior/rec-1?panel=recap)" in leader.feishu_body
+    assert leader.feishu_summary == "上级视角摘要"
+    assert leader.feishu_extract_actions == ()
+    assert "待我跟进" not in leader.dingtalk_text
+    assert report in leader.feishu_action_links

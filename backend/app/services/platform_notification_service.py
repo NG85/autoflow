@@ -1693,11 +1693,16 @@ class PlatformNotificationService:
     ) -> Tuple[Any, str]:
         """按平台返回轻量复盘卡的消息体与 msg_type。"""
         if platform in (PLATFORM_FEISHU, PLATFORM_LARK):
+            extra_sections = [recap_card.feishu_summary] if recap_card.feishu_summary else None
             return (
                 self.build_feishu_markdown_card(
                     recap_card.feishu_body,
                     title=recap_card.title,
                     header_template=recap_card.header_template,
+                    extra_sections=extra_sections,
+                    footer=recap_card.feishu_action_links or None,
+                    footer_text_size="normal",
+                    footer_buttons=list(recap_card.feishu_extract_actions) or None,
                 ),
                 "interactive",
             )
@@ -3035,6 +3040,10 @@ class PlatformNotificationService:
         *,
         title: Optional[str] = None,
         header_template: Optional[str] = None,
+        extra_sections: Optional[List[str]] = None,
+        footer: Optional[str] = None,
+        footer_text_size: str = "notation",
+        footer_buttons: Optional[List[Tuple[str, str]]] = None,
     ) -> Dict[str, Any]:
         """
         飞书 / Lark 无模板 markdown 卡片（Card JSON 2.0）。
@@ -3042,6 +3051,9 @@ class PlatformNotificationService:
         标题 / 表格等语法仅 2.0 支持；1.0 会把 # 与 | 表格当纯文本显示。
         header 优先用 title，否则取正文首行；为空则回退「通知」。
         header_template 为飞书色板（green/blue/orange 等），缺省 blue。
+        extra_sections 追加为正文字号 markdown（与首块同间距）。
+        footer 可选，另起一块 markdown（默认 notation≈12px）；轻量卡主操作用 normal。
+        footer_buttons 为 (文案, url) 列表时，在 footer 之后追加 default 小按钮 + open_url。
         """
         body = (content or "").strip()
         header = (title or "").strip()
@@ -3049,6 +3061,60 @@ class PlatformNotificationService:
             header = body.split("\n", 1)[0].strip() if body else ""
         header = (header or "通知")[:50]
         color = (header_template or "blue").strip() or "blue"
+        elements: List[Dict[str, Any]] = [
+            {"tag": "markdown", "content": body or "--"},
+        ]
+        for section in extra_sections or []:
+            section_body = (section or "").strip()
+            if section_body:
+                elements.append({"tag": "markdown", "content": section_body})
+        footer_body = (footer or "").strip()
+        if footer_body:
+            size = (footer_text_size or "notation").strip() or "notation"
+            elements.append(
+                {
+                    "tag": "markdown",
+                    "content": footer_body,
+                    "text_size": size,
+                }
+            )
+        button_columns: List[Dict[str, Any]] = []
+        for raw_label, raw_url in footer_buttons or []:
+            label = (raw_label or "").strip()
+            url = (raw_url or "").strip()
+            if not label or not url:
+                continue
+            button_columns.append(
+                {
+                    "tag": "column",
+                    "width": "auto",
+                    "elements": [
+                        {
+                            "tag": "button",
+                            "type": "default",
+                            "size": "small",
+                            "text": {"tag": "plain_text", "content": label},
+                            "behaviors": [
+                                {
+                                    "type": "open_url",
+                                    "default_url": url,
+                                    "pc_url": url,
+                                    "ios_url": url,
+                                    "android_url": url,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            )
+        if button_columns:
+            elements.append(
+                {
+                    "tag": "column_set",
+                    "flex_mode": "flow",
+                    "columns": button_columns,
+                }
+            )
         return {
             "schema": "2.0",
             "config": {
@@ -3060,9 +3126,9 @@ class PlatformNotificationService:
                 "title": {"tag": "plain_text", "content": header},
             },
             "body": {
-                "elements": [
-                    {"tag": "markdown", "content": body or "--"},
-                ],
+                # meta / 摘要 / 操作链 / 按钮统一元素间距。
+                "vertical_spacing": "12px",
+                "elements": elements,
             },
         }
 

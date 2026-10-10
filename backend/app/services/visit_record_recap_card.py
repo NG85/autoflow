@@ -17,7 +17,7 @@ _TITLE_MAX_LEN = 50
 _REVISED_NOTICE = "【修改后】"
 _VISIT_DETAIL_LABEL = "查看行为详情"
 _RECAP_REPORT_LABEL = "完整复盘报告"
-_EXTRACT_SECTION_LEAD = "接下来可以看看这些："
+_PRIMARY_ACTION_SEP = "  "
 _EMPTY_MARKERS = frozenset({"--", "-", "—", "－"})
 
 _QUALITY_BY_SEVERITY = {
@@ -33,6 +33,12 @@ class RecapLiteCard:
     header_template: str
     feishu_body: str
     dingtalk_text: str
+    # 飞书复盘摘要（与 meta 分块，间距与操作区一致）。
+    feishu_summary: str = ""
+    # 飞书操作区：行为详情 / 完整复盘蓝链，渲染在抽取按钮之前。
+    feishu_action_links: str = ""
+    # 飞书抽取入口：(文案, url)；空则不渲染。钉钉仍用 markdown 链接写在 dingtalk_text。
+    feishu_extract_actions: tuple[tuple[str, str], ...] = ()
 
 
 def _text(value: Any) -> str:
@@ -204,7 +210,6 @@ def _meta_lines(
     recorder_name: str,
     entry_time: str,
     opportunity: str,
-    detail_url: str = "",
 ) -> list[str]:
     lines: list[str] = []
     if recorder_name:
@@ -213,21 +218,33 @@ def _meta_lines(
         lines.append(f"创建时间：{entry_time}")
     if opportunity:
         lines.append(f"商机：{opportunity}")
-    if detail_url:
-        lines.append(f"[{_VISIT_DETAIL_LABEL}]({detail_url})")
     return lines
 
 
-def format_extract_card_lines(
+def _primary_action_lines(
+    *,
+    visit_detail_url: str = "",
+    report_url: str = "",
+) -> list[str]:
+    """详情 / 完整复盘等主操作链接，集中放在抽取按钮前。"""
+    lines: list[str] = []
+    if visit_detail_url:
+        lines.append(f"[{_VISIT_DETAIL_LABEL}]({visit_detail_url})")
+    if report_url:
+        lines.append(f"[{_RECAP_REPORT_LABEL}]({report_url})")
+    return lines
+
+
+def format_extract_card_actions(
     card_links: Optional[Sequence[Mapping[str, Any]]],
     *,
     record_id: str,
     recap_detail_query: str,
-) -> list[str]:
-    """销售轻量卡后处理入口：有数据的 card_links 才出链接。"""
+) -> list[tuple[str, str]]:
+    """有数据的 card_links → (文案, url)。count=1 不展示数量。"""
     from app.utils.push_page_urls import build_visit_record_extract_section_url
 
-    lines: list[str] = []
+    actions: list[tuple[str, str]] = []
     for link in card_links or []:
         if not isinstance(link, Mapping):
             continue
@@ -242,34 +259,43 @@ def format_extract_card_lines(
             continue
         count = link.get("count")
         label = f"{title}（{count}）" if isinstance(count, int) and count > 1 else title
-        lines.append(f"[{label}]({url})")
-    return lines
+        actions.append((label, url))
+    return actions
 
 
-def _summary_with_report_link(recap_text: str, detail_url: str) -> str:
-    body = recap_text or "--"
-    if not detail_url:
-        return body
-    return f"{body}\n[{_RECAP_REPORT_LABEL}]({detail_url})"
+def format_extract_card_lines(
+    card_links: Optional[Sequence[Mapping[str, Any]]],
+    *,
+    record_id: str,
+    recap_detail_query: str,
+) -> list[str]:
+    """钉钉等纯文本渠道：markdown 链接，一行一个。"""
+    return [
+        f"[{label}]({url})"
+        for label, url in format_extract_card_actions(
+            card_links,
+            record_id=record_id,
+            recap_detail_query=recap_detail_query,
+        )
+    ]
 
 
-def _feishu_body(
+def _format_extract_section(extract_lines: Optional[list[str]]) -> str:
+    if not extract_lines:
+        return ""
+    return "\n".join(extract_lines)
+
+
+def _feishu_meta_body(
     *,
     is_revised: bool,
     meta_lines: list[str],
-    recap_text: str,
-    detail_url: str,
-    extract_lines: Optional[list[str]] = None,
 ) -> str:
     blocks: list[str] = []
     if is_revised:
         blocks.append(_REVISED_NOTICE)
     if meta_lines:
         blocks.append("\n".join(meta_lines))
-    blocks.append(_summary_with_report_link(recap_text, detail_url))
-    if extract_lines:
-        blocks.append(_EXTRACT_SECTION_LEAD)
-        blocks.append("\n".join(extract_lines))
     return "\n\n".join(blocks)
 
 
@@ -279,7 +305,7 @@ def _dingtalk_text(
     is_revised: bool,
     meta_lines: list[str],
     recap_text: str,
-    detail_url: str,
+    action_lines: Optional[list[str]] = None,
     extract_lines: Optional[list[str]] = None,
 ) -> str:
     parts: list[str] = [f"### {title}"]
@@ -287,10 +313,12 @@ def _dingtalk_text(
         parts.extend([DINGTALK_PARAGRAPH_GAP, _REVISED_NOTICE])
     if meta_lines:
         parts.extend([DINGTALK_PARAGRAPH_GAP, "\n".join(meta_lines)])
-    parts.extend([DINGTALK_PARAGRAPH_GAP, _summary_with_report_link(recap_text, detail_url)])
-    if extract_lines:
-        parts.extend([DINGTALK_PARAGRAPH_GAP, _EXTRACT_SECTION_LEAD])
-        parts.extend([DINGTALK_PARAGRAPH_GAP, "\n".join(extract_lines)])
+    parts.extend([DINGTALK_PARAGRAPH_GAP, recap_text or "--"])
+    if action_lines:
+        parts.extend([DINGTALK_PARAGRAPH_GAP, _PRIMARY_ACTION_SEP.join(action_lines)])
+    extract_section = _format_extract_section(extract_lines)
+    if extract_section:
+        parts.extend([DINGTALK_PARAGRAPH_GAP, extract_section])
     return "\n".join(parts)
 
 
@@ -317,31 +345,32 @@ def build_recap_lite_card(
     visit_detail_url = build_visit_record_page_url(record_id)
     detail_url = build_visit_record_recap_page_url(record_id, query=recap_detail_query)
     recorder = _text(recorder_name) or _text(record.get("recorder"))
-    extract_lines = format_extract_card_lines(
+    extract_actions = format_extract_card_actions(
         extract_links,
         record_id=record_id,
         recap_detail_query=recap_detail_query,
     )
+    extract_lines = [f"[{label}]({url})" for label, url in extract_actions]
     meta_lines = _meta_lines(
         recorder_name=recorder,
         entry_time=entry_time,
         opportunity=opportunity,
-        detail_url=visit_detail_url,
+    )
+    action_lines = _primary_action_lines(
+        visit_detail_url=visit_detail_url,
+        report_url=detail_url,
     )
 
-    feishu_body = _feishu_body(
+    feishu_body = _feishu_meta_body(
         is_revised=is_revised,
         meta_lines=meta_lines,
-        recap_text=recap_text,
-        detail_url=detail_url,
-        extract_lines=extract_lines,
     )
     dingtalk_text = _dingtalk_text(
         title=title,
         is_revised=is_revised,
         meta_lines=meta_lines,
         recap_text=recap_text,
-        detail_url=detail_url,
+        action_lines=action_lines,
         extract_lines=extract_lines,
     )
     return RecapLiteCard(
@@ -349,4 +378,7 @@ def build_recap_lite_card(
         header_template=header_template,
         feishu_body=feishu_body,
         dingtalk_text=dingtalk_text,
+        feishu_summary=recap_text or "--",
+        feishu_action_links=_PRIMARY_ACTION_SEP.join(action_lines),
+        feishu_extract_actions=tuple(extract_actions),
     )
