@@ -135,6 +135,29 @@ def test_payload_json_string_is_parsed():
     assert data["items"]["KEY_GAP"][0]["claim"] == "缺口"
 
 
+def test_conclusion_item_status_is_cleared():
+    data = build_extract_response(
+        visit_id="rec-conclusion",
+        rows=[
+            _row(
+                unique_id="con-1",
+                item_type="CONCLUSION",
+                extract_key="summary",
+                status="PENDING",
+                payload={
+                    "claim": "本轮拜访结论",
+                    "why": "信息充分",
+                    "confidence": 0.9,
+                    "evidence": [],
+                },
+            ),
+            _row(unique_id="gap-1", status="PENDING"),
+        ],
+    )
+    assert data["items"]["CONCLUSION"][0]["status"] is None
+    assert data["items"]["KEY_GAP"][0]["status"] == "PENDING"
+
+
 def test_card_links_snapshot_overrides_fallback_profile():
     data = build_extract_response(
         visit_id="rec-snap",

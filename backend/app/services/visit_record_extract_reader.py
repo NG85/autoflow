@@ -149,16 +149,19 @@ def serialize_extract_item(
     extras = {k: v for k, v in payload.items() if k not in reserved}
     owner = _text(row.get("feedback_user_id")) or None
     visible = _same_user(viewer_user_id, owner)
+    item_type = _text(row.get("item_type"))
+    # CONCLUSION 无采纳/拒绝语义，对外不回传 status
+    status = None if item_type == "CONCLUSION" else _text(row.get("status"))
     data: dict[str, Any] = {
         "unique_id": _text(row.get("unique_id")),
-        "item_type": _text(row.get("item_type")),
+        "item_type": item_type,
         "extract_key": _text(row.get("extract_key")),
         "claim": payload.get("claim"),
         "why": payload.get("why"),
         "evidence": payload.get("evidence") or [],
         "confidence": payload.get("confidence"),
         "severity": _text(row.get("severity")) or None,
-        "status": _text(row.get("status")),
+        "status": status,
         "adopted_todo_id": _text(row.get("adopted_todo_id")) or None,
         "reject_reason": _text(row.get("reject_reason")) or None,
         "feedback": (_text(row.get("feedback")) or None) if visible else None,
