@@ -248,7 +248,7 @@ def test_recap_text_prefers_summary_then_title():
     assert insight.recap_text() == "标题"
 
 
-def test_load_visit_record_insights_by_view_splits_sales_and_leader(monkeypatch):
+def test_load_visit_record_insights_by_view_splits_sales_and_leader():
     rows = [
         _row(
             unique_id="leader",
@@ -264,25 +264,9 @@ def test_load_visit_record_insights_by_view_splits_sales_and_leader(monkeypatch)
         ),
     ]
     result = MagicMock()
-    result.mappings.return_value.all.return_value = rows
+    result.all.return_value = rows
     session = MagicMock()
-    session.execute.return_value = result
-    monkeypatch.setattr(
-        "app.services.visit_record_insight_reader.settings.ALDEBARAN_ENTITY_INSIGHT_TABLE",
-        "crm_entity_insight",
-    )
-    monkeypatch.setattr(
-        "app.services.visit_record_insight_reader.settings.ALDEBARAN_VISIT_INSIGHT_ENTITY_TYPE",
-        "VISIT",
-    )
-    monkeypatch.setattr(
-        "app.services.visit_record_insight_reader.settings.ALDEBARAN_VISIT_INSIGHT_SALES_TYPE",
-        VISIT_INSIGHT_SALES_TYPE,
-    )
-    monkeypatch.setattr(
-        "app.services.visit_record_insight_reader.settings.ALDEBARAN_VISIT_INSIGHT_LEADER_TYPE",
-        VISIT_INSIGHT_LEADER_TYPE,
-    )
+    session.exec.return_value = result
 
     insights = load_visit_record_insights_by_view(session, "rec-1")
     assert insights[RECAP_VIEW_SALES].unique_id == "sales"
@@ -290,29 +274,22 @@ def test_load_visit_record_insights_by_view_splits_sales_and_leader(monkeypatch)
     assert insights[RECAP_VIEW_SALES].summary == "客户确认下季度扩容。"
     assert insights[RECAP_VIEW_LEADER].summary == "上级：注意回款节奏"
 
-    sql, params = session.execute.call_args.args[0], session.execute.call_args.args[1]
-    assert "crm_entity_insight" in str(sql)
-    assert params["entity_type"] == "VISIT"
-    assert params["entity_id"] == "rec-1"
+    statement = session.exec.call_args.args[0]
+    sql = str(statement.compile(compile_kwargs={"literal_binds": True}))
+    assert "crm_entity_insight" in sql
+    assert "VISIT" in sql
+    assert "rec-1" in sql
 
 
-def test_load_visit_record_insight_defaults_to_sales_view(monkeypatch):
+def test_load_visit_record_insight_defaults_to_sales_view():
     rows = [
         _row(insight_type=VISIT_INSIGHT_LEADER_TYPE, summary="上级视角"),
         _row(insight_type=VISIT_INSIGHT_SALES_TYPE, summary="销售视角"),
     ]
     result = MagicMock()
-    result.mappings.return_value.all.return_value = rows
+    result.all.return_value = rows
     session = MagicMock()
-    session.execute.return_value = result
-    monkeypatch.setattr(
-        "app.services.visit_record_insight_reader.settings.ALDEBARAN_VISIT_INSIGHT_SALES_TYPE",
-        VISIT_INSIGHT_SALES_TYPE,
-    )
-    monkeypatch.setattr(
-        "app.services.visit_record_insight_reader.settings.ALDEBARAN_VISIT_INSIGHT_LEADER_TYPE",
-        VISIT_INSIGHT_LEADER_TYPE,
-    )
+    session.exec.return_value = result
     insight = load_visit_record_insight(session, "rec-1")
     assert insight is not None
     assert insight.summary == "销售视角"
@@ -320,7 +297,7 @@ def test_load_visit_record_insight_defaults_to_sales_view(monkeypatch):
 
 def test_load_visit_record_insight_returns_none_on_error():
     session = MagicMock()
-    session.execute.side_effect = RuntimeError("table missing")
+    session.exec.side_effect = RuntimeError("table missing")
     assert load_visit_record_insight(session, "rec-1") is None
     assert load_visit_record_insight(None, "rec-1") is None
     assert load_visit_record_insight(session, "") is None

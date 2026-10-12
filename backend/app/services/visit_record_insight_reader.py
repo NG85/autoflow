@@ -4,25 +4,23 @@
 - POSTVISIT_REVIEW_SALES_VIEW 销售视角
 - POSTVISIT_REVIEW_LEADER_VIEW 上级视角
 
-表由 Aldebaran 落库，Autoflow 只 SELECT。查询失败不影响推卡主流程。
+通过 CRMEntityInsight 查询。查询失败不影响推卡主流程。
 """
 
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Mapping, Optional, Sequence
 
-from sqlalchemy import text
-from sqlmodel import Session
+from sqlalchemy import func, or_
+from sqlmodel import Session, col, select
 
-from app.core.config import settings
+from app.models.crm_entity_insight import CRMEntityInsight
 
 logger = logging.getLogger(__name__)
 
-_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 VISIT_INSIGHT_ENTITY_TYPE = "VISIT"
 VISIT_INSIGHT_SALES_TYPE = "POSTVISIT_REVIEW_SALES_VIEW"
 VISIT_INSIGHT_LEADER_TYPE = "POSTVISIT_REVIEW_LEADER_VIEW"
@@ -181,20 +179,10 @@ def recap_view_for_viewer(
     return RECAP_VIEW_LEADER
 
 
-def sales_insight_type() -> str:
-    raw = (getattr(settings, "ALDEBARAN_VISIT_INSIGHT_SALES_TYPE", None) or VISIT_INSIGHT_SALES_TYPE).strip()
-    return raw or VISIT_INSIGHT_SALES_TYPE
-
-
-def leader_insight_type() -> str:
-    raw = (getattr(settings, "ALDEBARAN_VISIT_INSIGHT_LEADER_TYPE", None) or VISIT_INSIGHT_LEADER_TYPE).strip()
-    return raw or VISIT_INSIGHT_LEADER_TYPE
-
-
 def insight_type_for_view(view: str) -> str:
     if view == RECAP_VIEW_SALES:
-        return sales_insight_type()
-    return leader_insight_type()
+        return VISIT_INSIGHT_SALES_TYPE
+    return VISIT_INSIGHT_LEADER_TYPE
 
 
 def _text(value: Any) -> str:
@@ -203,13 +191,6 @@ def _text(value: Any) -> str:
     if isinstance(value, str):
         return value.strip()
     return str(value).strip()
-
-
-def _quote_ident(name: str) -> str:
-    raw = (name or "").strip()
-    if not _IDENT_RE.fullmatch(raw):
-        raise ValueError(f"invalid sql identifier: {name!r}")
-    return f"`{raw}`"
 
 
 def _row_to_insight(row: Mapping[str, Any]) -> VisitRecordInsight:
@@ -254,49 +235,34 @@ def pick_visit_record_insight(
     return insights[0]
 
 
-def _query_visit_insight_rows(session: Session, record_id: str) -> Optional[list[Mapping[str, Any]]]:
-    entity_type = (
-        getattr(settings, "ALDEBARAN_VISIT_INSIGHT_ENTITY_TYPE", None) or VISIT_INSIGHT_ENTITY_TYPE
-    ).strip() or VISIT_INSIGHT_ENTITY_TYPE
-    table_name = (getattr(settings, "ALDEBARAN_ENTITY_INSIGHT_TABLE", None) or "crm_entity_insight").strip()
-    try:
-        table_sql = _quote_ident(table_name)
-    except ValueError:
-        logger.warning("Skip visit insight read: invalid table name %r", table_name)
-        return None
+def _as_mapping(row: Any) -> dict[str, Any]:
+    if isinstance(row, Mapping):
+        return dict(row)
+    return row.model_dump()
 
-    sql = text(
-        f"""
-        SELECT
-            unique_id,
-            entity_id,
-            insight_type,
-            title,
-            summary,
-            detail_text,
-            category,
-            severity,
-            generated_at
-        FROM {table_sql}
-        WHERE entity_type = :entity_type
-          AND entity_id = :entity_id
-          AND is_deleted = 0
-          AND (expires_at IS NULL OR expires_at > UTC_TIMESTAMP())
-        ORDER BY generated_at DESC, id DESC
-        LIMIT 20
-        """
+
+def _query_visit_insight_rows(session: Session, record_id: str) -> Optional[list[Mapping[str, Any]]]:
+    statement = (
+        select(CRMEntityInsight)
+        .where(CRMEntityInsight.entity_type == VISIT_INSIGHT_ENTITY_TYPE)
+        .where(CRMEntityInsight.entity_id == record_id)
+        .where(CRMEntityInsight.is_deleted == 0)
+        .where(
+            or_(
+                CRMEntityInsight.expires_at.is_(None),
+                CRMEntityInsight.expires_at > func.utc_timestamp(),
+            )
+        )
+        .order_by(col(CRMEntityInsight.generated_at).desc(), col(CRMEntityInsight.id).desc())
+        .limit(20)
     )
     try:
-        result = session.execute(
-            sql,
-            {"entity_type": entity_type, "entity_id": record_id},
-        )
-        return list(result.mappings().all())
+        rows = session.exec(statement).all()
+        return [_as_mapping(row) for row in rows]
     except Exception as exc:
         logger.warning(
-            "Failed to load visit entity insight, record_id=%s table=%s: %s",
+            "Failed to load visit entity insight, record_id=%s: %s",
             record_id,
-            table_name,
             exc,
         )
         return None
@@ -320,7 +286,7 @@ def load_visit_record_insight(
     if types is None and view:
         types = (insight_type_for_view(view),)
     if types is None:
-        types = (sales_insight_type(),)
+        types = (VISIT_INSIGHT_SALES_TYPE,)
     picked = pick_visit_record_insight(rows, preferred_types=types)
     if picked is None:
         logger.info(
@@ -348,8 +314,8 @@ def load_visit_record_insights_by_view(
     if not rows:
         return empty
     return {
-        RECAP_VIEW_SALES: pick_visit_record_insight(rows, preferred_types=(sales_insight_type(),)),
-        RECAP_VIEW_LEADER: pick_visit_record_insight(rows, preferred_types=(leader_insight_type(),)),
+        RECAP_VIEW_SALES: pick_visit_record_insight(rows, preferred_types=(VISIT_INSIGHT_SALES_TYPE,)),
+        RECAP_VIEW_LEADER: pick_visit_record_insight(rows, preferred_types=(VISIT_INSIGHT_LEADER_TYPE,)),
     }
 
 

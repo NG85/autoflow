@@ -1803,6 +1803,23 @@ class MyLatestReviewSessionOut(BaseModel):
     session_type: Optional[str] = None
 
 
+class ReviewCxoReportOut(BaseModel):
+    unique_id: str
+    session_id: str
+    report_name: Optional[str] = None
+    report_level: str
+    department_id: str
+    department_name: Optional[str] = None
+    period: str
+    snapshot_date: date
+    report_date: date
+    report_status: str
+    report_format: str = Field(description="报告格式，如 html / markdown")
+    report_content: Optional[str] = Field(default=None, description="报告正文")
+    summary: Optional[str] = None
+    version: int = 1
+
+
 class ReviewSessionHistoryItemOut(BaseModel):
     session_id: str
     session_name: Optional[str] = None

@@ -50,14 +50,29 @@ def test_weekly_visit_report_skips_when_variant_disabled():
     assert result["skip_reason"] == "variant_disabled"
 
 
-def test_weekly_visit_report_skips_when_row_missing():
+def test_weekly_visit_report_sends_no_record_when_row_missing():
+    uid = str(uuid4())
     db = MagicMock()
     db.exec.return_value.first.return_value = None
     db.exec.return_value.all.return_value = []
-    with patch(
-        "app.services.report_ready_push.load_report_push_policy",
-        return_value=parse_report_push_policy(
-            {"company_weekly": {"kpi_card": False, "visit_report": True}}
+    service = MagicMock()
+    service.get_recipients_for_company_weekly_report.return_value = [
+        {"user_id": uid, "open_id": "ou_k"}
+    ]
+    service.send_platform_notification.return_value = {"success": True}
+    policy = parse_report_push_policy(
+        {"company_weekly": {"kpi_card": False, "visit_report": True}}
+    )
+    with (
+        patch("app.services.report_ready_push.load_report_push_policy", return_value=policy),
+        patch("app.services.report_markdown_dispatch.load_report_push_policy", return_value=policy),
+        patch(
+            "app.services.report_markdown_dispatch.filter_opted_out_recipients",
+            side_effect=lambda _s, recipients, **_k: recipients,
+        ),
+        patch(
+            "app.services.platform_notification_service.platform_notification_service",
+            service,
         ),
     ):
         result = handle_report_ready(
@@ -67,8 +82,10 @@ def test_weekly_visit_report_skips_when_row_missing():
             week_end="2026-09-19",
         )
 
-    assert result["skipped"] is True
-    assert result["skip_reason"] == "summary_not_found"
+    assert result["sent"] is True
+    content = service.send_platform_notification.call_args.kwargs["content"]
+    assert "未查询到周报数据" in content
+    service._ops_cc_platform_card.assert_not_called()
 
 
 def test_weekly_visit_report_sends_markdown_to_eligible_minus_opt_out():
@@ -132,3 +149,70 @@ def test_weekly_visit_report_sends_markdown_to_eligible_minus_opt_out():
     assert kwargs["content_type"] == "markdown"
     assert kwargs["title"] == "APTSell 销售经营周报｜2026-09-13至2026-09-19"
     assert "agent_markdown" not in kwargs
+    service._ops_cc_platform_card.assert_called_once()
+    assert service._ops_cc_platform_card.call_args.kwargs["source"] == "company weekly report"
+    assert service._ops_cc_platform_card.call_args.kwargs["dingtalk_text"] == "**md**"
+
+
+def test_department_weekly_only_pushes_departments_in_mirror():
+    uid = str(uuid4())
+    in_scope = MagicMock()
+    in_scope.id = uuid4()
+    in_scope.summary_content = "## 销售部周报"
+    in_scope.department_id = "dept-1"
+    in_scope.department_name = "销售部"
+    out_of_scope = MagicMock()
+    out_of_scope.id = uuid4()
+    out_of_scope.summary_content = "## 历史部门周报"
+    out_of_scope.department_id = "old-dept"
+    out_of_scope.department_name = "历史部门"
+    db = MagicMock()
+    db.exec.return_value.all.return_value = [in_scope, out_of_scope]
+
+    service = MagicMock()
+    service.resolve_department_report_recipients.return_value = [
+        {"user_id": uid, "open_id": "ou_k"}
+    ]
+    service._filter_recipients_by_receive_permission.return_value = [
+        {"user_id": uid, "open_id": "ou_k"}
+    ]
+    service._get_group_chats_by_department.return_value = []
+    service.send_platform_notification.return_value = {"success": True}
+
+    policy = parse_report_push_policy({"department_weekly": {"visit_report": True}})
+    with (
+        patch(
+            "app.services.report_ready_push.load_report_push_policy",
+            return_value=policy,
+        ),
+        patch(
+            "app.services.report_markdown_dispatch.load_report_push_policy",
+            return_value=policy,
+        ),
+        patch(
+            "app.services.report_markdown_dispatch.filter_opted_out_recipients",
+            side_effect=lambda _s, recipients, **_k: recipients,
+        ),
+        patch(
+            "app.services.report_ready_push.department_names_for_report_push",
+            return_value={"销售部"},
+        ),
+        patch(
+            "app.services.platform_notification_service.platform_notification_service",
+            service,
+        ),
+    ):
+        result = handle_report_ready(
+            db,
+            scene="department_weekly",
+            week_start=date(2026, 9, 13),
+            week_end=date(2026, 9, 19),
+        )
+
+    assert result["sent"] is True
+    assert result["success_count"] == 1
+    departments = result["departments"]
+    assert len(departments) == 1
+    assert departments[0]["department_id"] == "dept-1"
+    service.send_platform_notification.assert_called_once()
+    service._ops_cc_platform_card.assert_not_called()

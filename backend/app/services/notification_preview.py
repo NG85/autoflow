@@ -349,19 +349,8 @@ def _preview_report(
             ]
         extra_reason = None
     elif scene == SCENE_COMPANY_DAILY:
-        if variant == VARIANT_SUMMARY_MD:
-            named_ids = policy.override_user_ids(scene, variant)
-            recipients = (
-                service.recipients_from_user_ids(
-                    db_session, named_ids, recipient_type="named_recipient"
-                )
-                if named_ids
-                else []
-            )
-            extra_reason = "named_recipient"
-        else:
-            recipients = service.get_recipients_for_company_daily_report(db_session)
-            extra_reason = None
+        recipients = service.get_recipients_for_company_daily_report(db_session)
+        extra_reason = None
     elif scene == SCENE_COMPANY_HIGHLIGHTS:
         recipients = service.get_recipients_for_company_highlights(db_session)
         extra_reason = "named_recipient"
@@ -369,15 +358,13 @@ def _preview_report(
         recipients = service.get_recipients_for_company_weekly_report(db_session)
         extra_reason = None
 
-    if (
-        override_ids
-        and scene != SCENE_COMPANY_HIGHLIGHTS
-        and not (scene == SCENE_COMPANY_DAILY and variant == VARIANT_SUMMARY_MD)
-    ):
+    if override_ids and scene != SCENE_COMPANY_HIGHLIGHTS:
         recipients = service.recipients_from_user_ids(
             db_session, override_ids, recipient_type="variant_override"
         )
         extra_reason = "variant_override"
+        if variant in (VARIANT_SUMMARY_MD, VARIANT_VISIT_REPORT):
+            base["groups"] = []
 
     eligible, will_send, opted_out = _split_eligible_and_send(
         db_session,

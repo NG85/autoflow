@@ -158,6 +158,7 @@ def test_review_session_list_type_predicate_includes_cxo_for_global_scope():
     ).lower()
     assert "lead_analysis" in sql
     assert "cxo" in sql
+    assert "__company__" in sql
     assert "sales_update" not in sql
     assert "legacy_long" not in sql
 

@@ -41,9 +41,11 @@ from app.services.visit_record_push_policy import (
     load_visit_record_push_policy,
 )
 from app.services.visit_record_recap_card import RecapLiteCard, build_recap_lite_card
+from app.services.visit_record_extract_reader import load_visit_record_extract_response
 from app.services.visit_record_insight_reader import (
     RECAP_VIEW_LEADER,
     RECAP_VIEW_SALES,
+    has_visit_recap_insight,
     load_visit_record_insights_by_view,
     recap_view_for_role,
 )
@@ -201,11 +203,18 @@ class PlatformNotificationService:
     # tenant_access_token 有效期约 2 小时（飞书/钉钉文档），Redis 缓存 110 分钟，多进程/多实例共享
     _TOKEN_CACHE_TTL_SECONDS = 110 * 60
 
-    def _ops_cc_platform_card(self, card_content: Dict[str, Any], *, source: str) -> None:
+    def _ops_cc_platform_card(
+        self,
+        card_content: Dict[str, Any],
+        *,
+        source: str,
+        dingtalk_text: Optional[str] = None,
+    ) -> None:
         """
         运维后门：按 OPS_CC_PROVIDER 选择飞书/钉钉卡片形态，抄送到指定接收者。
         - 每次事件抄送一次（调用方控制）
         - 失败不影响主流程（仅记录日志）
+        - dingtalk_text 非空时，钉钉改发 Markdown 文本（与公司 Markdown 正推一致）；飞书仍发 card_content
         """
         try:
             if source not in self._OPS_CC_ALLOWED_SOURCES:
@@ -280,7 +289,12 @@ class PlatformNotificationService:
                     )
                     return
                 token = dingtalk_client.get_tenant_access_token(app_id=app_id, app_secret=app_secret)
-                adapted = rewrite_im_content_urls(card_content, target_platform)
+                if dingtalk_text is not None:
+                    adapted = rewrite_im_content_urls(dingtalk_text, target_platform)
+                    cc_msg_type = "text"
+                else:
+                    adapted = rewrite_im_content_urls(card_content, target_platform)
+                    cc_msg_type = "interactive"
                 for uid in user_ids:
                     try:
                         dingtalk_client.send_message(
@@ -288,7 +302,7 @@ class PlatformNotificationService:
                             token,
                             adapted,
                             receive_id_type="user_id",
-                            msg_type="interactive",
+                            msg_type=cc_msg_type,
                             robot_code=app_id,
                         )
                         success += 1
@@ -302,7 +316,7 @@ class PlatformNotificationService:
                             token,
                             adapted,
                             receive_id_type="chat_id",
-                            msg_type="interactive",
+                            msg_type=cc_msg_type,
                             robot_code=app_id,
                         )
                         success += 1
@@ -1666,6 +1680,9 @@ class PlatformNotificationService:
         is_group: bool = False,
     ) -> Optional[RecapLiteCard]:
         if recap_cards_by_view:
+            # 抽取入口只挂在记录人卡上；协同人等同销售视角但不带 extract。
+            if role == "recorder" and "recorder" in recap_cards_by_view:
+                return recap_cards_by_view["recorder"]
             return recap_cards_by_view.get(recap_view_for_role(role, is_group=is_group))
         return recap_card
 
@@ -1676,11 +1693,16 @@ class PlatformNotificationService:
     ) -> Tuple[Any, str]:
         """按平台返回轻量复盘卡的消息体与 msg_type。"""
         if platform in (PLATFORM_FEISHU, PLATFORM_LARK):
+            extra_sections = [recap_card.feishu_summary] if recap_card.feishu_summary else None
             return (
                 self.build_feishu_markdown_card(
                     recap_card.feishu_body,
                     title=recap_card.title,
                     header_template=recap_card.header_template,
+                    extra_sections=extra_sections,
+                    footer=recap_card.feishu_action_links or None,
+                    footer_text_size="normal",
+                    footer_buttons=list(recap_card.feishu_extract_actions) or None,
                 ),
                 "interactive",
             )
@@ -2017,23 +2039,42 @@ class PlatformNotificationService:
         recap_cards_by_view: Optional[Dict[str, RecapLiteCard]] = None
         if policy.uses_recap_lite():
             insights = load_visit_record_insights_by_view(db_session, record_id)
-            recap_cards_by_view = {
-                RECAP_VIEW_SALES: build_recap_lite_card(
+            extract_links = None
+            if has_visit_recap_insight(insights):
+                extract_links = (
+                    load_visit_record_extract_response(db_session, record_id).get("card_links")
+                    or []
+                )
+            sales_card = build_recap_lite_card(
+                record_id,
+                visit_record,
+                recorder_name=recorder_name,
+                is_revised=is_revised,
+                insight=insights.get(RECAP_VIEW_SALES),
+            )
+            leader_card = build_recap_lite_card(
+                record_id,
+                visit_record,
+                recorder_name=recorder_name,
+                is_revised=is_revised,
+                insight=insights.get(RECAP_VIEW_LEADER),
+            )
+            recorder_card = (
+                build_recap_lite_card(
                     record_id,
                     visit_record,
                     recorder_name=recorder_name,
-                    recap_detail_query=policy.recap_detail_query,
                     is_revised=is_revised,
                     insight=insights.get(RECAP_VIEW_SALES),
-                ),
-                RECAP_VIEW_LEADER: build_recap_lite_card(
-                    record_id,
-                    visit_record,
-                    recorder_name=recorder_name,
-                    recap_detail_query=policy.recap_detail_query,
-                    is_revised=is_revised,
-                    insight=insights.get(RECAP_VIEW_LEADER),
-                ),
+                    extract_links=extract_links,
+                )
+                if extract_links is not None
+                else sales_card
+            )
+            recap_cards_by_view = {
+                RECAP_VIEW_SALES: sales_card,
+                RECAP_VIEW_LEADER: leader_card,
+                "recorder": recorder_card,
             }
         base_template_vars = self._prepare_visit_record_template_vars(
             record_id,
@@ -2996,6 +3037,10 @@ class PlatformNotificationService:
         *,
         title: Optional[str] = None,
         header_template: Optional[str] = None,
+        extra_sections: Optional[List[str]] = None,
+        footer: Optional[str] = None,
+        footer_text_size: str = "notation",
+        footer_buttons: Optional[List[Tuple[str, str]]] = None,
     ) -> Dict[str, Any]:
         """
         飞书 / Lark 无模板 markdown 卡片（Card JSON 2.0）。
@@ -3003,6 +3048,9 @@ class PlatformNotificationService:
         标题 / 表格等语法仅 2.0 支持；1.0 会把 # 与 | 表格当纯文本显示。
         header 优先用 title，否则取正文首行；为空则回退「通知」。
         header_template 为飞书色板（green/blue/orange 等），缺省 blue。
+        extra_sections 追加为正文字号 markdown（与首块同间距）。
+        footer 可选，另起一块 markdown（默认 notation≈12px）；轻量卡主操作用 normal。
+        footer_buttons 为 (文案, url) 列表时，在 footer 之后追加 default 小按钮 + open_url。
         """
         body = (content or "").strip()
         header = (title or "").strip()
@@ -3010,6 +3058,60 @@ class PlatformNotificationService:
             header = body.split("\n", 1)[0].strip() if body else ""
         header = (header or "通知")[:50]
         color = (header_template or "blue").strip() or "blue"
+        elements: List[Dict[str, Any]] = [
+            {"tag": "markdown", "content": body or "--"},
+        ]
+        for section in extra_sections or []:
+            section_body = (section or "").strip()
+            if section_body:
+                elements.append({"tag": "markdown", "content": section_body})
+        footer_body = (footer or "").strip()
+        if footer_body:
+            size = (footer_text_size or "notation").strip() or "notation"
+            elements.append(
+                {
+                    "tag": "markdown",
+                    "content": footer_body,
+                    "text_size": size,
+                }
+            )
+        button_columns: List[Dict[str, Any]] = []
+        for raw_label, raw_url in footer_buttons or []:
+            label = (raw_label or "").strip()
+            url = (raw_url or "").strip()
+            if not label or not url:
+                continue
+            button_columns.append(
+                {
+                    "tag": "column",
+                    "width": "auto",
+                    "elements": [
+                        {
+                            "tag": "button",
+                            "type": "default",
+                            "size": "small",
+                            "text": {"tag": "plain_text", "content": label},
+                            "behaviors": [
+                                {
+                                    "type": "open_url",
+                                    "default_url": url,
+                                    "pc_url": url,
+                                    "ios_url": url,
+                                    "android_url": url,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            )
+        if button_columns:
+            elements.append(
+                {
+                    "tag": "column_set",
+                    "flex_mode": "flow",
+                    "columns": button_columns,
+                }
+            )
         return {
             "schema": "2.0",
             "config": {
@@ -3021,9 +3123,9 @@ class PlatformNotificationService:
                 "title": {"tag": "plain_text", "content": header},
             },
             "body": {
-                "elements": [
-                    {"tag": "markdown", "content": body or "--"},
-                ],
+                # meta / 摘要 / 操作链 / 按钮统一元素间距。
+                "vertical_spacing": "12px",
+                "elements": elements,
             },
         }
 

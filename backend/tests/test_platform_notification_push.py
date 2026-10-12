@@ -46,6 +46,55 @@ def test_build_feishu_markdown_card_falls_back_to_first_line():
     assert card["body"]["elements"][0]["content"] == "首行标题\n其余内容"
 
 
+def test_build_feishu_markdown_card_appends_smaller_footer():
+    card = PlatformNotificationService.build_feishu_markdown_card(
+        "正文摘要",
+        title="正常 · 9月20日 · 星辰科技",
+        footer="[待我跟进](https://example/x)\n[下次沟通](https://example/y)",
+    )
+    assert card["body"]["elements"] == [
+        {"tag": "markdown", "content": "正文摘要"},
+        {
+            "tag": "markdown",
+            "content": "[待我跟进](https://example/x)\n[下次沟通](https://example/y)",
+            "text_size": "notation",
+        },
+    ]
+
+
+def test_build_feishu_markdown_card_appends_default_buttons():
+    card = PlatformNotificationService.build_feishu_markdown_card(
+        "元信息",
+        title="正常 · 9月20日 · 星辰科技",
+        extra_sections=["复盘摘要"],
+        footer="[查看行为详情](https://example/detail)  [完整复盘报告](https://example/recap)",
+        footer_text_size="normal",
+        footer_buttons=[
+            ("待我跟进（2）", "https://example/follow"),
+            ("下次沟通", "https://example/next"),
+        ],
+    )
+    assert card["body"]["vertical_spacing"] == "12px"
+    assert card["body"]["elements"][0] == {"tag": "markdown", "content": "元信息"}
+    assert card["body"]["elements"][1] == {"tag": "markdown", "content": "复盘摘要"}
+    assert card["body"]["elements"][2] == {
+        "tag": "markdown",
+        "content": "[查看行为详情](https://example/detail)  [完整复盘报告](https://example/recap)",
+        "text_size": "normal",
+    }
+    column_set = card["body"]["elements"][3]
+    assert column_set["tag"] == "column_set"
+    assert column_set["flex_mode"] == "flow"
+    buttons = [col["elements"][0] for col in column_set["columns"]]
+    assert buttons[0]["tag"] == "button"
+    assert buttons[0]["type"] == "default"
+    assert buttons[0]["size"] == "small"
+    assert buttons[0]["text"]["content"] == "待我跟进（2）"
+    assert buttons[0]["behaviors"][0]["type"] == "open_url"
+    assert buttons[0]["behaviors"][0]["default_url"] == "https://example/follow"
+    assert buttons[1]["text"]["content"] == "下次沟通"
+
+
 def test_build_feishu_post_markdown_uses_md_tag():
     post = PlatformNotificationService.build_feishu_post_markdown(
         "## 标题\n\n| a | b |\n|---|---|\n| 1 | 2 |",
