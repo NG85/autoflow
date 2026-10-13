@@ -36,7 +36,7 @@ card: recap_lite       # recap_lite | legacy
 
 lite 卡拜访区链到详情页 `/v2/behavior/{record_id}`；完整复盘报告链到 `/v2/behavior/{record_id}/recap`；抽取按钮链到 `/v2/behavior/{record_id}/extract?tab={card_links.key}`（如 `follow_ups` / `next_visit` / `key_issues` / `potential_opps` / `conclusion`）。链接里不要带 `view=`，视角由打开页的登录人决定。
 
-详情 GET 不读这项配置，也不返回复盘。复盘用 `GET /crm/visit_records/{record_id}/recap`。没有 `crm_entity_insight` 复盘行时不返回 `insight`，也不查 OAuth 汇报链、不读抽取表。有复盘才按身份选视角：记录人始终 sales（UUID 连字符忽略）；**本条**记录人汇报链上级（含同时是协同人）走 leader；其余协同人 sales；其他人 leader。结构化抽取（含 lite 卡 extract 入口、赞踩/采纳）**仅记录人本人**；协同人/上级/群只看对应视角复盘报告，`extract` 为空。协同人匹配用库内原始 JSON（ask_id/user_id），不用详情里拼好的姓名。汇报链有结果时不再用档案直属上级。
+详情 GET 不读这项配置，也不返回复盘。复盘用 `GET /crm/visit_records/{record_id}/recap`。没有 `crm_entity_insight` 复盘行时不返回 `insight`，也不查 OAuth 汇报链、不读抽取表。有复盘才按身份选视角：记录人看销售视角（UUID 连字符忽略）；**本条**记录人的汇报链上级看上级视角；协同人、管理员及其他人没有可看的复盘。结构化抽取（含 lite 卡 extract 入口、赞踩/采纳）**仅记录人本人**；上级只看上级视角复盘报告，`extract` 为空。汇报链有结果时不再用档案直属上级。
 
 ---
 

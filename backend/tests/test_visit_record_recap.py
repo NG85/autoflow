@@ -12,6 +12,7 @@ from app.services.visit_record_insight_reader import (
     VisitRecordInsight,
 )
 from app.services.visit_record_recap import (
+    RecapViewContext,
     load_visit_record_recap_response,
     resolve_viewer_recap,
 )
@@ -168,14 +169,22 @@ def test_resolve_failure_returns_empty_recap(monkeypatch):
     assert data["extract"]["items"] == {}
 
 
+def _both_insights():
+    return {
+        RECAP_VIEW_SALES: _insight(RECAP_VIEW_SALES, "销售摘要"),
+        RECAP_VIEW_LEADER: _insight(RECAP_VIEW_LEADER, "上级摘要"),
+    }
+
+
 def test_recorder_with_insight_does_not_query_reporting_chain(monkeypatch):
-    sales = _insight(RECAP_VIEW_SALES, "销售摘要")
     monkeypatch.setattr(
         "app.services.visit_record_recap.load_visit_record_insights_by_view",
-        lambda *args, **kwargs: {RECAP_VIEW_SALES: sales, RECAP_VIEW_LEADER: None},
+        lambda *args, **kwargs: _both_insights(),
     )
     oauth = MagicMock()
     monkeypatch.setattr("app.services.oauth_service.oauth_client", oauth)
+    profiles = MagicMock()
+    monkeypatch.setattr("app.services.visit_record_recap.UserProfileRepo", lambda: profiles)
 
     resolved = resolve_viewer_recap(
         MagicMock(),
@@ -185,10 +194,109 @@ def test_recorder_with_insight_does_not_query_reporting_chain(monkeypatch):
     )
 
     oauth.get_reporting_chain_leaders.assert_not_called()
+    profiles.get_by_user_id.assert_not_called()
     assert resolved is not None
     view, picked = resolved
     assert view == RECAP_VIEW_SALES
-    assert picked is sales
+    assert picked.summary == "销售摘要"
+
+
+def test_other_viewer_gets_no_recap(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.visit_record_recap.load_visit_record_insights_by_view",
+        lambda *args, **kwargs: _both_insights(),
+    )
+    viewer = MagicMock(oauth_user_id="ask_admin", oauth_users=[MagicMock(open_id="ou_admin")])
+    recorder = MagicMock(user_id="recorder-user", direct_manager_id="ask_leader", oauth_users=[])
+    profiles = MagicMock()
+    profiles.get_by_user_id.return_value = viewer
+    profiles.get_by_recorder_id.return_value = recorder
+    monkeypatch.setattr("app.services.visit_record_recap.UserProfileRepo", lambda: profiles)
+    oauth = MagicMock()
+    oauth.get_reporting_chain_leaders.return_value = [{"open_id": "ou_leader"}]
+    monkeypatch.setattr("app.services.oauth_service.oauth_client", oauth)
+
+    resolved = resolve_viewer_recap(
+        MagicMock(),
+        visit_record_id="rec-1",
+        recorder_id="recorder-1",
+        viewer_user_id="admin-1",
+    )
+
+    oauth.get_reporting_chain_leaders.assert_called_once()
+    assert resolved is None
+
+
+def test_reporting_chain_leader_uses_leader_view(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.visit_record_recap.load_visit_record_insights_by_view",
+        lambda *args, **kwargs: _both_insights(),
+    )
+    viewer = MagicMock(oauth_user_id="ask_viewer", oauth_users=[MagicMock(open_id="ou_leader")])
+    recorder = MagicMock(user_id="recorder-user", direct_manager_id=None, oauth_users=[])
+    profiles = MagicMock()
+    profiles.get_by_user_id.return_value = viewer
+    profiles.get_by_recorder_id.return_value = recorder
+    monkeypatch.setattr("app.services.visit_record_recap.UserProfileRepo", lambda: profiles)
+    oauth = MagicMock()
+    oauth.get_reporting_chain_leaders.return_value = [{"open_id": "ou_leader"}]
+    monkeypatch.setattr("app.services.oauth_service.oauth_client", oauth)
+
+    resolved = resolve_viewer_recap(
+        MagicMock(),
+        visit_record_id="rec-1",
+        recorder_id="recorder-1",
+        viewer_user_id="leader-1",
+    )
+
+    oauth.get_reporting_chain_leaders.assert_called_once()
+    assert resolved is not None
+    view, picked = resolved
+    assert view == RECAP_VIEW_LEADER
+    assert picked.summary == "上级摘要"
+
+
+def test_collaborator_gets_no_recap(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.visit_record_recap.load_visit_record_insights_by_view",
+        lambda *args, **kwargs: _both_insights(),
+    )
+    viewer = MagicMock(oauth_user_id="ask_collab", oauth_users=[MagicMock(open_id="ou_collab")])
+    recorder = MagicMock(user_id="recorder-user", direct_manager_id="ask_leader", oauth_users=[])
+    profiles = MagicMock()
+    profiles.get_by_user_id.return_value = viewer
+    profiles.get_by_recorder_id.return_value = recorder
+    monkeypatch.setattr("app.services.visit_record_recap.UserProfileRepo", lambda: profiles)
+    oauth = MagicMock()
+    oauth.get_reporting_chain_leaders.return_value = [{"open_id": "ou_leader"}]
+    monkeypatch.setattr("app.services.oauth_service.oauth_client", oauth)
+
+    resolved = resolve_viewer_recap(
+        MagicMock(),
+        visit_record_id="rec-1",
+        recorder_id="recorder-1",
+        viewer_user_id="collab-1",
+    )
+
+    assert resolved is None
+
+
+def test_reporting_leader_lookup_is_cached_per_recorder(monkeypatch):
+    viewer = MagicMock(oauth_user_id="ask_viewer", oauth_users=[MagicMock(open_id="ou_leader")])
+    recorder = MagicMock(user_id="recorder-user", direct_manager_id=None, oauth_users=[])
+    profiles = MagicMock()
+    profiles.get_by_user_id.return_value = viewer
+    profiles.get_by_recorder_id.return_value = recorder
+    monkeypatch.setattr("app.services.visit_record_recap.UserProfileRepo", lambda: profiles)
+    oauth = MagicMock()
+    oauth.get_reporting_chain_leaders.return_value = [{"open_id": "ou_leader"}]
+    monkeypatch.setattr("app.services.oauth_service.oauth_client", oauth)
+
+    context = RecapViewContext(MagicMock(), "leader-1")
+    assert context.is_reporting_leader("recorder-1") is True
+    assert context.is_reporting_leader("recorder-1") is True
+    oauth.get_reporting_chain_leaders.assert_called_once()
+    profiles.get_by_user_id.assert_called_once()
 
 
 def test_no_insight_rows_do_not_query_reporting_chain(monkeypatch):

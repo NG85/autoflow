@@ -21,7 +21,6 @@ from app.api.routes.crm.models import (
 from app.core.config import settings
 from app.repositories.crm_account import crm_account_repo
 from app.repositories.base_repo import BaseRepo
-from app.repositories.user_profile import user_profile_repo
 from app.repositories.user_department_relation import user_department_relation_repo
 from app.repositories.department_mirror import department_mirror_repo
 from app.services.crm_config_service import get_resolved_field_mapping
@@ -447,6 +446,39 @@ def _convert_to_response(
     return response
 
 
+def _fill_has_recap(
+    session: Session,
+    current_user_id: Optional[UUID],
+    pairs: list[tuple[CRMSalesVisitRecord, VisitRecordResponse]],
+) -> None:
+    """按当前用户视角标记每条拜访是否已有可看的复盘。读失败则保持 false。"""
+    from app.services.visit_record_insight_reader import (
+        load_visit_recap_types_by_record_id,
+        viewer_has_visible_recap,
+    )
+    from app.services.visit_record_recap import RecapViewContext
+
+    record_ids = [
+        str(getattr(record, "record_id", "") or "").strip()
+        for record, _response in pairs
+    ]
+    types_by_id = load_visit_recap_types_by_record_id(session, record_ids)
+    if not any(types_by_id.get(record_id) for record_id in record_ids):
+        return
+    context = RecapViewContext(session, current_user_id)
+    for record, response in pairs:
+        record_id = str(getattr(record, "record_id", "") or "").strip()
+        present = types_by_id.get(record_id) or ()
+        if not present:
+            continue
+        recorder_id = getattr(record, "recorder_id", None)
+        response.has_recap = viewer_has_visible_recap(
+            present,
+            is_recorder=context.is_recorder(recorder_id),
+            is_reporting_leader=context.is_reporting_leader(recorder_id),
+        )
+
+
 def _visit_record_has_comments_predicate():
     """构建 SQL 谓词：comments 数组是否非空（不区分 comment / task）。"""
     comments_col = CRMSalesVisitRecord.comments
@@ -710,6 +742,7 @@ class VisitRecordRepo(BaseRepo):
         current_user_id: Optional[UUID] = None,
         *,
         include_row_permissions: bool = False,
+        include_has_recap: bool = True,
     ) -> Page[VisitRecordResponse]:
         """
         查询拜访记录，支持条件过滤和分页
@@ -1002,6 +1035,9 @@ class VisitRecordRepo(BaseRepo):
                 response.permissions = row_permissions_map[record_id]
             items.append(response)
 
+        if include_has_recap:
+            _fill_has_recap(session, current_user_id, list(zip(page_records, items)))
+
         # 返回自定义分页结果
         return Page(
             items=items,
@@ -1098,13 +1134,15 @@ class VisitRecordRepo(BaseRepo):
             if dept_id:
                 department = department_mirror_repo.get_department_name_by_id(session, dept_id)
 
-        return _convert_to_response(
+        response = _convert_to_response(
             record,
             customer_level,
             customer_attribute,
             department,
             followup_extra=followup_extra if isinstance(followup_extra, dict) else None,
         )
+        _fill_has_recap(session, current_user_id, [(record, response)])
+        return response
 
     def get_collaborative_participants_raw(
         self,
@@ -1162,7 +1200,9 @@ class VisitRecordRepo(BaseRepo):
         session.refresh(record)
 
         # 返回完整记录（便于上层推送消息等后续处理）
-        return _convert_to_response(record, None, None, None)
+        response = _convert_to_response(record, None, None, None)
+        _fill_has_recap(session, current_user_id, [(record, response)])
+        return response
 
 
 # 创建repository实例

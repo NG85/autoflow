@@ -612,7 +612,8 @@ def export_visit_records_to_xlsx(
             result = visit_record_repo.query_visit_records(
                 session=db_session,
                 request=export_request,
-                current_user_id=user.id
+                current_user_id=user.id,
+                include_has_recap=False,
             )
             
             # 第一次查询时，获取总数和总页数
