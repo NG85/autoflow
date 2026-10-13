@@ -144,39 +144,15 @@ def viewer_is_leader_of_recorder(
 
 def recap_view_for_viewer(
     *,
-    viewer_user_id: Any,
-    recorder_id: Any = None,
-    viewer_oauth_user_id: Optional[str] = None,
-    collaborative_participants: Any = None,
+    is_recorder: bool = False,
     is_leader: bool = False,
-) -> str:
-    """详情页按当前用户选视角。
-
-    记录人本人始终 sales；本条汇报上级（含同时是协同人）走 leader；
-    其余协同人 sales；其他人 leader。
-
-    collaborative_participants 必须是库内原始 JSON/列表（含 ask_id/user_id），
-    不能用详情接口里拼好的姓名串。
-    """
-    if viewer_is_recorder(viewer_user_id, recorder_id):
+) -> Optional[str]:
+    """记录人看销售视角，其汇报链上级看上级视角。其余人没有可看的复盘。"""
+    if is_recorder:
         return RECAP_VIEW_SALES
     if is_leader:
         return RECAP_VIEW_LEADER
-
-    from app.utils.participants_utils import parse_collaborative_participants_list
-
-    viewer_tokens = _identity_tokens(viewer_user_id, viewer_oauth_user_id)
-    for participant in parse_collaborative_participants_list(collaborative_participants):
-        if not isinstance(participant, dict):
-            continue
-        participant_tokens = _identity_tokens(
-            participant.get("ask_id"),
-            participant.get("user_id"),
-            participant.get("id"),
-        )
-        if viewer_tokens and participant_tokens and viewer_tokens & participant_tokens:
-            return RECAP_VIEW_SALES
-    return RECAP_VIEW_LEADER
+    return None
 
 
 def insight_type_for_view(view: str) -> str:
@@ -325,22 +301,79 @@ def has_visit_recap_insight(
     return bool(insights.get(RECAP_VIEW_SALES) or insights.get(RECAP_VIEW_LEADER))
 
 
+def viewer_has_visible_recap(
+    insight_types: Sequence[str],
+    *,
+    is_recorder: bool = False,
+    is_reporting_leader: bool = False,
+) -> bool:
+    """当前用户打开复盘页时，对应视角是否已有复盘。"""
+    present = {
+        str(item).strip().upper()
+        for item in (insight_types or ())
+        if item and str(item).strip()
+    }
+    if not present:
+        return False
+    view = recap_view_for_viewer(
+        is_recorder=is_recorder,
+        is_leader=is_reporting_leader,
+    )
+    if view is None:
+        return False
+    return insight_type_for_view(view).upper() in present
+
+
+def load_visit_recap_types_by_record_id(
+    session: Optional[Session],
+    record_ids: Sequence[str],
+) -> dict[str, set[str]]:
+    """一批拜访上未删除、未过期的销售/上级复盘类型。查询失败时全部视为没有。"""
+    ids = list(dict.fromkeys(_text(item) for item in record_ids if _text(item)))
+    if session is None or not ids:
+        return {}
+    statement = (
+        select(CRMEntityInsight.entity_id, CRMEntityInsight.insight_type)
+        .where(CRMEntityInsight.entity_type == VISIT_INSIGHT_ENTITY_TYPE)
+        .where(CRMEntityInsight.entity_id.in_(ids))
+        .where(
+            CRMEntityInsight.insight_type.in_(
+                (VISIT_INSIGHT_SALES_TYPE, VISIT_INSIGHT_LEADER_TYPE)
+            )
+        )
+        .where(CRMEntityInsight.is_deleted == 0)
+        .where(
+            or_(
+                CRMEntityInsight.expires_at.is_(None),
+                CRMEntityInsight.expires_at > func.utc_timestamp(),
+            )
+        )
+    )
+    try:
+        rows = session.exec(statement).all()
+    except Exception as exc:
+        logger.warning("批量读取拜访复盘标记失败: %s", exc)
+        return {}
+    found: dict[str, set[str]] = {}
+    for row in rows:
+        entity_id = _text(row[0] if not isinstance(row, Mapping) else row.get("entity_id"))
+        insight_type = _text(row[1] if not isinstance(row, Mapping) else row.get("insight_type"))
+        if not entity_id or not insight_type:
+            continue
+        found.setdefault(entity_id, set()).add(insight_type)
+    return found
+
+
 def resolve_visit_record_detail_recap(
     insights: Mapping[str, Optional[VisitRecordInsight]],
     *,
-    viewer_is_recorder: bool,
-    resolve_non_recorder_view: Optional[Callable[[], str]] = None,
+    view: Optional[str] = None,
+    resolve_view: Optional[Callable[[], Optional[str]]] = None,
 ) -> Optional[tuple[str, Optional[VisitRecordInsight]]]:
-    """详情装配：没有复盘就不选视角（调用方也不该去打汇报链）。
-
-    有复盘时记录人直接 sales；其他人由 resolve_non_recorder_view 决定。
-    """
+    """没有复盘，或当前用户没有可看的视角时，返回 None。"""
     if not has_visit_recap_insight(insights):
         return None
-    if viewer_is_recorder:
-        view = RECAP_VIEW_SALES
-    else:
-        view = (resolve_non_recorder_view() if resolve_non_recorder_view else None) or RECAP_VIEW_LEADER
-    if view not in (RECAP_VIEW_SALES, RECAP_VIEW_LEADER):
-        view = RECAP_VIEW_LEADER
-    return view, insights.get(view)
+    chosen = view if view is not None else (resolve_view() if resolve_view else None)
+    if chosen not in (RECAP_VIEW_SALES, RECAP_VIEW_LEADER):
+        return None
+    return chosen, insights.get(chosen)

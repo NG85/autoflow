@@ -10,12 +10,14 @@ from app.services.visit_record_insight_reader import (
     VISIT_INSIGHT_SALES_TYPE,
     VisitRecordInsight,
     has_visit_recap_insight,
+    load_visit_recap_types_by_record_id,
     load_visit_record_insight,
     load_visit_record_insights_by_view,
     pick_visit_record_insight,
     recap_view_for_role,
     recap_view_for_viewer,
     resolve_visit_record_detail_recap,
+    viewer_has_visible_recap,
     viewer_is_leader_of_recorder,
     viewer_is_recorder,
 )
@@ -37,113 +39,17 @@ def _row(**overrides):
     return base
 
 
-def test_recap_view_for_viewer_recorder_and_collaborator_are_sales():
-    recorder_id = "11111111-1111-1111-1111-111111111111"
-    collaborator_id = "22222222-2222-2222-2222-222222222222"
-    assert recap_view_for_viewer(
-        viewer_user_id=recorder_id,
-        recorder_id=recorder_id,
-    ) == RECAP_VIEW_SALES
-    assert recap_view_for_viewer(
-        viewer_user_id=collaborator_id,
-        recorder_id=recorder_id,
-        viewer_oauth_user_id="ask_collab",
-        collaborative_participants=[{"name": "王芳", "ask_id": "ask_collab"}],
-    ) == RECAP_VIEW_SALES
-    assert recap_view_for_viewer(
-        viewer_user_id=collaborator_id,
-        recorder_id=recorder_id,
-        collaborative_participants=[{"name": "王芳", "user_id": collaborator_id}],
-    ) == RECAP_VIEW_SALES
+def test_recap_view_for_viewer_only_recorder_and_reporting_leader():
+    assert recap_view_for_viewer() is None
+    assert recap_view_for_viewer(is_recorder=True) == RECAP_VIEW_SALES
+    assert recap_view_for_viewer(is_leader=True) == RECAP_VIEW_LEADER
+    assert recap_view_for_viewer(is_recorder=True, is_leader=True) == RECAP_VIEW_SALES
 
 
 def test_recap_view_for_viewer_recorder_id_ignores_uuid_hyphens():
     hyphen = "11111111-1111-1111-1111-111111111111"
     compact = "11111111111111111111111111111111"
     assert viewer_is_recorder(hyphen, compact) is True
-    assert recap_view_for_viewer(
-        viewer_user_id=hyphen,
-        recorder_id=compact,
-    ) == RECAP_VIEW_SALES
-
-
-def test_recap_view_for_viewer_raw_json_string_matches_collaborator():
-    recorder_id = "11111111-1111-1111-1111-111111111111"
-    collaborator_id = "22222222-2222-2222-2222-222222222222"
-    raw = (
-        '[{"name": "王芳", "ask_id": "ask_collab", '
-        '"user_id": "22222222-2222-2222-2222-222222222222"}]'
-    )
-    assert recap_view_for_viewer(
-        viewer_user_id=collaborator_id,
-        recorder_id=recorder_id,
-        viewer_oauth_user_id="ask_collab",
-        collaborative_participants=raw,
-    ) == RECAP_VIEW_SALES
-
-
-def test_formatted_participant_names_do_not_match_collaborator():
-    """详情接口会把协同人收成「王芳, 李四」，不能用来匹配视角。"""
-    from app.utils.participants_utils import format_collaborative_participants_names
-
-    recorder_id = "11111111-1111-1111-1111-111111111111"
-    collaborator_id = "22222222-2222-2222-2222-222222222222"
-    raw = [{"name": "王芳", "ask_id": "ask_collab"}]
-    formatted = format_collaborative_participants_names(raw)
-    assert formatted == "王芳"
-    assert recap_view_for_viewer(
-        viewer_user_id=collaborator_id,
-        recorder_id=recorder_id,
-        viewer_oauth_user_id="ask_collab",
-        collaborative_participants=formatted,
-    ) == RECAP_VIEW_LEADER
-    assert recap_view_for_viewer(
-        viewer_user_id=collaborator_id,
-        recorder_id=recorder_id,
-        viewer_oauth_user_id="ask_collab",
-        collaborative_participants=raw,
-    ) == RECAP_VIEW_SALES
-
-
-def test_collaborator_user_id_matches_without_hyphens():
-    recorder_id = "11111111-1111-1111-1111-111111111111"
-    collaborator_id = "22222222-2222-2222-2222-222222222222"
-    assert recap_view_for_viewer(
-        viewer_user_id=collaborator_id,
-        recorder_id=recorder_id,
-        collaborative_participants=[
-            {"name": "王芳", "user_id": "22222222222222222222222222222222"}
-        ],
-    ) == RECAP_VIEW_SALES
-
-
-def test_recap_view_for_viewer_others_are_leader():
-    assert recap_view_for_viewer(
-        viewer_user_id="33333333-3333-3333-3333-333333333333",
-        recorder_id="11111111-1111-1111-1111-111111111111",
-        collaborative_participants=[{"name": "王芳", "ask_id": "ask_collab"}],
-    ) == RECAP_VIEW_LEADER
-
-
-def test_recap_view_for_viewer_collaborator_who_is_leader_uses_leader_view():
-    recorder_id = "11111111-1111-1111-1111-111111111111"
-    leader_id = "22222222-2222-2222-2222-222222222222"
-    assert recap_view_for_viewer(
-        viewer_user_id=leader_id,
-        recorder_id=recorder_id,
-        viewer_oauth_user_id="ask_leader",
-        collaborative_participants=[{"name": "王芳", "ask_id": "ask_leader"}],
-        is_leader=True,
-    ) == RECAP_VIEW_LEADER
-
-
-def test_recap_view_for_viewer_recorder_who_is_leader_still_sales():
-    recorder_id = "11111111-1111-1111-1111-111111111111"
-    assert recap_view_for_viewer(
-        viewer_user_id=recorder_id,
-        recorder_id=recorder_id,
-        is_leader=True,
-    ) == RECAP_VIEW_SALES
 
 
 def test_viewer_is_leader_of_recorder_by_direct_manager_or_reporting_chain():
@@ -182,16 +88,8 @@ def test_direct_manager_not_used_when_reporting_chain_has_other_leader():
     ) is False
 
 
-def test_other_dept_leader_collaborator_stays_sales():
-    recorder_id = "11111111-1111-1111-1111-111111111111"
-    other_leader_id = "33333333-3333-3333-3333-333333333333"
-    assert recap_view_for_viewer(
-        viewer_user_id=other_leader_id,
-        recorder_id=recorder_id,
-        viewer_oauth_user_id="ask_other_leader",
-        collaborative_participants=[{"name": "李四", "ask_id": "ask_other_leader"}],
-        is_leader=False,
-    ) == RECAP_VIEW_SALES
+def test_other_viewer_has_no_recap_view():
+    assert recap_view_for_viewer(is_recorder=False, is_leader=False) is None
 
 
 def test_recap_view_for_role():
@@ -318,21 +216,19 @@ def test_get_collaborative_participants_raw_reads_unformatted_json():
     assert VisitRecordRepo().get_collaborative_participants_raw(session, "") is None
 
 
-def test_no_insight_skips_non_recorder_view_resolver():
+def test_no_insight_skips_view_resolver():
     called = []
     result = resolve_visit_record_detail_recap(
         {RECAP_VIEW_SALES: None, RECAP_VIEW_LEADER: None},
-        viewer_is_recorder=False,
-        resolve_non_recorder_view=lambda: called.append("oauth") or RECAP_VIEW_LEADER,
+        resolve_view=lambda: called.append("oauth") or RECAP_VIEW_LEADER,
     )
     assert result is None
     assert called == []
     assert has_visit_recap_insight({RECAP_VIEW_SALES: None, RECAP_VIEW_LEADER: None}) is False
 
 
-def test_has_insight_recorder_skips_non_recorder_view_resolver():
-    called = []
-    insight = VisitRecordInsight(
+def test_has_insight_uses_given_view():
+    sales = VisitRecordInsight(
         unique_id="ins-1",
         entity_id="rec-1",
         insight_type=VISIT_INSIGHT_SALES_TYPE,
@@ -344,18 +240,16 @@ def test_has_insight_recorder_skips_non_recorder_view_resolver():
         generated_at=None,
     )
     result = resolve_visit_record_detail_recap(
-        {RECAP_VIEW_SALES: insight, RECAP_VIEW_LEADER: None},
-        viewer_is_recorder=True,
-        resolve_non_recorder_view=lambda: called.append("oauth") or RECAP_VIEW_LEADER,
+        {RECAP_VIEW_SALES: sales, RECAP_VIEW_LEADER: None},
+        view=RECAP_VIEW_SALES,
     )
-    assert called == []
     assert result is not None
     view, picked = result
     assert view == RECAP_VIEW_SALES
-    assert picked is insight
+    assert picked is sales
 
 
-def test_has_insight_non_recorder_uses_view_resolver():
+def test_has_insight_uses_view_resolver():
     called = []
     sales = VisitRecordInsight(
         unique_id="sales",
@@ -381,11 +275,36 @@ def test_has_insight_non_recorder_uses_view_resolver():
     )
     result = resolve_visit_record_detail_recap(
         {RECAP_VIEW_SALES: sales, RECAP_VIEW_LEADER: leader},
-        viewer_is_recorder=False,
-        resolve_non_recorder_view=lambda: called.append("oauth") or RECAP_VIEW_LEADER,
+        resolve_view=lambda: called.append("oauth") or RECAP_VIEW_LEADER,
     )
     assert called == ["oauth"]
     assert result is not None
     view, picked = result
     assert view == RECAP_VIEW_LEADER
     assert picked is leader
+
+
+def test_viewer_has_visible_recap_follows_sales_or_leader_view():
+    sales = [VISIT_INSIGHT_SALES_TYPE]
+    leader = [VISIT_INSIGHT_LEADER_TYPE]
+    assert viewer_has_visible_recap(sales) is False
+    assert viewer_has_visible_recap(sales, is_recorder=True) is True
+    assert viewer_has_visible_recap(leader, is_recorder=True) is False
+    assert viewer_has_visible_recap(leader, is_reporting_leader=True) is True
+    assert viewer_has_visible_recap(sales, is_reporting_leader=True) is False
+    assert viewer_has_visible_recap([]) is False
+
+
+def test_load_visit_recap_types_groups_by_record_and_fails_closed():
+    session = MagicMock()
+    session.exec.return_value.all.return_value = [
+        ("rec-1", VISIT_INSIGHT_SALES_TYPE),
+        ("rec-1", VISIT_INSIGHT_LEADER_TYPE),
+        ("rec-2", VISIT_INSIGHT_LEADER_TYPE),
+    ]
+    found = load_visit_recap_types_by_record_id(session, ["rec-1", "rec-2", "rec-1"])
+    assert found["rec-1"] == {VISIT_INSIGHT_SALES_TYPE, VISIT_INSIGHT_LEADER_TYPE}
+    assert found["rec-2"] == {VISIT_INSIGHT_LEADER_TYPE}
+
+    session.exec.side_effect = RuntimeError("db down")
+    assert load_visit_recap_types_by_record_id(session, ["rec-1"]) == {}
