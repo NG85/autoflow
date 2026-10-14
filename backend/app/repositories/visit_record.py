@@ -466,16 +466,19 @@ def _fill_has_recap(
     if not any(types_by_id.get(record_id) for record_id in record_ids):
         return
     context = RecapViewContext(session, current_user_id)
+    admin = context.is_sys_admin()
     for record, response in pairs:
         record_id = str(getattr(record, "record_id", "") or "").strip()
         present = types_by_id.get(record_id) or ()
         if not present:
             continue
         recorder_id = getattr(record, "recorder_id", None)
+        recorder = context.is_recorder(recorder_id)
         response.has_recap = viewer_has_visible_recap(
             present,
-            is_recorder=context.is_recorder(recorder_id),
-            is_reporting_leader=context.is_reporting_leader(recorder_id),
+            is_recorder=recorder,
+            is_reporting_leader=False if admin and not recorder else context.is_reporting_leader(recorder_id),
+            is_sys_admin=admin and not recorder,
         )
 
 
