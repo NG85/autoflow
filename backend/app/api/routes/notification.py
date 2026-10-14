@@ -11,11 +11,13 @@ from app.api.deps import CurrentUserDep, SessionDep
 from app.api.routes.notification_schemas import (
     DailyNoFollowupReminderPushRequest,
     DailyVisitReportPushRequest,
+    DepartmentTodayHighlightsPushRequest,
     NotificationPreferenceUpdateRequest,
     PlatformNotificationPushRequest,
     PushNotificationRequest,
     ReviewSessionPushRequest,
     SalesTaskCreatedPushRequest,
+    SalesTodayHighlightsPushRequest,
     VisitRecordCardPushRequest,
     VisitRecordCommentPushRequest,
     WeeklyFollowupCommentPushRequest,
@@ -708,6 +710,38 @@ def _handle_platform_notification_push(
     }
 
 
+def _handle_department_today_highlights_push(
+    db_session: SessionDep,
+    payload: DepartmentTodayHighlightsPushRequest,
+) -> Dict[str, Any]:
+    from app.services.department_today_highlights import handle_department_today_highlights
+
+    try:
+        return handle_department_today_highlights(
+            db_session,
+            report_date=payload.report_date,
+            department_id=payload.department_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _handle_sales_today_highlights_push(
+    db_session: SessionDep,
+    payload: SalesTodayHighlightsPushRequest,
+) -> Dict[str, Any]:
+    from app.services.sales_today_highlights import handle_sales_today_highlights
+
+    try:
+        return handle_sales_today_highlights(
+            db_session,
+            report_date=payload.report_date,
+            recipient_user_ids=payload.recipient_user_ids,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 def _handle_weekly_visit_report_push(
     db_session: SessionDep,
     payload: WeeklyVisitReportPushRequest,
@@ -887,7 +921,8 @@ async def push_notification_api(
     统一消息推送入口（请求体按 type 判别，字段见 notification_schemas）：
     weekly_followup_comment / visit_record_comment / sales_task_created /
     review_session / visit_record_card / daily_no_followup_reminder /
-    platform_notification / weekly_visit_report / daily_visit_report
+    platform_notification / weekly_visit_report / daily_visit_report /
+    sales_today_highlights / department_today_highlights
     """
     try:
         if isinstance(payload, VisitRecordCardPushRequest):
@@ -908,6 +943,10 @@ async def push_notification_api(
             result = _handle_weekly_visit_report_push(db_session, payload)
         elif isinstance(payload, DailyVisitReportPushRequest):
             result = _handle_daily_visit_report_push(db_session, payload)
+        elif isinstance(payload, SalesTodayHighlightsPushRequest):
+            result = _handle_sales_today_highlights_push(db_session, payload)
+        elif isinstance(payload, DepartmentTodayHighlightsPushRequest):
+            result = _handle_department_today_highlights_push(db_session, payload)
         else:
             raise HTTPException(status_code=422, detail="unsupported notification type")
 

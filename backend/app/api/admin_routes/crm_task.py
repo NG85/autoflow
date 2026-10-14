@@ -127,6 +127,52 @@ def trigger_daily_statistics_task(
             "message": f"触发任务失败: {str(e)}",
             "data": {}
         }
+        
+
+@router.post("/crm/today-highlights/trigger-task")
+def trigger_today_highlights_task(
+    user: CurrentSuperuserDep,
+    report_date: Optional[str] = Body(None, description="YYYY-MM-DD，不传则北京时间当天"),
+    audience: Optional[str] = Body(
+        None,
+        description="sales（一线销售） / department（负责人），不传则两边都推",
+    ),
+):
+    """手动触发今日重点。与日报任务无关，发卡逻辑与 notification/push 相同。"""
+    if not user.is_superuser:
+        return {"code": 403, "message": "权限不足，只有超级管理员可以触发此任务", "data": {}}
+    valid_audiences = ["sales", "department"]
+    if audience is not None and audience not in valid_audiences:
+        return {
+            "code": 400,
+            "message": f"无效的 audience={audience}，支持: {valid_audiences}，不传则两边都推",
+            "data": {},
+        }
+    if report_date:
+        try:
+            datetime.strptime(report_date, "%Y-%m-%d")
+        except ValueError:
+            return {"code": 400, "message": "日期格式错误，请使用YYYY-MM-DD格式", "data": {}}
+    try:
+        from app.tasks.cron_jobs import push_crm_today_highlights
+
+        task = push_crm_today_highlights.delay(
+            report_date_str=report_date,
+            audience=audience,
+        )
+        return {
+            "code": 0,
+            "message": "今日重点推送任务已触发",
+            "data": {
+                "task_id": task.id,
+                "report_date": report_date,
+                "audience": audience,
+                "status": "PENDING",
+            },
+        }
+    except Exception as e:
+        logger.exception(f"触发今日重点推送任务失败: {e}")
+        return {"code": 500, "message": f"触发任务失败: {str(e)}", "data": {}}
 
 
 @router.post("/crm/daily-reports/send-department")

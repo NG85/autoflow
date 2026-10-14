@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Optional, Tuple
 from zoneinfo import ZoneInfo
 
@@ -30,8 +30,8 @@ def get_week_range_from_date(target_date: date) -> Tuple[date, date]:
     """
     # 计算到本周一的天数
     days_since_monday = target_date.weekday()
-    monday = target_date - datetime.timedelta(days=days_since_monday)
-    sunday = monday + datetime.timedelta(days=6)
+    monday = target_date - timedelta(days=days_since_monday)
+    sunday = monday + timedelta(days=6)
     
     return monday, sunday
 
