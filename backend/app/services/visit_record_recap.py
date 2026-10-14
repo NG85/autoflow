@@ -2,7 +2,7 @@
 
 洞察来自 crm_entity_insight，抽取来自 crm_postvisit_extract_items。
 没有复盘行时不查汇报链、不读抽取表。
-记录人看销售视角，其汇报链上级看上级视角；其余人没有可看的复盘。
+记录人看销售视角，其汇报链上级看上级视角。系统管理员看上级视角，不附带抽取。其余人没有可看的复盘。
 抽取仅记录人本人可见。任一侧读取失败时该侧为空，不把异常抛给调用方。
 """
 
@@ -50,6 +50,7 @@ class RecapViewContext:
         self._leader_by_recorder: dict[str, bool] = {}
         self._viewer_profile_row: Any = None
         self._viewer_profile_loaded = False
+        self._sys_admin: Optional[bool] = None
 
     def is_recorder(self, recorder_id: Any) -> bool:
         return viewer_is_recorder(self.viewer_user_id, recorder_id)
@@ -63,11 +64,18 @@ class RecapViewContext:
             self._leader_by_recorder[key] = self._query_reporting_leader(recorder_id)
         return self._leader_by_recorder[key]
 
+    def is_sys_admin(self) -> bool:
+        """当前用户是否为系统管理员。查一次，失败视为不是。"""
+        if self._sys_admin is None:
+            self._sys_admin = _viewer_is_sys_admin(self.viewer_user_id)
+        return self._sys_admin
+
     def view_for(self, recorder_id: Any) -> Optional[str]:
-        return recap_view_for_viewer(
-            is_recorder=self.is_recorder(recorder_id),
-            is_leader=self.is_reporting_leader(recorder_id),
-        )
+        if self.is_recorder(recorder_id):
+            return recap_view_for_viewer(is_recorder=True)
+        if self.is_sys_admin():
+            return recap_view_for_viewer(is_sys_admin=True)
+        return recap_view_for_viewer(is_leader=self.is_reporting_leader(recorder_id))
 
     def _viewer_profile(self) -> Any:
         if not self._viewer_profile_loaded:
@@ -109,6 +117,28 @@ class RecapViewContext:
             ),
             reporting_chain_leader_open_ids=reporting_chain_leader_open_ids,
         )
+
+
+def _viewer_is_sys_admin(user_id: Any) -> bool:
+    """系统管理员可看上级视角复盘。角色查询失败时不放开。"""
+    from uuid import UUID
+
+    if isinstance(user_id, UUID):
+        uid = user_id
+    else:
+        try:
+            uid = UUID(str(user_id)) if user_id else None
+        except (TypeError, ValueError):
+            return False
+    if uid is None:
+        return False
+    try:
+        from app.services.oauth_service import oauth_client
+
+        return oauth_client.check_user_has_role(user_id=uid, role="SYS_ADMIN") is True
+    except Exception as exc:
+        logger.warning("拜访复盘查询系统管理员角色失败: %s", exc)
+        return False
 
 
 def _reporting_chain_leader_open_ids(recorder_profile: Any) -> list[str]:
