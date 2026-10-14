@@ -10,6 +10,7 @@ from sqlalchemy import (
     JSON,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlmodel import (
     SQLModel,
     Field,
@@ -1762,5 +1763,130 @@ class CRMReviewOppAuditLog(UUIDBaseModel, UpdatableBaseModel, table=True):
         Index("idx_session_id", "session_id"),
         Index("idx_updated_by_id", "updated_by_id"),
         Index("idx_updated_at", "updated_at"),
+    )
+
+
+class CRMReviewCxoReport(SQLModel, table=True):
+    """CXO 周报，一场 review session 一条。"""
+
+    model_config = {"from_attributes": True}
+
+    __tablename__ = "crm_review_cxo_report"
+
+    id: Optional[int] = Field(
+        default=None,
+        primary_key=True,
+        description="主键ID（自增序列）",
+    )
+    unique_id: str = Field(
+        sa_column=Column(String(255), nullable=False),
+        description="报告唯一标识",
+    )
+    session_id: str = Field(
+        sa_column=Column(String(255), nullable=False),
+        description="FK → crm_review_session.unique_id",
+    )
+    report_name: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+        description="报告名称",
+    )
+    report_level: str = Field(
+        sa_column=Column(String(16), nullable=False),
+        description="company | department",
+    )
+    department_id: str = Field(
+        sa_column=Column(String(255), nullable=False),
+        description="部门 ID；公司级为 __COMPANY__",
+    )
+    department_name: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+        description="部门名称",
+    )
+    period: str = Field(
+        sa_column=Column(String(32), nullable=False),
+        description="周期，如 2026-W39",
+    )
+    snapshot_date: date = Field(
+        sa_column=Column(Date, nullable=False),
+        description="快照日期",
+    )
+    report_date: date = Field(
+        sa_column=Column(Date, nullable=False),
+        description="报告日期",
+    )
+    report_status: str = Field(
+        default="processing",
+        sa_column=Column(String(32), nullable=False, default="processing"),
+        description="processing | published | failed",
+    )
+    report_format: str = Field(
+        default="html",
+        sa_column=Column(String(16), nullable=False, default="html"),
+        description="报告格式，如 html / markdown",
+    )
+    report_content: Optional[str] = Field(
+        default=None,
+        sa_column=Column(MEDIUMTEXT),
+        description="报告正文",
+    )
+    summary: Optional[str] = Field(
+        default=None,
+        sa_column=Column(Text),
+        description="摘要",
+    )
+    plan_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+    execution_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+    synapse_run_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+    fact_pack_version: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(32)),
+    )
+    quality_json: Optional[dict] = Field(
+        default=None,
+        sa_column=Column(JSON),
+    )
+    error_message: Optional[str] = Field(
+        default=None,
+        sa_column=Column(Text),
+    )
+    version: int = Field(
+        default=1,
+        sa_column=Column(Integer, nullable=False, default=1),
+    )
+    created_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime, nullable=False, server_default=func.now()),
+    )
+    updated_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(
+            DateTime,
+            nullable=False,
+            server_default=func.now(),
+            onupdate=func.now(),
+        ),
+    )
+    created_by: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255)),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("session_id", name="uk_cxo_report_session"),
+        UniqueConstraint("unique_id", name="uk_cxo_report_unique_id"),
+        Index("idx_cxo_report_period_level", "period", "report_level", "department_id"),
+        Index("idx_cxo_report_status", "report_status"),
+        Index("idx_cxo_report_execution", "execution_id"),
     )
 

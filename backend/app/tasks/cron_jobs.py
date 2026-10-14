@@ -357,7 +357,10 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
             dept_report_fetch_failures: list[dict[str, str]] = []
             dept_weekly_report_send_failures: list[dict[str, str]] = []
             company_weekly_report_send_failure: Optional[str] = None
-            from app.models.crm_weekly_followup_summary import CRMWeeklyFollowupSummary
+            from app.models.crm_weekly_followup_summary import (
+                CRMWeeklyFollowupSummary,
+                REPORT_KIND_FOLLOWUP,
+            )
 
             def _join_names(val: Any) -> str:
                 if val is None:
@@ -630,6 +633,7 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                         CRMWeeklyFollowupSummary.week_end == end_date,
                         CRMWeeklyFollowupSummary.summary_type == "department",
                         CRMWeeklyFollowupSummary.department_name.in_(dept_names),
+                        CRMWeeklyFollowupSummary.report_kind == REPORT_KIND_FOLLOWUP,
                     )
                 ).all()
                 dept_weekly_followup_summary_by_dept = {
@@ -643,6 +647,7 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                     CRMWeeklyFollowupSummary.week_end == end_date,
                     CRMWeeklyFollowupSummary.summary_type == "company",
                     CRMWeeklyFollowupSummary.department_name == "",
+                    CRMWeeklyFollowupSummary.report_kind == REPORT_KIND_FOLLOWUP,
                 )
             ).first()
             if company_summary:
@@ -1114,7 +1119,10 @@ def send_crm_weekly_followup_leader_engagement_report(self, week_start_str: str 
     """
     try:
         from zoneinfo import ZoneInfo
-        from app.models.crm_weekly_followup_summary import CRMWeeklyFollowupSummary
+        from app.models.crm_weekly_followup_summary import (
+            CRMWeeklyFollowupSummary,
+            REPORT_KIND_FOLLOWUP,
+        )
         from app.models.crm_weekly_followup_leader_engagement import CRMWeeklyFollowupLeaderEngagement
 
         # 计算日期范围：默认上一周（周六~周五）
@@ -1165,6 +1173,7 @@ def send_crm_weekly_followup_leader_engagement_report(self, week_start_str: str 
                         CRMWeeklyFollowupSummary.week_end == week_end,
                         CRMWeeklyFollowupSummary.summary_type == "department",
                         CRMWeeklyFollowupSummary.department_name.in_(dept_names),
+                        CRMWeeklyFollowupSummary.report_kind == REPORT_KIND_FOLLOWUP,
                     )
                 ).all()
             # 若当周没有生成任何“部门周跟进总结”，则不推送

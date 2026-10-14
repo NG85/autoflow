@@ -302,7 +302,7 @@ class Settings(BaseSettings):
     # 关闭时走本地空任务推卡降级（便于本地/联调）
     ALDEBARAN_VISIT_RECORD_POST_PROCESS_ENABLED: bool = True
     ALDEBARAN_CONTACT_CREATED_ENABLED: bool = True
-    
+
     EMBEDDING_THRESHOLD: float = 0.92
 
     CRM_ENABLED: bool = False

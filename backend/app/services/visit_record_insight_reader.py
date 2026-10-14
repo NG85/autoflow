@@ -1,0 +1,379 @@
+"""只读 Aldebaran crm_entity_insight：拜访复盘（entity_type=VISIT）。
+
+同一拜访两条结果：
+- POSTVISIT_REVIEW_SALES_VIEW 销售视角
+- POSTVISIT_REVIEW_LEADER_VIEW 上级视角
+
+通过 CRMEntityInsight 查询。查询失败不影响推卡主流程。
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Callable, Mapping, Optional, Sequence
+
+from sqlalchemy import func, or_
+from sqlmodel import Session, col, select
+
+from app.models.crm_entity_insight import CRMEntityInsight
+
+logger = logging.getLogger(__name__)
+
+VISIT_INSIGHT_ENTITY_TYPE = "VISIT"
+VISIT_INSIGHT_SALES_TYPE = "POSTVISIT_REVIEW_SALES_VIEW"
+VISIT_INSIGHT_LEADER_TYPE = "POSTVISIT_REVIEW_LEADER_VIEW"
+# 兼容旧常量名
+VISIT_INSIGHT_TYPE = VISIT_INSIGHT_SALES_TYPE
+
+RECAP_VIEW_SALES = "sales"
+RECAP_VIEW_LEADER = "leader"
+_SALES_RECIPIENT_TYPES = frozenset({"recorder", "collaborative_participant"})
+
+
+@dataclass(frozen=True)
+class VisitRecordInsight:
+    unique_id: str
+    entity_id: str
+    insight_type: str
+    title: str
+    summary: str
+    detail_text: str
+    category: str
+    severity: str
+    generated_at: Optional[datetime]
+
+    def recap_text(self) -> str:
+        return next((part for part in (self.summary, self.title, self.detail_text) if part), "")
+
+    def to_public_dict(self) -> dict[str, Any]:
+        return {
+            "unique_id": self.unique_id,
+            "insight_type": self.insight_type,
+            "title": self.title or None,
+            "summary": self.summary or None,
+            "detail_text": self.detail_text or None,
+            "category": self.category or None,
+            "severity": self.severity or None,
+            "generated_at": self.generated_at.isoformat() if self.generated_at else None,
+        }
+
+
+def recap_view_for_role(role: Optional[str], *, is_group: bool = False) -> str:
+    """个人：记录人/协同人看销售视角，上级/抄送看 leader 视角；群一律 leader。
+
+    同一人兼有 leader 与协同人身份时，推送侧按角色优先级取 leader，本函数不会单独看到协同人。
+    """
+    if is_group:
+        return RECAP_VIEW_LEADER
+    if (role or "") in _SALES_RECIPIENT_TYPES:
+        return RECAP_VIEW_SALES
+    return RECAP_VIEW_LEADER
+
+
+def _identity_tokens(*values: Any) -> set[str]:
+    tokens: set[str] = set()
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, (list, tuple, set)):
+            tokens.update(_identity_tokens(*value))
+            continue
+        text = str(value).strip().lower()
+        if not text:
+            continue
+        tokens.add(text)
+        compact = text.replace("-", "")
+        if compact:
+            tokens.add(compact)
+    return tokens
+
+
+def collect_profile_open_ids(profile: Any) -> list[str]:
+    """当前用户 oauth_accounts.open_id，用于对齐汇报链 leader。"""
+    ids: list[str] = []
+    seen: set[str] = set()
+    for account in getattr(profile, "oauth_users", None) or []:
+        open_id = str(getattr(account, "open_id", None) or "").strip()
+        if open_id and open_id not in seen:
+            seen.add(open_id)
+            ids.append(open_id)
+    return ids
+
+
+def viewer_is_recorder(
+    viewer_user_id: Any,
+    recorder_id: Any,
+) -> bool:
+    """记录人 ID 按 UUID 连字符有无都视为同一人。"""
+    viewer_tokens = _identity_tokens(viewer_user_id)
+    recorder_tokens = _identity_tokens(recorder_id)
+    return bool(viewer_tokens and recorder_tokens and viewer_tokens & recorder_tokens)
+
+
+def viewer_is_leader_of_recorder(
+    *,
+    viewer_user_id: Any = None,
+    viewer_oauth_user_id: Optional[str] = None,
+    viewer_open_ids: Optional[Sequence[str]] = None,
+    recorder_direct_manager_id: Optional[str] = None,
+    reporting_chain_leader_open_ids: Optional[Sequence[str]] = None,
+) -> bool:
+    """当前用户是否是本条拜访记录人的上级。
+
+    与推送一致：优先 OAuth 汇报链 max_levels=1（open_id）。
+    汇报链有结果时不再用直属上级；链为空或查询失败时才退回 direct_manager_id。
+    """
+    leader_open_ids = {
+        str(oid).strip().lower()
+        for oid in (reporting_chain_leader_open_ids or ())
+        if oid and str(oid).strip()
+    }
+    viewer_open = {
+        str(oid).strip().lower()
+        for oid in (viewer_open_ids or ())
+        if oid and str(oid).strip()
+    }
+    if leader_open_ids:
+        return bool(viewer_open and leader_open_ids & viewer_open)
+
+    viewer_tokens = _identity_tokens(viewer_user_id, viewer_oauth_user_id, viewer_open_ids)
+    return bool(viewer_tokens & _identity_tokens(recorder_direct_manager_id))
+
+
+def recap_view_for_viewer(
+    *,
+    is_recorder: bool = False,
+    is_leader: bool = False,
+) -> Optional[str]:
+    """记录人看销售视角，其汇报链上级看上级视角。其余人没有可看的复盘。"""
+    if is_recorder:
+        return RECAP_VIEW_SALES
+    if is_leader:
+        return RECAP_VIEW_LEADER
+    return None
+
+
+def insight_type_for_view(view: str) -> str:
+    if view == RECAP_VIEW_SALES:
+        return VISIT_INSIGHT_SALES_TYPE
+    return VISIT_INSIGHT_LEADER_TYPE
+
+
+def _text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    return str(value).strip()
+
+
+def _row_to_insight(row: Mapping[str, Any]) -> VisitRecordInsight:
+    generated_at = row.get("generated_at")
+    if generated_at is not None and not isinstance(generated_at, datetime):
+        generated_at = None
+    return VisitRecordInsight(
+        unique_id=_text(row.get("unique_id")),
+        entity_id=_text(row.get("entity_id")),
+        insight_type=_text(row.get("insight_type")),
+        title=_text(row.get("title")),
+        summary=_text(row.get("summary")),
+        detail_text=_text(row.get("detail_text")),
+        category=_text(row.get("category")),
+        severity=_text(row.get("severity")),
+        generated_at=generated_at,
+    )
+
+
+def pick_visit_record_insight(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    preferred_types: Optional[Sequence[str]] = None,
+) -> Optional[VisitRecordInsight]:
+    """从已按 generated_at DESC 排好的行里挑一条。指定 preferred_types 时只匹配这些类型，不串到另一视角。"""
+    insights = [_row_to_insight(row) for row in rows]
+    if not insights:
+        return None
+    preferred = tuple(
+        item.strip() for item in (preferred_types or ())
+        if item and str(item).strip()
+    )
+    if preferred:
+        preferred_upper = {item.upper() for item in preferred}
+        for insight in insights:
+            if insight.insight_type.upper() in preferred_upper:
+                return insight
+        return None
+    for insight in insights:
+        if insight.summary:
+            return insight
+    return insights[0]
+
+
+def _as_mapping(row: Any) -> dict[str, Any]:
+    if isinstance(row, Mapping):
+        return dict(row)
+    return row.model_dump()
+
+
+def _query_visit_insight_rows(session: Session, record_id: str) -> Optional[list[Mapping[str, Any]]]:
+    statement = (
+        select(CRMEntityInsight)
+        .where(CRMEntityInsight.entity_type == VISIT_INSIGHT_ENTITY_TYPE)
+        .where(CRMEntityInsight.entity_id == record_id)
+        .where(CRMEntityInsight.is_deleted == 0)
+        .where(
+            or_(
+                CRMEntityInsight.expires_at.is_(None),
+                CRMEntityInsight.expires_at > func.utc_timestamp(),
+            )
+        )
+        .order_by(col(CRMEntityInsight.generated_at).desc(), col(CRMEntityInsight.id).desc())
+        .limit(20)
+    )
+    try:
+        rows = session.exec(statement).all()
+        return [_as_mapping(row) for row in rows]
+    except Exception as exc:
+        logger.warning(
+            "Failed to load visit entity insight, record_id=%s: %s",
+            record_id,
+            exc,
+        )
+        return None
+
+
+def load_visit_record_insight(
+    session: Optional[Session],
+    record_id: str,
+    *,
+    preferred_types: Optional[Sequence[str]] = None,
+    view: Optional[str] = None,
+) -> Optional[VisitRecordInsight]:
+    """读取拜访一条未删除、未过期洞察。view=sales/leader 时按对应 insight_type。"""
+    rid = (record_id or "").strip()
+    if session is None or not rid:
+        return None
+    rows = _query_visit_insight_rows(session, rid)
+    if rows is None:
+        return None
+    types = preferred_types
+    if types is None and view:
+        types = (insight_type_for_view(view),)
+    if types is None:
+        types = (VISIT_INSIGHT_SALES_TYPE,)
+    picked = pick_visit_record_insight(rows, preferred_types=types)
+    if picked is None:
+        logger.info(
+            "No visit entity insight found, record_id=%s view=%s types=%s",
+            rid,
+            view,
+            types,
+        )
+    return picked
+
+
+def load_visit_record_insights_by_view(
+    session: Optional[Session],
+    record_id: str,
+) -> dict[str, Optional[VisitRecordInsight]]:
+    """一次查出同一拜访的销售/上级两条复盘。"""
+    empty: dict[str, Optional[VisitRecordInsight]] = {
+        RECAP_VIEW_SALES: None,
+        RECAP_VIEW_LEADER: None,
+    }
+    rid = (record_id or "").strip()
+    if session is None or not rid:
+        return empty
+    rows = _query_visit_insight_rows(session, rid)
+    if not rows:
+        return empty
+    return {
+        RECAP_VIEW_SALES: pick_visit_record_insight(rows, preferred_types=(VISIT_INSIGHT_SALES_TYPE,)),
+        RECAP_VIEW_LEADER: pick_visit_record_insight(rows, preferred_types=(VISIT_INSIGHT_LEADER_TYPE,)),
+    }
+
+
+def has_visit_recap_insight(
+    insights: Mapping[str, Optional[VisitRecordInsight]],
+) -> bool:
+    return bool(insights.get(RECAP_VIEW_SALES) or insights.get(RECAP_VIEW_LEADER))
+
+
+def viewer_has_visible_recap(
+    insight_types: Sequence[str],
+    *,
+    is_recorder: bool = False,
+    is_reporting_leader: bool = False,
+) -> bool:
+    """当前用户打开复盘页时，对应视角是否已有复盘。"""
+    present = {
+        str(item).strip().upper()
+        for item in (insight_types or ())
+        if item and str(item).strip()
+    }
+    if not present:
+        return False
+    view = recap_view_for_viewer(
+        is_recorder=is_recorder,
+        is_leader=is_reporting_leader,
+    )
+    if view is None:
+        return False
+    return insight_type_for_view(view).upper() in present
+
+
+def load_visit_recap_types_by_record_id(
+    session: Optional[Session],
+    record_ids: Sequence[str],
+) -> dict[str, set[str]]:
+    """一批拜访上未删除、未过期的销售/上级复盘类型。查询失败时全部视为没有。"""
+    ids = list(dict.fromkeys(_text(item) for item in record_ids if _text(item)))
+    if session is None or not ids:
+        return {}
+    statement = (
+        select(CRMEntityInsight.entity_id, CRMEntityInsight.insight_type)
+        .where(CRMEntityInsight.entity_type == VISIT_INSIGHT_ENTITY_TYPE)
+        .where(CRMEntityInsight.entity_id.in_(ids))
+        .where(
+            CRMEntityInsight.insight_type.in_(
+                (VISIT_INSIGHT_SALES_TYPE, VISIT_INSIGHT_LEADER_TYPE)
+            )
+        )
+        .where(CRMEntityInsight.is_deleted == 0)
+        .where(
+            or_(
+                CRMEntityInsight.expires_at.is_(None),
+                CRMEntityInsight.expires_at > func.utc_timestamp(),
+            )
+        )
+    )
+    try:
+        rows = session.exec(statement).all()
+    except Exception as exc:
+        logger.warning("批量读取拜访复盘标记失败: %s", exc)
+        return {}
+    found: dict[str, set[str]] = {}
+    for row in rows:
+        entity_id = _text(row[0] if not isinstance(row, Mapping) else row.get("entity_id"))
+        insight_type = _text(row[1] if not isinstance(row, Mapping) else row.get("insight_type"))
+        if not entity_id or not insight_type:
+            continue
+        found.setdefault(entity_id, set()).add(insight_type)
+    return found
+
+
+def resolve_visit_record_detail_recap(
+    insights: Mapping[str, Optional[VisitRecordInsight]],
+    *,
+    view: Optional[str] = None,
+    resolve_view: Optional[Callable[[], Optional[str]]] = None,
+) -> Optional[tuple[str, Optional[VisitRecordInsight]]]:
+    """没有复盘，或当前用户没有可看的视角时，返回 None。"""
+    if not has_visit_recap_insight(insights):
+        return None
+    chosen = view if view is not None else (resolve_view() if resolve_view else None)
+    if chosen not in (RECAP_VIEW_SALES, RECAP_VIEW_LEADER):
+        return None
+    return chosen, insights.get(chosen)

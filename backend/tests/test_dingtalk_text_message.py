@@ -30,6 +30,14 @@ def test_robot_text_msg_param_doubles_newlines_and_truncates_title():
     assert msg_param["title"] == "x" * 64
 
 
+def test_robot_text_msg_param_strips_markdown_heading_from_session_title():
+    _, msg_param = DingTalkClient._robot_text_msg_param(
+        "### 正常 · 9月20日 · 星辰科技\n客户确认下季度扩容"
+    )
+    assert msg_param["title"] == "正常 · 9月20日 · 星辰科技"
+    assert msg_param["text"].startswith("### 正常 · 9月20日 · 星辰科技")
+
+
 def test_send_text_message_posts_sample_markdown(monkeypatch):
     client = DingTalkClient(app_id="ding_test", app_secret="secret")
     mock_resp = MagicMock()

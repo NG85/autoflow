@@ -20,7 +20,10 @@ from app.models.crm_leads import CRMLead
 from app.models.crm_user import CRMUser
 from app.models.user_department_relation import UserDepartmentRelation
 from app.models.crm_weekly_followup_entity_summary import CRMWeeklyFollowupEntitySummary
-from app.models.crm_weekly_followup_summary import CRMWeeklyFollowupSummary
+from app.models.crm_weekly_followup_summary import (
+    CRMWeeklyFollowupSummary,
+    REPORT_KIND_FOLLOWUP,
+)
 from app.repositories.department_mirror import department_mirror_repo
 from app.repositories.user_department_relation import user_department_relation_repo
 from app.services.aldebaran_service import AldebaranOpportunityForecast, aldebaran_client
@@ -494,18 +497,24 @@ class CRMWeeklyFollowupService:
             session.refresh(existing)
             return existing
 
+    def upsert_summary(self, session: Session, obj: CRMWeeklyFollowupSummary) -> CRMWeeklyFollowupSummary:
+        return self._upsert_summary(session, obj)
+
     def _upsert_summary(self, session: Session, obj: CRMWeeklyFollowupSummary) -> CRMWeeklyFollowupSummary:
         """
-        幂等键：week_start/week_end/summary_type/department_name（company 行 department_name=""）
+        幂等键：week_start/week_end/summary_type/department_name/report_kind
+        （company 行 department_name=""；未指定 report_kind 时为 followup）
         """
-        existing = session.exec(
-            select(CRMWeeklyFollowupSummary).where(
-                CRMWeeklyFollowupSummary.week_start == obj.week_start,
-                CRMWeeklyFollowupSummary.week_end == obj.week_end,
-                CRMWeeklyFollowupSummary.summary_type == obj.summary_type,
-                CRMWeeklyFollowupSummary.department_name == obj.department_name,
-            )
-        ).first()
+        report_kind = (obj.report_kind or REPORT_KIND_FOLLOWUP).strip() or REPORT_KIND_FOLLOWUP
+        obj.report_kind = report_kind
+        identity = (
+            CRMWeeklyFollowupSummary.week_start == obj.week_start,
+            CRMWeeklyFollowupSummary.week_end == obj.week_end,
+            CRMWeeklyFollowupSummary.summary_type == obj.summary_type,
+            CRMWeeklyFollowupSummary.department_name == obj.department_name,
+            CRMWeeklyFollowupSummary.report_kind == report_kind,
+        )
+        existing = session.exec(select(CRMWeeklyFollowupSummary).where(*identity)).first()
         if existing:
             existing.summary_content = obj.summary_content
             existing.title = obj.title
@@ -521,14 +530,7 @@ class CRMWeeklyFollowupService:
             return obj
         except IntegrityError:
             session.rollback()
-            existing = session.exec(
-                select(CRMWeeklyFollowupSummary).where(
-                    CRMWeeklyFollowupSummary.week_start == obj.week_start,
-                    CRMWeeklyFollowupSummary.week_end == obj.week_end,
-                    CRMWeeklyFollowupSummary.summary_type == obj.summary_type,
-                    CRMWeeklyFollowupSummary.department_name == obj.department_name,
-                )
-            ).first()
+            existing = session.exec(select(CRMWeeklyFollowupSummary).where(*identity)).first()
             if not existing:
                 raise
             return existing

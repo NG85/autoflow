@@ -23,6 +23,10 @@ PERM_FOLLOW_UP_CARD_RECEIVE = "notification:follow_up_card:receive"
 # Legacy alias（OAuth maps_to）；业务与文档一律用 PERM_FOLLOW_UP_CARD_RECEIVE，勿再硬编码
 LEGACY_VISIT_RECORD_CARD_RECEIVE = "visit_record:card:receive"
 
+# 推送场景目录 / 资格预览（功能门控，不是 receive 资格）
+PERM_NOTIFICATION_SCENES_VIEW = "notification:scenes:view"
+PERM_NOTIFICATION_SCENES_PREVIEW = "notification:scenes:preview"
+
 # 所有推送类型列表
 ALL_NOTIFICATION_TYPES = [
     NOTIFICATION_TYPE_REPORT_1,

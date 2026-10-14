@@ -6,12 +6,19 @@ from app.models.base import UpdatableBaseModel
 from app.models.base import UUIDBaseModel
 from sqlalchemy import UniqueConstraint
 
+# 同一周、同一部门可同时存在两类内容：原周跟进总结 / 外部服务生成的周拜访报告
+REPORT_KIND_FOLLOWUP = "followup"
+REPORT_KIND_VISIT_REPORT = "visit_report"
+
+
 class CRMWeeklyFollowupSummary(UUIDBaseModel, UpdatableBaseModel, table=True):
     """
-    CRM 周跟进总结（公司 / 部门维度）
+    CRM 周报类汇总（公司 / 部门维度）
 
     - summary_type = "company": 公司级（department_name 为空）
     - summary_type = "department": 部门级（department_name 必填）
+    - report_kind = "followup": 周跟进总结（本服务生成）
+    - report_kind = "visit_report": 周拜访报告（外部服务 LLM 生成后落库）
     """
 
     model_config = {"from_attributes": True}
@@ -26,6 +33,11 @@ class CRMWeeklyFollowupSummary(UUIDBaseModel, UpdatableBaseModel, table=True):
     department_id: str = Field(default="", sa_column=Column(String(100), nullable=False), description="部门ID（company时为空字符串）")
     department_name: str = Field(default="", sa_column=Column(String(255), nullable=False), description="部门名称（company时为空字符串）")
     title: str = Field(default="", sa_column=Column(String(255), nullable=False), description="周总结名称（用于列表展示）")
+    report_kind: str = Field(
+        default=REPORT_KIND_FOLLOWUP,
+        sa_column=Column(String(32), nullable=False, server_default=REPORT_KIND_FOLLOWUP),
+        description="报告种类：followup=周跟进总结，visit_report=周拜访报告",
+    )
 
     summary_content: Optional[str] = Field(default=None, sa_column=Column(Text), description="汇总内容（中文）")
 
@@ -35,11 +47,13 @@ class CRMWeeklyFollowupSummary(UUIDBaseModel, UpdatableBaseModel, table=True):
             "week_end",
             "summary_type",
             "department_name",
+            "report_kind",
             name="ux_crm_weekly_followup_summary",
         ),
         Index("idx_weekly_followup_summary_week", "week_start", "week_end"),
         Index("idx_weekly_followup_summary_type_dept", "summary_type", "department_name"),
         Index("idx_weekly_followup_summary_dept_id", "department_id"),
+        Index("idx_weekly_followup_summary_report_kind", "report_kind"),
     )
 
 

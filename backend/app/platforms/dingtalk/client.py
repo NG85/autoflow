@@ -325,8 +325,9 @@ class DingTalkClient(BaseClient):
         """
         body = text if isinstance(text, str) else str(text or "")
         first_line = body.strip().split("\n", 1)[0].strip() or "通知"
+        title = re.sub(r"^#{1,6}\s*", "", first_line).replace("**", "").strip() or "通知"
         return "sampleMarkdown", {
-            "title": first_line[:64],
+            "title": title[:64],
             "text": body.replace("\n", "\n\n"),
         }
 

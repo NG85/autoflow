@@ -4,12 +4,14 @@ from typing import Any, Callable, Dict, List, Optional, Set
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from sqlmodel import select
 
-from app.api.deps import SessionDep
+from app.api.deps import CurrentUserDep, SessionDep
 from app.api.routes.notification_schemas import (
     DailyNoFollowupReminderPushRequest,
+    DailyVisitReportPushRequest,
+    NotificationPreferenceUpdateRequest,
     PlatformNotificationPushRequest,
     PushNotificationRequest,
     ReviewSessionPushRequest,
@@ -17,6 +19,7 @@ from app.api.routes.notification_schemas import (
     VisitRecordCardPushRequest,
     VisitRecordCommentPushRequest,
     WeeklyFollowupCommentPushRequest,
+    WeeklyVisitReportPushRequest,
 )
 from app.core.config import settings
 from app.repositories.user_profile import user_profile_repo
@@ -705,6 +708,176 @@ def _handle_platform_notification_push(
     }
 
 
+def _handle_weekly_visit_report_push(
+    db_session: SessionDep,
+    payload: WeeklyVisitReportPushRequest,
+) -> Dict[str, Any]:
+    from app.services.report_ready_push import handle_report_ready
+
+    try:
+        return handle_report_ready(
+            db_session,
+            scene=payload.scene,
+            variant=payload.variant,
+            week_start=payload.week_start,
+            week_end=payload.week_end,
+            title=payload.title,
+            department_id=payload.department_id,
+            department_name=payload.department_name,
+            delivery=payload.delivery,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _handle_daily_visit_report_push(
+    db_session: SessionDep,
+    payload: DailyVisitReportPushRequest,
+) -> Dict[str, Any]:
+    from app.services.daily_summary_push import handle_daily_summary
+
+    try:
+        return handle_daily_summary(
+            db_session,
+            scene=payload.scene,
+            variant=payload.variant,
+            report_date=payload.report_date,
+            title=payload.title,
+            department_id=payload.department_id,
+            department_name=payload.department_name,
+            delivery=payload.delivery,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _user_has_function_permission(user_id: UUID, permission: str) -> bool:
+    from app.services.oauth_service import oauth_client
+
+    result = oauth_client.check_function_permission(
+        user_id=user_id,
+        permission=permission,
+    )
+    return bool(result.get("function_allowed") or result.get("allowed"))
+
+
+def _require_notification_scene_permission(user: CurrentUserDep, permission: str, detail: str) -> None:
+    if not _user_has_function_permission(user.id, permission):
+        raise HTTPException(status_code=403, detail=detail)
+
+
+@router.get("/scenes")
+def list_notification_scenes(user: CurrentUserDep):
+    from app.platforms.notification_types import PERM_NOTIFICATION_SCENES_VIEW
+    from app.services.notification_preview import catalog_payload
+
+    _require_notification_scene_permission(
+        user, PERM_NOTIFICATION_SCENES_VIEW, "无推送场景查看权限"
+    )
+    return {"code": 0, "message": "ok", "data": catalog_payload()}
+
+
+@router.get("/preview")
+def preview_notification_recipients(
+    user: CurrentUserDep,
+    db_session: SessionDep,
+    scene: str = Query(..., description="visit_record / company_weekly / department_daily 等"),
+    variant: str = Query(
+        default="",
+        description="kpi_card / visit_card / recap_lite / visit_report / today_highlights / summary_md；空则取该 scene 的默认变体",
+    ),
+    department_id: Optional[str] = Query(default=None),
+    department_name: Optional[str] = Query(default=None),
+    record_id: Optional[str] = Query(default=None),
+):
+    from app.platforms.notification_types import PERM_NOTIFICATION_SCENES_PREVIEW
+    from app.services.notification_preview import preview_notification
+
+    _require_notification_scene_permission(
+        user, PERM_NOTIFICATION_SCENES_PREVIEW, "无推送场景预览权限"
+    )
+    try:
+        data = preview_notification(
+            db_session,
+            scene=scene,
+            variant=variant,
+            department_id=department_id,
+            department_name=department_name,
+            record_id=record_id,
+        )
+    except Exception as exc:
+        logger.exception("Failed to preview notification recipients")
+        raise HTTPException(status_code=500, detail="Failed to preview notification") from exc
+    return {"code": 0, "message": "ok", "data": data}
+
+
+@router.get("/preferences")
+def list_my_notification_preferences(
+    user: CurrentUserDep,
+    db_session: SessionDep,
+):
+    from app.services.notification_preview import list_eligible_preference_targets
+
+    items = list_eligible_preference_targets(db_session, user.id)
+    return {"code": 0, "message": "ok", "data": items}
+
+
+@router.put("/preferences")
+def update_my_notification_preference(
+    payload: NotificationPreferenceUpdateRequest,
+    user: CurrentUserDep,
+    db_session: SessionDep,
+):
+    from app.repositories.department_mirror import department_mirror_repo
+    from app.services.notification_delivery_preference import upsert_preference
+    from app.services.notification_preview import user_is_eligible
+    from app.services.notification_scene_catalog import get_scene, normalize_scene
+
+    scene = normalize_scene(payload.scene)
+    spec = get_scene(scene)
+    if not spec or spec.preference != "eligible_opt_out":
+        raise HTTPException(status_code=403, detail="this scene does not allow preference toggle")
+
+    department_id = str(payload.department_id or "").strip()
+    department_name = None
+    if spec.requires_department and not department_id:
+        # 允许空 department_id：关掉该 scene 下自己负责的全部部门
+        department_name = None
+    elif department_id:
+        department_name = department_mirror_repo.get_department_name_by_id(
+            db_session, department_id
+        )
+
+    if not user_is_eligible(
+        db_session,
+        user_id=str(user.id),
+        scene=scene,
+        variant=payload.variant or "",
+        department_id=department_id or None,
+        department_name=department_name,
+    ):
+        raise HTTPException(status_code=403, detail="not eligible for this notification")
+
+    row = upsert_preference(
+        db_session,
+        user_id=user.id,
+        scene=scene,
+        receive=bool(payload.receive),
+        variant=payload.variant or "",
+        department_id=department_id,
+    )
+    return {
+        "code": 0,
+        "message": "ok",
+        "data": {
+            "scene": row.scene,
+            "variant": row.variant,
+            "department_id": row.department_id,
+            "receive": row.receive,
+        },
+    }
+
+
 @router.post("/push")
 async def push_notification_api(
     payload: PushNotificationRequest,
@@ -714,7 +887,7 @@ async def push_notification_api(
     统一消息推送入口（请求体按 type 判别，字段见 notification_schemas）：
     weekly_followup_comment / visit_record_comment / sales_task_created /
     review_session / visit_record_card / daily_no_followup_reminder /
-    platform_notification
+    platform_notification / weekly_visit_report / daily_visit_report
     """
     try:
         if isinstance(payload, VisitRecordCardPushRequest):
@@ -731,6 +904,10 @@ async def push_notification_api(
             result = _handle_sales_task_created_push(db_session, payload)
         elif isinstance(payload, PlatformNotificationPushRequest):
             result = _handle_platform_notification_push(db_session, payload)
+        elif isinstance(payload, WeeklyVisitReportPushRequest):
+            result = _handle_weekly_visit_report_push(db_session, payload)
+        elif isinstance(payload, DailyVisitReportPushRequest):
+            result = _handle_daily_visit_report_push(db_session, payload)
         else:
             raise HTTPException(status_code=422, detail="unsupported notification type")
 

@@ -77,6 +77,23 @@ def build_visit_record_page_url(record_id: str) -> str:
     return f"{host}/v2/behavior/{quote(rid, safe='')}"
 
 
+def build_visit_record_recap_page_url(record_id: str) -> str:
+    """轻量复盘卡「完整复盘报告」：/v2/behavior/{id}/recap。"""
+    base = build_visit_record_page_url(record_id)
+    if not base:
+        return ""
+    return f"{base}/recap"
+
+
+def build_visit_record_extract_section_url(record_id: str, section: str) -> str:
+    """销售轻量卡抽取入口：/v2/behavior/{id}/extract?tab={card_links.key}。"""
+    base = build_visit_record_page_url(record_id)
+    key = (section or "").strip()
+    if not base or not key:
+        return ""
+    return f"{base}/extract?tab={quote(key, safe='')}"
+
+
 def build_visit_record_add_comment_page_url(record_id: str) -> str:
     """拜访卡片内「添加评论/任务」页。"""
     host = _host()
