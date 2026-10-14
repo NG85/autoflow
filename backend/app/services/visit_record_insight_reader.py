@@ -146,11 +146,12 @@ def recap_view_for_viewer(
     *,
     is_recorder: bool = False,
     is_leader: bool = False,
+    is_sys_admin: bool = False,
 ) -> Optional[str]:
-    """记录人看销售视角，其汇报链上级看上级视角。其余人没有可看的复盘。"""
+    """记录人看销售视角，其汇报链上级或系统管理员看上级视角。其余人没有可看的复盘。"""
     if is_recorder:
         return RECAP_VIEW_SALES
-    if is_leader:
+    if is_leader or is_sys_admin:
         return RECAP_VIEW_LEADER
     return None
 
@@ -306,6 +307,7 @@ def viewer_has_visible_recap(
     *,
     is_recorder: bool = False,
     is_reporting_leader: bool = False,
+    is_sys_admin: bool = False,
 ) -> bool:
     """当前用户打开复盘页时，对应视角是否已有复盘。"""
     present = {
@@ -318,6 +320,7 @@ def viewer_has_visible_recap(
     view = recap_view_for_viewer(
         is_recorder=is_recorder,
         is_leader=is_reporting_leader,
+        is_sys_admin=is_sys_admin,
     )
     if view is None:
         return False

@@ -92,6 +92,11 @@ def test_other_viewer_has_no_recap_view():
     assert recap_view_for_viewer(is_recorder=False, is_leader=False) is None
 
 
+def test_sys_admin_sees_leader_view_unless_they_are_the_recorder():
+    assert recap_view_for_viewer(is_sys_admin=True) == RECAP_VIEW_LEADER
+    assert recap_view_for_viewer(is_recorder=True, is_sys_admin=True) == RECAP_VIEW_SALES
+
+
 def test_recap_view_for_role():
     assert recap_view_for_role("recorder") == RECAP_VIEW_SALES
     assert recap_view_for_role("collaborative_participant") == RECAP_VIEW_SALES
@@ -292,6 +297,8 @@ def test_viewer_has_visible_recap_follows_sales_or_leader_view():
     assert viewer_has_visible_recap(leader, is_recorder=True) is False
     assert viewer_has_visible_recap(leader, is_reporting_leader=True) is True
     assert viewer_has_visible_recap(sales, is_reporting_leader=True) is False
+    assert viewer_has_visible_recap(leader, is_sys_admin=True) is True
+    assert viewer_has_visible_recap(sales, is_sys_admin=True) is False
     assert viewer_has_visible_recap([]) is False
 
 

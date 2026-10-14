@@ -1,6 +1,7 @@
 """拜访复盘查询：视角决定是否附带结构化抽取。"""
 
 from unittest.mock import MagicMock
+from uuid import UUID
 
 import pytest
 
@@ -276,6 +277,57 @@ def test_collaborator_gets_no_recap(monkeypatch):
         visit_record_id="rec-1",
         recorder_id="recorder-1",
         viewer_user_id="collab-1",
+    )
+
+    assert resolved is None
+
+
+def test_sys_admin_sees_leader_insight_without_extract(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.visit_record_recap.load_visit_record_insights_by_view",
+        lambda *args, **kwargs: _both_insights(),
+    )
+    oauth = MagicMock()
+    oauth.check_user_has_role.return_value = True
+    monkeypatch.setattr("app.services.oauth_service.oauth_client", oauth)
+    admin_id = UUID("33333333-3333-3333-3333-333333333333")
+
+    data = load_visit_record_recap_response(
+        MagicMock(),
+        visit_record_id="rec-1",
+        recorder_id="recorder-1",
+        viewer_user_id=admin_id,
+    )
+
+    oauth.get_reporting_chain_leaders.assert_not_called()
+    oauth.check_user_has_role.assert_called_once()
+    assert data["view"] == RECAP_VIEW_LEADER
+    assert data["insight"]["summary"] == "上级摘要"
+    assert data["extract"]["items"] == {}
+
+
+def test_sys_admin_role_check_failure_does_not_open_recap(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.visit_record_recap.load_visit_record_insights_by_view",
+        lambda *args, **kwargs: _both_insights(),
+    )
+    viewer = MagicMock(oauth_user_id="ask_admin", oauth_users=[MagicMock(open_id="ou_admin")])
+    recorder = MagicMock(user_id="recorder-user", direct_manager_id="ask_leader", oauth_users=[])
+    profiles = MagicMock()
+    profiles.get_by_user_id.return_value = viewer
+    profiles.get_by_recorder_id.return_value = recorder
+    monkeypatch.setattr("app.services.visit_record_recap.UserProfileRepo", lambda: profiles)
+    oauth = MagicMock()
+    oauth.check_user_has_role.side_effect = RuntimeError("oauth down")
+    oauth.get_reporting_chain_leaders.return_value = [{"open_id": "ou_leader"}]
+    monkeypatch.setattr("app.services.oauth_service.oauth_client", oauth)
+    admin_id = UUID("44444444-4444-4444-4444-444444444444")
+
+    resolved = resolve_viewer_recap(
+        MagicMock(),
+        visit_record_id="rec-1",
+        recorder_id="recorder-1",
+        viewer_user_id=admin_id,
     )
 
     assert resolved is None
