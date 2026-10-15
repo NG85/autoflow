@@ -12,8 +12,14 @@ class CRMEntityInsight(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True, description="主键")
     unique_id: str = Field(max_length=255, unique=True, description="唯一性ID")
-    entity_type: str = Field(max_length=32, description="实体类型：ACCOUNT / OPPORTUNITY / VISIT")
-    entity_id: str = Field(max_length=255, description="实体唯一ID")
+    entity_type: str = Field(
+        max_length=32,
+        description="实体类型：ACCOUNT / OPPORTUNITY / VISIT / USER / DEPARTMENT",
+    )
+    entity_id: str = Field(
+        max_length=255,
+        description="实体唯一ID。VISIT=record_id，USER=owner_id，DEPARTMENT=department_id",
+    )
     account_id: Optional[str] = Field(default=None, max_length=255, description="关联账户ID")
     opportunity_id: Optional[str] = Field(default=None, max_length=255, description="关联商机ID")
     insight_type: str = Field(max_length=64, description="洞察类型")
@@ -31,3 +37,8 @@ class CRMEntityInsight(SQLModel, table=True):
     is_deleted: int = Field(default=0, description="软删除标识")
     created_at: Optional[datetime] = Field(default=None, description="创建时间")
     updated_at: Optional[datetime] = Field(default=None, description="更新时间")
+    period_key: Optional[str] = Field(
+        default=None,
+        max_length=64,
+        description="周期键。日报告 YYYY-MM-DD，周 FY26W42。与 entity_type、entity_id、insight_type 构成 upsert 键",
+    )
