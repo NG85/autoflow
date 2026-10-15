@@ -21,7 +21,7 @@ from app.services.visit_record_recap import (
 
 def _insight(view: str, summary: str) -> VisitRecordInsight:
     insight_type = (
-        VISIT_INSIGHT_SALES_TYPE if view == RECAP_VIEW_SALES else "POSTVISIT_REVIEW_LEADER_VIEW"
+        VISIT_INSIGHT_SALES_TYPE if view == RECAP_VIEW_SALES else "POSTVISIT_REVIEW_LEAD_VIEW"
     )
     return VisitRecordInsight(
         unique_id=view,
