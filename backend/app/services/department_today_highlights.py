@@ -18,6 +18,7 @@ from app.models.crm_accounts import CRMAccount
 from app.models.crm_opportunities import CRMOpportunity
 from app.models.crm_skill_extract_items import CRMSkillExtractItem
 from app.platforms.constants import PLATFORM_DINGTALK, PLATFORM_FEISHU, PLATFORM_LARK
+from app.services.leader_visit_watch import load_leader_visit_watch, visit_watch_lines
 from app.services.notification_delivery_preference import filter_opted_out_recipients
 from app.services.notification_scene_catalog import (
     SCENE_DEPARTMENT_HIGHLIGHTS,
@@ -343,23 +344,25 @@ def department_highlights_payload(assembled: Mapping[str, Any]) -> dict[str, Any
 
 
 def render_card_markdown(assembled: Mapping[str, Any]) -> str:
-    """正文只放置信度最高的一条介入。标题不跳转，下面固定一个出口。"""
-    sections = list(assembled.get("sections") or [])
-    if not sections:
-        return ""
-    section = sections[0]
-    items = list(section.get("items") or [])
-    if not items:
-        return ""
-    title = _text(section.get("title"))
-    key = _text(section.get("key"))
+    """正文只展开信度最高的一条介入，其余人只点名。标题不跳转，下面固定一个出口。"""
     lines: list[str] = []
-    if title and title != key:
-        lines.append(f"**{title}**")
-    lines.append(_card_line(items[0]))
-    more = _section_exit_link(section)
-    if more:
-        lines.append(more)
+    sections = list(assembled.get("sections") or [])
+    if sections:
+        section = sections[0]
+        items = list(section.get("items") or [])
+        if items:
+            title = _text(section.get("title"))
+            key = _text(section.get("key"))
+            if title and title != key:
+                lines.append(f"**{title}**")
+            lines.append(_card_line(items[0]))
+            others = _other_people_line(items)
+            if others:
+                lines.append(others)
+            more = _section_exit_link(section)
+            if more:
+                lines.append(more)
+    lines.extend(visit_watch_lines(assembled.get("visit_watch")))
     return "\n".join(lines)
 
 
@@ -372,6 +375,19 @@ def _section_exit_link(section: Mapping[str, Any]) -> str:
     extra = total - 1
     label = "查看" if extra <= 0 else f"更多（{extra}）"
     return f"[{label}]({url})"
+
+
+def _other_people_line(items: Sequence[Mapping[str, Any]]) -> str:
+    """没展开的介入只写姓名，避免被看成「更多」的子项。"""
+    shown = _text(items[0].get("related_user_name")) or _text(items[0].get("related_user_id"))
+    names: list[str] = []
+    for item in list(items)[1:]:
+        name = _text(item.get("related_user_name")) or _text(item.get("related_user_id"))
+        if name and name != shown and name not in names:
+            names.append(name)
+    if not names:
+        return ""
+    return "还有" + "、".join(names)
 
 
 WEEK_VISIT_LABEL = "本周已拜访"
@@ -388,7 +404,10 @@ def _report_day(assembled: Mapping[str, Any]) -> Optional[date]:
 
 
 def card_footer_buttons(assembled: Mapping[str, Any]) -> list[tuple[str, str]]:
-    """本周已拜访：周一不放。其余日子只筛本周一到本周日的拜访日期，可见范围由列表权限决定。"""
+    """本周已拜访：周一不放。周一、周五有拜访对照时，入口改在那段末尾，这里不再重复。"""
+    watch = assembled.get("visit_watch") or {}
+    if _text(watch.get("url")):
+        return []
     report_day = _report_day(assembled)
     if report_day is None or report_day.weekday() == 0:
         return []
@@ -411,9 +430,13 @@ def render_dingtalk_markdown(assembled: Mapping[str, Any], *, title: str) -> str
         if heading and heading != key:
             lines.append(f"## {heading}")
         lines.extend(_dingtalk_item_lines(items[0]))
+        others = _other_people_line(items)
+        if others:
+            lines.append(others)
         exit_link = _section_exit_link(section)
         if exit_link:
             lines.append(exit_link)
+    lines.extend(visit_watch_lines(assembled.get("visit_watch"), dingtalk=True))
     body = "\n".join(lines)
     tail = "  ".join(f"[{label}]({url})" for label, url in card_footer_buttons(assembled))
     if not tail:
@@ -819,6 +842,76 @@ def _aggregate_skip_reason(items: Iterable[Mapping[str, Any]], success_count: in
     return "empty_highlights"
 
 
+def _visit_only_leader_buckets(
+    db_session: Session,
+    report_date: date,
+    department_id: str = "",
+) -> dict[str, dict[str, Any]]:
+    """周一、周五没有需介入时，仍按有负责人的部门准备拜访对照。"""
+    from app.repositories.department_mirror import department_mirror_repo
+    from app.services.oauth_service import oauth_client
+    from app.services.platform_notification_service import platform_notification_service
+
+    allowed_name = ""
+    if department_id:
+        try:
+            names = department_mirror_repo.get_department_names_by_ids(db_session, [department_id])
+        except Exception:
+            logger.exception("visit-only department name failed id=%s", department_id)
+            return {}
+        allowed_name = _text((names or {}).get(department_id))
+        if not allowed_name:
+            return {}
+    try:
+        oauth_map = oauth_client.get_departments_with_leaders() or {}
+    except Exception:
+        logger.exception("visit-only leader departments failed")
+        return {}
+    leaders: dict[str, dict[str, Any]] = {}
+    for raw_name, raw_leaders in oauth_map.items():
+        dept_name = _text(raw_name)
+        if not dept_name or not raw_leaders:
+            continue
+        if allowed_name and dept_name != allowed_name:
+            continue
+        try:
+            raw_recipients = platform_notification_service.resolve_department_report_recipients(
+                db_session,
+                dept_name,
+            )
+            dept_ids = list(department_mirror_repo.get_department_ids_by_name(db_session, dept_name) or [])
+        except Exception:
+            logger.exception("visit-only recipients failed department=%s", dept_name)
+            continue
+        recipients = _pushable_recipients(raw_recipients)
+        if not recipients:
+            continue
+        kept = filter_opted_out_recipients(
+            db_session,
+            recipients,
+            scene=SCENE_DEPARTMENT_HIGHLIGHTS,
+            variant=VARIANT_TODAY_HIGHLIGHTS,
+            department_ids=[_text(item) for item in dept_ids if _text(item)],
+        )
+        if not kept:
+            continue
+        dept_id = department_id or (_text(dept_ids[0]) if dept_ids else "")
+        placeholder = {
+            "report_date": report_date.isoformat(),
+            "department_id": dept_id,
+            "department_name": dept_name,
+            "sections": [],
+            "has_content": False,
+        }
+        for recipient in kept:
+            bucket = leaders.setdefault(
+                recipient["user_id"],
+                {"recipient": recipient, "cards": []},
+            )
+            bucket["cards"].append(placeholder)
+    return leaders
+
+
 def handle_department_today_highlights(
     db_session: Session,
     *,
@@ -847,7 +940,7 @@ def handle_department_today_highlights(
     grouped = _group_by_subject(rows)
     if requested:
         grouped = {key: value for key, value in grouped.items() if key == requested}
-    if not grouped:
+    if not grouped and target.weekday() not in (0, 4):
         return {**result, "skipped": True, "skip_reason": "empty_highlights"}
 
     names = load_display_names(db_session, rows)
@@ -919,9 +1012,34 @@ def handle_department_today_highlights(
                 {"recipient": recipient, "cards": []},
             )
             bucket["cards"].append(assembled)
+    if not grouped:
+        leaders = _visit_only_leader_buckets(db_session, target, requested)
 
     for user_id, bucket in leaders.items():
         card = assemble_leader_highlights(bucket["cards"], target)
+        department_names = [
+            _text(item.get("department_name"))
+            for item in bucket["cards"]
+            if _text(item.get("department_name"))
+        ]
+        watch = load_leader_visit_watch(
+            db_session,
+            department_names,
+            target,
+            leader_user_id=user_id,
+        )
+        if not card.get("has_content") and not watch:
+            items.append(
+                {
+                    "recipient_user_id": user_id,
+                    "sent": False,
+                    "skipped": True,
+                    "skip_reason": "empty_highlights",
+                }
+            )
+            continue
+        if watch:
+            card["visit_watch"] = watch
         recipients_count += 1
         sent = deliver_department_highlight_card(db_session, bucket["recipient"], card)
         department_ids = list(card.get("department_ids") or [])

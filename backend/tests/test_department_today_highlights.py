@@ -138,7 +138,8 @@ def test_user_rows_stay_off_the_leader_card(monkeypatch):
     assert "一线立即处理" not in str(items)
     body = render_card_markdown(assembled)
     assert "张三" in body
-    assert "李四" not in body
+    assert "还有李四" in body
+    assert "合同卡在法务" not in body
     assert "特价必须今天拍板" in body
     assert "今天找张三确认折扣上限" in body
     assert "甲客户" in body and "乙商机" in body
@@ -317,6 +318,10 @@ def test_variant_disabled_skips_without_reading_rows(monkeypatch):
 def test_empty_department_skips_without_empty_card(monkeypatch):
     _enable(monkeypatch)
     monkeypatch.setattr(
+        "app.services.oauth_service.oauth_client.get_departments_with_leaders",
+        lambda *args, **kwargs: {},
+    )
+    monkeypatch.setattr(
         "app.services.department_today_highlights.load_department_extract_rows",
         lambda *args, **kwargs: [
             _row(
@@ -447,7 +452,7 @@ def test_leader_open_id_receives_every_item(monkeypatch):
     assert captured["recipient"]["open_id"] == "ou_leader"
     assert captured["recipient"]["user_id"] == leader_id
     assert "张三" in captured["body"]
-    assert "李四" not in captured["body"]
+    assert "还有李四" in captured["body"]
     assert "华北销售" not in captured["body"]
     assert (
         "[更多（1）](https://example.com/v2/department-highlights"
@@ -540,7 +545,7 @@ def test_one_leader_of_two_departments_gets_one_card(monkeypatch):
     by_user = {item["user_id"]: item["body"] for item in captured}
     shared = by_user["leader-1"]
     assert "张三 · 华北销售" in shared
-    assert "李四" not in shared
+    assert "还有李四" in shared
     assert "更多（1）" in shared
     assert "department_id" not in shared
     north_only = by_user["leader-2"]
