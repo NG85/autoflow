@@ -4,8 +4,8 @@
 
 | 工作台 | 谁的内容 | 页面 | 列表接口 | 页面上做什么 |
 | --- | --- | --- | --- | --- |
-| 我的 | 当前用户自己的抽取 | `/v2/today-highlights` | `GET /api/v1/crm/sales/today-highlights` | 立即处理、商机风险、下周待确认都可以采纳/拒绝和赞踩。 |
-| 团队 | 当前用户负责的部门，含没有负责人、抬上来的下级部门 | `/v2/department-highlights` | `GET /api/v1/crm/departments/today-highlights` | 对每条需介入做采纳/拒绝、评论、挂任务、赞踩。 |
+| 我的 | 当前用户自己的抽取 | `/v2/today-highlights` | `GET /api/v1/crm/today-highlights/sales` | 立即处理、商机风险、下周待确认都可以采纳/拒绝和赞踩。 |
+| 团队 | 当前用户负责的部门，含没有负责人、抬上来的下级部门 | `/v2/department-highlights` | `GET /api/v1/crm/today-highlights/departments` | 对每条需介入做采纳/拒绝、评论、挂任务、赞踩。 |
 
 登录态沿用现有 CRM 接口。两个列表都只认当前登录人，请求里不要传别人的用户 id。
 
@@ -85,7 +85,7 @@
 ## 3. 拉列表
 
 ```http
-GET /api/v1/crm/sales/today-highlights?report_date=2026-10-13
+GET /api/v1/crm/today-highlights/sales?report_date=2026-10-13
 ```
 
 `report_date` 可不传。没有 `department_id`。当前用户没有 oauth 身份，或当天没有条目时，HTTP 200，`items` 为 `{}`。
@@ -95,9 +95,7 @@ GET /api/v1/crm/sales/today-highlights?report_date=2026-10-13
   "report_date": "2026-10-13",
   "subject_id": "oauth-user-id",
   "items": {
-    "immediate_today": [],
-    "open_risks": [],
-    "next_week_confirm": []
+    "immediate_today": []
   },
   "card_links": [
     {
@@ -151,7 +149,7 @@ GET /api/v1/crm/sales/today-highlights?report_date=2026-10-13
 ## 4. 采纳 / 拒绝
 
 ```http
-POST /api/v1/crm/sales/today-highlights/items/decisions
+POST /api/v1/crm/today-highlights/sales/items/decisions
 ```
 
 请求体、成功时的 `results`、以及「带了任务编号就要先核对、核对失败整批 422」这些规则，与负责人页的采纳接口相同。差别只有：
@@ -162,7 +160,7 @@ POST /api/v1/crm/sales/today-highlights/items/decisions
 ## 5. 赞 / 踩
 
 ```http
-POST /api/v1/crm/sales/today-highlights/items/{unique_id}/feedback
+POST /api/v1/crm/today-highlights/sales/items/{unique_id}/feedback
 ```
 
 请求体和成功响应与负责人页的赞踩相同。撤销传 `{ "feedback": null }`。找不到或不是自己的抽取时 **404**，`detail` 为「今日重点条目不存在或无权限」。赞踩不改 `status`。
@@ -213,7 +211,7 @@ POST /api/v1/crm/sales/today-highlights/items/{unique_id}/feedback
 ## 8. 拉列表
 
 ```http
-GET /api/v1/crm/departments/today-highlights?report_date=2026-10-13&department_id={可选}
+GET /api/v1/crm/today-highlights/departments?report_date=2026-10-13&department_id={可选}
 ```
 
 `report_date`、`department_id` 都可以不传。指定了自己无权处理的部门时，HTTP 200，`departments` 为空数组，不要当成接口失败。
@@ -315,7 +313,7 @@ GET /api/v1/crm/departments/today-highlights?report_date=2026-10-13&department_i
 ## 9. 采纳 / 拒绝
 
 ```http
-POST /api/v1/crm/departments/today-highlights/items/decisions
+POST /api/v1/crm/today-highlights/departments/items/decisions
 ```
 
 ```json
@@ -378,7 +376,7 @@ POST /api/v1/crm/departments/today-highlights/items/decisions
 ## 10. 评论
 
 ```http
-POST /api/v1/crm/departments/today-highlights/items/{unique_id}/comments
+POST /api/v1/crm/today-highlights/departments/items/{unique_id}/comments
 ```
 
 ```json
@@ -413,7 +411,7 @@ POST /api/v1/crm/departments/today-highlights/items/{unique_id}/comments
 2. 再调用：
 
 ```http
-POST /api/v1/crm/departments/today-highlights/items/{unique_id}/tasks
+POST /api/v1/crm/today-highlights/departments/items/{unique_id}/tasks
 ```
 
 ```json
@@ -445,7 +443,7 @@ POST /api/v1/crm/departments/today-highlights/items/{unique_id}/tasks
 ## 12. 赞 / 踩
 
 ```http
-POST /api/v1/crm/departments/today-highlights/items/{unique_id}/feedback
+POST /api/v1/crm/today-highlights/departments/items/{unique_id}/feedback
 ```
 
 | 操作 | body |

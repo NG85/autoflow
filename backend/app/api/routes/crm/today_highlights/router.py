@@ -35,7 +35,7 @@ def _viewer_oauth_id(db_session: SessionDep, user: CurrentUserDep) -> str:
     return str(getattr(profile, "oauth_user_id", None) or "").strip() if profile else ""
 
 
-@router.get("/crm/sales/today-highlights")
+@router.get("/crm/today-highlights/sales")
 def get_sales_today_highlights(
     db_session: SessionDep,
     user: CurrentUserDep,
@@ -61,7 +61,7 @@ def get_sales_today_highlights(
         raise InternalServerError()
 
 
-@router.get("/crm/departments/today-highlights")
+@router.get("/crm/today-highlights/departments")
 def get_department_today_highlights(
     db_session: SessionDep,
     user: CurrentUserDep,
@@ -123,7 +123,7 @@ class InterventionDecisionsUpdate(BaseModel):
 
 
 class InterventionCommentIn(BaseModel):
-    content: str = Field(min_length=1, max_length=2000)
+    content: str = Field(max_length=2000)
     reply_to_id: Optional[str] = Field(default=None, max_length=64)
     author_id: Optional[str] = None
 
@@ -151,7 +151,7 @@ def _require_intervention_item(db_session: SessionDep, user: CurrentUserDep, uni
     return row
 
 
-@router.post("/crm/sales/today-highlights/items/{unique_id}/feedback")
+@router.post("/crm/today-highlights/sales/items/{unique_id}/feedback")
 def save_sales_highlight_feedback(
     db_session: SessionDep,
     user: CurrentUserDep,
@@ -180,7 +180,7 @@ def save_sales_highlight_feedback(
         raise InternalServerError()
 
 
-@router.post("/crm/sales/today-highlights/items/decisions")
+@router.post("/crm/today-highlights/sales/items/decisions")
 def save_sales_today_highlight_decisions(
     db_session: SessionDep,
     user: CurrentUserDep,
@@ -202,7 +202,7 @@ def save_sales_today_highlight_decisions(
         raise InternalServerError()
 
 
-@router.post("/crm/departments/today-highlights/items/{unique_id}/feedback")
+@router.post("/crm/today-highlights/departments/items/{unique_id}/feedback")
 def save_department_highlight_feedback(
     db_session: SessionDep,
     user: CurrentUserDep,
@@ -229,7 +229,7 @@ def save_department_highlight_feedback(
         raise InternalServerError()
 
 
-@router.post("/crm/departments/today-highlights/items/decisions")
+@router.post("/crm/today-highlights/departments/items/decisions")
 def save_department_highlight_decisions(
     db_session: SessionDep,
     user: CurrentUserDep,
@@ -250,7 +250,7 @@ def save_department_highlight_decisions(
         raise InternalServerError()
 
 
-@router.post("/crm/departments/today-highlights/items/{unique_id}/comments")
+@router.post("/crm/today-highlights/departments/items/{unique_id}/comments")
 def save_department_highlight_comments(
     db_session: SessionDep,
     user: CurrentUserDep,
@@ -261,6 +261,8 @@ def save_department_highlight_comments(
     try:
         actor = str(user.id)
         for item in payload.comments:
+            if not item.content.strip():
+                raise HTTPException(status_code=400, detail="评论内容不能为空")
             if item.author_id and item.author_id.strip() != actor:
                 raise HTTPException(status_code=400, detail="author_id 必须是当前用户")
         row = _require_intervention_item(db_session, user, unique_id)
@@ -281,7 +283,7 @@ def save_department_highlight_comments(
         raise InternalServerError()
 
 
-@router.post("/crm/departments/today-highlights/items/{unique_id}/tasks")
+@router.post("/crm/today-highlights/departments/items/{unique_id}/tasks")
 def link_department_highlight_task(
     db_session: SessionDep,
     user: CurrentUserDep,

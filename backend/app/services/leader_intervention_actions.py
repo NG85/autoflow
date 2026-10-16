@@ -197,7 +197,12 @@ def save_feedback(
         before,
         after,
     )
-    return {"unique_id": row.unique_id, **after}
+    return {
+        "unique_id": row.unique_id,
+        "feedback": after["feedback"],
+        "feedback_comment": after["feedback_comment"],
+        "feedback_at": after["feedback_at"],
+    }
 
 
 def _decision_patch(item: Mapping[str, Any]) -> dict[str, Any]:

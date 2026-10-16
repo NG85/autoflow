@@ -188,6 +188,7 @@ def test_feedback_can_be_revoked_without_touching_decision_or_payload():
     )
     assert saved["feedback"] == "down"
     assert saved["feedback_comment"] == "不太准"
+    assert set(saved) == {"unique_id", "feedback", "feedback_comment", "feedback_at"}
     assert row.feedback_user_id == "user-9"
     assert row.status == "ADOPTED"
     assert row.adopted_todo_id == "todo-kept"
