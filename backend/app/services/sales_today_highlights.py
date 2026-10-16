@@ -43,7 +43,7 @@ ITEM_NEXT_WEEK = "NEXT_WEEK_ACTION_CANDIDATE"
 FRIDAY = 4
 WEEK_TASK_LINK_LABEL = "本周待完成"
 WEEK_FOLLOWUP_LINK_LABEL = "本周已拜访"
-INCOMPLETE_TASK_STATUSES = ("PENDING", "IN_PROGRESS")
+INCOMPLETE_TASK_STATUSES = ("IN_PROGRESS", "PENDING")
 
 # 区块顺序与类型是销售卡合同。标题只从 card_links 快照读取。
 # 快照 title：immediate_today=立即处理，open_risks=商机风险，next_week_confirm=下周待确认。
@@ -336,7 +336,7 @@ def _section_by_key(assembled: Mapping[str, Any], key: str) -> Optional[Mapping[
 
 
 def render_card_markdown(assembled: Mapping[str, Any]) -> str:
-    """主卡正文只放最紧急的一条立即处理。其余走蓝链。"""
+    """主卡正文只放最紧急的一条立即处理。标题不跳转，下面固定一个出口。"""
     section = _section_by_key(assembled, "immediate_today")
     if not section:
         return ""
@@ -345,29 +345,25 @@ def render_card_markdown(assembled: Mapping[str, Any]) -> str:
         return ""
     title = _text(section.get("title"))
     key = _text(section.get("key"))
-    url = _text(section.get("url"))
-    single = len(items) == 1
     lines: list[str] = []
     if title and title != key:
-        shown = f"**[{title}]({url})**" if single and url else f"**{title}**"
-        lines.append(shown)
-        lines.append(_card_line(key, items[0], None))
-    else:
-        line = _card_line(key, items[0], None)
-        lines.append(_with_entry_link(line, url) if single and url else line)
-    more = _more_immediate_link(section)
+        lines.append(f"**{title}**")
+    lines.append(_card_line(key, items[0], None))
+    more = _section_exit_link(section)
     if more:
         lines.append(more)
     return "\n".join(lines)
 
 
-def _more_immediate_link(section: Mapping[str, Any]) -> str:
-    """其余立即处理紧跟正文，文案只写剩余条数。"""
-    extra = len(list(section.get("items") or [])) - 1
+def _section_exit_link(section: Mapping[str, Any]) -> str:
+    """正文下唯一出口。一条是「查看」；还有没展开的写成「更多（N）」。"""
+    total = len(list(section.get("items") or []))
     url = _text(section.get("url"))
-    if extra <= 0 or not url:
+    if total <= 0 or not url:
         return ""
-    return f"[更多（{extra}）]({url})"
+    extra = total - 1
+    label = "查看" if extra <= 0 else f"更多（{extra}）"
+    return f"[{label}]({url})"
 
 
 def week_task_summary_link(owner_name: str, report_date: date) -> Optional[tuple[str, str]]:
@@ -380,7 +376,7 @@ def week_task_summary_link(owner_name: str, report_date: date) -> Optional[tuple
         owner_name=name,
         due_date__gte=week_start.isoformat(),
         due_date__lte=week_end.isoformat(),
-        ai_status__in=list(INCOMPLETE_TASK_STATUSES),
+        status__in=list(INCOMPLETE_TASK_STATUSES),
     )
     if not url:
         return None
@@ -447,6 +443,65 @@ def render_action_buttons(buttons: Sequence[tuple[str, str]]) -> str:
     return "  ".join(f"[{label}]({url})" for label, url in buttons)
 
 
+def render_dingtalk_markdown(
+    assembled: Mapping[str, Any],
+    *,
+    title: str,
+    owner_name: str = "",
+) -> str:
+    """钉钉 sampleMarkdown：一级标题、二级小节、引用说明。底部链接不用列表，避免看成「更多」的展开。"""
+    lines: list[str] = [f"# {title}"]
+    section = _section_by_key(assembled, "immediate_today")
+    items = list((section or {}).get("items") or [])
+    if section and items:
+        heading = _text(section.get("title"))
+        key = _text(section.get("key"))
+        if heading and heading != key:
+            lines.append(f"## {heading}")
+        lines.extend(_dingtalk_item_lines(key, items[0]))
+        exit_link = _section_exit_link(section)
+        if exit_link:
+            lines.append(exit_link)
+    body = "\n".join(lines)
+    tail_parts = [
+        part
+        for part in (
+            render_card_links(assembled),
+            render_action_buttons(card_action_buttons(assembled, owner_name=owner_name)),
+        )
+        if part
+    ]
+    if not tail_parts:
+        return body
+    return f"{body}\n\n\n" + "\n\n".join(tail_parts)
+
+
+def _dingtalk_item_lines(section_key: str, item: Mapping[str, Any]) -> list[str]:
+    context = " · ".join(
+        part
+        for part in (_text(item.get("account_name")), _text(item.get("opportunity_name")))
+        if part
+    )
+    if section_key == "immediate_today":
+        head = _text(item.get("claim"))
+        extra = _text(item.get("why_today"))
+    elif section_key == "open_risks":
+        claim = _text(item.get("claim"))
+        head = f"已闭环：{claim}" if item.get("risk_change") == "resolved" else claim
+        extra = ""
+    else:
+        head = _text(item.get("confirm_prompt")) or _text(item.get("claim"))
+        extra = ""
+    lines: list[str] = []
+    if head:
+        lines.append(head)
+    if extra:
+        lines.append(f"> {extra}")
+    if context:
+        lines.append(f"*{context}*")
+    return lines
+
+
 def _report_day(assembled: Mapping[str, Any]) -> Optional[date]:
     raw = assembled.get("report_date")
     if isinstance(raw, date):
@@ -458,12 +513,6 @@ def _report_day(assembled: Mapping[str, Any]) -> Optional[date]:
         return date.fromisoformat(text)
     except ValueError:
         return None
-
-
-def _with_entry_link(text: str, url: str) -> str:
-    first, sep, rest = text.partition("\n")
-    linked = f"[{first}]({url})"
-    return linked + sep + rest if sep else linked
 
 
 def _card_line(section_key: str, item: Mapping[str, Any], index: Optional[int]) -> str:
@@ -644,11 +693,11 @@ def deliver_highlight_card(
             "failed_recipients": failed,
         }
 
-    text = body
-    extras = [part for part in (links, render_action_buttons(buttons)) if part]
-    if extras:
-        tail = "\n\n".join(extras)
-        text = f"{body}\n\n{tail}" if body else tail
+    text = render_dingtalk_markdown(
+        assembled,
+        title=title,
+        owner_name=_text(recipient.get("name")),
+    )
     if platform == PLATFORM_DINGTALK or platform:
         return platform_notification_service.send_platform_notification(
             db_session,

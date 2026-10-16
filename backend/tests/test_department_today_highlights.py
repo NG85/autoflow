@@ -285,8 +285,10 @@ def test_single_item_card_links_to_the_page(monkeypatch):
     )
     body = render_card_markdown(assembled)
     assert "更多" not in body
+    assert "[今日需介入]" not in body
+    assert "**今日需介入**" in body
     assert (
-        "[今日需介入](https://example.com/v2/department-highlights"
+        "[查看](https://example.com/v2/department-highlights"
         "?date=2026-10-12&department_id=dept-1&tab=leader_intervene)"
     ) in body
 
@@ -545,6 +547,7 @@ def test_one_leader_of_two_departments_gets_one_card(monkeypatch):
     assert "张三" in north_only
     assert "华北销售" not in north_only
     assert "更多" not in north_only
+    assert "[查看]" in north_only
 
 
 def test_opt_out_removes_that_department_from_the_person_card(monkeypatch):
@@ -882,6 +885,35 @@ def test_card_title_omits_department_name(monkeypatch):
     )
     assert captured["title"] == "今日重点｜2026-10-12"
     assert "华北销售" not in captured["title"]
+
+
+def test_dingtalk_card_puts_title_in_the_body(monkeypatch):
+    captured = {}
+
+    def _send(db_session, **kwargs):
+        captured.update(kwargs)
+        return {"success": True}
+
+    monkeypatch.setattr(
+        "app.services.platform_notification_service.platform_notification_service.send_platform_notification",
+        _send,
+    )
+    assembled = assemble_department_highlights(
+        [_row({"claim": "拍板", "related_user_id": "oauth-zhang"})],
+        DAY,
+        "dept-1",
+        _names(),
+        department_name="华北销售",
+    )
+    deliver_department_highlight_card(
+        MagicMock(),
+        {"platform": "dingtalk", "user_id": "leader-1", "open_id": "manager1"},
+        assembled,
+    )
+    content = captured["content"]
+    assert content.startswith("# 今日重点｜2026-10-12\n")
+    assert "## 今日需介入\n" in content
+    assert "[查看](" in content
 
 
 def test_highlights_task_keeps_the_other_side_when_one_fails(monkeypatch):

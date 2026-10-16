@@ -343,7 +343,7 @@ def department_highlights_payload(assembled: Mapping[str, Any]) -> dict[str, Any
 
 
 def render_card_markdown(assembled: Mapping[str, Any]) -> str:
-    """正文只放置信度最高的一条介入。其余紧跟「更多（N）」。"""
+    """正文只放置信度最高的一条介入。标题不跳转，下面固定一个出口。"""
     sections = list(assembled.get("sections") or [])
     if not sections:
         return ""
@@ -353,29 +353,25 @@ def render_card_markdown(assembled: Mapping[str, Any]) -> str:
         return ""
     title = _text(section.get("title"))
     key = _text(section.get("key"))
-    url = _text(section.get("url"))
-    single = len(items) == 1
     lines: list[str] = []
     if title and title != key:
-        shown = f"**[{title}]({url})**" if single and url else f"**{title}**"
-        lines.append(shown)
-        lines.append(_card_line(items[0]))
-    else:
-        line = _card_line(items[0])
-        lines.append(_with_entry_link(line, url) if single and url else line)
-    more = _more_link(section)
+        lines.append(f"**{title}**")
+    lines.append(_card_line(items[0]))
+    more = _section_exit_link(section)
     if more:
         lines.append(more)
     return "\n".join(lines)
 
 
-def _more_link(section: Mapping[str, Any]) -> str:
-    """其余介入项紧跟正文，文案只写剩余条数。"""
-    extra = len(list(section.get("items") or [])) - 1
+def _section_exit_link(section: Mapping[str, Any]) -> str:
+    """正文下唯一出口。一条是「查看」；还有没展开的写成「更多（N）」。"""
+    total = len(list(section.get("items") or []))
     url = _text(section.get("url"))
-    if extra <= 0 or not url:
+    if total <= 0 or not url:
         return ""
-    return f"[更多（{extra}）]({url})"
+    extra = total - 1
+    label = "查看" if extra <= 0 else f"更多（{extra}）"
+    return f"[{label}]({url})"
 
 
 WEEK_VISIT_LABEL = "本周已拜访"
@@ -403,10 +399,50 @@ def card_footer_buttons(assembled: Mapping[str, Any]) -> list[tuple[str, str]]:
     return [(WEEK_VISIT_LABEL, url)]
 
 
-def _with_entry_link(text: str, url: str) -> str:
-    first, sep, rest = text.partition("\n")
-    linked = f"[{first}]({url})"
-    return linked + sep + rest if sep else linked
+def render_dingtalk_markdown(assembled: Mapping[str, Any], *, title: str) -> str:
+    """钉钉 sampleMarkdown：一级标题、二级小节、引用说明。底部链接不用列表，避免看成「更多」的展开。"""
+    lines: list[str] = [f"# {title}"]
+    sections = list(assembled.get("sections") or [])
+    section = sections[0] if sections else None
+    items = list((section or {}).get("items") or [])
+    if section and items:
+        heading = _text(section.get("title"))
+        key = _text(section.get("key"))
+        if heading and heading != key:
+            lines.append(f"## {heading}")
+        lines.extend(_dingtalk_item_lines(items[0]))
+        exit_link = _section_exit_link(section)
+        if exit_link:
+            lines.append(exit_link)
+    body = "\n".join(lines)
+    tail = "  ".join(f"[{label}]({url})" for label, url in card_footer_buttons(assembled))
+    if not tail:
+        return body
+    return f"{body}\n\n\n{tail}"
+
+
+def _dingtalk_item_lines(item: Mapping[str, Any]) -> list[str]:
+    who = _text(item.get("related_user_name")) or _text(item.get("related_user_id"))
+    claim = _text(item.get("claim"))
+    dept = _text(item.get("department_name"))
+    lines: list[str] = []
+    if who and dept:
+        lines.append(f"**{who}** · {dept}")
+    elif who:
+        lines.append(f"**{who}**")
+    if claim and claim != who:
+        lines.append(claim)
+    action = _text(item.get("leader_action"))
+    if action:
+        lines.append(f"> {action}")
+    context = " · ".join(
+        part
+        for part in (_text(item.get("account_name")), _text(item.get("opportunity_name")))
+        if part
+    )
+    if context:
+        lines.append(f"*{context}*")
+    return lines
 
 
 def _card_line(item: Mapping[str, Any]) -> str:
@@ -719,10 +755,7 @@ def deliver_department_highlight_card(
             "failed_recipients": failed,
         }
 
-    text = body
-    if buttons:
-        links = "\n".join(f"[{label}]({url})" for label, url in buttons)
-        text = f"{body}\n\n{links}" if body else links
+    text = render_dingtalk_markdown(assembled, title=title)
     if platform == PLATFORM_DINGTALK or platform:
         return platform_notification_service.send_platform_notification(
             db_session,

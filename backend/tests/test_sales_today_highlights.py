@@ -13,6 +13,7 @@ from app.services.sales_today_highlights import (
     assemble_sales_highlights,
     card_action_buttons,
     card_blue_links,
+    deliver_highlight_card,
     handle_sales_today_highlights,
     highlights_for_viewer,
     load_sales_extract_rows,
@@ -250,6 +251,8 @@ def test_card_shows_top_immediate_and_blue_links_for_the_rest(monkeypatch):
     assert "稍后处理" not in body
     assert "风险1" not in body
     assert "还有" not in body
+    assert "**立即处理**" in body
+    assert "[立即处理]" not in body
     assert "[更多（1）](https://example.com/v2/today-highlights?date=2026-10-08&tab=immediate_today)" in body
     assert body.rstrip().endswith(
         "[更多（1）](https://example.com/v2/today-highlights?date=2026-10-08&tab=immediate_today)"
@@ -275,10 +278,47 @@ def test_card_shows_top_immediate_and_blue_links_for_the_rest(monkeypatch):
     )
     solo_body = render_card_markdown(only)
     assert "更多" not in solo_body
+    assert "[立即处理]" not in solo_body
+    assert "**立即处理**" in solo_body
     assert (
-        "[立即处理](https://example.com/v2/today-highlights?date=2026-10-08&tab=immediate_today)"
+        "[查看](https://example.com/v2/today-highlights?date=2026-10-08&tab=immediate_today)"
         in solo_body
     )
+
+
+def test_dingtalk_card_puts_title_in_the_body(monkeypatch):
+    captured = {}
+
+    def _send(db_session, **kwargs):
+        captured.update(kwargs)
+        return {"success": True}
+
+    monkeypatch.setattr(
+        "app.services.platform_notification_service.platform_notification_service.send_platform_notification",
+        _send,
+    )
+    assembled = assemble_sales_highlights(
+        [
+            _row(
+                "IMMEDIATE_ACTION",
+                {"claim": "先做这个", "why_today": "今天要定", "confidence": 0.9},
+                card_links=[{"key": "immediate_today", "title": "立即处理"}],
+            )
+        ],
+        THURSDAY,
+    )
+    deliver_highlight_card(
+        MagicMock(),
+        {"platform": "dingtalk", "user_id": "user-1", "name": "张三"},
+        assembled,
+    )
+    content = captured["content"]
+    assert content.startswith("# 今日重点｜2026-10-08\n")
+    assert "## 立即处理\n" in content
+    assert "> 今天要定" in content
+    assert "[查看](" in content
+    assert "\n\n\n[本周待完成]" in content
+    assert "- [本周待完成]" not in content
 
 
 def test_week_task_summary_link_filters_own_incomplete_due_this_week(monkeypatch):
@@ -299,8 +339,9 @@ def test_week_task_summary_link_filters_own_incomplete_due_this_week(monkeypatch
     assert "due_date__gte=2026-10-05" in url
     assert "due_date__lte=2026-10-11" in url
     assert "is_overdue" not in url
-    assert "ai_status__in=PENDING" in url
-    assert "ai_status__in=IN_PROGRESS" in url
+    assert "ai_status__in" not in url
+    assert "status__in=IN_PROGRESS" in url
+    assert "status__in=PENDING" in url
     assert week_task_summary_link("", THURSDAY) is None
     assert week_task_summary_link("Unknown", THURSDAY) is None
 

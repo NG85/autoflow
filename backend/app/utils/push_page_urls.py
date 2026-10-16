@@ -171,7 +171,7 @@ def build_task_list_page_url(
     due_date__gte: Optional[str] = None,
     due_date__lte: Optional[str] = None,
     is_overdue: Optional[bool] = None,
-    ai_status__in: Optional[list[str]] = None,
+    status__in: Optional[list[str]] = None,
 ) -> str:
     """任务列表页（日报 / 销售任务周卡片等）。"""
     base = _task_list_base()
@@ -188,10 +188,10 @@ def build_task_list_page_url(
         parts.append(f"due_date__lte={quote(due_date__lte, safe='')}")
     if is_overdue is not None:
         parts.append(f"is_overdue={'true' if is_overdue else 'false'}")
-    for status in ai_status__in or []:
+    for status in status__in or []:
         value = (status or "").strip()
         if value:
-            parts.append(f"ai_status__in={quote(value, safe='')}")
+            parts.append(f"status__in={quote(value, safe='')}")
     if not parts:
         return base
     return f"{base}?{'&'.join(parts)}"

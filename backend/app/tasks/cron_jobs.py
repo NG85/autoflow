@@ -1960,7 +1960,7 @@ def send_sales_task_summary(self, start_date_str=None, end_date_str=None):
                                 owner_name=assignee_name,
                                 due_date__gte=start_date_str2,
                                 due_date__lte=end_date_str2,
-                                ai_status__in=["CANCELLED"],
+                                status__in=["CANCELLED"],
                             ),
                         }
 
@@ -1987,7 +1987,7 @@ def send_sales_task_summary(self, start_date_str=None, end_date_str=None):
                                     owner_name=assignee_name,
                                     due_date__gte=next_week_start_date_str2,
                                     due_date__lte=next_week_end_date_str2,
-                                    ai_status__in=["PENDING", "IN_PROGRESS"],
+                                    status__in=["IN_PROGRESS", "PENDING"],
                                 ),
                             }
                         )
@@ -2520,7 +2520,7 @@ def _analyze_crm_todos(
                 owner_name=assignee_data["assignee_name"],
                 due_date__gte=start_date_str,
                 due_date__lte=end_date_str,
-                ai_status__in=["CANCELLED"],
+                status__in=["CANCELLED"],
             )
         }
         
@@ -2591,7 +2591,7 @@ def _analyze_crm_todos(
                 owner_name=assignee_data["assignee_name"],
                 due_date__gte=next_week_start_date_str,
                 due_date__lte=next_week_end_date_str,
-                ai_status__in=["PENDING", "IN_PROGRESS"],
+                status__in=["IN_PROGRESS", "PENDING"],
             ),
         }
         
