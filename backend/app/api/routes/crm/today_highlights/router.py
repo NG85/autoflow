@@ -1,4 +1,4 @@
-"""今日重点查询。销售只看自己；负责人只看自己负责的部门。"""
+"""今日重点查询。销售和负责人都只看自己的 USER 条目。"""
 
 import logging
 from typing import List, Literal, Optional
@@ -69,23 +69,14 @@ def get_department_today_highlights(
         default=None,
         description="业务日 YYYY-MM-DD，默认北京时间当天",
     ),
-    department_id: Optional[str] = Query(
-        default=None,
-        description="部门 unique_id；不传则返回当前用户负责的全部部门",
-    ),
 ):
-    """当前用户负责的部门今日需介入。不是负责人的部门返回空，不返回条目。"""
+    """当前负责人自己的今日需介入。subject_id 是其 oauth id。"""
     try:
         target = parse_report_date(report_date)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:
-        data = highlights_for_leader(
-            db_session,
-            user.id,
-            target,
-            department_id=department_id,
-        )
+        data = highlights_for_leader(db_session, user.id, target)
         return {"code": 0, "message": "success", "data": data}
     except HTTPException:
         raise

@@ -25,9 +25,10 @@ LINKS = [{"key": "leader_intervene", "title": "今日需介入"}]
 def _row(
     payload,
     *,
-    subject_id="dept-1",
+    subject_id="oauth-leader",
     unique_id="u1",
-    subject_type="DEPARTMENT",
+    subject_type="USER",
+    department_id=None,
     audience="leader",
     item_type="TODAY_INTERVENTION",
     account_id=None,
@@ -44,6 +45,7 @@ def _row(
         "unique_id": unique_id,
         "subject_type": subject_type,
         "subject_id": subject_id,
+        "department_id": department_id,
         "audience": audience,
         "status": status,
         "is_deleted": 0,
@@ -69,6 +71,17 @@ def _names():
     }
 
 
+def _profile(oauth_id="oauth-leader", user_id="leader-1", open_id="ou_leader", name="王经理"):
+    return SimpleNamespace(
+        is_active=True,
+        user_id=user_id,
+        oauth_user_id=oauth_id,
+        name=name,
+        department="华北销售",
+        oauth_user=SimpleNamespace(open_id=open_id, provider="feishu"),
+    )
+
+
 def _enable(monkeypatch):
     monkeypatch.setattr(
         "app.services.department_today_highlights.load_report_push_policy",
@@ -82,13 +95,17 @@ def _enable(monkeypatch):
         "app.services.department_today_highlights.build_week_visit_list_url",
         lambda *args, **kwargs: "",
     )
+    monkeypatch.setattr(
+        "app.repositories.user_profile.user_profile_repo.get_by_oauth_user_id",
+        lambda session, oauth_id: _profile(oauth_id=oauth_id),
+    )
 
 
 def test_schema_defaults():
     payload = DepartmentTodayHighlightsPushRequest()
     assert payload.type == "department_today_highlights"
     assert payload.report_date is None
-    assert payload.department_id is None
+    assert "department_id" not in DepartmentTodayHighlightsPushRequest.model_fields
 
 
 def test_user_rows_stay_off_the_leader_card(monkeypatch):
@@ -170,71 +187,35 @@ def test_missing_snapshot_title_omits_button(monkeypatch):
     assert "今日需介入" not in render_card_markdown(assembled)
 
 
-def test_leader_query_hides_departments_they_do_not_lead(monkeypatch):
+def test_leader_query_returns_only_their_own_rows(monkeypatch):
     seen = {}
 
-    def fake_led(session, user_id):
+    def fake_oauth(session, user_id):
         seen["user"] = user_id
-        return {"dept-mine"}
+        return "oauth-leader"
 
-    def fake_load(session, report_date, department_ids=None):
-        seen["ids"] = list(department_ids or [])
-        return [
-            _row({"claim": "我的部门", "leader_action": "今天介入", "related_user_id": "oauth-zhang"}, subject_id="dept-mine"),
-            _row({"claim": "别人的部门", "leader_action": "不该看见"}, subject_id="dept-other", unique_id="other"),
-        ]
+    def fake_load(session, report_date, oauth_user_ids=None):
+        seen["ids"] = list(oauth_user_ids or [])
+        if oauth_user_ids == ["oauth-leader"]:
+            return [
+                _row(
+                    {"claim": "我的介入", "leader_action": "今天介入", "related_user_id": "oauth-zhang"},
+                    subject_id="oauth-leader",
+                )
+            ]
+        return []
 
-    monkeypatch.setattr("app.services.department_today_highlights.department_ids_led_by", fake_led)
+    monkeypatch.setattr("app.services.department_today_highlights.leader_oauth_id", fake_oauth)
     monkeypatch.setattr("app.services.department_today_highlights.load_department_extract_rows", fake_load)
     monkeypatch.setattr(
         "app.services.department_today_highlights.load_display_names",
         lambda session, rows: _names(),
     )
-    monkeypatch.setattr(
-        "app.repositories.department_mirror.department_mirror_repo.get_department_names_by_ids",
-        lambda session, ids: {"dept-mine": "华北销售", "dept-other": "华南销售"},
-    )
-    data = highlights_for_leader(MagicMock(), "leader-1", DAY, department_id="dept-other")
-    assert seen["user"] == "leader-1"
-    assert data["departments"] == []
-    assert "别人的部门" not in str(data)
-
     own = highlights_for_leader(MagicMock(), "leader-1", DAY)
-    assert seen["ids"] == ["dept-mine"]
-    assert own["departments"][0]["department_id"] == "dept-mine"
-    assert own["departments"][0]["items"]["leader_intervene"][0]["claim"] == "我的部门"
-
-
-def test_escalated_child_department_is_visible(monkeypatch):
-    monkeypatch.setattr(
-        "app.services.department_today_highlights.department_ids_led_by",
-        lambda session, user_id: {"dept-parent"},
-    )
-    monkeypatch.setattr(
-        "app.services.department_today_highlights.escalated_child_department_ids",
-        lambda session, led: {"dept-child"} if "dept-parent" in led else set(),
-    )
-    monkeypatch.setattr(
-        "app.services.department_today_highlights.load_department_extract_rows",
-        lambda session, report_date, department_ids=None: [
-            _row(
-                {"claim": "下级没人管", "leader_action": "今天过问"},
-                unique_id="child-1",
-                subject_id="dept-child",
-            )
-        ],
-    )
-    monkeypatch.setattr(
-        "app.services.department_today_highlights.load_display_names",
-        lambda session, rows: _names(),
-    )
-    monkeypatch.setattr(
-        "app.repositories.department_mirror.department_mirror_repo.get_department_names_by_ids",
-        lambda session, ids: {"dept-child": "华北一组"},
-    )
-    data = highlights_for_leader(MagicMock(), "leader-1", DAY)
-    assert data["departments"][0]["department_id"] == "dept-child"
-    assert data["departments"][0]["items"]["leader_intervene"][0]["claim"] == "下级没人管"
+    assert seen["user"] == "leader-1"
+    assert seen["ids"] == ["oauth-leader"]
+    assert own["departments"][0]["subject_id"] == "oauth-leader"
+    assert own["departments"][0]["items"]["leader_intervene"][0]["claim"] == "我的介入"
 
 
 def test_reextract_keeps_one_item_and_carries_the_decision():
@@ -420,6 +401,10 @@ def test_leader_open_id_receives_every_item(monkeypatch):
     )
     leader_id = str(uuid4())
     monkeypatch.setattr(
+        "app.repositories.user_profile.user_profile_repo.get_by_oauth_user_id",
+        lambda session, oauth_id: _profile(oauth_id=oauth_id, user_id=leader_id, open_id="ou_leader"),
+    )
+    monkeypatch.setattr(
         "app.services.platform_notification_service.platform_notification_service.resolve_department_report_recipients",
         lambda session, name: [
             {
@@ -472,7 +457,7 @@ def _leader(user_id, name="王经理"):
     }
 
 
-def test_one_leader_of_two_departments_gets_one_card(monkeypatch):
+def test_one_leader_gets_one_card_for_their_items(monkeypatch):
     captured = []
     _enable(monkeypatch)
     monkeypatch.setattr(
@@ -489,38 +474,20 @@ def test_one_leader_of_two_departments_gets_one_card(monkeypatch):
             _row(
                 {"claim": "特价必须今天拍板", "leader_action": "今天确认", "related_user_id": "oauth-zhang", "confidence": 0.9},
                 unique_id="north",
-                subject_id="dept-north",
+                subject_id="oauth-leader",
                 account_id="acc-1",
                 opportunity_id="opp-1",
             ),
             _row(
                 {"claim": "合同卡在法务", "leader_action": "今天对齐", "related_user_id": "oauth-li", "confidence": 0.4},
                 unique_id="east",
-                subject_id="dept-east",
+                subject_id="oauth-leader",
             ),
         ],
     )
     monkeypatch.setattr(
         "app.services.department_today_highlights.load_display_names",
         lambda *args, **kwargs: _names(),
-    )
-    monkeypatch.setattr(
-        "app.repositories.department_mirror.department_mirror_repo.get_department_names_by_ids",
-        lambda session, ids: {"dept-north": "华北销售", "dept-east": "华东销售"},
-    )
-
-    def recipients(session, name):
-        leader = _leader("leader-1")
-        leader["department"] = name
-        if name == "华北销售":
-            other = _leader("leader-2", "李经理")
-            other["department"] = name
-            return [leader, other]
-        return [leader]
-
-    monkeypatch.setattr(
-        "app.services.platform_notification_service.platform_notification_service.resolve_department_report_recipients",
-        recipients,
     )
     monkeypatch.setattr(
         "app.services.department_today_highlights.filter_opted_out_recipients",
@@ -541,22 +508,17 @@ def test_one_leader_of_two_departments_gets_one_card(monkeypatch):
         fake_send,
     )
     result = handle_department_today_highlights(MagicMock(), report_date=DAY)
-    assert result["success_count"] == 2
-    by_user = {item["user_id"]: item["body"] for item in captured}
-    shared = by_user["leader-1"]
-    assert "张三 · 华北销售" in shared
-    assert "还有李四" in shared
-    assert "更多（1）" in shared
-    assert "department_id" not in shared
-    north_only = by_user["leader-2"]
-    assert "张三" in north_only
-    assert "华北销售" not in north_only
-    assert "更多" not in north_only
-    assert "[查看]" in north_only
+    assert result["success_count"] == 1
+    body = captured[0]["body"]
+    assert captured[0]["user_id"] == "leader-1"
+    assert "张三" in body
+    assert "还有李四" in body
+    assert "更多（1）" in body
+    assert "department_id" not in body
 
 
-def test_opt_out_removes_that_department_from_the_person_card(monkeypatch):
-    captured = {}
+def test_opt_out_skips_that_leader_and_sends_the_other(monkeypatch):
+    captured = []
     _enable(monkeypatch)
     monkeypatch.setattr(
         "app.services.department_today_highlights.load_department_extract_rows",
@@ -564,12 +526,12 @@ def test_opt_out_removes_that_department_from_the_person_card(monkeypatch):
             _row(
                 {"claim": "华北事项", "related_user_id": "oauth-zhang", "confidence": 0.9},
                 unique_id="north",
-                subject_id="dept-north",
+                subject_id="oauth-north",
             ),
             _row(
                 {"claim": "华东事项", "related_user_id": "oauth-li", "confidence": 0.5},
                 unique_id="east",
-                subject_id="dept-east",
+                subject_id="oauth-east",
             ),
         ],
     )
@@ -577,19 +539,18 @@ def test_opt_out_removes_that_department_from_the_person_card(monkeypatch):
         "app.services.department_today_highlights.load_display_names",
         lambda *args, **kwargs: _names(),
     )
+
+    def profile(session, oauth_id):
+        user_id = "leader-north" if oauth_id == "oauth-north" else "leader-east"
+        return _profile(oauth_id=oauth_id, user_id=user_id, open_id=f"ou_{user_id}")
+
     monkeypatch.setattr(
-        "app.repositories.department_mirror.department_mirror_repo.get_department_names_by_ids",
-        lambda session, ids: {"dept-north": "华北销售", "dept-east": "华东销售"},
-    )
-    monkeypatch.setattr(
-        "app.services.platform_notification_service.platform_notification_service.resolve_department_report_recipients",
-        lambda session, name: [_leader("leader-1")],
+        "app.repositories.user_profile.user_profile_repo.get_by_oauth_user_id",
+        profile,
     )
 
     def keep(session, people, **kwargs):
-        if kwargs.get("department_ids") == ["dept-north"]:
-            return []
-        return list(people)
+        return [person for person in people if person.get("user_id") != "leader-north"]
 
     monkeypatch.setattr(
         "app.services.department_today_highlights.filter_opted_out_recipients",
@@ -597,8 +558,9 @@ def test_opt_out_removes_that_department_from_the_person_card(monkeypatch):
     )
 
     def fake_send(session, recipient, assembled):
-        captured["body"] = render_card_markdown(assembled)
-        captured["ids"] = list(assembled.get("department_ids") or [])
+        captured.append(
+            {"user_id": recipient["user_id"], "body": render_card_markdown(assembled)}
+        )
         return {"success": True}
 
     monkeypatch.setattr(
@@ -607,83 +569,30 @@ def test_opt_out_removes_that_department_from_the_person_card(monkeypatch):
     )
     result = handle_department_today_highlights(MagicMock(), report_date=DAY)
     assert result["success_count"] == 1
-    assert captured["ids"] == ["dept-east"]
-    assert "华东事项" in captured["body"]
-    assert "华北事项" not in captured["body"]
-    assert "华东销售" not in captured["body"]
+    assert captured[0]["user_id"] == "leader-east"
+    assert "华东事项" in captured[0]["body"]
+    assert "华北事项" not in captured[0]["body"]
 
 
-def test_explicit_department_id_stays_on_that_department(monkeypatch):
+def test_push_keeps_rows_from_every_department(monkeypatch):
     captured = {}
     _enable(monkeypatch)
-    seen = {}
 
-    def fake_load(session, report_date, department_ids=None):
-        seen["ids"] = list(department_ids or [])
-        return [
+    monkeypatch.setattr(
+        "app.services.department_today_highlights.load_department_extract_rows",
+        lambda *args, **kwargs: [
             _row(
                 {"claim": "华北事项", "related_user_id": "oauth-zhang", "confidence": 0.2},
                 unique_id="north",
-                subject_id="dept-north",
+                subject_id="oauth-leader",
+                department_id="dept-north",
             ),
             _row(
                 {"claim": "华东事项", "related_user_id": "oauth-li", "confidence": 0.9},
                 unique_id="east",
-                subject_id="dept-east",
+                subject_id="oauth-leader",
+                department_id="dept-east",
             ),
-        ]
-
-    monkeypatch.setattr("app.services.department_today_highlights.load_department_extract_rows", fake_load)
-    monkeypatch.setattr(
-        "app.services.department_today_highlights.load_display_names",
-        lambda *args, **kwargs: _names(),
-    )
-    monkeypatch.setattr(
-        "app.repositories.department_mirror.department_mirror_repo.get_department_names_by_ids",
-        lambda session, ids: {"dept-north": "华北销售", "dept-east": "华东销售"},
-    )
-    monkeypatch.setattr(
-        "app.services.platform_notification_service.platform_notification_service.resolve_department_report_recipients",
-        lambda session, name: [_leader("leader-1")],
-    )
-    monkeypatch.setattr(
-        "app.services.department_today_highlights.filter_opted_out_recipients",
-        lambda session, people, **kwargs: list(people),
-    )
-
-    def fake_send(session, recipient, assembled):
-        captured["body"] = render_card_markdown(assembled)
-        captured["ids"] = list(assembled.get("department_ids") or [])
-        return {"success": True}
-
-    monkeypatch.setattr(
-        "app.services.department_today_highlights.deliver_department_highlight_card",
-        fake_send,
-    )
-    result = handle_department_today_highlights(MagicMock(), report_date=DAY, department_id="dept-north")
-    assert result["success_count"] == 1
-    assert seen["ids"] == ["dept-north"]
-    assert captured["ids"] == ["dept-north"]
-    assert "华北事项" in captured["body"]
-    assert "华东事项" not in captured["body"]
-
-
-def test_department_without_leader_goes_to_parent_leader(monkeypatch):
-    captured = {}
-    asked = []
-    _enable(monkeypatch)
-    monkeypatch.setattr(
-        "app.repositories.department_mirror.department_mirror_repo.get_ancestor_chains_bulk",
-        lambda session, ids: {"dept-child": [("dept-child", "小组"), ("dept-parent", "华北销售")]},
-    )
-    monkeypatch.setattr(
-        "app.services.department_today_highlights.load_department_extract_rows",
-        lambda *args, **kwargs: [
-            _row(
-                {"claim": "特价必须今天拍板", "leader_action": "今天确认", "related_user_id": "oauth-zhang", "confidence": 0.9},
-                unique_id="child",
-                subject_id="dept-child",
-            )
         ],
     )
     monkeypatch.setattr(
@@ -691,27 +600,11 @@ def test_department_without_leader_goes_to_parent_leader(monkeypatch):
         lambda *args, **kwargs: _names(),
     )
     monkeypatch.setattr(
-        "app.repositories.department_mirror.department_mirror_repo.get_department_names_by_ids",
-        lambda session, ids: {"dept-child": "小组"},
-    )
-
-    def recipients(session, name):
-        asked.append(name)
-        if name == "华北销售":
-            return [_leader("leader-parent")]
-        return []
-
-    monkeypatch.setattr(
-        "app.services.platform_notification_service.platform_notification_service.resolve_department_report_recipients",
-        recipients,
-    )
-    monkeypatch.setattr(
         "app.services.department_today_highlights.filter_opted_out_recipients",
         lambda session, people, **kwargs: list(people),
     )
 
     def fake_send(session, recipient, assembled):
-        captured["user_id"] = recipient["user_id"]
         captured["body"] = render_card_markdown(assembled)
         return {"success": True}
 
@@ -721,28 +614,16 @@ def test_department_without_leader_goes_to_parent_leader(monkeypatch):
     )
     result = handle_department_today_highlights(MagicMock(), report_date=DAY)
     assert result["success_count"] == 1
-    assert asked == ["小组", "华北销售"]
-    assert captured["user_id"] == "leader-parent"
-    assert "张三 · 小组" in captured["body"]
+    assert "华东事项" in captured["body"]
+    assert "张三" in captured["body"]
 
 
-def test_parent_without_leader_is_not_climbed_further(monkeypatch):
-    asked = []
+def test_leader_without_open_id_is_skipped(monkeypatch):
     _enable(monkeypatch)
-    monkeypatch.setattr(
-        "app.repositories.department_mirror.department_mirror_repo.get_ancestor_chains_bulk",
-        lambda session, ids: {
-            "dept-child": [
-                ("dept-child", "小组"),
-                ("dept-parent", "华北销售"),
-                ("dept-root", "销售中心"),
-            ]
-        },
-    )
     monkeypatch.setattr(
         "app.services.department_today_highlights.load_department_extract_rows",
         lambda *args, **kwargs: [
-            _row({"claim": "拍板", "related_user_id": "oauth-zhang"}, subject_id="dept-child")
+            _row({"claim": "拍板", "related_user_id": "oauth-zhang"})
         ],
     )
     monkeypatch.setattr(
@@ -750,17 +631,8 @@ def test_parent_without_leader_is_not_climbed_further(monkeypatch):
         lambda *args, **kwargs: _names(),
     )
     monkeypatch.setattr(
-        "app.repositories.department_mirror.department_mirror_repo.get_department_names_by_ids",
-        lambda session, ids: {"dept-child": "小组"},
-    )
-
-    def recipients(session, name):
-        asked.append(name)
-        return []
-
-    monkeypatch.setattr(
-        "app.services.platform_notification_service.platform_notification_service.resolve_department_report_recipients",
-        recipients,
+        "app.repositories.user_profile.user_profile_repo.get_by_oauth_user_id",
+        lambda session, oauth_id: _profile(oauth_id=oauth_id, open_id=""),
     )
     sent = {"count": 0}
     monkeypatch.setattr(
@@ -770,50 +642,6 @@ def test_parent_without_leader_is_not_climbed_further(monkeypatch):
     result = handle_department_today_highlights(MagicMock(), report_date=DAY)
     assert result["skip_reason"] == "no_open_id"
     assert sent["count"] == 0
-    assert asked == ["小组", "华北销售"]
-
-
-def test_leader_without_open_id_does_not_escalate(monkeypatch):
-    asked = []
-    _enable(monkeypatch)
-    monkeypatch.setattr(
-        "app.repositories.department_mirror.department_mirror_repo.get_ancestor_chains_bulk",
-        lambda session, ids: {"dept-child": [("dept-child", "小组"), ("dept-parent", "华北销售")]},
-    )
-    monkeypatch.setattr(
-        "app.services.department_today_highlights.load_department_extract_rows",
-        lambda *args, **kwargs: [
-            _row({"claim": "拍板", "related_user_id": "oauth-zhang"}, subject_id="dept-child")
-        ],
-    )
-    monkeypatch.setattr(
-        "app.services.department_today_highlights.load_display_names",
-        lambda *args, **kwargs: _names(),
-    )
-    monkeypatch.setattr(
-        "app.repositories.department_mirror.department_mirror_repo.get_department_names_by_ids",
-        lambda session, ids: {"dept-child": "小组"},
-    )
-
-    def recipients(session, name):
-        asked.append(name)
-        if name == "小组":
-            return [{"name": "王经理", "userId": "leader-1", "platform": "feishu"}]
-        return [_leader("leader-parent")]
-
-    monkeypatch.setattr(
-        "app.services.platform_notification_service.platform_notification_service.resolve_department_report_recipients",
-        recipients,
-    )
-    sent = {"count": 0}
-    monkeypatch.setattr(
-        "app.services.department_today_highlights.deliver_department_highlight_card",
-        lambda *args, **kwargs: sent.__setitem__("count", sent["count"] + 1) or {"success": True},
-    )
-    result = handle_department_today_highlights(MagicMock(), report_date=DAY)
-    assert result["skip_reason"] == "no_open_id"
-    assert sent["count"] == 0
-    assert asked == ["小组"]
 
 
 def test_week_visit_button_filters_visit_date_only(monkeypatch):

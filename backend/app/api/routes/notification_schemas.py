@@ -115,16 +115,12 @@ class SalesTodayHighlightsPushRequest(BaseModel):
 
 
 class DepartmentTodayHighlightsPushRequest(BaseModel):
-    """销售负责人今日重点：读部门粒度 TODAY_INTERVENTION，只推部门负责人。"""
+    """销售负责人今日重点：按负责人 oauth 推 TODAY_INTERVENTION，一人一天一张卡。"""
 
     type: Literal["department_today_highlights"] = "department_today_highlights"
     report_date: Optional[str] = Field(
         default=None,
         description="YYYY-MM-DD；不传则北京时间当天",
-    )
-    department_id: Optional[str] = Field(
-        default=None,
-        description="部门 unique_id；不传则发给当天有介入项的每个部门的负责人",
     )
 
 

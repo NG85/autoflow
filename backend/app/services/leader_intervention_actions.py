@@ -14,8 +14,9 @@ from app.models.crm_skill_extract_items import CRMSkillExtractItem
 from app.services.department_today_highlights import (
     ITEM_INTERVENTION,
     STATUS_SUPERSEDED,
+    SUBJECT_USER,
     _text,
-    department_ids_in_scope,
+    leader_oauth_id,
 )
 from app.services.subject_interaction import (
     SCENE_DEPARTMENT_TODAY_HIGHLIGHTS,
@@ -106,7 +107,7 @@ def attach_item_interactions(
         grouped = department.get("items") if isinstance(department, Mapping) else None
         if not isinstance(grouped, Mapping):
             continue
-        department_id = department.get("department_id")
+        department_id = department.get("subject_id") or department.get("department_id")
         for item in grouped.get("leader_intervene") or []:
             if isinstance(item, dict):
                 items.append((_item_anchor(report_date, department_id, item), item))
@@ -139,29 +140,15 @@ def load_actionable_item(
     user_id: Any,
     unique_id: str,
 ) -> Optional[CRMSkillExtractItem]:
-    """当前用户负责的、未删除且未作废的今日需介入。否则 None。"""
+    """当前负责人自己的、未删除且未作废的今日需介入。否则 None。"""
     item_id = _text(unique_id)
-    if not item_id:
-        return None
-    led = department_ids_in_scope(session, user_id)
-    if not led:
+    oauth_id = leader_oauth_id(session, user_id)
+    if not item_id or not oauth_id:
         return None
     row = session.exec(
         select(CRMSkillExtractItem).where(CRMSkillExtractItem.unique_id == item_id)
     ).first()
-    if row is None:
-        return None
-    if int(getattr(row, "is_deleted", 0) or 0) != 0:
-        return None
-    if _text(getattr(row, "status", None)).upper() == STATUS_SUPERSEDED:
-        return None
-    if _text(getattr(row, "subject_type", None)).upper() != "DEPARTMENT":
-        return None
-    if _text(getattr(row, "audience", None)).lower() != "leader":
-        return None
-    if _text(getattr(row, "item_type", None)) != ITEM_INTERVENTION:
-        return None
-    if _text(getattr(row, "subject_id", None)) not in led:
+    if not _is_actionable(row, oauth_id):
         return None
     return row
 
@@ -243,7 +230,7 @@ def save_decisions(
     for item in normalized:
         if item["status"] == STATUS_ADOPTED and item["adopted_todo_id"]:
             require_active_todo(session, item["adopted_todo_id"])
-    led = department_ids_in_scope(session, user_id)
+    oauth_id = leader_oauth_id(session, user_id)
     found_rows = session.exec(
         select(CRMSkillExtractItem).where(CRMSkillExtractItem.unique_id.in_(ids))
     ).all()
@@ -254,7 +241,7 @@ def save_decisions(
     applied = False
     for item in normalized:
         current = found.get(item["unique_id"])
-        if current is None or not _is_actionable(current, led):
+        if current is None or not _is_actionable(current, oauth_id):
             results.append({"unique_id": item["unique_id"], "ok": False})
             continue
         before = interaction_fields(current)
@@ -278,18 +265,21 @@ def save_decisions(
     return {"results": results}
 
 
-def _is_actionable(row: CRMSkillExtractItem, led: set[str]) -> bool:
+def _is_actionable(row: Optional[CRMSkillExtractItem], oauth_id: str) -> bool:
+    owner = _text(oauth_id)
+    if row is None or not owner:
+        return False
     if int(getattr(row, "is_deleted", 0) or 0) != 0:
         return False
     if _text(getattr(row, "status", None)).upper() == STATUS_SUPERSEDED:
         return False
-    if _text(getattr(row, "subject_type", None)).upper() != "DEPARTMENT":
+    if _text(getattr(row, "subject_type", None)).upper() != SUBJECT_USER:
         return False
     if _text(getattr(row, "audience", None)).lower() != "leader":
         return False
     if _text(getattr(row, "item_type", None)) != ITEM_INTERVENTION:
         return False
-    return _text(getattr(row, "subject_id", None)) in led
+    return _text(getattr(row, "subject_id", None)) == owner
 
 
 def save_item_comments(

@@ -39,8 +39,8 @@ def _item(**overrides):
     payload.update(overrides.pop("payload", {}))
     data = {
         "unique_id": "item-1",
-        "subject_type": "DEPARTMENT",
-        "subject_id": "dept-mine",
+        "subject_type": "USER",
+        "subject_id": "oauth-leader",
         "audience": "leader",
         "item_type": "TODAY_INTERVENTION",
         "status": "PENDING",
@@ -62,10 +62,10 @@ def _item(**overrides):
     return SimpleNamespace(**data)
 
 
-def _led(monkeypatch, departments=None):
+def _led(monkeypatch, oauth_id="oauth-leader"):
     monkeypatch.setattr(
-        "app.services.department_today_highlights.department_ids_led_by",
-        lambda session, user_id: set(departments if departments is not None else {"dept-mine"}),
+        "app.services.leader_intervention_actions.leader_oauth_id",
+        lambda session, user_id: oauth_id,
     )
 
 
@@ -79,8 +79,8 @@ def _session_with(row):
 def test_leader_list_returns_extract_state_and_side_records(monkeypatch):
     row = {
         "unique_id": "item-1",
-        "subject_type": "DEPARTMENT",
-        "subject_id": "dept-mine",
+        "subject_type": "USER",
+        "subject_id": "oauth-leader",
         "audience": "leader",
         "status": "ADOPTED",
         "is_deleted": 0,
@@ -102,12 +102,12 @@ def test_leader_list_returns_extract_state_and_side_records(monkeypatch):
         },
     }
     monkeypatch.setattr(
-        "app.services.department_today_highlights.department_ids_led_by",
-        lambda session, user_id: {"dept-mine"},
+        "app.services.department_today_highlights.leader_oauth_id",
+        lambda session, user_id: "oauth-leader",
     )
     monkeypatch.setattr(
         "app.services.department_today_highlights.load_department_extract_rows",
-        lambda session, report_date, department_ids=None: [row],
+        lambda session, report_date, oauth_user_ids=None: [row],
     )
     monkeypatch.setattr(
         "app.services.department_today_highlights.load_display_names",
@@ -120,7 +120,7 @@ def test_leader_list_returns_extract_state_and_side_records(monkeypatch):
     monkeypatch.setattr(
         "app.services.leader_intervention_actions.load_threads",
         lambda session, subject_type, subject_ids: {
-            "2026-10-13|dept-mine|item-1": {
+            "2026-10-13|oauth-leader|item-1": {
                 "comments": [{"id": "c1", "content": "先问客户"}],
                 "todo_ids": ["todo-9"],
             }
@@ -156,10 +156,10 @@ def test_leader_list_returns_extract_state_and_side_records(monkeypatch):
 def test_non_leader_and_superseded_are_not_writable(monkeypatch):
     row = _item()
     session = _session_with(row)
-    _led(monkeypatch, set())
+    _led(monkeypatch, "")
     assert load_actionable_item(session, "outsider", "item-1") is None
 
-    _led(monkeypatch, {"dept-other"})
+    _led(monkeypatch, "oauth-other")
     assert load_actionable_item(session, "other-leader", "item-1") is None
 
     superseded = _item(status="SUPERSEDED")
@@ -433,13 +433,11 @@ def test_missing_task_does_not_adopt(monkeypatch):
     session.add.assert_not_called()
 
 
-def test_escalated_child_can_be_written(monkeypatch):
+def test_another_leader_cannot_write_the_row(monkeypatch):
     from app.services.leader_intervention_actions import load_actionable_item
 
-    child = _item(unique_id="child-item", subject_id="dept-child", extract_key="child-key")
-    _led(monkeypatch, {"dept-parent"})
-    monkeypatch.setattr(
-        "app.services.department_today_highlights.escalated_child_department_ids",
-        lambda session, led: {"dept-child"} if "dept-parent" in led else set(),
-    )
-    assert load_actionable_item(_session_with(child), "leader-1", "child-item") is child
+    own = _item()
+    _led(monkeypatch, "oauth-other")
+    assert load_actionable_item(_session_with(own), "leader-1", "item-1") is None
+    _led(monkeypatch, "oauth-leader")
+    assert load_actionable_item(_session_with(own), "leader-1", "item-1") is own

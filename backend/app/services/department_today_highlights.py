@@ -1,6 +1,6 @@
-"""销售负责人今日重点：只读部门粒度的 TODAY_INTERVENTION。
+"""销售负责人今日重点：只读 USER + audience=leader 的 TODAY_INTERVENTION。
 
-不消费一线 USER 抽取，不进部门群，不抄送。
+subject_id 是负责人 oauth id。不消费一线 audience=sales 的抽取，不进部门群，不抄送。
 入口标题用抽取行上的 card_links 快照。
 """
 
@@ -31,7 +31,7 @@ from app.utils.push_page_urls import build_department_highlights_url, build_week
 
 logger = logging.getLogger(__name__)
 
-SUBJECT_DEPARTMENT = "DEPARTMENT"
+SUBJECT_USER = "USER"
 AUDIENCE_LEADER = "leader"
 STATUS_SUPERSEDED = "SUPERSEDED"
 STATUS_ADOPTED = "ADOPTED"
@@ -88,7 +88,7 @@ def _include_row(row: Any) -> bool:
         return False
     if _text(_row_value(row, "status")).upper() == STATUS_SUPERSEDED:
         return False
-    if _text(_row_value(row, "subject_type")).upper() != SUBJECT_DEPARTMENT:
+    if _text(_row_value(row, "subject_type")).upper() != SUBJECT_USER:
         return False
     if _text(_row_value(row, "audience")).lower() != AUDIENCE_LEADER:
         return False
@@ -210,7 +210,7 @@ def _prefer_one(group: Sequence[Any]) -> Any:
 
 
 def _collapse_rows(rows: Sequence[Any]) -> list[Any]:
-    """同一天、同一部门、同一抽取键只留一条。重抽产生的新行接上已有决定。"""
+    """同一天、同一负责人、同一抽取键只留一条。重抽产生的新行接上已有决定。"""
     from app.services.subject_interaction import intervention_anchor
 
     grouped: dict[str, list[Any]] = {}
@@ -235,7 +235,7 @@ def assemble_department_highlights(
     *,
     department_name: str = "",
 ) -> dict[str, Any]:
-    """组装一个部门当天的今日需介入。USER 行会被丢掉。"""
+    """组装一位负责人当天的今日需介入。主体是负责人 oauth id。"""
     kept = _collapse_rows(rows)
     name_map = names or {"accounts": {}, "opportunities": {}, "people": {}}
     items = [_serialize_item(row, name_map) for row in kept]
@@ -497,19 +497,19 @@ def _subject_id(row: Any) -> str:
 def load_department_extract_rows(
     session: Session,
     report_date: date,
-    department_ids: Optional[Sequence[str]] = None,
+    oauth_user_ids: Optional[Sequence[str]] = None,
 ) -> Optional[list[Any]]:
-    """读取当天部门有效抽取。表不可用时返回 None。"""
-    ids = [_text(item) for item in (department_ids or []) if _text(item)]
+    """读取当天负责人的今日需介入。subject_id 是负责人 oauth id。表不可用时返回 None。"""
+    ids = [_text(item) for item in (oauth_user_ids or []) if _text(item)]
     try:
         statement = select(CRMSkillExtractItem).where(
             CRMSkillExtractItem.report_date == report_date,
-            CRMSkillExtractItem.subject_type == SUBJECT_DEPARTMENT,
+            CRMSkillExtractItem.subject_type == SUBJECT_USER,
             CRMSkillExtractItem.audience == AUDIENCE_LEADER,
             CRMSkillExtractItem.is_deleted == 0,
             CRMSkillExtractItem.status != STATUS_SUPERSEDED,
         )
-        if department_ids is not None:
+        if oauth_user_ids is not None:
             if not ids:
                 return []
             statement = statement.where(CRMSkillExtractItem.subject_id.in_(ids))
@@ -681,42 +681,53 @@ def department_ids_in_scope(session: Session, user_id: Any) -> set[str]:
     return led | escalated_child_department_ids(session, led)
 
 
+def leader_oauth_id(session: Session, user_id: Any) -> str:
+    """登录用户对应的 oauth id。抽取行的 subject_id 用这个值。"""
+    from app.repositories.user_profile import user_profile_repo
+
+    uid = _text(user_id)
+    if not uid:
+        return ""
+    profile = None
+    try:
+        from uuid import UUID
+
+        profile = user_profile_repo.get_by_user_id(session, UUID(uid))
+    except (TypeError, ValueError):
+        profile = None
+    if profile is None:
+        try:
+            profile = user_profile_repo.get_by_user_id(session, uid)
+        except Exception:
+            profile = None
+    return _text(getattr(profile, "oauth_user_id", None)) if profile else ""
+
+
 def highlights_for_leader(
     session: Session,
     user_id: Any,
     report_date: date,
-    department_id: Optional[str] = None,
 ) -> dict[str, Any]:
-    """返回该用户负责的部门，以及上探到他的下级部门。指定了范围外的部门则 departments 为空。"""
-    led = department_ids_in_scope(session, user_id)
-    requested = _text(department_id)
-    if requested:
-        led = {requested} if requested in led else set()
+    """返回当前负责人自己的今日需介入。subject_id 是其 oauth id。"""
+    oauth_id = leader_oauth_id(session, user_id)
     empty = {"report_date": report_date.isoformat(), "departments": []}
-    if not led:
+    if not oauth_id:
         return empty
-    rows = load_department_extract_rows(session, report_date, department_ids=sorted(led))
+    rows = load_department_extract_rows(session, report_date, oauth_user_ids=[oauth_id])
     if not rows:
         return empty
-    from app.repositories.department_mirror import department_mirror_repo
-
     names = load_display_names(session, rows)
-    dept_names = department_mirror_repo.get_department_names_by_ids(session, led)
-    departments = []
-    for subject_id, subject_rows in _group_by_subject(rows).items():
-        if subject_id not in led:
-            continue
-        assembled = assemble_department_highlights(
-            subject_rows,
-            report_date,
-            subject_id,
-            names,
-            department_name=dept_names.get(subject_id) or "",
-        )
-        if not assembled["has_content"]:
-            continue
-        departments.append(department_highlights_payload(assembled))
-    departments.sort(key=lambda item: _text(item.get("department_name") or item.get("department_id")))
+    assembled = assemble_department_highlights(
+        rows,
+        report_date,
+        "",
+        names,
+    )
+    if not assembled["has_content"]:
+        return empty
+    payload = department_highlights_payload(assembled)
+    payload["subject_id"] = oauth_id
+    departments = [payload]
     try:
         from app.services.leader_intervention_actions import attach_item_interactions
 
@@ -916,12 +927,8 @@ def handle_department_today_highlights(
     db_session: Session,
     *,
     report_date: Optional[date | str] = None,
-    department_id: Optional[str] = None,
 ) -> dict[str, Any]:
-    """推送销售负责人今日重点。同一人一天一张卡，不进部门群。"""
-    from app.repositories.department_mirror import department_mirror_repo
-    from app.services.platform_notification_service import platform_notification_service
-
+    """推送销售负责人今日重点。按负责人 oauth 一人一天一张卡，不进部门群。"""
     target = parse_report_date(report_date)
     result = _base_result(target)
     policy = load_report_push_policy()
@@ -929,23 +936,17 @@ def handle_department_today_highlights(
         logger.info("department today highlights disabled")
         return {**result, "skipped": True, "skip_reason": "variant_disabled"}
 
-    requested = _text(department_id)
-    rows = load_department_extract_rows(
-        db_session,
-        target,
-        department_ids=[requested] if requested else None,
-    )
+    rows = load_department_extract_rows(db_session, target)
     if rows is None:
         return {**result, "skipped": True, "skip_reason": "source_unavailable"}
     grouped = _group_by_subject(rows)
-    if requested:
-        grouped = {key: value for key, value in grouped.items() if key == requested}
     if not grouped and target.weekday() not in (0, 4):
         return {**result, "skipped": True, "skip_reason": "empty_highlights"}
 
+    from app.repositories.user_profile import user_profile_repo
+    from app.services.sales_today_highlights import _recipient_from_profile
+
     names = load_display_names(db_session, rows)
-    dept_names = department_mirror_repo.get_department_names_by_ids(db_session, grouped.keys())
-    chains = department_mirror_repo.get_ancestor_chains_bulk(db_session, grouped.keys())
     items: List[Dict[str, Any]] = []
     failed: List[Dict[str, Any]] = []
     success_count = 0
@@ -953,67 +954,36 @@ def handle_department_today_highlights(
     leaders: dict[str, dict[str, Any]] = {}
 
     for subject_id, subject_rows in grouped.items():
-        chain = chains.get(subject_id) or []
-        dept_name = dept_names.get(subject_id) or ""
-        if not dept_name and chain:
-            mirrored = _text(chain[0][1])
-            if mirrored and mirrored != "未知部门":
-                dept_name = mirrored
         assembled = assemble_department_highlights(
             subject_rows,
             target,
-            subject_id,
+            "",
             names,
-            department_name=dept_name,
         )
         if not assembled["has_content"]:
             items.append(_skipped_department(subject_id, "empty_highlights"))
             continue
-        if not dept_name:
+        profile = user_profile_repo.get_by_oauth_user_id(db_session, subject_id)
+        recipient = _recipient_from_profile(profile)
+        if recipient is None:
             items.append(_skipped_department(subject_id, "no_open_id"))
             continue
-        raw_recipients = platform_notification_service.resolve_department_report_recipients(
-            db_session,
-            dept_name,
-        )
-        escalated = False
-        if raw_recipients:
-            recipients = _pushable_recipients(raw_recipients)
-            if not recipients:
-                items.append(_skipped_department(subject_id, "no_open_id"))
-                continue
-        else:
-            parent = _parent_department(chain)
-            parent_raw: list[Mapping[str, Any]] = []
-            if parent:
-                parent_raw = platform_notification_service.resolve_department_report_recipients(
-                    db_session,
-                    parent[1],
-                )
-            recipients = _pushable_recipients(parent_raw)
-            if not parent or not parent_raw or not recipients:
-                items.append(_skipped_department(subject_id, "no_open_id"))
-                continue
-            escalated = True
-            assembled = {**assembled, "escalated": True}
+        dept_name = _text(getattr(profile, "department", None))
+        if dept_name:
+            assembled = {**assembled, "department_name": dept_name}
         kept = filter_opted_out_recipients(
             db_session,
-            recipients,
+            [recipient],
             scene=SCENE_DEPARTMENT_HIGHLIGHTS,
             variant=VARIANT_TODAY_HIGHLIGHTS,
-            department_ids=[subject_id],
+            department_ids=[],
         )
         if not kept:
             items.append(_skipped_department(subject_id, "opted_out"))
             continue
-        for recipient in kept:
-            bucket = leaders.setdefault(
-                recipient["user_id"],
-                {"recipient": recipient, "cards": []},
-            )
-            bucket["cards"].append(assembled)
+        leaders[recipient["user_id"]] = {"recipient": kept[0], "cards": [assembled]}
     if not grouped:
-        leaders = _visit_only_leader_buckets(db_session, target, requested)
+        leaders = _visit_only_leader_buckets(db_session, target, "")
 
     for user_id, bucket in leaders.items():
         card = assemble_leader_highlights(bucket["cards"], target)
