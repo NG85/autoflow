@@ -13,6 +13,7 @@ def build_crm_router() -> APIRouter:
     from app.api.routes.crm.config.router import router as config_router
     from app.api.routes.crm.documents.router import router as documents_router
     from app.api.routes.crm.review.router import router as review_router
+    from app.api.routes.crm.today_highlights.router import router as today_highlights_router
     from app.api.routes.crm.visit_records.router import router as visit_records_router
     from app.api.routes.crm.views.router import router as views_router
     from app.api.routes.crm.weekly_followup.router import router as weekly_followup_router
@@ -21,6 +22,7 @@ def build_crm_router() -> APIRouter:
     root.include_router(review_router)
     root.include_router(weekly_followup_router)
     root.include_router(visit_records_router)
+    root.include_router(today_highlights_router)
     root.include_router(config_router)
     root.include_router(documents_router)
     root.include_router(views_router)

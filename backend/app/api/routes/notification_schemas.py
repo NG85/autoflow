@@ -100,6 +100,30 @@ class VisitRecordCardPushRequest(BaseModel):
     )
 
 
+class SalesTodayHighlightsPushRequest(BaseModel):
+    """一线销售今日重点：读 crm_skill_extract_items，只推本人。"""
+
+    type: Literal["sales_today_highlights"] = "sales_today_highlights"
+    report_date: Optional[str] = Field(
+        default=None,
+        description="YYYY-MM-DD；不传则北京时间当天",
+    )
+    recipient_user_ids: Optional[List[str]] = Field(
+        default=None,
+        description="可选 OAuth id；不传则发给当天有条目的全部一线销售",
+    )
+
+
+class DepartmentTodayHighlightsPushRequest(BaseModel):
+    """销售负责人今日重点：按负责人 oauth 推 TODAY_INTERVENTION，一人一天一张卡。"""
+
+    type: Literal["department_today_highlights"] = "department_today_highlights"
+    report_date: Optional[str] = Field(
+        default=None,
+        description="YYYY-MM-DD；不传则北京时间当天",
+    )
+
+
 class DailyVisitReportPushRequest(BaseModel):
     """公司/部门日拜访报告 Markdown：读 crm_department_daily_summary.summary_content。"""
 
@@ -207,6 +231,8 @@ PushNotificationRequest = Annotated[
         PlatformNotificationPushRequest,
         WeeklyVisitReportPushRequest,
         DailyVisitReportPushRequest,
+        SalesTodayHighlightsPushRequest,
+        DepartmentTodayHighlightsPushRequest,
     ],
     Field(discriminator="type"),
 ]

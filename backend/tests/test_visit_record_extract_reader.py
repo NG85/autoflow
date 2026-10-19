@@ -58,8 +58,32 @@ def test_card_links_hide_potential_opp_when_empty():
     assert "key_issues" in keys
     assert "next_visit" not in keys
     assert "potential_opps" not in keys
-    assert "KEY_GAP" in data["items"]
-    assert data["items"]["KEY_GAP"][0]["current_state"] == "未接触"
+
+
+def test_key_issue_button_hides_when_action_covers_it():
+    data = build_extract_response(
+        visit_id="rec-covered",
+        rows=[
+            _row(extract_key="cfo"),
+            _row(
+                unique_id="ext-2",
+                item_type="SUGGESTED_ACTION",
+                extract_key="act",
+                payload={
+                    "claim": "【康成｜AI销售项目】确认CFO参与方式",
+                    "why": "最终审批角色尚未实际覆盖",
+                    "confidence": 0.7,
+                    "evidence": [],
+                    "origin": "ai_recommendation",
+                    "related_gap": "cfo",
+                    "done_when": "明确CFO是否参与下周评审",
+                },
+            ),
+        ],
+    )
+    keys = [link["key"] for link in data["card_links"]]
+    assert keys == ["follow_ups"]
+    assert "KEY_GAP" not in data["items"]
     assert "POTENTIAL_OPP" not in data["items"]
 
 

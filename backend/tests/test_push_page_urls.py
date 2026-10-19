@@ -113,12 +113,13 @@ def test_build_task_list_page_url(monkeypatch):
         owner_name="张三",
         due_date__lte="2026-06-22",
         is_overdue=True,
-        ai_status__in=["PENDING", "IN_PROGRESS"],
+        status__in=["IN_PROGRESS", "PENDING"],
     )
     assert "owner_name=" in result
     assert "is_overdue=true" in result
-    assert "ai_status__in=PENDING" in result
-    assert "ai_status__in=IN_PROGRESS" in result
+    assert "status__in=IN_PROGRESS" in result
+    assert "status__in=PENDING" in result
+    assert "ai_status__in" not in result
     assert result.startswith("https://example.com/v2/task?")
 
 

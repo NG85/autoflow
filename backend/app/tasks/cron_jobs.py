@@ -100,6 +100,101 @@ def _daily_report_types_to_run(report_type: Optional[str]) -> list[str]:
     return [t for t in types if is_scenario_enabled(_DAILY_REPORT_SCENARIOS[t])]
 
 
+_HIGHLIGHT_AUDIENCES = ("sales", "department")
+
+
+def _parse_highlights_report_date(report_date_str: Optional[str]):
+    raw = (report_date_str or "").strip()
+    if not raw:
+        return None
+    return datetime.strptime(raw, "%Y-%m-%d").date()
+
+
+def _highlights_push_summary(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "success": bool(result.get("success")),
+        "skipped": bool(result.get("skipped")),
+        "skip_reason": result.get("skip_reason"),
+        "success_count": int(result.get("success_count") or 0),
+    }
+
+
+def _highlights_push_failed() -> dict[str, Any]:
+    return {
+        "success": False,
+        "skipped": False,
+        "skip_reason": "push_failed",
+        "success_count": 0,
+    }
+
+
+def _push_one_today_highlights(session, audience: str, report_date) -> dict[str, Any]:
+    """调用与 notification/push 相同的处理函数。一边失败不影响另一边。"""
+    try:
+        if audience == "sales":
+            from app.services.sales_today_highlights import handle_sales_today_highlights
+
+            result = handle_sales_today_highlights(session, report_date=report_date)
+        else:
+            from app.services.department_today_highlights import handle_department_today_highlights
+
+            result = handle_department_today_highlights(session, report_date=report_date)
+    except Exception:
+        logger.exception("%s today highlights push failed", audience)
+        return _highlights_push_failed()
+    summary = _highlights_push_summary(result)
+    logger.info("%s today highlights push: %s", audience, summary)
+    return summary
+
+
+@app.task
+def push_crm_today_highlights(report_date_str=None, audience=None):
+    """独立推送今日重点。不跟日报任务，不看日报计费场景和飞书总开关。
+
+    report_date_str: YYYY-MM-DD，不传则北京时间当天。
+    audience: sales / department，不传则两边都推。是否发出由各自的 today_highlights 变体决定。
+    一边失败记 push_failed，不重试，避免另一边已经发出的卡片再发一遍。
+    """
+    if audience is not None and audience not in _HIGHLIGHT_AUDIENCES:
+        return {
+            "success": False,
+            "message": f"invalid audience={audience}, valid={list(_HIGHLIGHT_AUDIENCES)}",
+            "report_date": None,
+            "audience": audience,
+            "sales_today_highlights": None,
+            "department_today_highlights": None,
+        }
+    try:
+        report_date = _parse_highlights_report_date(report_date_str)
+    except ValueError:
+        return {
+            "success": False,
+            "message": "invalid report_date, expected YYYY-MM-DD",
+            "report_date": None,
+            "audience": audience,
+            "sales_today_highlights": None,
+            "department_today_highlights": None,
+        }
+
+    audiences = [audience] if audience else list(_HIGHLIGHT_AUDIENCES)
+    sales_result = None
+    department_result = None
+    with Session(engine) as session:
+        if "sales" in audiences:
+            sales_result = _push_one_today_highlights(session, "sales", report_date)
+        if "department" in audiences:
+            department_result = _push_one_today_highlights(session, "department", report_date)
+    ran = [item for item in (sales_result, department_result) if item is not None]
+    failed = any(item.get("skip_reason") == "push_failed" for item in ran)
+    return {
+        "success": not failed,
+        "report_date": report_date.isoformat() if report_date else None,
+        "audience": audience,
+        "sales_today_highlights": sales_result,
+        "department_today_highlights": department_result,
+    }
+
+
 def _report_task_usage_once(scenario: BillingScenario, trace_key: str, review_detail: str) -> None:
     report_billing_usage(
         scenario,
@@ -200,9 +295,11 @@ def generate_crm_daily_statistics(self, target_date_str=None, report_type=None):
     1. 按 CRM_DAILY_REPORT_VISIT_DATE_FIELD（跟进日期 / 最后修改时间）查询统计日拜访记录，
        按销售人员分组，统计客户/合作伙伴/线索并生成完整个人日报
        （客户区分首次/多次；合作伙伴与线索只统计总数；有商机与仅跟进对象分开计数）
-    2. 基于客户/商机/线索评估信息，补充红黄绿灯统计与评估明细，推送销售个人日报飞书卡片给每个有数据的销售人员
-        3. 从 crm_department_daily_summary 表中读取部门级汇总数据，为所有有负责人的部门生成部门日报（有跟进发完整卡片；有记录但全 0 发无跟进短文本；无记录发任务未写入短文本）
-        4. 从 crm_department_daily_summary 表中读取公司级汇总数据，生成公司日报（有跟进发完整卡片；有记录但全 0 发无跟进短文本；无记录发任务未写入短文本）
+    2. 基于客户/商机/线索评估信息，补充红黄绿灯统计与评估明细，推送销售个人日报飞书卡片给每个有数据的销售人员。
+    3. 从 crm_department_daily_summary 表中读取部门级汇总数据，为所有有负责人的部门生成部门日报
+       （有跟进发完整卡片；有记录但全 0 发无跟进短文本；无记录发任务未写入短文本）。
+    4. 从 crm_department_daily_summary 表中读取公司级汇总数据，生成公司日报
+       （有跟进发完整卡片；有记录但全 0 发无跟进短文本；无记录发任务未写入短文本）
     5. 将部门日报和公司日报通过飞书推送给对应的负责人 / 管理员（卡片或短文本）
     
     """
@@ -1863,7 +1960,7 @@ def send_sales_task_summary(self, start_date_str=None, end_date_str=None):
                                 owner_name=assignee_name,
                                 due_date__gte=start_date_str2,
                                 due_date__lte=end_date_str2,
-                                ai_status__in=["CANCELLED"],
+                                status__in=["CANCELLED"],
                             ),
                         }
 
@@ -1890,7 +1987,7 @@ def send_sales_task_summary(self, start_date_str=None, end_date_str=None):
                                     owner_name=assignee_name,
                                     due_date__gte=next_week_start_date_str2,
                                     due_date__lte=next_week_end_date_str2,
-                                    ai_status__in=["PENDING", "IN_PROGRESS"],
+                                    status__in=["IN_PROGRESS", "PENDING"],
                                 ),
                             }
                         )
@@ -2423,7 +2520,7 @@ def _analyze_crm_todos(
                 owner_name=assignee_data["assignee_name"],
                 due_date__gte=start_date_str,
                 due_date__lte=end_date_str,
-                ai_status__in=["CANCELLED"],
+                status__in=["CANCELLED"],
             )
         }
         
@@ -2494,7 +2591,7 @@ def _analyze_crm_todos(
                 owner_name=assignee_data["assignee_name"],
                 due_date__gte=next_week_start_date_str,
                 due_date__lte=next_week_end_date_str,
-                ai_status__in=["PENDING", "IN_PROGRESS"],
+                status__in=["IN_PROGRESS", "PENDING"],
             ),
         }
         
