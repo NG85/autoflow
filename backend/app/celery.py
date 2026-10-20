@@ -29,6 +29,7 @@ app.conf.update(
     task_routes=[
         # {"app.tasks.evaluate.*": {"queue": "evaluation"}},
         {"app.tasks.cron_jobs.generate_crm_daily_statistics": {"queue": "cron"}},
+        {"app.tasks.cron_jobs.push_crm_today_highlights": {"queue": "cron"}},
         {"app.tasks.cron_jobs.generate_crm_weekly_report": {"queue": "cron"}},
         {"app.tasks.cron_jobs.generate_crm_weekly_followup_summary": {"queue": "cron"}},
         {"app.tasks.cron_jobs.send_crm_weekly_followup_leader_engagement_report": {"queue": "cron"}},
@@ -122,6 +123,26 @@ if settings.CRM_DAILY_REPORT_ENABLED:
     app.conf.beat_schedule['generate_crm_daily_report'] = {
         'task': 'app.tasks.cron_jobs.generate_crm_daily_statistics',
         'schedule': statistics_schedule,
+    }
+
+# 今日重点，与日报任务分开调度
+if settings.CRM_TODAY_HIGHLIGHTS_ENABLED:
+    highlights_fields = parse_crontab_fields(settings.CRM_TODAY_HIGHLIGHTS_CRON)
+    if highlights_fields:
+        minute, hour, day_of_month, month_of_year, day_of_week = highlights_fields
+        highlights_schedule = crontab(
+            minute=minute,
+            hour=hour,
+            day_of_month=day_of_month,
+            month_of_year=month_of_year,
+            day_of_week=day_of_week,
+        )
+    else:
+        highlights_schedule = crontab(hour=8, minute=0)
+    app.conf.beat_schedule = getattr(app.conf, "beat_schedule", {})
+    app.conf.beat_schedule["push_crm_today_highlights"] = {
+        "task": "app.tasks.cron_jobs.push_crm_today_highlights",
+        "schedule": highlights_schedule,
     }
 
 # CRM周报推送任务

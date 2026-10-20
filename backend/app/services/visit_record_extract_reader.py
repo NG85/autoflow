@@ -53,8 +53,9 @@ CARD_LINKS_BY_PROFILE: dict[str, list[dict[str, Any]]] = {
         {
             "key": "key_issues",
             "title": "当前最关键问题",
-            "item_types": ["KEY_GAP", "RISK"],
-            "require_any": ["KEY_GAP", "RISK"],
+            "item_types": ["KEY_GAP"],
+            "require_any": ["KEY_GAP"],
+            "hide_when_covered_by_action": True,
         },
         {
             "key": "potential_opps",
@@ -200,10 +201,20 @@ def card_links_for_profile(profile_id: Optional[str]) -> list[dict[str, Any]]:
     return CARD_LINKS_BY_PROFILE.get(pid) or CARD_LINKS_BY_PROFILE[DEFAULT_PROFILE_ID]
 
 
+def _action_covered_gap_keys(grouped: Mapping[str, Sequence[Mapping[str, Any]]]) -> set[str]:
+    covered: set[str] = set()
+    for action in grouped.get("SUGGESTED_ACTION") or []:
+        gap_key = _text(action.get("related_gap"))
+        if gap_key:
+            covered.add(gap_key)
+    return covered
+
+
 def build_card_links(
     grouped: dict[str, list[dict[str, Any]]],
     specs: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
+    covered_gaps = _action_covered_gap_keys(grouped)
     links: list[dict[str, Any]] = []
     for spec in specs:
         types = [str(t) for t in (spec.get("item_types") or [])]
@@ -211,19 +222,20 @@ def build_card_links(
         collected: list[dict[str, Any]] = []
         for item_type in types:
             collected.extend(grouped.get(item_type) or [])
+        if spec.get("hide_when_covered_by_action"):
+            collected = [
+                item
+                for item in collected
+                if _text(item.get("extract_key")) not in covered_gaps
+            ]
+        if spec.get("hide_when_covered_by_action") and not collected:
+            continue
         if require_any:
             if not any(grouped.get(item_type) for item_type in require_any):
                 continue
         elif spec.get("show_if_any", True) and not collected:
             continue
-        preview_pool = collected
-        if require_any:
-            preview_pool = []
-            for item_type in require_any:
-                preview_pool.extend(grouped.get(item_type) or [])
-            if not preview_pool:
-                preview_pool = collected
-        preview = preview_pool[0].get("claim") if preview_pool else None
+        preview = collected[0].get("claim") if collected else None
         links.append(
             {
                 "key": spec.get("key"),
@@ -259,12 +271,34 @@ def build_extract_response(
     pid = profile_id or DEFAULT_PROFILE_ID
     if rows:
         pid = _text(rows[0].get("profile_id")) or pid
+    specs = resolve_card_link_specs(rows, pid)
+    grouped = _omit_covered_key_gaps(grouped, specs)
     return {
         "visit_id": visit_id,
         "profile_id": pid,
         "items": grouped,
-        "card_links": build_card_links(grouped, resolve_card_link_specs(rows, pid)),
+        "card_links": build_card_links(grouped, specs),
     }
+
+
+def _omit_covered_key_gaps(
+    grouped: dict[str, list[dict[str, Any]]],
+    specs: Sequence[Mapping[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Keep the key-issue list aligned with the button when a snapshot hides covered gaps."""
+    if not any(spec.get("hide_when_covered_by_action") for spec in specs):
+        return grouped
+    covered = _action_covered_gap_keys(grouped)
+    gaps = grouped.get("KEY_GAP") or []
+    if not covered or not gaps:
+        return grouped
+    remaining = [item for item in gaps if _text(item.get("extract_key")) not in covered]
+    updated = dict(grouped)
+    if remaining:
+        updated["KEY_GAP"] = remaining
+    else:
+        updated.pop("KEY_GAP", None)
+    return updated
 
 
 def _as_mapping(row: Any) -> dict[str, Any]:

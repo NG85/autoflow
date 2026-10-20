@@ -43,6 +43,7 @@ from .evaluation_task import EvaluationTask, EvaluationTaskItem, EvaluationStatu
 from .evaluation_dataset import EvaluationDataset, EvaluationDatasetItem
 from .file_permission import FilePermission
 from .crm_sales_visit_records import CRMSalesVisitRecord
+from .crm_subject_interaction import CRMSubjectInteraction
 from .crm_daily_account_statistics import CRMDailyAccountStatistics
 from .crm_account_assessment import CRMAccountAssessment
 from .document_contents import DocumentContent

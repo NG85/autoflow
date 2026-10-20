@@ -68,6 +68,19 @@ def build_visit_list_page_url(
     return f"{base}?{query}"
 
 
+def build_week_visit_list_url(week_start: str, week_end: str) -> str:
+    """拜访列表只按拜访日期筛选。谁能看见哪些记录由列表接口的权限决定。"""
+    base = _visit_list_base()
+    start = (week_start or "").strip()
+    end = (week_end or "").strip()
+    if not base or not start or not end:
+        return ""
+    return (
+        f"{base}?visit_communication_date_start={quote(start, safe='')}"
+        f"&visit_communication_date_end={quote(end, safe='')}"
+    )
+
+
 def build_visit_record_page_url(record_id: str) -> str:
     """拜访详情页（路径参数形式）。"""
     host = _host()
@@ -83,6 +96,42 @@ def build_visit_record_recap_page_url(record_id: str) -> str:
     if not base:
         return ""
     return f"{base}/recap"
+
+
+def build_department_highlights_url(
+    report_date: str,
+    department_id: str,
+    section: str,
+) -> str:
+    """销售负责人今日重点页。不传 department_id 时打开该负责人的全部部门。"""
+    host = _host()
+    day = (report_date or "").strip()
+    dept = (department_id or "").strip()
+    key = (section or "").strip()
+    if not host or not day or not key:
+        return ""
+    if dept:
+        query = (
+            f"date={quote(day, safe='')}"
+            f"&department_id={quote(dept, safe='')}"
+            f"&tab={quote(key, safe='')}"
+        )
+    else:
+        query = f"date={quote(day, safe='')}&tab={quote(key, safe='')}"
+    return f"{host}/v2/department-highlights?{query}"
+
+
+def build_sales_today_highlights_url(report_date: str, section: str) -> str:
+    """一线销售今日重点结构化页：/v2/today-highlights?date=&tab=。"""
+    host = _host()
+    day = (report_date or "").strip()
+    key = (section or "").strip()
+    if not host or not day or not key:
+        return ""
+    return (
+        f"{host}/v2/today-highlights"
+        f"?date={quote(day, safe='')}&tab={quote(key, safe='')}"
+    )
 
 
 def build_visit_record_extract_section_url(record_id: str, section: str) -> str:
@@ -122,7 +171,7 @@ def build_task_list_page_url(
     due_date__gte: Optional[str] = None,
     due_date__lte: Optional[str] = None,
     is_overdue: Optional[bool] = None,
-    ai_status__in: Optional[list[str]] = None,
+    status__in: Optional[list[str]] = None,
 ) -> str:
     """任务列表页（日报 / 销售任务周卡片等）。"""
     base = _task_list_base()
@@ -139,10 +188,10 @@ def build_task_list_page_url(
         parts.append(f"due_date__lte={quote(due_date__lte, safe='')}")
     if is_overdue is not None:
         parts.append(f"is_overdue={'true' if is_overdue else 'false'}")
-    for status in ai_status__in or []:
+    for status in status__in or []:
         value = (status or "").strip()
         if value:
-            parts.append(f"ai_status__in={quote(value, safe='')}")
+            parts.append(f"status__in={quote(value, safe='')}")
     if not parts:
         return base
     return f"{base}?{'&'.join(parts)}"
