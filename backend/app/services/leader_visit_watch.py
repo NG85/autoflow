@@ -1,11 +1,11 @@
 """负责人今日重点在周一、周五附带的团队拜访对照。
 
 周一对照上一周（上周一到上周日），周五对照本周（本周一到本周日）。
-先写团队拜访总数和复盘需关注条数，再点名。口径和一线「本周已拜访」一致：按录入人、拜访沟通日落在该周，
-复盘取每条拜访最新一条销售视角复盘。卡片只展示 severity=HIGH（需关注）的条数。
+先写「{部门名}总拜访 N 条」，再点名。口径和一线「本周已拜访」一致：按录入人、拜访沟通日落在该周，
+复盘取每条拜访最新一条销售视角复盘。卡片点名只用 severity=HIGH（需关注）。
 
 - 拜访偏少：团队里有人录入时，这一周一条都没录入的成员。全员都是 0 时不点名。
-  负责人本人不参与点名，也不计入团队总数。
+  负责人本人计入团队总数，不参与点名。
 - 需关注偏多：销售视角复盘 severity=HIGH 至少 2 条，并且不少于团队人均的两倍。
 """
 
@@ -119,17 +119,19 @@ def load_leader_visit_watch(
     except Exception:
         logger.exception("leader visit watch failed")
         return None
-    if not members:
+    if int(summary.get("member_count") or 0) <= 0:
         return None
+    names = list(dict.fromkeys(_text(name) for name in department_names if _text(name)))
     picked = select_visit_watch(members)
     return {
         "label": label,
+        "department_names": names,
         "week_start": week_start.isoformat(),
         "week_end": week_end.isoformat(),
         "visit_total": int(summary.get("visit_total") or 0),
         "recap_total": int(summary.get("recap_total") or 0),
         "recap_by_severity": list(summary.get("recap_by_severity") or []),
-        "url": build_week_visit_list_url(week_start.isoformat(), week_end.isoformat()),
+        "url": build_week_visit_list_url(week_start.isoformat(), week_end.isoformat(), names),
         **picked,
     }
 
@@ -156,14 +158,16 @@ def _member_counts(
     ).all()
     skip = _text(exclude_user_id)
     by_user: dict[str, str] = {}
+    leaders: set[str] = set()
     for profile in profiles:
         user_id = str(profile.user_id or "").strip()
         oauth_id = _text(getattr(profile, "oauth_user_id", None))
-        if skip and skip in {user_id, oauth_id}:
-            continue
         name = _text(profile.name)
-        if user_id and name and user_id not in by_user:
-            by_user[user_id] = name
+        if not user_id or not name or user_id in by_user:
+            continue
+        by_user[user_id] = name
+        if skip and skip in {user_id, oauth_id}:
+            leaders.add(user_id)
     if not by_user:
         return [], empty
     recorder_ids = _uuids(by_user)
@@ -192,6 +196,7 @@ def _member_counts(
     insight_rows = _sales_view_insights(session, record_ids)
     summary = summarize_week_visit_recaps(record_ids, insight_rows)
     summary["visit_total"] = sum(visit_totals.values())
+    summary["member_count"] = len(by_user)
     high_counts = _high_counts(insight_rows, record_owner)
     members = [
         {
@@ -200,6 +205,7 @@ def _member_counts(
             "high_count": high_counts.get(user_id, 0),
         }
         for user_id, name in by_user.items()
+        if user_id not in leaders
     ]
     return members, summary
 
@@ -251,16 +257,18 @@ def _detail_link(url: Any, label: str) -> str:
     return f"[查看{label}拜访]({target})"
 
 
+def _team_phrase(names: Sequence[str]) -> str:
+    """用部门原名。多个部门用顿号接上。"""
+    cleaned = list(dict.fromkeys(_text(name) for name in names if _text(name)))
+    return "、".join(cleaned)
+
+
 def _stats_line(watch: Mapping[str, Any]) -> str:
     total = int(watch.get("visit_total") or 0)
-    return f"拜访 {total} 条，其中需关注 {_high_recap_count(watch)} 条"
-
-
-def _high_recap_count(watch: Mapping[str, Any]) -> int:
-    for group in watch.get("recap_by_severity") or []:
-        if _text(group.get("severity")).upper() == "HIGH":
-            return int(group.get("count") or 0)
-    return 0
+    team = _team_phrase(watch.get("department_names") or [])
+    if not team:
+        return f"总拜访 {total} 条"
+    return f"{team}总拜访 {total} 条"
 
 
 def _is_low_entry(visit_total: int, average: float) -> bool:

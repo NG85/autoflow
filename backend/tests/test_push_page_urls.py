@@ -26,6 +26,23 @@ def test_build_visit_list_page_url(monkeypatch):
     )
 
 
+def test_build_week_visit_list_url_filters_departments(monkeypatch):
+    monkeypatch.setattr(urls.settings, "REVIEW_REPORT_HOST", "https://example.com")
+    monkeypatch.setattr(urls.settings, "VISIT_DETAIL_PAGE_URL", "/v2/behavior")
+    result = urls.build_week_visit_list_url(
+        "2026-10-12",
+        "2026-10-18",
+        ["Dept_004", "华东团队", "Dept_004"],
+    )
+    assert result == (
+        "https://example.com/v2/behavior"
+        "?visit_communication_date_start=2026-10-12"
+        "&visit_communication_date_end=2026-10-18"
+        "&department_name=Dept_004"
+        "&department_name=%E5%8D%8E%E4%B8%9C%E5%9B%A2%E9%98%9F"
+    )
+
+
 def test_build_visit_list_page_url_with_recorder(monkeypatch):
     from app.core.config import CRMDailyReportVisitDateField
 

@@ -3038,6 +3038,7 @@ class PlatformNotificationService:
         title: Optional[str] = None,
         header_template: Optional[str] = None,
         extra_sections: Optional[List[str]] = None,
+        divide_extra_sections: bool = False,
         footer: Optional[str] = None,
         footer_text_size: str = "notation",
         footer_buttons: Optional[List[Tuple[str, str]]] = None,
@@ -3049,6 +3050,7 @@ class PlatformNotificationService:
         header 优先用 title，否则取正文首行；为空则回退「通知」。
         header_template 为飞书色板（green/blue/orange 等），缺省 blue。
         extra_sections 追加为正文字号 markdown（与首块同间距）。
+        divide_extra_sections 为真时，每块追加内容前加一条分隔线。
         footer 可选，另起一块 markdown（默认 notation≈12px）；轻量卡主操作用 normal。
         footer_buttons 为 (文案, url) 列表时，在 footer 之后追加 default 小按钮 + open_url。
         """
@@ -3063,8 +3065,11 @@ class PlatformNotificationService:
         ]
         for section in extra_sections or []:
             section_body = (section or "").strip()
-            if section_body:
-                elements.append({"tag": "markdown", "content": section_body})
+            if not section_body:
+                continue
+            if divide_extra_sections:
+                elements.append({"tag": "hr"})
+            elements.append({"tag": "markdown", "content": section_body})
         footer_body = (footer or "").strip()
         if footer_body:
             size = (footer_text_size or "notation").strip() or "notation"

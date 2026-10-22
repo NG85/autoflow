@@ -132,14 +132,14 @@ def test_thursday_drops_next_week_and_unchanged_risk_keeps_resolved(monkeypatch)
     assert "甲客户" in body and "乙商机" in body
     assert "已闭环" not in body
     assert "这件下周还做吗" not in body
-    assert [label for label, _url in card_blue_links(thursday)] == ["商机风险"]
+    assert [label for label, _url in card_blue_links(thursday)] == ["建议关注"]
 
     friday = assemble_sales_highlights(rows, FRIDAY, _names())
     friday_keys = [section["key"] for section in friday["sections"]]
     assert friday_keys == ["immediate_today", "open_risks", "next_week_confirm"]
     assert friday["sections"][2]["items"][0]["confirm_prompt"] == "这件下周还做吗"
     assert "这件下周还做吗" not in render_card_markdown(friday)
-    assert [label for label, _url in card_blue_links(friday)] == ["商机风险", "下周待确认"]
+    assert [label for label, _url in card_blue_links(friday)] == ["建议关注", "下周待确认"]
 
 
 def test_immediate_item_carries_decision_and_feedback():

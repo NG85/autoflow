@@ -46,13 +46,15 @@ WEEK_FOLLOWUP_LINK_LABEL = "本周已拜访"
 INCOMPLETE_TASK_STATUSES = ("IN_PROGRESS", "PENDING")
 
 # 区块顺序与类型是销售卡合同。标题只从 card_links 快照读取。
-# 快照 title：immediate_today=立即处理，open_risks=商机风险，next_week_confirm=下周待确认。
+# 快照 title：immediate_today=立即处理，open_risks=建议关注，next_week_confirm=下周待确认。
+# 旧快照里的「商机风险」仍按「建议关注」展示。
 SECTION_ORDER: tuple[tuple[str, str], ...] = (
     ("immediate_today", ITEM_IMMEDIATE),
     ("open_risks", ITEM_RISK),
     ("next_week_confirm", ITEM_NEXT_WEEK),
 )
 SECTION_KEYS = {key: item_type for key, item_type in SECTION_ORDER}
+_SECTION_TITLE_RENAMES = {"open_risks": {"商机风险": "建议关注"}}
 
 
 def parse_report_date(value: Any) -> date:
@@ -149,7 +151,7 @@ def _snapshot_titles(rows: Sequence[Any]) -> dict[str, str]:
             key = _text(spec.get("key"))
             title = _text(spec.get("title"))
             if key in SECTION_KEYS and title and key not in titles:
-                titles[key] = title
+                titles[key] = _SECTION_TITLE_RENAMES.get(key, {}).get(title, title)
     return titles
 
 
@@ -402,7 +404,7 @@ def week_followup_link(owner_name: str, report_date: date) -> Optional[tuple[str
 
 
 def card_blue_links(assembled: Mapping[str, Any]) -> list[tuple[str, str]]:
-    """商机风险、下周待确认。更多立即处理写在正文后面。"""
+    """建议关注、下周待确认。更多立即处理写在正文后面。"""
     links: list[tuple[str, str]] = []
     for section in assembled.get("sections") or []:
         title = _text(section.get("title"))
