@@ -83,6 +83,20 @@ def test_risk_and_next_week_can_be_adopted():
         assert row.status == "ADOPTED"
 
 
+def test_adopt_without_todo_keeps_the_existing_link():
+    row = _item(status="ADOPTED", adopted_todo_id="todo-kept")
+    session = _session_with(row)
+    result = save_sales_highlight_decisions(
+        session,
+        "oauth-1",
+        "user-9",
+        [{"unique_id": "item-1", "action": "adopt"}],
+    )
+    assert result["results"][0]["ok"] is True
+    assert result["results"][0]["adopted_todo_id"] == "todo-kept"
+    assert row.adopted_todo_id == "todo-kept"
+
+
 def test_adopt_and_reject_keep_feedback():
     row = _item(feedback="up", feedback_comment="有用")
     session = _session_with(row)

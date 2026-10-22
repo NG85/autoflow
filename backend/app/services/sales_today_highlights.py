@@ -187,6 +187,16 @@ def _serialize_item(row: Any, names: Mapping[str, Mapping[str, str]]) -> dict[st
     from app.services.leader_intervention_actions import interaction_fields
 
     data.update(interaction_fields(row))
+    titles = names.get("todos") or {}
+    related = []
+    for todo_id in _todo_ids_on_row(row):
+        related.append(
+            {
+                "unique_id": todo_id,
+                "title": _text(titles.get(todo_id)) or None,
+            }
+        )
+    data["related_todos"] = related
     return data
 
 
@@ -257,6 +267,60 @@ def _collapse_extracts(rows: Sequence[Any]) -> list[Any]:
     return [_prefer_extract(group) for group in grouped.values()]
 
 
+def _todo_ids_on_row(row: Any) -> list[str]:
+    payload = _payload(row)
+    found: list[str] = []
+    raw = payload.get("todo_ids")
+    if isinstance(raw, list):
+        for value in raw:
+            todo_id = _text(value)
+            if todo_id and todo_id not in found:
+                found.append(todo_id)
+    one = _text(_row_value(row, "adopted_todo_id") or payload.get("todo_id"))
+    if one and one not in found:
+        found.append(one)
+    return found
+
+
+def _merge_shared_immediate(rows: Sequence[Any]) -> list[Any]:
+    """同一句立即处理只留一条，下面带上它挂的全部任务。"""
+    others: list[Any] = []
+    buckets: dict[str, list[Any]] = {}
+    order: list[str] = []
+    for row in rows or []:
+        if _text(_row_value(row, "item_type")) != ITEM_IMMEDIATE:
+            others.append(row)
+            continue
+        claim = _text(_payload(row).get("claim"))
+        if not claim:
+            others.append(row)
+            continue
+        if claim not in buckets:
+            order.append(claim)
+            buckets[claim] = []
+        buckets[claim].append(row)
+    merged: list[Any] = []
+    for claim in order:
+        group = buckets[claim]
+        todo_ids: list[str] = []
+        for row in group:
+            for todo_id in _todo_ids_on_row(row):
+                if todo_id not in todo_ids:
+                    todo_ids.append(todo_id)
+        if len(group) == 1 or len(todo_ids) < 2:
+            merged.extend(group)
+            continue
+        primary = sorted(group, key=_stamp_key)[0]
+        data = _copy_immediate(primary)
+        payload = dict(_payload(primary))
+        payload["todo_ids"] = todo_ids
+        data["payload"] = payload
+        kept_todo = _text(_row_value(primary, "adopted_todo_id"))
+        data["adopted_todo_id"] = kept_todo or None
+        merged.append(data)
+    return others + merged
+
+
 def assemble_sales_highlights(
     rows: Sequence[Any],
     report_date: date,
@@ -264,7 +328,9 @@ def assemble_sales_highlights(
 ) -> dict[str, Any]:
     """按业务日组装销售今日重点。非周五丢掉下周确认；unchanged 风险不进。"""
     friday = is_friday(report_date)
-    kept = _collapse_extracts([row for row in rows or [] if _include_row(row, friday=friday)])
+    kept = _merge_shared_immediate(
+        _collapse_extracts([row for row in rows or [] if _include_row(row, friday=friday)])
+    )
     titles = _snapshot_titles(kept)
     name_map = names or {"accounts": {}, "opportunities": {}}
     day = report_date.isoformat()
@@ -501,7 +567,21 @@ def _dingtalk_item_lines(section_key: str, item: Mapping[str, Any]) -> list[str]
         lines.append(f"> {extra}")
     if context:
         lines.append(f"*{context}*")
+    if section_key == "immediate_today":
+        for label in _related_todo_labels(item):
+            lines.append(f"- {label}")
     return lines
+
+
+def _related_todo_labels(item: Mapping[str, Any]) -> list[str]:
+    labels: list[str] = []
+    for todo in item.get("related_todos") or []:
+        if not isinstance(todo, Mapping):
+            continue
+        label = _text(todo.get("title")) or _text(todo.get("unique_id"))
+        if label and label not in labels:
+            labels.append(label)
+    return labels
 
 
 def _report_day(assembled: Mapping[str, Any]) -> Optional[date]:
@@ -538,6 +618,9 @@ def _card_line(section_key: str, item: Mapping[str, Any], index: Optional[int]) 
         parts.append(f"   {context}")
     if extra:
         parts.append(f"   {extra}")
+    if section_key == "immediate_today":
+        for label in _related_todo_labels(item):
+            parts.append(f"   - {label}")
     return "\n".join(parts)
 
 
@@ -582,8 +665,14 @@ def load_display_names(session: Session, rows: Sequence[Any]) -> dict[str, dict[
     }
     account_ids.discard("")
     opportunity_ids.discard("")
+    todo_ids = []
+    for row in rows:
+        for todo_id in _todo_ids_on_row(row):
+            if todo_id not in todo_ids:
+                todo_ids.append(todo_id)
     accounts: dict[str, str] = {}
     opportunities: dict[str, str] = {}
+    todos: dict[str, str] = {}
     try:
         if account_ids:
             found = session.exec(
@@ -603,9 +692,16 @@ def load_display_names(session: Session, rows: Sequence[Any]) -> dict[str, dict[
                 name = _text(getattr(row, "opportunity_name", None))
                 if uid and name:
                     opportunities[uid] = name
+        if todo_ids:
+            from app.services.subject_interaction import load_task_summaries
+
+            for todo_id, summary in load_task_summaries(session, todo_ids).items():
+                title = _text(summary.get("title"))
+                if title:
+                    todos[todo_id] = title
     except Exception as exc:
         logger.warning("load highlight display names failed: %s", exc)
-    return {"accounts": accounts, "opportunities": opportunities}
+    return {"accounts": accounts, "opportunities": opportunities, "todos": todos}
 
 
 def highlights_for_viewer(

@@ -215,6 +215,75 @@ def test_reextract_keeps_the_decided_immediate_row():
     assert items[0]["feedback"] == "down"
 
 
+def test_same_claim_lists_todos_under_one_immediate():
+    assembled = assemble_sales_highlights(
+        [
+            _row(
+                "IMMEDIATE_ACTION",
+                {"claim": "收口两条待办", "why_today": "今天"},
+                unique_id="a",
+                extract_key="todo_a",
+                status="ADOPTED",
+                adopted_todo_id="todo-a",
+            ),
+            _row(
+                "IMMEDIATE_ACTION",
+                {"claim": "收口两条待办", "why_today": "今天"},
+                unique_id="b",
+                extract_key="todo_b",
+                status="ADOPTED",
+                adopted_todo_id="todo-b",
+            ),
+        ],
+        THURSDAY,
+        {
+            "accounts": {},
+            "opportunities": {},
+            "todos": {"todo-a": "案例触达", "todo-b": "清账"},
+        },
+    )
+    items = assembled["sections"][0]["items"]
+    assert len(items) == 1
+    assert items[0]["status"] == "ADOPTED"
+    assert items[0]["adopted_todo_id"] == "todo-a"
+    assert [todo["title"] for todo in items[0]["related_todos"]] == ["案例触达", "清账"]
+    body = render_card_markdown(assembled)
+    assert body.count("收口两条待办") == 1
+    assert "案例触达" in body
+    assert "清账" in body
+
+
+def test_rejected_immediate_stays_rejected_when_a_sibling_is_adopted():
+    assembled = assemble_sales_highlights(
+        [
+            _row(
+                "IMMEDIATE_ACTION",
+                {"claim": "收口两条待办", "todo_ids": ["todo-a"]},
+                unique_id="a",
+                extract_key="todo_a",
+                status="REJECTED",
+                created_at="2026-10-08T09:00:00",
+            ),
+            _row(
+                "IMMEDIATE_ACTION",
+                {"claim": "收口两条待办", "todo_ids": ["todo-b"]},
+                unique_id="b",
+                extract_key="todo_b",
+                status="ADOPTED",
+                adopted_todo_id="todo-b",
+                created_at="2026-10-08T10:00:00",
+            ),
+        ],
+        THURSDAY,
+        {"accounts": {}, "opportunities": {}, "todos": {"todo-a": "案例触达", "todo-b": "清账"}},
+    )
+    item = assembled["sections"][0]["items"][0]
+    assert item["unique_id"] == "a"
+    assert item["status"] == "REJECTED"
+    assert item["adopted_todo_id"] is None
+    assert [todo["unique_id"] for todo in item["related_todos"]] == ["todo-a", "todo-b"]
+
+
 def test_card_shows_top_immediate_and_blue_links_for_the_rest(monkeypatch):
     monkeypatch.setattr(
         "app.services.sales_today_highlights.build_sales_today_highlights_url",
