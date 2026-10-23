@@ -644,7 +644,7 @@ def test_leader_without_open_id_is_skipped(monkeypatch):
     assert sent["count"] == 0
 
 
-def test_week_visit_button_filters_visit_date_only(monkeypatch):
+def test_week_visit_button_filters_the_team(monkeypatch):
     from app.core.config import CRMDailyReportVisitDateField
 
     monkeypatch.setattr(
@@ -677,9 +677,13 @@ def test_week_visit_button_filters_visit_date_only(monkeypatch):
             "本周已拜访",
             "https://example.com/v2/behavior"
             "?visit_communication_date_start=2026-10-12"
-            "&visit_communication_date_end=2026-10-18",
+            "&visit_communication_date_end=2026-10-18"
+            "&department_name=%E5%8D%8E%E5%8C%97%E9%94%80%E5%94%AE",
         )
     ]
+    merged = assemble_leader_highlights([assembled], TUESDAY)
+    merged_buttons = card_footer_buttons(merged)
+    assert merged_buttons == buttons
 
 
 def test_card_title_omits_department_name(monkeypatch):
@@ -718,6 +722,49 @@ def test_card_title_omits_department_name(monkeypatch):
     )
     assert captured["title"] == "今日重点｜2026-10-12"
     assert "华北销售" not in captured["title"]
+
+
+def test_feishu_card_splits_visit_watch_from_intervention(monkeypatch):
+    captured = {}
+    assembled = assemble_department_highlights(
+        [_row({"claim": "拍板", "leader_action": "今天确认", "related_user_id": "oauth-zhang"})],
+        DAY,
+        "dept-1",
+        _names(),
+        department_name="华北销售",
+    )
+    assembled["visit_watch"] = {
+        "label": "上周",
+        "visit_total": 0,
+        "recap_by_severity": [{"severity": "HIGH", "count": 0}],
+        "low_entry": [],
+        "high_severity": [],
+        "url": "https://example.com/visits",
+    }
+    monkeypatch.setattr(
+        "app.services.platform_notification_service.platform_notification_service.build_feishu_markdown_card",
+        lambda body, title=None, **kwargs: captured.update(title=title, body=body, **kwargs) or {},
+    )
+    monkeypatch.setattr(
+        "app.services.platform_notification_service.platform_notification_service._get_platform_tokens",
+        lambda platforms: {"feishu": "token"},
+    )
+    monkeypatch.setattr(
+        "app.services.platform_notification_service.platform_notification_service._send_messages_to_platform",
+        lambda *args, **kwargs: (1, []),
+    )
+    deliver_department_highlight_card(
+        MagicMock(),
+        {"platform": "feishu", "user_id": "leader-1", "open_id": "ou_leader"},
+        assembled,
+    )
+    assert "**今日需介入**" in captured["body"]
+    assert "**张三**" in captured["body"]
+    assert "上周拜访" not in captured["body"]
+    assert captured["divide_extra_sections"] is True
+    assert captured["extra_sections"] == [
+        "**上周拜访**\n总拜访 0 条\n[查看上周拜访](https://example.com/visits)"
+    ]
 
 
 def test_dingtalk_card_puts_title_in_the_body(monkeypatch):

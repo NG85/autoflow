@@ -62,6 +62,20 @@ def test_build_feishu_markdown_card_appends_smaller_footer():
     ]
 
 
+def test_build_feishu_markdown_card_divides_extra_sections():
+    card = PlatformNotificationService.build_feishu_markdown_card(
+        "**今日需介入**",
+        title="今日重点｜2026-10-19",
+        extra_sections=["**上周拜访**\nDept_004总拜访 0 条"],
+        divide_extra_sections=True,
+    )
+    assert card["body"]["elements"][:3] == [
+        {"tag": "markdown", "content": "**今日需介入**"},
+        {"tag": "hr"},
+        {"tag": "markdown", "content": "**上周拜访**\nDept_004总拜访 0 条"},
+    ]
+
+
 def test_build_feishu_markdown_card_appends_default_buttons():
     card = PlatformNotificationService.build_feishu_markdown_card(
         "元信息",

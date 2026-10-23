@@ -2,7 +2,7 @@ from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Annotated, Union
 from datetime import date, datetime
 from uuid import UUID
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_serializer, model_validator
 import json
 
 # 定义响应模型
@@ -755,13 +755,24 @@ class CRMComment(BaseModel):
     content: str
     type: Optional[Literal["comment", "task"]] = None
     created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = Field(
+        default=None,
+        description="最近一次编辑时间；未编辑时不返回",
+    )
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_updated_at(self, handler):
+        data = handler(self)
+        if not data.get("updated_at"):
+            data.pop("updated_at", None)
+        return data
 
 class VisitRecordCommentsUpdate(BaseModel):
-    """追加拜访记录的评论（JSON数组）；传本次新增条目即可"""
+    """追加或编辑拜访记录的评论（JSON数组）。无 id 时追加；id 命中已有条目时编辑本人评论。"""
 
     comments: Optional[List[CRMComment]] = Field(
         default=None,
-        description="本次新增的评论条目（服务端在既有 comments 后追加）；每条 author_id 须为当前登录用户",
+        description="本次新增或编辑的评论条目。编辑时传入已有 id，且该条须为当前登录用户所发，只更新 content；无 id 时在既有 comments 后追加。每条 author_id 须为当前登录用户",
     )
 
 
@@ -1257,11 +1268,11 @@ class WeeklyFollowupDepartmentOption(BaseModel):
 
 
 class SaveWeeklyFollowupCommentsIn(BaseModel):
-    """追加周跟进实体评论；传本次新增条目即可。"""
+    """追加或编辑周跟进实体评论。无 id 时追加；id 命中已有条目时编辑本人评论。"""
 
     comments: List[CRMComment] = Field(
         default_factory=list,
-        description="本次新增的评论/任务条目（服务端在既有 comments 后追加）；每条 author_id 须为当前登录用户",
+        description="本次新增或编辑的评论/任务条目。编辑时传入已有 id，且该条须为当前登录用户所发，只更新 content；无 id 时在既有 comments 后追加。每条 author_id 须为当前登录用户",
     )
 
 

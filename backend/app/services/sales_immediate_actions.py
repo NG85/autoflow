@@ -122,7 +122,10 @@ def save_sales_highlight_decisions(
             continue
         before = interaction_fields(current)
         current.status = item["status"]
-        current.adopted_todo_id = item["adopted_todo_id"]
+        adopted_todo_id = item["adopted_todo_id"]
+        if item["status"] == STATUS_ADOPTED and not adopted_todo_id:
+            adopted_todo_id = _text(getattr(current, "adopted_todo_id", None)) or None
+        current.adopted_todo_id = adopted_todo_id
         current.reject_reason = item["reject_reason"]
         current.updated_at = _now()
         session.add(current)
