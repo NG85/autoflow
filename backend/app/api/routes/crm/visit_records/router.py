@@ -1098,12 +1098,13 @@ def update_visit_record_comments(
     payload: VisitRecordCommentsUpdate,
 ):
     """
-    追加保存指定跟进记录的评论（comments，JSON数组）；请求体只需传本次新增条目。
+    追加或编辑指定跟进记录的评论（comments，JSON数组）。
+    - 无 id，或 id 未命中已有条目：追加。type=comment 时 id 由服务端生成；type=task 时 id 可选由前端传入，未传则保持为空
+    - 传入已有 id：编辑该条，只更新 content（不改作者、回复关系、类型、创建时间）；只能编辑本人评论，否则返回 400
     - 每条评论的 author_id 须与当前登录用户一致，否则返回 400
     - 复用跟进记录的权限控制逻辑：无权限/不存在返回 404
     - 支持 reply_to_id 回复已有评论；无效 reply_to_id 返回 400
-    - type=task 时 id 可选由前端传入，未传则保持为空（不生成）；type=comment 时 id 由服务端生成
-    - 保存成功后：type=comment 的顶层评论向记录人推送提醒；带 reply_to_id 的回复向被回复评论作者推送提醒（type=task 不推送）
+    - 保存成功后：type=comment 推送提醒，编辑在首行末尾追加「（MM-DD HH:mm 编辑过）」。顶层评论向记录人推送；带 reply_to_id 的回复向被回复评论作者推送（type=task 不推送）
     """
     try:
         current_user_id_str = str(user.id)
@@ -1120,7 +1121,7 @@ def update_visit_record_comments(
             len(payload.comments or []),
         )
         try:
-            updated_record = visit_record_repo.update_visit_record_comments(
+            result = visit_record_repo.update_visit_record_comments(
                 session=db_session,
                 record_id=record_id,
                 comments=[c.model_dump() for c in (payload.comments or [])],
@@ -1129,8 +1130,9 @@ def update_visit_record_comments(
         except VisitRecordCommentError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
 
-        if updated_record is None:
+        if result is None:
             raise HTTPException(status_code=404, detail="跟进记录不存在或无权限访问")
+        updated_record, appended_comments, edited_comments = result
 
         # 保存评论成功后推送提醒（不影响主流程，失败仅记录日志）
         try:
@@ -1169,24 +1171,32 @@ def update_visit_record_comments(
             opp = (getattr(record, "opportunity_name", None) or "") or ""
             link_text = f"{title}  {opp}".strip() or "跟进记录"
 
-            for item in payload.comments or []:
-                item_type = str(item.type or "comment").strip().lower()
+            def _notify_comment(item: dict, *, edited: bool) -> None:
+                item_type = str(item.get("type") or "comment").strip().lower()
                 if item_type != "comment":
-                    continue
+                    return
 
-                comment_preview = str(item.content or "").strip()
+                comment_preview = str(item.get("content") or "").strip()
                 if len(comment_preview) > 200:
                     comment_preview = comment_preview[:197] + "..."
 
-                author_name = str(item.author or "").strip()
+                author_name = str(item.get("author") or "").strip()
                 author_name = author_name or str(getattr(user, "name", "") or "").strip()
                 author_name = author_name or "有人"
+                edited_suffix = ""
+                if edited:
+                    raw_updated_at = str(item.get("updated_at") or "").strip()
+                    try:
+                        edited_label = datetime.fromisoformat(raw_updated_at).strftime("%m-%d %H:%M")
+                    except Exception:
+                        edited_label = raw_updated_at
+                    edited_suffix = f"（{edited_label} 编辑过）" if edited_label else "（编辑过）"
 
-                reply_to_id = str(item.reply_to_id or "").strip()
+                reply_to_id = str(item.get("reply_to_id") or "").strip()
                 if reply_to_id:
                     parent = comment_by_id.get(reply_to_id)
                     recipient_user_id = str((parent or {}).get("author_id") or "").strip()
-                    notify_kind = "reply"
+                    notify_kind = "reply_edit" if edited else "reply"
                     if not recipient_user_id or recipient_user_id == current_user_id:
                         logger.info(
                             "visit_record_comment notify skipped: record_id=%s, reply_to_id=%s, reason=%s",
@@ -1194,24 +1204,24 @@ def update_visit_record_comments(
                             reply_to_id,
                             "invalid_recipient_or_self_notification",
                         )
-                        continue
+                        return
                     text = (
-                        f"{author_name}回复了你的评论\n"
+                        f"{author_name}回复了你的评论{edited_suffix}\n"
                         f"[{link_text}]({jump_url})\n"
                         f"回复：{comment_preview or '--'}\n"
                     )
                 else:
                     recipient_user_id = recorder_user_id
-                    notify_kind = "comment"
+                    notify_kind = "comment_edit" if edited else "comment"
                     if not recipient_user_id or recipient_user_id == current_user_id:
                         logger.info(
                             "visit_record_comment notify skipped: record_id=%s, reason=%s",
                             record_id,
                             "invalid_recipient_or_self_notification",
                         )
-                        continue
+                        return
                     text = (
-                        f"{author_name}评论了你的跟进记录\n"
+                        f"{author_name}评论了你的跟进记录{edited_suffix}\n"
                         f"[{link_text}]({jump_url})\n"
                         f"评论：{comment_preview or '--'}\n"
                     )
@@ -1228,6 +1238,11 @@ def update_visit_record_comments(
                     recipient_user_id,
                     author_name,
                 )
+
+            for item in appended_comments:
+                _notify_comment(item, edited=False)
+            for item in edited_comments:
+                _notify_comment(item, edited=True)
         except Exception as e:
             logger.warning(f"发送跟进记录评论提醒失败（不影响保存评论）：{e}")
 

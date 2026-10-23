@@ -1168,12 +1168,14 @@ class VisitRecordRepo(BaseRepo):
         record_id: str,
         comments: Optional[List[Dict[str, Any]]],
         current_user_id: Optional[UUID] = None
-    ) -> Optional[VisitRecordResponse]:
+    ) -> Optional[tuple[VisitRecordResponse, List[Dict[str, Any]], List[Dict[str, Any]]]]:
         """
-        更新指定拜访记录的 comments 字段（JSON数组）
-        调用方仅传入本次新增的评论；在既有数据后追加落库。
+        更新指定拜访记录的 comments 字段（JSON数组）。
+        调用方传入本次新增或编辑的条目：无 id（或 id 不存在）时追加；
+        id 命中已有条目时只更新本人评论的 content。
         安全保护：不得修改/删除他人评论。HTTP 接口应在入口处校验 payload 的 author_id；
         此处仍忽略 author_id 非当前用户的条目，以防绕过 API 直接调用本方法。
+        返回 (记录, 本次追加的条目, 本次编辑的条目)；记录不存在或无权限时返回 None。
         """
         # 更新评论只需要查询拜访记录主表即可
         query = select(CRMSalesVisitRecord).where(CRMSalesVisitRecord.record_id == record_id)
@@ -1191,21 +1193,22 @@ class VisitRecordRepo(BaseRepo):
             return None
 
         current_user_id_str = str(current_user_id or "")
-        merged, _appended = merge_append_crm_comments(
+        merged, appended, edited = merge_append_crm_comments(
             record.comments,
             comments,
             current_user_id_str,
             now=datetime.now(ZoneInfo("Asia/Shanghai")),
+            allow_edit=True,
         )
         record.comments = merged
         session.add(record)
         session.commit()
         session.refresh(record)
 
-        # 返回完整记录（便于上层推送消息等后续处理）
+        # 返回完整记录（便于上层推送消息等后续处理）、本次追加条目和本次编辑条目
         response = _convert_to_response(record, None, None, None)
         _fill_has_recap(session, current_user_id, [(record, response)])
-        return response
+        return response, appended, edited
 
 
 # 创建repository实例
