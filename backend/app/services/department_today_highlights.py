@@ -293,6 +293,13 @@ def assemble_leader_highlights(
             item["department_name"] = entry["_department_name"]
         items.append(item)
     title = _text(entries[0].get("_section_title")) if entries else ""
+    department_names = list(
+        dict.fromkeys(
+            _text(card.get("department_name"))
+            for card in department_cards or []
+            if _text(card.get("department_name"))
+        )
+    )
     day = report_date.isoformat()
     if len(items) == 1 and len(department_ids) == 1:
         link_department = department_ids[0]
@@ -312,6 +319,7 @@ def assemble_leader_highlights(
         "report_date": day,
         "department_id": department_ids[0] if len(department_ids) == 1 else "",
         "department_name": "",
+        "department_names": department_names,
         "department_ids": department_ids,
         "sections": [section] if section else [],
         "has_content": bool(items),
@@ -343,27 +351,42 @@ def department_highlights_payload(assembled: Mapping[str, Any]) -> dict[str, Any
     }
 
 
+def _intervention_markdown(assembled: Mapping[str, Any]) -> str:
+    """介入块：标题、展开的一条、未展开的人名、出口链接。"""
+    sections = list(assembled.get("sections") or [])
+    if not sections:
+        return ""
+    section = sections[0]
+    items = list(section.get("items") or [])
+    if not items:
+        return ""
+    lines: list[str] = []
+    title = _text(section.get("title"))
+    key = _text(section.get("key"))
+    if title and title != key:
+        lines.append(f"**{title}**")
+    lines.append(_card_line(items[0]))
+    others = _other_people_line(items)
+    if others:
+        lines.append(others)
+    more = _section_exit_link(section)
+    if more:
+        lines.append(more)
+    return "\n".join(lines)
+
+
+def render_card_sections(assembled: Mapping[str, Any]) -> list[str]:
+    """飞书按块发送。介入一块；周一、周五的拜访对照单独一块。"""
+    parts = [
+        _intervention_markdown(assembled),
+        "\n".join(visit_watch_lines(assembled.get("visit_watch"))),
+    ]
+    return [part for part in parts if part]
+
+
 def render_card_markdown(assembled: Mapping[str, Any]) -> str:
     """正文只展开信度最高的一条介入，其余人只点名。标题不跳转，下面固定一个出口。"""
-    lines: list[str] = []
-    sections = list(assembled.get("sections") or [])
-    if sections:
-        section = sections[0]
-        items = list(section.get("items") or [])
-        if items:
-            title = _text(section.get("title"))
-            key = _text(section.get("key"))
-            if title and title != key:
-                lines.append(f"**{title}**")
-            lines.append(_card_line(items[0]))
-            others = _other_people_line(items)
-            if others:
-                lines.append(others)
-            more = _section_exit_link(section)
-            if more:
-                lines.append(more)
-    lines.extend(visit_watch_lines(assembled.get("visit_watch")))
-    return "\n".join(lines)
+    return "\n\n".join(render_card_sections(assembled))
 
 
 def _section_exit_link(section: Mapping[str, Any]) -> str:
@@ -403,6 +426,14 @@ def _report_day(assembled: Mapping[str, Any]) -> Optional[date]:
         return None
 
 
+def _visit_department_names(assembled: Mapping[str, Any]) -> list[str]:
+    names = [_text(name) for name in (assembled.get("department_names") or []) if _text(name)]
+    single = _text(assembled.get("department_name"))
+    if single and single not in names:
+        names.append(single)
+    return list(dict.fromkeys(names))
+
+
 def card_footer_buttons(assembled: Mapping[str, Any]) -> list[tuple[str, str]]:
     """本周已拜访：周一不放。周一、周五有拜访对照时，入口改在那段末尾，这里不再重复。"""
     watch = assembled.get("visit_watch") or {}
@@ -412,7 +443,11 @@ def card_footer_buttons(assembled: Mapping[str, Any]) -> list[tuple[str, str]]:
     if report_day is None or report_day.weekday() == 0:
         return []
     week_start, week_end = get_week_range_from_date(report_day)
-    url = build_week_visit_list_url(week_start.isoformat(), week_end.isoformat())
+    url = build_week_visit_list_url(
+        week_start.isoformat(),
+        week_end.isoformat(),
+        _visit_department_names(assembled),
+    )
     if not url:
         return []
     return [(WEEK_VISIT_LABEL, url)]
@@ -436,7 +471,10 @@ def render_dingtalk_markdown(assembled: Mapping[str, Any], *, title: str) -> str
         exit_link = _section_exit_link(section)
         if exit_link:
             lines.append(exit_link)
-    lines.extend(visit_watch_lines(assembled.get("visit_watch"), dingtalk=True))
+    watch_lines = visit_watch_lines(assembled.get("visit_watch"), dingtalk=True)
+    if lines and watch_lines:
+        lines.append("")
+    lines.extend(watch_lines)
     body = "\n".join(lines)
     tail = "  ".join(f"[{label}]({url})" for label, url in card_footer_buttons(assembled))
     if not tail:
@@ -469,25 +507,30 @@ def _dingtalk_item_lines(item: Mapping[str, Any]) -> list[str]:
 
 
 def _card_line(item: Mapping[str, Any]) -> str:
+    """人名单独加粗。情况说明和建议动作之间空一行，避免粘成一段。"""
     who = _text(item.get("related_user_name")) or _text(item.get("related_user_id"))
     claim = _text(item.get("claim"))
     dept = _text(item.get("department_name"))
-    label = who or claim
-    head = f"{label} · {dept}" if label and dept else label
-    parts = [head]
-    if who and claim:
-        parts.append(f"   {claim}")
+    lines: list[str] = []
+    if who:
+        lines.append(f"**{who}** · {dept}" if dept else f"**{who}**")
+        if claim and claim != who:
+            lines.append(claim)
+    elif claim:
+        lines.append(f"{claim} · {dept}" if dept else claim)
     action = _text(item.get("leader_action"))
     if action:
-        parts.append(f"   {action}")
+        if lines:
+            lines.append("")
+        lines.append(action)
     context = " · ".join(
         part
         for part in (_text(item.get("account_name")), _text(item.get("opportunity_name")))
         if part
     )
     if context:
-        parts.append(f"   {context}")
-    return "\n".join(parts)
+        lines.append(context)
+    return "\n".join(lines)
 
 
 def _subject_id(row: Any) -> str:
@@ -765,13 +808,17 @@ def deliver_department_highlight_card(
 
     day = assembled.get("report_date")
     title = f"今日重点｜{day}"
-    body = render_card_markdown(assembled)
+    sections = render_card_sections(assembled)
+    body = sections[0] if sections else ""
+    extra = sections[1:]
     buttons = card_footer_buttons(assembled)
     platform = _text(recipient.get("platform"))
     if platform in (PLATFORM_FEISHU, PLATFORM_LARK):
         card = platform_notification_service.build_feishu_markdown_card(
             body,
             title=title,
+            extra_sections=extra or None,
+            divide_extra_sections=bool(extra),
             footer_buttons=buttons or None,
         )
         tokens = platform_notification_service._get_platform_tokens([platform])

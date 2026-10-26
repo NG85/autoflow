@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Sequence
 from urllib.parse import quote, quote_plus
 
 from app.core.config import CRMDailyReportVisitDateField, settings
@@ -68,17 +68,29 @@ def build_visit_list_page_url(
     return f"{base}?{query}"
 
 
-def build_week_visit_list_url(week_start: str, week_end: str) -> str:
-    """拜访列表只按拜访日期筛选。谁能看见哪些记录由列表接口的权限决定。"""
+def build_week_visit_list_url(
+    week_start: str,
+    week_end: str,
+    department_names: Optional[Sequence[str]] = None,
+) -> str:
+    """拜访列表按拜访日期筛选。传入部门名时再按部门收窄，和卡片上的团队总数对齐。"""
     base = _visit_list_base()
     start = (week_start or "").strip()
     end = (week_end or "").strip()
     if not base or not start or not end:
         return ""
-    return (
-        f"{base}?visit_communication_date_start={quote(start, safe='')}"
+    query = (
+        f"visit_communication_date_start={quote(start, safe='')}"
         f"&visit_communication_date_end={quote(end, safe='')}"
     )
+    seen: set[str] = set()
+    for raw in department_names or []:
+        dept = (raw or "").strip()
+        if not dept or dept in seen:
+            continue
+        seen.add(dept)
+        query = f"{query}&department_name={quote_plus(dept)}"
+    return f"{base}?{query}"
 
 
 def build_visit_record_page_url(record_id: str) -> str:

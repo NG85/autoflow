@@ -31,10 +31,14 @@ def merge_append_crm_comments(
     current_user_id: str,
     *,
     now: Optional[datetime] = None,
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    allow_edit: bool = False,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     在既有评论后追加当前用户的新评论；为历史 comment 懒补 id（历史 task 无 id 时不填充）。
-    返回 (merged_sorted, appended)。
+    allow_edit=True 时，若条目 id 命中已有评论且作者为当前用户，则只更新 content 与 updated_at，
+    不改 id、author、reply_to_id、type、created_at；该条计入 edited，不计入 appended。
+    命中他人评论时抛出 CRMCommentValidationError。
+    返回 (merged_sorted, appended, edited)。
     """
     current_user_id_str = str(current_user_id or "")
     now_bj = now or datetime.now(ZoneInfo("Asia/Shanghai"))
@@ -58,10 +62,20 @@ def merge_append_crm_comments(
             comment_by_id[cid] = item
 
     appended: List[Dict[str, Any]] = []
+    edited: List[Dict[str, Any]] = []
     for c in (new_comments or []):
         if not isinstance(c, dict):
             continue
         if str(c.get("author_id") or "") != current_user_id_str:
+            continue
+        incoming_id = str(c.get("id") or "").strip()
+        if allow_edit and incoming_id and incoming_id in comment_by_id:
+            existing = comment_by_id[incoming_id]
+            if str(existing.get("author_id") or "").strip() != current_user_id_str:
+                raise CRMCommentValidationError("只能编辑本人的评论")
+            existing["content"] = c.get("content")
+            existing["updated_at"] = now_bj.isoformat()
+            edited.append(existing)
             continue
         reply_to_id = str(c.get("reply_to_id") or "").strip()
         if reply_to_id:
@@ -109,7 +123,7 @@ def merge_append_crm_comments(
             return (1, v)
 
     merged.sort(key=_sort_key)
-    return merged, appended
+    return merged, appended, edited
 
 
 def has_nonempty_comments(comments_raw: object) -> bool:
