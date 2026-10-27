@@ -114,6 +114,10 @@ def test_leader_list_returns_extract_state_and_side_records(monkeypatch):
         lambda session, rows: {"accounts": {}, "opportunities": {}, "people": {}},
     )
     monkeypatch.setattr(
+        "app.services.department_today_highlights.load_leader_insight_sections",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
         "app.repositories.department_mirror.department_mirror_repo.get_department_names_by_ids",
         lambda session, ids: {"dept-mine": "华北销售"},
     )
@@ -141,7 +145,7 @@ def test_leader_list_returns_extract_state_and_side_records(monkeypatch):
     )
 
     data = highlights_for_leader(MagicMock(), "leader-1", DAY)
-    item = data["departments"][0]["items"]["leader_intervene"][0]
+    item = data["items"]["leader_intervene"][0]
     assert item["status"] == "ADOPTED"
     assert item["adopted_todo_id"] == "todo-1"
     assert item["feedback"] == "up"

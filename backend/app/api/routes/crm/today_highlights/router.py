@@ -70,7 +70,7 @@ def get_department_today_highlights(
         description="业务日 YYYY-MM-DD，默认北京时间当天",
     ),
 ):
-    """当前负责人自己的今日需介入。subject_id 是其 oauth id。"""
+    """当前负责人自己的今日需介入和报告。subject_id 是其 oauth id。"""
     try:
         target = parse_report_date(report_date)
     except ValueError as exc:

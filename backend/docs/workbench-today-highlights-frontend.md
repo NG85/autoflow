@@ -5,7 +5,7 @@
 | 工作台 | 谁的内容 | 页面 | 列表接口 | 页面上做什么 |
 | --- | --- | --- | --- | --- |
 | 我的 | 当前用户自己的抽取 | `/v2/today-highlights` | `GET /api/v1/crm/today-highlights/sales` | 建议关注、下周待确认可以采纳/拒绝和赞踩。立即处理已有关联待办时只给一个查看任务的入口：一条打开详情，多条打开任务列表。不展示「已采纳」。采纳和拒绝只出现在还是待判断、且没有关联待办的立即处理上。 |
-| 团队 | 当前用户负责的部门，含没有负责人、抬上来的下级部门 | `/v2/department-highlights` | `GET /api/v1/crm/today-highlights/departments` | 对每条需介入做采纳/拒绝、评论、挂任务、赞踩。 |
+| 团队 | 当前用户作为负责人的需介入和报告 | `/v2/department-highlights` | `GET /api/v1/crm/today-highlights/departments` | 只对「今日需介入」做采纳/拒绝、评论、挂任务、赞踩。重点商机、团队人效、经营趋势只读，不要画出这些操作。 |
 
 登录态沿用现有 CRM 接口。两个列表都只认当前登录人，请求里不要传别人的用户 id。
 
@@ -202,7 +202,7 @@ POST /api/v1/crm/today-highlights/sales/items/{unique_id}/feedback
 
 # 部门负责人
 
-登录态沿用现有 CRM 接口。服务端用当前用户判断他负责哪些部门，请求里不要传别人的用户 id。
+登录态沿用现有 CRM 接口。列表按当前登录人一份返回，不要传别人的用户 id，也不要按部门分段。
 
 ## 6. 从卡片进页面
 
@@ -210,26 +210,39 @@ POST /api/v1/crm/today-highlights/sales/items/{unique_id}/feedback
 
 ```text
 /v2/department-highlights?date=YYYY-MM-DD&tab=leader_intervene
-/v2/department-highlights?date=YYYY-MM-DD&department_id={部门id}&tab=leader_intervene
+/v2/department-highlights?date=YYYY-MM-DD&tab=key_deal_review
+/v2/department-highlights?date=YYYY-MM-DD&tab=leader_efficiency_insight
+/v2/department-highlights?date=YYYY-MM-DD&tab=team_operating_trend
 ```
 
 | URL 参数 | 含义 |
 | --- | --- |
 | `date` | 业务日。调接口时改名为 `report_date`。缺省按北京时间当天。 |
-| `department_id` | 有则只拉这一个部门。没有则拉当前用户能处理的全部部门。 |
-| `tab` | 要打开的 tab，取值是 `card_links[].key`。现在只有 `leader_intervene`。和拜访复盘、销售今日重点的 `tab` 相同。 |
+| `tab` | 要打开的 tab，取值是这次列表里的 `card_links[].key`。不要写死四个 tab。和拜访复盘、销售今日重点的 `tab` 相同。 |
 
-标题始终是小节名，不跳转。正文下面固定一个入口：只有这一条时写「查看」，还有别的时写「更多（N）」，N 是卡片上没展开的条数。当天只有一条、且只涉及一个部门时，这个入口带 `department_id`。还有别的条目，或同一个人负责多个部门时，不带 `department_id`。
+标题始终是小节名，不跳转。需介入正文下面固定一个入口：只有这一条时写「查看」，还有别的时写「更多（N）」，N 是卡片上没展开的条数。报告入口是一行蓝链，文案是「重点商机」「团队人效」「经营趋势」，没有的不出现。
 
-页面同样一类一个 tab，tab 来自各部门 `card_links` 的并集，按第一次出现的顺序排，标题用先出现的那条 `title`，`count` 用各类条目加总。现在只有「今日需介入」一个 tab。`tab` 对不上或没传时打开第一个。切换 tab 时把 `tab` 写回地址栏。多个部门时，部门名是这个 tab 里面的分组标题，不是 tab。某个部门在当前 tab 下没有条目，就不渲染这一组。
+页面 tab 只来自 `card_links`，按返回顺序排，文案用 `card_links[].title`。当天没有的报告不要占空 tab。`tab` 对不上或没传时打开第一个。切换 tab 时把 `tab` 写回地址栏。
 
-周一、周五的推送正文在需介入后面还会多一段拜访对照，页面列表里没有这段。周一对照上一周，周五对照本周。需介入只展开一条。其余人在「更多」前面写成「还有姓名」，不展开事项。周一、周五这段先写「{部门名}总拜访 N 条」，口径和一线「本周已拜访」相同：按录入人、拜访沟通日，同一拜访只计最新一条销售视角复盘。卡片上不写具体日期。负责人本人计入总数，不参与点名。然后再点名两类成员：拜访偏少（团队有人录入时，这一周 0 条的人；全员都是 0 不点名），以及需关注偏多（severity=HIGH 至少 2 条，且不少于人均的两倍）。没有要点名的人时，总数仍然保留。这段末尾是「查看上周拜访」或「查看本周拜访」，打开同一周的拜访列表，并带上卡片上的部门名。有这段时，卡片底部不再另放「本周已拜访」。没有在职成员时不加这一段，底部仍按周二到周日放「本周已拜访」，并带上卡片上的部门名。周一、周五没有需介入、但有这段拜访对照时，仍然发卡片。
+周一、周五的推送正文在需介入后面还会多一段拜访对照，页面列表里没有这段。周一对照上一周，周五对照本周。需介入只展开一条。其余人在「更多」前面写成「还有姓名」，不展开事项。周一、周五这段先写「{部门名}总拜访 N 条」，口径和一线「本周已拜访」相同：按录入人、拜访沟通日，同一拜访只计最新一条销售视角复盘。卡片上不写具体日期。负责人本人计入总数，不参与点名。然后再点名两类成员：拜访偏少（团队有人录入时，这一周 0 条的人；全员都是 0 不点名），以及需关注偏多（severity=HIGH 至少 2 条，且不少于人均的两倍）。没有要点名的人时，总数仍然保留。这段末尾是「查看上周拜访」或「查看本周拜访」，打开同一周的拜访列表，并带上卡片上的部门名。有这段时，卡片底部不再另放「本周已拜访」。没有在职成员时不加这一段，底部仍按周二到周日放「本周已拜访」，并带上卡片上的部门名。周一、周五没有需介入、但有这段拜访对照时，仍然发卡片。只有报告入口时也发，正文先写「今天没有需介入事项，可以先看这些报告。」再跟蓝链。有需介入或拜访对照时不写这句。
+
+拜访对照后面再跟三个报告入口，有匹配到的洞察才出现，没有的不占位。都打开今日重点页对应 tab，不跳到周报旧地址。团队人效、经营趋势只在周一、周五展示，也是当天任务写出、当天用进卡片。卡片文案不带上周/本周。顺序固定：
+
+| 入口 | `tab` | 打开 |
+| --- | --- | --- |
+| 重点商机 | `key_deal_review` | `/v2/department-highlights?date=YYYY-MM-DD&tab=key_deal_review` |
+| 团队人效 | `leader_efficiency_insight` | `/v2/department-highlights?date=YYYY-MM-DD&tab=leader_efficiency_insight` |
+| 经营趋势 | `team_operating_trend` | `/v2/department-highlights?date=YYYY-MM-DD&tab=team_operating_trend` |
+
+报告按负责人本人取，和需介入抽取同一套人：`crm_entity_insight.entity_type=USER`，`entity_id` 是 oauth id。链接不带 `department_id`。`period_key` 等于当天 `report_date`（写入方当天执行，存的是执行日）。需介入对应 `DAILY_LEADER_INTERVENE`；重点商机是 `KEY_DEAL_REVIEW`；团队人效是 `LEADER_EFFICIENCY_INSIGHT`；经营趋势是 `TEAM_OPERATING_TREND`。这三项有匹配时就会发卡片，不必再等需介入或拜访对照。需介入、拜访对照、报告都没有才跳过。
 
 ---
 
-## 7. 页面上三块操作
+## 7. 页面上三块操作（仅今日需介入）
 
-一张卡上三块互不影响，写的也是不同接口。销售今日重点不要调用这四个地址。
+这三块只出现在 `leader_intervene`。重点商机、团队人效、经营趋势不要画这些按钮，也不要调这四个地址。销售今日重点同样不要调用。
+
+一张卡上三块互不影响，写的也是不同接口。
 
 | 区块 | 用户在做什么 | 接口 |
 | --- | --- | --- |
@@ -246,40 +259,69 @@ POST /api/v1/crm/today-highlights/sales/items/{unique_id}/feedback
 ## 8. 拉列表
 
 ```http
-GET /api/v1/crm/today-highlights/departments?report_date=2026-10-13&department_id={可选}
+GET /api/v1/crm/today-highlights/departments?report_date=2026-10-13
 ```
 
-`report_date`、`department_id` 都可以不传。指定了自己无权处理的部门时，HTTP 200，`departments` 为空数组，不要当成接口失败。
+`report_date` 可不传。没有 oauth 身份，或当天没有需介入也没有报告时，HTTP 200，`items` 为 `{}`，`card_links` 为 `[]`。
+
+只返回当天有内容的区块。不要假定一定有 `key_deal_review` / `leader_efficiency_insight` / `team_operating_trend`。没有的 key 不会出现在 `items` 和 `card_links` 里，不要补空数组、不要画空 tab。
 
 ```json
 {
   "report_date": "2026-10-13",
-  "departments": [
+  "subject_id": "oauth-leader",
+  "items": {
+    "leader_intervene": [
+      {
+        "unique_id": "item-1",
+        "claim": "特价必须今天拍板",
+        "leader_action": "今天确认",
+        "related_user_name": "张三",
+        "status": "PENDING"
+      }
+    ],
+    "key_deal_review": [
+      {
+        "unique_id": "insight-1",
+        "summary": "一条摘要",
+        "detail_text": "完整正文"
+      }
+    ]
+  },
+  "card_links": [
     {
-      "department_id": "dept-1",
-      "department_name": "华北销售",
-      "items": {
-        "leader_intervene": []
-      },
-      "card_links": [
-        {
-          "key": "leader_intervene",
-          "title": "今日需介入",
-          "count": 1,
-          "url": "https://.../v2/department-highlights?date=2026-10-13&department_id=dept-1&tab=leader_intervene",
-          "item_types": ["TODAY_INTERVENTION"]
-        }
-      ]
+      "key": "leader_intervene",
+      "title": "今日需介入",
+      "count": 1,
+      "url": "https://.../v2/department-highlights?date=2026-10-13&tab=leader_intervene",
+      "item_types": ["TODAY_INTERVENTION"]
+    },
+    {
+      "key": "key_deal_review",
+      "title": "重点商机",
+      "count": 1,
+      "url": "https://.../v2/department-highlights?date=2026-10-13&tab=key_deal_review",
+      "item_types": ["KEY_DEAL_REVIEW"]
     }
   ]
 }
 ```
 
-部门按 `department_name` 排序。某个下级部门没有负责人时，它的条目会出现在上级负责人这份列表里，`department_name` 仍是下级部门自己的名字。按 `departments` 分段渲染即可。
-
-当天没有条目的部门不会出现。整个 `departments` 为空就是空状态。
+这个例子里没有团队人效、经营趋势，页面就只画两个 tab。形态和销售今日重点列表相同。不要按部门分段，也不要读 `department_id` / `department_name`。`subject_id` 是 oauth id，不要展示。整页 `items` 为空就是空状态。
 
 ### 条目字段
+
+报告区块各至多一条，字段和拜访复盘完整报告一样，只给页面正文，**只读**。不要把需介入的采纳、拒绝、评论、挂任务、赞踩画到这些 tab 上，也不要用报告的 `unique_id` 调下面的写入接口（会 404）。没有摘要也没有全文时，这个区块不会出现。
+
+`items.key_deal_review` / `leader_efficiency_insight` / `team_operating_trend`：
+
+| 字段 | 展示 |
+| --- | --- |
+| `unique_id` | 列表用，只读，不要拿去写入。 |
+| `summary` | 摘要，优先展示。空则为 `null`。 |
+| `detail_text` | 完整正文，可折叠。空则为 `null`。 |
+
+tab 名用 `card_links[].title`（重点商机 / 团队人效 / 经营趋势）。不要展示写入方带姓名、日期的包装标题。没有 `title`、`item_type`、`evidence`、`severity`、`category`、操作状态、评论、任务。
 
 `items.leader_intervene` 已按 `confidence` 从高到低排好。
 
@@ -347,6 +389,8 @@ GET /api/v1/crm/today-highlights/departments?report_date=2026-10-13&department_i
 
 ## 9. 采纳 / 拒绝
 
+只接受 `items.leader_intervene` 里的 `unique_id`。报告条目不要提交。
+
 ```http
 POST /api/v1/crm/today-highlights/departments/items/decisions
 ```
@@ -410,6 +454,8 @@ POST /api/v1/crm/today-highlights/departments/items/decisions
 
 ## 10. 评论
 
+路径里的 `unique_id` 必须是今日需介入的。报告条目调这个接口会 404。
+
 ```http
 POST /api/v1/crm/today-highlights/departments/items/{unique_id}/comments
 ```
@@ -440,7 +486,7 @@ POST /api/v1/crm/today-highlights/departments/items/{unique_id}/comments
 
 ## 11. 建任务并写回
 
-本服务不创建任务。顺序：
+只给今日需介入挂任务。本服务不创建任务。顺序：
 
 1. 用现有任务创建接口建好 `crm_todos`，拿到 `unique_id`。
 2. 再调用：
@@ -477,6 +523,8 @@ POST /api/v1/crm/today-highlights/departments/items/{unique_id}/tasks
 
 ## 12. 赞 / 踩
 
+只给今日需介入。报告条目调这个接口会 404。
+
 ```http
 POST /api/v1/crm/today-highlights/departments/items/{unique_id}/feedback
 ```
@@ -500,9 +548,10 @@ POST /api/v1/crm/today-highlights/departments/items/{unique_id}/feedback
 
 ## 13. 建议的请求顺序
 
-1. 用 URL 的 `date` 作为 `report_date`、`department_id` 原样带上，拉列表。
-2. 渲染 `departments[].items.leader_intervene`。
-3. 采纳、拒绝、赞踩：用响应里的字段更新这一条。
-4. 评论：用响应里的整段 `comments` 替换。
-5. 任务：先走任务服务创建，再写回；写回成功后重新拉列表。
-6. 用户重新进入页面，或从后台回到前台时，再拉一次列表，丢掉本地改过的 `unique_id`。
+1. 用 URL 的 `date` 作为 `report_date` 拉列表，不要传 `department_id`。
+2. 只按这次返回的 `card_links` 渲染 tab，当前 tab 用 `items[key]`。缺席的 key 不要补空 tab。
+3. `leader_intervene` 可以采纳、评论、挂任务、赞踩。报告 tab 名用 `card_links[].title`，正文只渲染 `summary` 和 `detail_text`。
+4. 采纳、拒绝、赞踩：用响应里的字段更新这一条。报告不要走这些接口。
+5. 评论：用响应里的整段 `comments` 替换。
+6. 任务：先走任务服务创建，再写回；写回成功后重新拉列表。
+7. 用户重新进入页面，或从后台回到前台时，再拉一次列表，丢掉本地改过的 `unique_id`。
