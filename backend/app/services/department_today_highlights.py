@@ -30,6 +30,10 @@ from app.services.notification_scene_catalog import (
     VARIANT_TODAY_HIGHLIGHTS,
 )
 from app.services.report_push_policy import load_report_push_policy
+from app.services.today_highlights_billing import (
+    check_today_highlights_quota,
+    report_today_highlights_usage,
+)
 from app.services.sales_today_highlights import parse_report_date
 from app.utils.date_utils import get_week_range_from_date
 from app.utils.push_page_urls import build_department_highlights_url, build_week_visit_list_url
@@ -1013,6 +1017,10 @@ def handle_department_today_highlights(
     if not policy.variant_enabled(SCENE_DEPARTMENT_HIGHLIGHTS, VARIANT_TODAY_HIGHLIGHTS):
         logger.info("department today highlights disabled")
         return {**result, "skipped": True, "skip_reason": "variant_disabled"}
+    quota_ok, quota_msg = check_today_highlights_quota("department")
+    if not quota_ok:
+        logger.warning("department today highlights blocked by billing: %s", quota_msg)
+        return {**result, "skipped": True, "skip_reason": "billing_blocked"}
 
     rows = load_department_extract_rows(db_session, target)
     if rows is None:
@@ -1105,6 +1113,18 @@ def handle_department_today_highlights(
         }
         if sent.get("success"):
             success_count += 1
+            try:
+                report_today_highlights_usage(
+                    "department",
+                    report_date=target,
+                    user_id=user_id,
+                )
+            except Exception:
+                logger.exception(
+                    "department today highlights billing failed user_id=%s date=%s",
+                    user_id,
+                    target.isoformat(),
+                )
         else:
             failed.extend(sent.get("failed_recipients") or [])
             if sent.get("message"):

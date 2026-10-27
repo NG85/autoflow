@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 _PERSIST_MSG_MAX = 16000
 _PERSIST_REVIEW_DETAIL_MAX = 32000
+# 飞书 pending_insert.trace_id 上限（字符数，含前缀与分隔符）。
+FEISHU_TRACE_ID_MAX_LEN = 64
 
 # 拜访记录计费功能：行为数据采集与质检
 def _truncate_text(value: Optional[str], max_len: int) -> Optional[str]:

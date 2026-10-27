@@ -24,6 +24,10 @@ from app.services.notification_scene_catalog import (
     VARIANT_TODAY_HIGHLIGHTS,
 )
 from app.services.report_push_policy import load_report_push_policy
+from app.services.today_highlights_billing import (
+    check_today_highlights_quota,
+    report_today_highlights_usage,
+)
 from app.utils.date_utils import beijing_today_date, get_week_range_from_date
 from app.utils.push_page_urls import (
     build_sales_today_highlights_url,
@@ -838,6 +842,10 @@ def handle_sales_today_highlights(
     if not policy.variant_enabled(SCENE_SALES_DAILY, VARIANT_TODAY_HIGHLIGHTS):
         logger.info("sales today highlights disabled")
         return {**result, "skipped": True, "skip_reason": "variant_disabled"}
+    quota_ok, quota_msg = check_today_highlights_quota("sales")
+    if not quota_ok:
+        logger.warning("sales today highlights blocked by billing: %s", quota_msg)
+        return {**result, "skipped": True, "skip_reason": "billing_blocked"}
 
     rows = load_sales_extract_rows(
         db_session,
@@ -891,6 +899,18 @@ def handle_sales_today_highlights(
         if sent.get("success"):
             success_count += 1
             item["sent"] = True
+            try:
+                report_today_highlights_usage(
+                    "sales",
+                    report_date=target,
+                    user_id=recipient["user_id"],
+                )
+            except Exception:
+                logger.exception(
+                    "sales today highlights billing failed user_id=%s date=%s",
+                    recipient["user_id"],
+                    target.isoformat(),
+                )
         else:
             item["skipped"] = True
             item["skip_reason"] = "send_failed"
