@@ -3,8 +3,16 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.api.routes.crm.models import CRMComment
-from app.utils.crm_comments import CRMCommentValidationError, merge_append_crm_comments
+from app.api.routes.crm.models import CRMComment, VisitRecordCommentsUpdate
+from app.api.routes.crm.today_highlights.router import (
+    InterventionCommentIn,
+    InterventionCommentsUpdate,
+)
+from app.utils.crm_comments import (
+    CRMCommentValidationError,
+    merge_append_crm_comments,
+    resolve_comment_notify_recipients,
+)
 
 
 def test_crm_comment_omits_updated_at_when_empty():
@@ -176,3 +184,42 @@ def test_allow_edit_updates_own_task():
     assert merged[0]["content"] == "new task"
     assert merged[0]["type"] == "task"
     assert merged[0]["id"] == "t1"
+
+
+def test_resolve_comment_notify_recipients_uses_default_when_unspecified():
+    assert resolve_comment_notify_recipients(
+        specified=None,
+        default_user_id="recorder-1",
+        current_user_id="author-1",
+    ) == ["recorder-1"]
+    assert resolve_comment_notify_recipients(
+        specified=[],
+        default_user_id="recorder-1",
+        current_user_id="author-1",
+    ) == ["recorder-1"]
+
+
+def test_resolve_comment_notify_recipients_uses_specified_and_skips_self():
+    me = "11111111-1111-1111-1111-111111111111"
+    other = "22222222-2222-2222-2222-222222222222"
+    assert resolve_comment_notify_recipients(
+        specified=[me, other, other, "  ", me.replace("-", "")],
+        default_user_id="recorder-1",
+        current_user_id=me.replace("-", ""),
+    ) == [other]
+
+
+def test_visit_comment_payload_accepts_recipient_user_ids():
+    payload = VisitRecordCommentsUpdate(
+        comments=[CRMComment(author_id="user-1", content="hi")],
+        recipient_user_ids=["user-2", "user-2", ""],
+    )
+    assert payload.recipient_user_ids == ["user-2", "user-2", ""]
+
+
+def test_today_highlight_comment_payload_accepts_recipient_user_ids():
+    payload = InterventionCommentsUpdate(
+        comments=[InterventionCommentIn(content="先问客户")],
+        recipient_user_ids=["user-2", "user-2", ""],
+    )
+    assert payload.recipient_user_ids == ["user-2", "user-2", ""]

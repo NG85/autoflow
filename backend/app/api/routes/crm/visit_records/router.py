@@ -44,6 +44,7 @@ from app.repositories.visit_record import (
     visit_record_repo,
 )
 from app.services.crm_config_service import build_customer_attribute_options, get_resolved_field_mapping
+from app.utils.crm_comments import resolve_comment_notify_recipients
 from app.utils.crm_followup_object import FOLLOWUP_OBJECT_TYPES, resolve_followup_object_from_record
 from app.utils.excel_sanitize import sanitize_excel_row
 from app.utils.visit_record_export import (
@@ -1104,7 +1105,7 @@ def update_visit_record_comments(
     - 每条评论的 author_id 须与当前登录用户一致，否则返回 400
     - 复用跟进记录的权限控制逻辑：无权限/不存在返回 404
     - 支持 reply_to_id 回复已有评论；无效 reply_to_id 返回 400
-    - 保存成功后：type=comment 推送提醒，编辑在首行末尾追加「（MM-DD HH:mm 编辑过）」。顶层评论向记录人推送；带 reply_to_id 的回复向被回复评论作者推送（type=task 不推送）
+    - 保存成功后：type=comment 推送提醒，编辑在首行末尾追加「（MM-DD HH:mm 编辑过）」。未指定 recipient_user_ids 时，顶层评论向记录人推送，回复向被回复评论作者推送；指定了非空名单则只发给这些人。type=task 不推送
     """
     try:
         current_user_id_str = str(user.id)
@@ -1195,49 +1196,48 @@ def update_visit_record_comments(
                 reply_to_id = str(item.get("reply_to_id") or "").strip()
                 if reply_to_id:
                     parent = comment_by_id.get(reply_to_id)
-                    recipient_user_id = str((parent or {}).get("author_id") or "").strip()
+                    default_recipient = str((parent or {}).get("author_id") or "").strip()
                     notify_kind = "reply_edit" if edited else "reply"
-                    if not recipient_user_id or recipient_user_id == current_user_id:
-                        logger.info(
-                            "visit_record_comment notify skipped: record_id=%s, reply_to_id=%s, reason=%s",
-                            record_id,
-                            reply_to_id,
-                            "invalid_recipient_or_self_notification",
-                        )
-                        return
                     text = (
                         f"{author_name}回复了你的评论{edited_suffix}\n"
                         f"[{link_text}]({jump_url})\n"
                         f"回复：{comment_preview or '--'}\n"
                     )
                 else:
-                    recipient_user_id = recorder_user_id
+                    default_recipient = recorder_user_id
                     notify_kind = "comment_edit" if edited else "comment"
-                    if not recipient_user_id or recipient_user_id == current_user_id:
-                        logger.info(
-                            "visit_record_comment notify skipped: record_id=%s, reason=%s",
-                            record_id,
-                            "invalid_recipient_or_self_notification",
-                        )
-                        return
                     text = (
                         f"{author_name}评论了你的跟进记录{edited_suffix}\n"
                         f"[{link_text}]({jump_url})\n"
                         f"评论：{comment_preview or '--'}\n"
                     )
 
-                platform_notification_service.send_visit_record_comment_notification(
-                    db_session,
-                    recipient_user_id=recipient_user_id,
-                    message_text=text,
+                recipients = resolve_comment_notify_recipients(
+                    specified=payload.recipient_user_ids,
+                    default_user_id=default_recipient,
+                    current_user_id=current_user_id,
                 )
-                logger.info(
-                    "visit_record_comment notify sent: record_id=%s, kind=%s, recipient_user_id=%s, author_name=%s",
-                    record_id,
-                    notify_kind,
-                    recipient_user_id,
-                    author_name,
-                )
+                if not recipients:
+                    logger.info(
+                        "visit_record_comment notify skipped: record_id=%s, reply_to_id=%s, reason=%s",
+                        record_id,
+                        reply_to_id or None,
+                        "invalid_recipient_or_self_notification",
+                    )
+                    return
+                for recipient_user_id in recipients:
+                    platform_notification_service.send_visit_record_comment_notification(
+                        db_session,
+                        recipient_user_id=recipient_user_id,
+                        message_text=text,
+                    )
+                    logger.info(
+                        "visit_record_comment notify sent: record_id=%s, kind=%s, recipient_user_id=%s, author_name=%s",
+                        record_id,
+                        notify_kind,
+                        recipient_user_id,
+                        author_name,
+                    )
 
             for item in appended_comments:
                 _notify_comment(item, edited=False)
