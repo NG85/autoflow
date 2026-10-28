@@ -1,8 +1,8 @@
 """CRM JSON 评论列表的合并与校验（拜访记录、周跟进等复用）。"""
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
-from uuid import uuid4
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from app.utils.date_utils import convert_utc_to_local_timezone
@@ -122,6 +122,42 @@ def merge_append_crm_comments(
 
     merged.sort(key=_sort_key)
     return merged, appended, edited
+
+
+def _user_id_key(raw: object) -> str:
+    value = str(raw or "").strip()
+    if not value:
+        return ""
+    try:
+        return UUID(value).hex
+    except Exception:
+        return value
+
+
+def resolve_comment_notify_recipients(
+    *,
+    specified: Optional[Sequence[Any]] = None,
+    default_user_id: str,
+    current_user_id: str,
+) -> List[str]:
+    """指定接收人时用名单；否则用默认规则。空名单视为未指定。跳过自己和重复 id。"""
+    picked: List[str] = []
+    for item in specified or []:
+        uid = str(item or "").strip()
+        if uid:
+            picked.append(uid)
+    candidates: Iterable[str] = picked if picked else [str(default_user_id or "").strip()]
+    current_key = _user_id_key(current_user_id)
+    result: List[str] = []
+    seen: set[str] = set()
+    for uid in candidates:
+        uid = str(uid or "").strip()
+        key = _user_id_key(uid)
+        if not key or key == current_key or key in seen:
+            continue
+        seen.add(key)
+        result.append(uid)
+    return result
 
 
 def has_nonempty_comments(comments_raw: object) -> bool:

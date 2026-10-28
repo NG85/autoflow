@@ -1,4 +1,5 @@
 import logging
+import re
 from collections import defaultdict
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -59,6 +60,9 @@ from app.platforms.notification_types import (
 from app.utils.im_applink import rewrite_im_content_urls
 
 logger = logging.getLogger(__name__)
+
+_FULL_LINE_MD_LINK = re.compile(r"^\[([^\]]*)\]\((https?://[^)\s]+)\)$")
+_COMMENT_QUOTE_PREFIXES = ("评论：", "回复：")
 
 _INVALID_TENANT_TOKEN_API_CODES = frozenset({99991663})
 _INVALID_TENANT_TOKEN_MARKERS = (
@@ -2943,9 +2947,10 @@ class PlatformNotificationService:
         message_text: str,
     ) -> Dict[str, Any]:
         """
-        周跟进总结评论提醒：给负责销售发一条「文本消息」。
-        - 不走卡片模板（避免引入新模板依赖）
-        - 失败不应影响主业务流程，调用方可自行 try/except
+        周跟进总结评论提醒。不走飞书卡片模板。
+        飞书 / Lark 用无模板 markdown 卡片：首行当标题，评论/回复正文用引用，整行链接做成按钮。
+        钉钉仍走 sampleMarkdown 文本。自家链接按收件人平台改成侧栏协议。
+        失败不应影响主业务流程，调用方可自行 try/except。
         """
         try:
             user_uuid = UUID(str(recipient_user_id))
@@ -2959,10 +2964,79 @@ class PlatformNotificationService:
         platform = profile.oauth_user.provider
         open_id = profile.oauth_user.open_id
         token = self._get_tenant_access_token(platform)
-
-        # 发送文本消息
-        self._send_message(open_id, token, message_text, platform, receive_id_type="open_id", msg_type="text")
+        title, body, buttons = self._layout_comment_style_message(message_text or "")
+        body = rewrite_im_content_urls(body, platform)
+        buttons = [
+            (label, rewrite_im_content_urls(url, platform))
+            for label, url in buttons
+        ]
+        if platform in (PLATFORM_FEISHU, PLATFORM_LARK):
+            card = self.build_feishu_markdown_card(
+                body,
+                title=title,
+                header_template="orange" if "编辑过" in title else "blue",
+                footer_buttons=buttons or None,
+            )
+            self._send_message(
+                open_id,
+                token,
+                card,
+                platform,
+                receive_id_type="open_id",
+                msg_type="interactive",
+            )
+        else:
+            lines = [title]
+            if body:
+                lines.append(body.replace("\n\n", "\n"))
+            for label, url in buttons:
+                lines.append(f"[{label}]({url})")
+            adapted = rewrite_im_content_urls("\n".join(lines), platform)
+            self._send_message(
+                open_id,
+                token,
+                adapted,
+                platform,
+                receive_id_type="open_id",
+                msg_type="text",
+            )
         return {"success": True, "message": "ok", "recipients_count": 1, "success_count": 1}
+
+    @staticmethod
+    def _layout_comment_style_message(
+        message_text: str,
+    ) -> Tuple[str, str, List[Tuple[str, str]]]:
+        """把评论类三行文案拆成标题、正文（引用）、整行链接按钮。"""
+        lines = [ln.strip() for ln in (message_text or "").splitlines() if ln.strip()]
+        title = lines[0] if lines else "通知"
+        context: List[str] = []
+        quotes: List[str] = []
+        buttons: List[Tuple[str, str]] = []
+        for line in lines[1:]:
+            link = _FULL_LINE_MD_LINK.match(line)
+            if link:
+                buttons.append((link.group(1).strip() or "查看详情", link.group(2)))
+                continue
+            quoted = False
+            for prefix in _COMMENT_QUOTE_PREFIXES:
+                if line.startswith(prefix):
+                    quotes.append(line[len(prefix):].strip() or "--")
+                    quoted = True
+                    break
+            if quoted:
+                continue
+            if line.startswith("> "):
+                quotes.append(line[2:])
+                continue
+            context.append(line)
+        body_parts = list(context)
+        if quotes:
+            quoted_lines: List[str] = []
+            for block in quotes:
+                for row in (block.splitlines() or [block]):
+                    quoted_lines.append(f"> {row}" if row else ">")
+            body_parts.append("\n".join(quoted_lines))
+        return title, "\n\n".join(body_parts), buttons
 
     def send_visit_record_comment_notification(
         self,
@@ -2972,7 +3046,7 @@ class PlatformNotificationService:
         message_text: str,
     ) -> Dict[str, Any]:
         """
-        拜访记录评论提醒：给记录人发一条「文本消息」。
+        拜访记录评论提醒。链接按收件人平台改成飞书 / Lark / 钉钉侧栏协议。
         复用 send_weekly_followup_comment_notification 的通用发送逻辑。
         """
         return self.send_weekly_followup_comment_notification(
@@ -2980,6 +3054,24 @@ class PlatformNotificationService:
             recipient_user_id=recipient_user_id,
             message_text=message_text,
         )
+
+    def send_today_highlight_comment_notification(
+        self,
+        db_session: Session,
+        *,
+        recipient_user_id: str,
+        message_text: str,
+    ) -> Dict[str, Any]:
+        """
+        今日需介入评论提醒。链接按收件人平台改成飞书 / Lark / 钉钉侧栏协议。
+        复用 send_weekly_followup_comment_notification 的通用发送逻辑。
+        """
+        return self.send_weekly_followup_comment_notification(
+            db_session,
+            recipient_user_id=recipient_user_id,
+            message_text=message_text,
+        )
+
     def send_review_session_notification(
         self,
         db_session: Session,

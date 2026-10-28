@@ -12,6 +12,7 @@ from app.services.department_today_highlights import highlights_for_leader
 from app.services.leader_intervention_actions import (
     link_item_task,
     load_actionable_item,
+    notify_item_comments,
     save_decisions,
     save_feedback,
     save_item_comments,
@@ -114,6 +115,10 @@ def test_leader_list_returns_extract_state_and_side_records(monkeypatch):
         lambda session, rows: {"accounts": {}, "opportunities": {}, "people": {}},
     )
     monkeypatch.setattr(
+        "app.services.department_today_highlights.load_leader_insight_sections",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
         "app.repositories.department_mirror.department_mirror_repo.get_department_names_by_ids",
         lambda session, ids: {"dept-mine": "华北销售"},
     )
@@ -141,7 +146,7 @@ def test_leader_list_returns_extract_state_and_side_records(monkeypatch):
     )
 
     data = highlights_for_leader(MagicMock(), "leader-1", DAY)
-    item = data["departments"][0]["items"]["leader_intervene"][0]
+    item = data["items"]["leader_intervene"][0]
     assert item["status"] == "ADOPTED"
     assert item["adopted_todo_id"] == "todo-1"
     assert item["feedback"] == "up"
@@ -359,6 +364,130 @@ def test_linked_task_is_separate_from_comments_and_can_adopt(monkeypatch):
     assert row.payload == original_payload
     assert linked["todo_id"] == "todo-from-crm"
     assert linked["adopted"] is True
+
+
+def _patch_comment_notify(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.leader_intervention_actions.load_display_names",
+        lambda *_args, **_kwargs: {
+            "accounts": {"acc-1": "甲客户"},
+            "opportunities": {"opp-1": "乙商机"},
+            "people": {},
+        },
+    )
+
+
+def test_notify_item_comments_sends_to_specified_recipients(monkeypatch):
+    row = _item()
+    session = MagicMock()
+    sent = []
+    _patch_comment_notify(monkeypatch)
+
+    class _Service:
+        def send_today_highlight_comment_notification(self, db, *, recipient_user_id, message_text):
+            sent.append((recipient_user_id, message_text))
+            return {"success": True}
+
+    monkeypatch.setattr(
+        "app.services.platform_notification_service.platform_notification_service",
+        _Service(),
+    )
+    notify_item_comments(
+        session,
+        row,
+        current_user_id="leader-1",
+        author="王经理",
+        comments=[{"content": "先问客户周五前能不能定"}],
+        saved_comments=[{"id": "c1", "author_id": "leader-1", "content": "先问客户周五前能不能定"}],
+        recipient_user_ids=["user-2", "leader-1"],
+    )
+
+    assert [item[0] for item in sent] == ["user-2"]
+    text = sent[0][1]
+    assert text.startswith("王经理给你留了评论\n")
+    assert "甲客户  乙商机" in text
+    assert "评论：先问客户周五前能不能定" in text
+    assert "http" not in text
+    assert "[" not in text
+
+
+def test_notify_item_comments_reply_defaults_to_parent_author(monkeypatch):
+    row = _item()
+    session = MagicMock()
+    sent = []
+    _patch_comment_notify(monkeypatch)
+
+    class _Service:
+        def send_today_highlight_comment_notification(self, db, *, recipient_user_id, message_text):
+            sent.append((recipient_user_id, message_text))
+            return {"success": True}
+
+    monkeypatch.setattr(
+        "app.services.platform_notification_service.platform_notification_service",
+        _Service(),
+    )
+    notify_item_comments(
+        session,
+        row,
+        current_user_id="leader-1",
+        author="李经理",
+        comments=[{"content": "我来跟", "reply_to_id": "c1"}],
+        saved_comments=[
+            {"id": "c1", "author_id": "user-9", "content": "先问客户"},
+            {"id": "c2", "author_id": "leader-1", "content": "我来跟", "reply_to_id": "c1"},
+        ],
+    )
+
+    assert [item[0] for item in sent] == ["user-9"]
+    assert sent[0][1].startswith("李经理回复了你的评论\n")
+    assert "回复：我来跟" in sent[0][1]
+    assert "http" not in sent[0][1]
+
+
+def test_notify_item_comments_skips_top_level_without_recipients(monkeypatch):
+    row = _item()
+    session = MagicMock()
+    sent = []
+    _patch_comment_notify(monkeypatch)
+    monkeypatch.setattr(
+        "app.services.platform_notification_service.platform_notification_service",
+        SimpleNamespace(
+            send_today_highlight_comment_notification=lambda *args, **kwargs: sent.append(kwargs)
+        ),
+    )
+    notify_item_comments(
+        session,
+        row,
+        current_user_id="leader-1",
+        author="王经理",
+        comments=[{"content": "只记一笔"}],
+        saved_comments=[{"id": "c1", "author_id": "leader-1", "content": "只记一笔"}],
+    )
+    assert sent == []
+
+
+def test_notify_item_comments_does_not_raise_when_send_fails(monkeypatch):
+    row = _item()
+    session = MagicMock()
+    _patch_comment_notify(monkeypatch)
+
+    class _Service:
+        def send_today_highlight_comment_notification(self, db, *, recipient_user_id, message_text):
+            raise RuntimeError("im down")
+
+    monkeypatch.setattr(
+        "app.services.platform_notification_service.platform_notification_service",
+        _Service(),
+    )
+    notify_item_comments(
+        session,
+        row,
+        current_user_id="leader-1",
+        author="王经理",
+        comments=[{"content": "先问客户"}],
+        saved_comments=[{"id": "c1", "author_id": "leader-1", "content": "先问客户"}],
+        recipient_user_ids=["user-2"],
+    )
 
 
 def test_comment_api_does_not_change_extract_status(monkeypatch):

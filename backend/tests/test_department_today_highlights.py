@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from app.api.routes.notification_schemas import DepartmentTodayHighlightsPushRequest
 from app.services.department_today_highlights import (
+    REPORTS_ONLY_LEAD,
     assemble_department_highlights,
     assemble_leader_highlights,
     card_footer_buttons,
@@ -98,6 +99,14 @@ def _enable(monkeypatch):
     monkeypatch.setattr(
         "app.repositories.user_profile.user_profile_repo.get_by_oauth_user_id",
         lambda session, oauth_id: _profile(oauth_id=oauth_id),
+    )
+    monkeypatch.setattr(
+        "app.services.oauth_service.oauth_client.get_departments_with_leaders",
+        lambda *args, **kwargs: {},
+    )
+    monkeypatch.setattr(
+        "app.services.department_today_highlights.load_leader_insight_reports",
+        lambda *args, **kwargs: [],
     )
 
 
@@ -211,11 +220,104 @@ def test_leader_query_returns_only_their_own_rows(monkeypatch):
         "app.services.department_today_highlights.load_display_names",
         lambda session, rows: _names(),
     )
+    monkeypatch.setattr(
+        "app.services.department_today_highlights.load_leader_insight_sections",
+        lambda *args, **kwargs: [],
+    )
     own = highlights_for_leader(MagicMock(), "leader-1", DAY)
     assert seen["user"] == "leader-1"
     assert seen["ids"] == ["oauth-leader"]
-    assert own["departments"][0]["subject_id"] == "oauth-leader"
-    assert own["departments"][0]["items"]["leader_intervene"][0]["claim"] == "我的介入"
+    assert own["subject_id"] == "oauth-leader"
+    assert "departments" not in own
+    assert "department_id" not in own
+    assert "department_name" not in own
+    assert own["items"]["leader_intervene"][0]["claim"] == "我的介入"
+
+
+def test_leader_query_includes_reports_without_extracts(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.department_today_highlights.leader_oauth_id",
+        lambda session, user_id: "oauth-leader",
+    )
+    monkeypatch.setattr(
+        "app.services.department_today_highlights.load_department_extract_rows",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        "app.services.department_today_highlights.load_leader_insight_sections",
+        lambda *args, **kwargs: [
+            {
+                "key": "leader_efficiency_insight",
+                "title": "团队人效",
+                "item_type": "LEADER_EFFICIENCY_INSIGHT",
+                "url": "https://example.com/v2/department-highlights?date=2026-10-12&tab=leader_efficiency_insight",
+                "items": [
+                    {
+                        "unique_id": "insight-1",
+                        "summary": "人均产出",
+                        "detail_text": "详情",
+                    }
+                ],
+            }
+        ],
+    )
+    data = highlights_for_leader(MagicMock(), "leader-1", DAY)
+    assert "departments" not in data
+    assert "department_id" not in data
+    assert "leader_intervene" not in data["items"]
+    assert data["items"]["leader_efficiency_insight"][0]["summary"] == "人均产出"
+    assert "title" not in data["items"]["leader_efficiency_insight"][0]
+    assert "evidence" not in data["items"]["leader_efficiency_insight"][0]
+    assert data["card_links"][0]["key"] == "leader_efficiency_insight"
+
+
+def test_leader_query_returns_intervene_and_reports(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.department_today_highlights.leader_oauth_id",
+        lambda session, user_id: "oauth-leader",
+    )
+    monkeypatch.setattr(
+        "app.services.department_today_highlights.load_department_extract_rows",
+        lambda *args, **kwargs: [_row({"claim": "我的介入", "related_user_id": "oauth-zhang"})],
+    )
+    monkeypatch.setattr(
+        "app.services.department_today_highlights.load_display_names",
+        lambda session, rows: _names(),
+    )
+    monkeypatch.setattr(
+        "app.services.department_today_highlights.load_leader_insight_sections",
+        lambda *args, **kwargs: [
+            {
+                "key": "key_deal_review",
+                "title": "重点商机",
+                "item_type": "KEY_DEAL_REVIEW",
+                "url": "https://example.com/v2/department-highlights?date=2026-10-12&tab=key_deal_review",
+                "items": [
+                    {
+                        "unique_id": "insight-1",
+                        "summary": "摘要",
+                        "detail_text": "正文",
+                    }
+                ],
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.leader_intervention_actions.attach_item_interactions",
+        lambda *args, **kwargs: None,
+    )
+    data = highlights_for_leader(MagicMock(), "leader-1", DAY)
+    assert list(data["items"]) == ["leader_intervene", "key_deal_review"]
+    assert [link["key"] for link in data["card_links"]] == [
+        "leader_intervene",
+        "key_deal_review",
+    ]
+    assert data["items"]["leader_intervene"][0]["claim"] == "我的介入"
+    assert data["items"]["key_deal_review"][0] == {
+        "unique_id": "insight-1",
+        "summary": "摘要",
+        "detail_text": "正文",
+    }
 
 
 def test_reextract_keeps_one_item_and_carries_the_decision():
@@ -318,11 +420,155 @@ def test_empty_department_skips_without_empty_card(monkeypatch):
         "app.services.department_today_highlights.deliver_department_highlight_card",
         lambda *args, **kwargs: sent.__setitem__("count", sent["count"] + 1) or {"success": True},
     )
-    result = handle_department_today_highlights(MagicMock(), report_date=DAY)
-    assert result["skipped"] is True
-    assert result["skip_reason"] == "empty_highlights"
-    assert sent["count"] == 0
-    assert "今天没有重点" not in str(result)
+    for day in (DAY, TUESDAY):
+        sent["count"] = 0
+        result = handle_department_today_highlights(MagicMock(), report_date=day)
+        assert result["skipped"] is True
+        assert result["skip_reason"] == "empty_highlights"
+        assert sent["count"] == 0
+        assert "今天没有重点" not in str(result)
+
+
+def _stub_department_leaders(monkeypatch, departments):
+    monkeypatch.setattr(
+        "app.services.oauth_service.oauth_client.get_departments_with_leaders",
+        lambda *args, **kwargs: {name: ["leader"] for name in departments},
+    )
+    monkeypatch.setattr(
+        "app.repositories.department_mirror.department_mirror_repo.get_department_ids_by_name",
+        lambda session, name: [f"dept-{name}"],
+    )
+    monkeypatch.setattr(
+        "app.services.platform_notification_service.platform_notification_service.resolve_department_report_recipients",
+        lambda session, name: [departments[name]],
+    )
+    monkeypatch.setattr(
+        "app.services.department_today_highlights.filter_opted_out_recipients",
+        lambda session, recipients, **kwargs: list(recipients),
+    )
+    monkeypatch.setattr(
+        "app.services.department_today_highlights.load_leader_visit_watch",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "app.services.department_today_highlights.load_department_extract_rows",
+        lambda *args, **kwargs: [],
+    )
+
+
+def test_reports_only_sends_card_on_weekday(monkeypatch):
+    captured = {}
+    _enable(monkeypatch)
+    _stub_department_leaders(
+        monkeypatch,
+        {"华北销售": _leader("leader-1")},
+    )
+    monkeypatch.setattr(
+        "app.services.department_today_highlights.leader_oauth_id",
+        lambda session, user_id: "oauth-leader",
+    )
+    monkeypatch.setattr(
+        "app.services.department_today_highlights.load_leader_insight_reports",
+        lambda *args, **kwargs: [
+            {
+                "key": "key_deal_review",
+                "label": "重点商机",
+                "url": "https://example.com/v2/department-highlights?date=2026-10-13&tab=key_deal_review",
+            }
+        ],
+    )
+
+    def fake_send(session, recipient, assembled):
+        captured["recipient"] = recipient
+        captured["body"] = render_card_markdown(assembled)
+        return {"success": True}
+
+    monkeypatch.setattr(
+        "app.services.department_today_highlights.deliver_department_highlight_card",
+        fake_send,
+    )
+    result = handle_department_today_highlights(MagicMock(), report_date=TUESDAY)
+    assert result["success"] is True
+    assert result["success_count"] == 1
+    assert captured["recipient"]["user_id"] == "leader-1"
+    assert "今日需介入" not in captured["body"]
+    assert captured["body"].startswith(REPORTS_ONLY_LEAD)
+    assert (
+        "[重点商机](https://example.com/v2/department-highlights"
+        "?date=2026-10-13&tab=key_deal_review)"
+    ) in captured["body"]
+
+
+def test_reports_only_leader_still_gets_card_when_others_have_extracts(monkeypatch):
+    captured = []
+    _enable(monkeypatch)
+    _stub_department_leaders(
+        monkeypatch,
+        {
+            "华北销售": _leader("leader-north"),
+            "华东销售": _leader("leader-east"),
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.department_today_highlights.load_department_extract_rows",
+        lambda *args, **kwargs: [
+            _row(
+                {"claim": "华北事项", "related_user_id": "oauth-zhang", "confidence": 0.9},
+                unique_id="north",
+                subject_id="oauth-north",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.department_today_highlights.load_display_names",
+        lambda *args, **kwargs: _names(),
+    )
+
+    def profile(session, oauth_id):
+        return _profile(oauth_id=oauth_id, user_id="leader-north", open_id="ou_leader-north")
+
+    monkeypatch.setattr(
+        "app.repositories.user_profile.user_profile_repo.get_by_oauth_user_id",
+        profile,
+    )
+    monkeypatch.setattr(
+        "app.services.department_today_highlights.leader_oauth_id",
+        lambda session, user_id: "oauth-east" if user_id == "leader-east" else "oauth-north",
+    )
+    monkeypatch.setattr(
+        "app.services.department_today_highlights.load_leader_insight_reports",
+        lambda session, oauth_id, report_date: (
+            [
+                {
+                    "key": "key_deal_review",
+                    "label": "重点商机",
+                    "url": "https://example.com/deals",
+                }
+            ]
+            if oauth_id == "oauth-east"
+            else []
+        ),
+    )
+
+    def fake_send(session, recipient, assembled):
+        captured.append(
+            {"user_id": recipient["user_id"], "body": render_card_markdown(assembled)}
+        )
+        return {"success": True}
+
+    monkeypatch.setattr(
+        "app.services.department_today_highlights.deliver_department_highlight_card",
+        fake_send,
+    )
+    result = handle_department_today_highlights(MagicMock(), report_date=TUESDAY)
+    assert result["success_count"] == 2
+    bodies = {item["user_id"]: item["body"] for item in captured}
+    assert "华北事项" in bodies["leader-north"]
+    assert "重点商机" not in bodies["leader-north"]
+    assert REPORTS_ONLY_LEAD not in bodies["leader-north"]
+    assert "今日需介入" not in bodies["leader-east"]
+    assert bodies["leader-east"].startswith(REPORTS_ONLY_LEAD)
+    assert "[重点商机](https://example.com/deals)" in bodies["leader-east"]
 
 
 def test_opt_out_skips_send(monkeypatch):
@@ -741,6 +987,9 @@ def test_feishu_card_splits_visit_watch_from_intervention(monkeypatch):
         "high_severity": [],
         "url": "https://example.com/visits",
     }
+    assembled["report_entries"] = [
+        {"key": "leader_efficiency_insight", "label": "团队人效", "url": "https://example.com/persona"},
+    ]
     monkeypatch.setattr(
         "app.services.platform_notification_service.platform_notification_service.build_feishu_markdown_card",
         lambda body, title=None, **kwargs: captured.update(title=title, body=body, **kwargs) or {},
@@ -763,7 +1012,8 @@ def test_feishu_card_splits_visit_watch_from_intervention(monkeypatch):
     assert "上周拜访" not in captured["body"]
     assert captured["divide_extra_sections"] is True
     assert captured["extra_sections"] == [
-        "**上周拜访**\n总拜访 0 条\n[查看上周拜访](https://example.com/visits)"
+        "**上周拜访**\n总拜访 0 条\n[查看上周拜访](https://example.com/visits)",
+        "[团队人效](https://example.com/persona)",
     ]
 
 

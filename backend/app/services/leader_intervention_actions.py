@@ -15,8 +15,10 @@ from app.services.department_today_highlights import (
     ITEM_INTERVENTION,
     STATUS_SUPERSEDED,
     SUBJECT_USER,
+    _payload,
     _text,
     leader_oauth_id,
+    load_display_names,
 )
 from app.services.subject_interaction import (
     SCENE_DEPARTMENT_TODAY_HIGHLIGHTS,
@@ -27,6 +29,7 @@ from app.services.subject_interaction import (
     load_task_summaries,
     load_threads,
 )
+from app.utils.crm_comments import resolve_comment_notify_recipients
 
 logger = logging.getLogger(__name__)
 
@@ -299,6 +302,97 @@ def save_item_comments(
         author=author,
         comments=comments,
     )
+
+
+def _comment_preview(content: Any) -> str:
+    preview = _text(content)
+    if len(preview) > 200:
+        return preview[:197] + "..."
+    return preview
+
+
+def _highlight_comment_context(session: Session, row: CRMSkillExtractItem) -> str:
+    payload = _payload(row)
+    names = load_display_names(session, [row])
+    account_id = _text(getattr(row, "account_id", None) or payload.get("account_id"))
+    opportunity_id = _text(getattr(row, "opportunity_id", None) or payload.get("opportunity_id"))
+    account = _text((names.get("accounts") or {}).get(account_id))
+    opportunity = _text((names.get("opportunities") or {}).get(opportunity_id))
+    return f"{account}  {opportunity}".strip() or _text(payload.get("claim"))
+
+
+def notify_item_comments(
+    session: Session,
+    row: CRMSkillExtractItem,
+    *,
+    current_user_id: str,
+    author: str,
+    comments: Sequence[Mapping[str, Any]],
+    saved_comments: Sequence[Mapping[str, Any]],
+    recipient_user_ids: Optional[Sequence[Any]] = None,
+) -> None:
+    """保存成功后推送今日需介入评论提醒。失败不影响已保存的评论。"""
+    try:
+        from app.services.platform_notification_service import platform_notification_service
+
+        comment_by_id: dict[str, Mapping[str, Any]] = {}
+        for raw in saved_comments or []:
+            if not isinstance(raw, Mapping):
+                continue
+            cid = _text(raw.get("id"))
+            if cid:
+                comment_by_id[cid] = raw
+
+        author_name = _text(author) or "有人"
+        context = _highlight_comment_context(session, row)
+        current_user_id_str = _text(current_user_id)
+
+        for item in comments or []:
+            if not isinstance(item, Mapping):
+                continue
+            preview = _comment_preview(item.get("content")) or "--"
+            reply_to_id = _text(item.get("reply_to_id"))
+            if reply_to_id:
+                parent = comment_by_id.get(reply_to_id)
+                default_recipient = _text((parent or {}).get("author_id"))
+                title = f"{author_name}回复了你的评论"
+                label = "回复"
+            else:
+                default_recipient = ""
+                title = f"{author_name}给你留了评论"
+                label = "评论"
+            lines = [title]
+            if context:
+                lines.append(context)
+            lines.append(f"{label}：{preview}")
+            text = "\n".join(lines) + "\n"
+            recipients = resolve_comment_notify_recipients(
+                specified=recipient_user_ids,
+                default_user_id=default_recipient,
+                current_user_id=current_user_id_str,
+            )
+            if not recipients:
+                logger.info(
+                    "today_highlight_comment notify skipped: unique_id=%s, reply_to_id=%s, reason=invalid_recipient_or_self_notification",
+                    getattr(row, "unique_id", None),
+                    reply_to_id or None,
+                )
+                continue
+            for recipient_user_id in recipients:
+                platform_notification_service.send_today_highlight_comment_notification(
+                    session,
+                    recipient_user_id=recipient_user_id,
+                    message_text=text,
+                )
+                logger.info(
+                    "today_highlight_comment notify sent: unique_id=%s, kind=%s, recipient_user_id=%s, author_name=%s",
+                    getattr(row, "unique_id", None),
+                    "reply" if reply_to_id else "comment",
+                    recipient_user_id,
+                    author_name,
+                )
+    except Exception as exc:
+        logger.warning("发送今日需介入评论提醒失败（不影响保存评论）：%s", exc)
 
 
 def _row_anchor(row: CRMSkillExtractItem) -> str:

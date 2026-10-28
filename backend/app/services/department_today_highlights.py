@@ -18,6 +18,11 @@ from app.models.crm_accounts import CRMAccount
 from app.models.crm_opportunities import CRMOpportunity
 from app.models.crm_skill_extract_items import CRMSkillExtractItem
 from app.platforms.constants import PLATFORM_DINGTALK, PLATFORM_FEISHU, PLATFORM_LARK
+from app.services.leader_insight_reports import (
+    load_leader_insight_reports,
+    load_leader_insight_sections,
+    report_entry_lines,
+)
 from app.services.leader_visit_watch import load_leader_visit_watch, visit_watch_lines
 from app.services.notification_delivery_preference import filter_opted_out_recipients
 from app.services.notification_scene_catalog import (
@@ -25,6 +30,10 @@ from app.services.notification_scene_catalog import (
     VARIANT_TODAY_HIGHLIGHTS,
 )
 from app.services.report_push_policy import load_report_push_policy
+from app.services.today_highlights_billing import (
+    check_today_highlights_quota,
+    report_today_highlights_usage,
+)
 from app.services.sales_today_highlights import parse_report_date
 from app.utils.date_utils import get_week_range_from_date
 from app.utils.push_page_urls import build_department_highlights_url, build_week_visit_list_url
@@ -39,6 +48,7 @@ STATUS_REJECTED = "REJECTED"
 _DECIDED = {STATUS_ADOPTED, STATUS_REJECTED}
 ITEM_INTERVENTION = "TODAY_INTERVENTION"
 SECTION_KEY = "leader_intervene"
+REPORTS_ONLY_LEAD = "今天没有需介入事项，可以先看这些报告。"
 
 
 def _text(value: Any) -> str:
@@ -344,8 +354,6 @@ def department_highlights_payload(assembled: Mapping[str, Any]) -> dict[str, Any
             }
         )
     return {
-        "department_id": assembled.get("department_id") or "",
-        "department_name": assembled.get("department_name") or "",
         "items": items,
         "card_links": links,
     }
@@ -376,12 +384,23 @@ def _intervention_markdown(assembled: Mapping[str, Any]) -> str:
 
 
 def render_card_sections(assembled: Mapping[str, Any]) -> list[str]:
-    """飞书按块发送。介入一块；周一、周五的拜访对照单独一块。"""
-    parts = [
-        _intervention_markdown(assembled),
-        "\n".join(visit_watch_lines(assembled.get("visit_watch"))),
-    ]
-    return [part for part in parts if part]
+    """飞书按块发送。介入一块；周一、周五的拜访对照单独一块；报告入口再一块。"""
+    intervention = _intervention_markdown(assembled)
+    watch = "\n".join(visit_watch_lines(assembled.get("visit_watch")))
+    reports = "\n".join(
+        _report_card_lines(assembled, has_other_blocks=bool(intervention or watch))
+    )
+    return [part for part in (intervention, watch, reports) if part]
+
+
+def _report_card_lines(assembled: Mapping[str, Any], *, has_other_blocks: bool) -> list[str]:
+    """报告入口一行蓝链。只有报告时先补一句说明，避免卡片太空。"""
+    links = report_entry_lines(assembled.get("report_entries"))
+    if not links:
+        return []
+    if has_other_blocks:
+        return links
+    return [REPORTS_ONLY_LEAD, *links]
 
 
 def render_card_markdown(assembled: Mapping[str, Any]) -> str:
@@ -475,6 +494,13 @@ def render_dingtalk_markdown(assembled: Mapping[str, Any], *, title: str) -> str
     if lines and watch_lines:
         lines.append("")
     lines.extend(watch_lines)
+    report_lines = _report_card_lines(
+        assembled,
+        has_other_blocks=bool(items) or bool(watch_lines),
+    )
+    if lines and report_lines:
+        lines.append("")
+    lines.extend(report_lines)
     body = "\n".join(lines)
     tail = "  ".join(f"[{label}]({url})" for label, url in card_footer_buttons(assembled))
     if not tail:
@@ -746,38 +772,47 @@ def leader_oauth_id(session: Session, user_id: Any) -> str:
     return _text(getattr(profile, "oauth_user_id", None)) if profile else ""
 
 
+def empty_leader_highlights_payload(report_date: date, *, subject_id: str = "") -> dict[str, Any]:
+    return {
+        "report_date": report_date.isoformat(),
+        "subject_id": subject_id,
+        "items": {},
+        "card_links": [],
+    }
+
+
 def highlights_for_leader(
     session: Session,
     user_id: Any,
     report_date: date,
 ) -> dict[str, Any]:
-    """返回当前负责人自己的今日需介入。subject_id 是其 oauth id。"""
+    """返回当前负责人自己的今日需介入和报告。subject_id 是其 oauth id。"""
     oauth_id = leader_oauth_id(session, user_id)
-    empty = {"report_date": report_date.isoformat(), "departments": []}
     if not oauth_id:
-        return empty
-    rows = load_department_extract_rows(session, report_date, oauth_user_ids=[oauth_id])
-    if not rows:
-        return empty
-    names = load_display_names(session, rows)
+        return empty_leader_highlights_payload(report_date)
+    rows = load_department_extract_rows(session, report_date, oauth_user_ids=[oauth_id]) or []
+    names = load_display_names(session, rows) if rows else {"accounts": {}, "opportunities": {}, "people": {}}
     assembled = assemble_department_highlights(
         rows,
         report_date,
         "",
         names,
     )
-    if not assembled["has_content"]:
-        return empty
-    payload = department_highlights_payload(assembled)
+    sections = list(assembled.get("sections") or [])
+    sections.extend(load_leader_insight_sections(session, oauth_id, report_date))
+    if not sections:
+        return empty_leader_highlights_payload(report_date, subject_id=oauth_id)
+    payload = department_highlights_payload({"sections": sections})
+    payload["report_date"] = report_date.isoformat()
     payload["subject_id"] = oauth_id
-    departments = [payload]
-    try:
-        from app.services.leader_intervention_actions import attach_item_interactions
+    if payload["items"].get("leader_intervene"):
+        try:
+            from app.services.leader_intervention_actions import attach_item_interactions
 
-        attach_item_interactions(session, departments, report_date)
-    except Exception as exc:
-        logger.warning("拼今日需介入评论和任务失败: %s", exc)
-    return {"report_date": report_date.isoformat(), "departments": departments}
+            attach_item_interactions(session, [payload], report_date)
+        except Exception as exc:
+            logger.warning("拼今日需介入评论和任务失败: %s", exc)
+    return payload
 
 
 def _push_recipient(raw: Mapping[str, Any]) -> Optional[dict[str, Any]]:
@@ -905,7 +940,7 @@ def _visit_only_leader_buckets(
     report_date: date,
     department_id: str = "",
 ) -> dict[str, dict[str, Any]]:
-    """周一、周五没有需介入时，仍按有负责人的部门准备拜访对照。"""
+    """没有需介入抽取的负责人，仍按有负责人的部门准备卡片（拜访对照或报告入口）。"""
     from app.repositories.department_mirror import department_mirror_repo
     from app.services.oauth_service import oauth_client
     from app.services.platform_notification_service import platform_notification_service
@@ -982,13 +1017,15 @@ def handle_department_today_highlights(
     if not policy.variant_enabled(SCENE_DEPARTMENT_HIGHLIGHTS, VARIANT_TODAY_HIGHLIGHTS):
         logger.info("department today highlights disabled")
         return {**result, "skipped": True, "skip_reason": "variant_disabled"}
+    quota_ok, quota_msg = check_today_highlights_quota("department")
+    if not quota_ok:
+        logger.warning("department today highlights blocked by billing: %s", quota_msg)
+        return {**result, "skipped": True, "skip_reason": "billing_blocked"}
 
     rows = load_department_extract_rows(db_session, target)
     if rows is None:
         return {**result, "skipped": True, "skip_reason": "source_unavailable"}
     grouped = _group_by_subject(rows)
-    if not grouped and target.weekday() not in (0, 4):
-        return {**result, "skipped": True, "skip_reason": "empty_highlights"}
 
     from app.repositories.user_profile import user_profile_repo
     from app.services.sales_today_highlights import _recipient_from_profile
@@ -1029,8 +1066,8 @@ def handle_department_today_highlights(
             items.append(_skipped_department(subject_id, "opted_out"))
             continue
         leaders[recipient["user_id"]] = {"recipient": kept[0], "cards": [assembled]}
-    if not grouped:
-        leaders = _visit_only_leader_buckets(db_session, target, "")
+    for user_id, bucket in _visit_only_leader_buckets(db_session, target, "").items():
+        leaders.setdefault(user_id, bucket)
 
     for user_id, bucket in leaders.items():
         card = assemble_leader_highlights(bucket["cards"], target)
@@ -1045,7 +1082,12 @@ def handle_department_today_highlights(
             target,
             leader_user_id=user_id,
         )
-        if not card.get("has_content") and not watch:
+        reports = load_leader_insight_reports(
+            db_session,
+            leader_oauth_id(db_session, user_id),
+            target,
+        )
+        if not card.get("has_content") and not watch and not reports:
             items.append(
                 {
                     "recipient_user_id": user_id,
@@ -1057,6 +1099,8 @@ def handle_department_today_highlights(
             continue
         if watch:
             card["visit_watch"] = watch
+        if reports:
+            card["report_entries"] = reports
         recipients_count += 1
         sent = deliver_department_highlight_card(db_session, bucket["recipient"], card)
         department_ids = list(card.get("department_ids") or [])
@@ -1069,6 +1113,18 @@ def handle_department_today_highlights(
         }
         if sent.get("success"):
             success_count += 1
+            try:
+                report_today_highlights_usage(
+                    "department",
+                    report_date=target,
+                    user_id=user_id,
+                )
+            except Exception:
+                logger.exception(
+                    "department today highlights billing failed user_id=%s date=%s",
+                    user_id,
+                    target.isoformat(),
+                )
         else:
             failed.extend(sent.get("failed_recipients") or [])
             if sent.get("message"):

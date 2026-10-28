@@ -149,10 +149,11 @@ def _push_one_today_highlights(session, audience: str, report_date) -> dict[str,
 
 @app.task
 def push_crm_today_highlights(report_date_str=None, audience=None):
-    """独立推送今日重点。不跟日报任务，不看日报计费场景和飞书总开关。
+    """独立推送今日重点。不跟日报任务，也不看 CRM_DAILY_REPORT_FEISHU_ENABLED。
 
     report_date_str: YYYY-MM-DD，不传则北京时间当天。
     audience: sales / department，不传则两边都推。是否发出由各自的 today_highlights 变体决定。
+    计费走对应日报 SKU：销售个人日报、团队日报。SKU 关闭或额度不足时 handle 内 skip。
     一边失败记 push_failed，不重试，避免另一边已经发出的卡片再发一遍。
     """
     if audience is not None and audience not in _HIGHLIGHT_AUDIENCES:
