@@ -78,6 +78,18 @@ class ReviewSessionPushRequest(BaseModel):
     context: ReviewSessionContext
 
 
+class LeaderMeetingReviewCardPushRequest(BaseModel):
+    """Aldebaran 例会复盘抽取完成：通知推送抽取项卡片。发卡逻辑后续再补。"""
+
+    type: Literal["leader_meeting_review_card"] = "leader_meeting_review_card"
+    report_id: str = Field(..., min_length=1, description="bi_reports.report_id")
+    owner_id: str = Field(..., min_length=1, description="上传人 oauth id，卡片接收人")
+    report_date: Optional[str] = Field(
+        default=None,
+        description="YYYY-MM-DD",
+    )
+
+
 class VisitRecordCardPushRequest(BaseModel):
     """Aldebaran 拜访后处理完成：推送拜访卡片。"""
 
@@ -226,6 +238,7 @@ PushNotificationRequest = Annotated[
         VisitRecordCommentPushRequest,
         SalesTaskCreatedPushRequest,
         ReviewSessionPushRequest,
+        LeaderMeetingReviewCardPushRequest,
         VisitRecordCardPushRequest,
         DailyNoFollowupReminderPushRequest,
         PlatformNotificationPushRequest,
