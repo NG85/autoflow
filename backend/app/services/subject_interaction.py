@@ -22,7 +22,9 @@ logger = logging.getLogger(__name__)
 
 SUBJECT_SKILL_EXTRACT_ITEM = "skill_extract_item"
 SUBJECT_DEPARTMENT_INTERVENTION = "department_intervention"
+SUBJECT_LEADER_MEETING_REVIEW = "leader_meeting_review"
 SCENE_DEPARTMENT_TODAY_HIGHLIGHTS = "department_today_highlights"
+SCENE_LEADER_MEETING_REVIEW = "leader_meeting_review"
 _ANCHOR_MAX = 255
 KIND_COMMENT = "comment"
 KIND_TASK = "task"
@@ -249,6 +251,75 @@ def append_comments(
         session.add(comment)
     session.commit()
     return [_comment_dict(row) for row in [*existing, *pending]]
+
+
+def save_subject_comments(
+    session: Session,
+    *,
+    subject_type: str,
+    subject_id: str,
+    scene: str,
+    actor_user_id: str,
+    author: str,
+    comments: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """追加、回复或修改评论。带 id 时只改本人那条的正文。返回保存后的整段线程。"""
+    actor = _text(actor_user_id)
+    if not actor:
+        raise SubjectInteractionError("缺少当前用户")
+    incoming = list(comments or [])
+    if not incoming:
+        raise SubjectInteractionError("评论不能为空")
+    existing = [row for row in _rows_for_subject(session, subject_type, subject_id) if _is_kind(row, KIND_COMMENT)]
+    by_id = {_text(getattr(row, "id", None)): row for row in existing if _text(getattr(row, "id", None))}
+    known = set(by_id)
+    pending: list[CRMSubjectInteraction] = []
+    base = _now()
+    for index, item in enumerate(incoming):
+        if not isinstance(item, Mapping):
+            raise SubjectInteractionError("评论格式不正确")
+        content = _text(item.get("content"))
+        if not content:
+            raise SubjectInteractionError("评论内容不能为空")
+        comment_id = _text(item.get("id"))
+        if comment_id:
+            current = by_id.get(comment_id)
+            if current is None:
+                raise SubjectInteractionError(f"评论不存在：id={comment_id}")
+            if _text(getattr(current, "author_id", None)) != actor:
+                raise SubjectInteractionError("只能编辑本人的评论")
+            current.content = content[:2000]
+            session.add(current)
+            continue
+        reply_to_id = _text(item.get("reply_to_id")) or None
+        if reply_to_id and reply_to_id not in known:
+            raise SubjectInteractionError(f"reply_to_id 无效：未找到 id={reply_to_id} 的评论")
+        comment = CRMSubjectInteraction(
+            id=str(uuid4()),
+            subject_type=subject_type,
+            subject_id=subject_id,
+            kind=KIND_COMMENT,
+            scene=_text(scene),
+            reply_to_id=reply_to_id,
+            author_id=actor,
+            author=_text(item.get("author")) or _text(author),
+            content=content[:2000],
+            created_at=base + timedelta(microseconds=index),
+        )
+        pending.append(comment)
+        known.add(comment.id)
+        by_id[comment.id] = comment
+    for comment in pending:
+        session.add(comment)
+    session.commit()
+    saved = [row for row in _rows_for_subject(session, subject_type, subject_id) if _is_kind(row, KIND_COMMENT)]
+    saved_ids = {_text(getattr(row, "id", None)) for row in saved}
+    for comment in pending:
+        if comment.id not in saved_ids:
+            saved.append(comment)
+    if not saved:
+        saved = [*existing, *pending]
+    return [_comment_dict(row) for row in saved]
 
 
 def append_todo_id(

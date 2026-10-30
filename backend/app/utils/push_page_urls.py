@@ -218,6 +218,47 @@ def build_task_detail_page_url(task_id: str) -> str:
     return f"{base}/{quote(tid, safe='')}"
 
 
+def build_leader_meeting_review_list_url(start_date: str, end_date: str) -> str:
+    """例会复盘列表。只带起止日期，两端都包含，不必按周对齐。上传人由打开页面的查询接口按权限决定。"""
+    host = _host()
+    start = (start_date or "").strip()
+    end = (end_date or "").strip()
+    if not host or not start or not end:
+        return ""
+    return (
+        f"{host}/v2/business/leader-meeting-review"
+        f"?start_date={quote(start, safe='')}"
+        f"&end_date={quote(end, safe='')}"
+    )
+
+
+def build_leader_meeting_review_report_url(report_id: str, report_date: str = "") -> str:
+    """单份例会复盘报告。对照拜访复盘的 /v2/behavior/{id}/recap。"""
+    host = _host()
+    rid = (report_id or "").strip()
+    if not host or not rid:
+        return ""
+    path = f"{host}/v2/business/leader-meeting-review/{quote(rid, safe='')}"
+    day = (report_date or "").strip()
+    if not day:
+        return path
+    return f"{path}?date={quote(day, safe='')}"
+
+
+def build_leader_meeting_review_section_url(report_id: str, report_date: str, section: str) -> str:
+    """抽取页某一类。对照拜访复盘的 /v2/behavior/{id}/extract?tab=。"""
+    host = _host()
+    rid = (report_id or "").strip()
+    day = (report_date or "").strip()
+    key = (section or "").strip()
+    if not host or not rid or not key:
+        return ""
+    path = f"{host}/v2/business/leader-meeting-review/{quote(rid, safe='')}/extract?tab={quote(key, safe='')}"
+    if not day:
+        return path
+    return f"{path}&date={quote(day, safe='')}"
+
+
 def build_weekly_review_1_page_url(execution_id: str) -> str:
     """周报表1（review1 / review1s）。"""
     host = _host()

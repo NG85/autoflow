@@ -79,7 +79,7 @@ class ReviewSessionPushRequest(BaseModel):
 
 
 class LeaderMeetingReviewCardPushRequest(BaseModel):
-    """Aldebaran 例会复盘抽取完成：通知推送抽取项卡片。发卡逻辑后续再补。"""
+    """Aldebaran 例会复盘抽取完成：按抽取项给上传人发卡片。"""
 
     type: Literal["leader_meeting_review_card"] = "leader_meeting_review_card"
     report_id: str = Field(..., min_length=1, description="bi_reports.report_id")

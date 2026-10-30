@@ -913,23 +913,18 @@ def update_my_notification_preference(
 
 
 def _handle_leader_meeting_review_card_push(
+    db_session: SessionDep,
     payload: LeaderMeetingReviewCardPushRequest,
 ) -> Dict[str, Any]:
-    """Accept the extract-finished callback. Card delivery is not implemented yet."""
-    logger.info(
-        "leader_meeting_review_card accepted, push deferred report_id=%s owner_id=%s report_date=%s",
-        payload.report_id,
-        payload.owner_id,
-        payload.report_date,
+    """按抽取项给上传人发例会复盘卡片。"""
+    from app.services.leader_meeting_review_card import handle_leader_meeting_review_card
+
+    return handle_leader_meeting_review_card(
+        db_session,
+        report_id=payload.report_id,
+        owner_id=payload.owner_id,
+        report_date=payload.report_date,
     )
-    return {
-        "success": True,
-        "pushed": False,
-        "reason": "not_implemented",
-        "report_id": payload.report_id,
-        "owner_id": payload.owner_id,
-        "report_date": payload.report_date,
-    }
 
 
 @router.post("/push")
@@ -947,7 +942,7 @@ async def push_notification_api(
     """
     try:
         if isinstance(payload, LeaderMeetingReviewCardPushRequest):
-            result = _handle_leader_meeting_review_card_push(payload)
+            result = _handle_leader_meeting_review_card_push(db_session, payload)
         elif isinstance(payload, VisitRecordCardPushRequest):
             result = _handle_visit_record_card_push(db_session, payload)
         elif isinstance(payload, DailyNoFollowupReminderPushRequest):

@@ -150,13 +150,15 @@ def test_card_appends_watch_after_the_exit_link():
     assert body.index("华东团队总拜访 11 条") < body.index("拜访偏少：王五 0 条")
     assert "拜访偏少：王五 0 条" in body
     assert "需关注偏多：赵六 2 条" in body
-    assert body.index("需关注偏多：赵六 2 条") < body.index("[查看本周拜访](")
+    assert "查看本周拜访" not in body
     assert "本周已拜访" not in body
     dingtalk = render_dingtalk_markdown(assembled, title="今日重点｜2026-10-16")
     assert "## 本周拜访" in dingtalk
+    assert "\n\n---\n\n**本周**\n" in dingtalk
     assert "- 王五" not in dingtalk
+    assert "查看本周拜访" not in dingtalk
     assert "本周已拜访" not in dingtalk
-    assert card_footer_buttons(assembled) == []
+    assert [label for label, _url in card_footer_buttons(assembled)] == ["已拜访", "例会复盘"]
 
 
 def test_stats_line_uses_the_department_name():

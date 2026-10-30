@@ -34,9 +34,14 @@ from app.services.today_highlights_billing import (
     check_today_highlights_quota,
     report_today_highlights_usage,
 )
-from app.services.sales_today_highlights import parse_report_date
+from app.services.sales_today_highlights import INCOMPLETE_TASK_STATUSES, parse_report_date
 from app.utils.date_utils import get_week_range_from_date
-from app.utils.push_page_urls import build_department_highlights_url, build_week_visit_list_url
+from app.utils.push_page_urls import (
+    build_department_highlights_url,
+    build_leader_meeting_review_list_url,
+    build_task_list_page_url,
+    build_week_visit_list_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -383,14 +388,19 @@ def _intervention_markdown(assembled: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def render_card_sections(assembled: Mapping[str, Any]) -> list[str]:
-    """飞书按块发送。介入一块；周一、周五的拜访对照单独一块；报告入口再一块。"""
+def render_card_sections(
+    assembled: Mapping[str, Any],
+    *,
+    owner_name: str = "",
+) -> list[str]:
+    """飞书按块发送。介入一块；周一、周五的拜访对照单独一块；报告入口再一块；本周按钮前一块标题。"""
     intervention = _intervention_markdown(assembled)
-    watch = "\n".join(visit_watch_lines(assembled.get("visit_watch")))
+    watch = _watch_section(assembled)
     reports = "\n".join(
         _report_card_lines(assembled, has_other_blocks=bool(intervention or watch))
     )
-    return [part for part in (intervention, watch, reports) if part]
+    week = _week_heading(assembled, owner_name=owner_name)
+    return [part for part in (intervention, watch, reports, week) if part]
 
 
 def _report_card_lines(assembled: Mapping[str, Any], *, has_other_blocks: bool) -> list[str]:
@@ -403,9 +413,9 @@ def _report_card_lines(assembled: Mapping[str, Any], *, has_other_blocks: bool) 
     return [REPORTS_ONLY_LEAD, *links]
 
 
-def render_card_markdown(assembled: Mapping[str, Any]) -> str:
+def render_card_markdown(assembled: Mapping[str, Any], *, owner_name: str = "") -> str:
     """正文只展开信度最高的一条介入，其余人只点名。标题不跳转，下面固定一个出口。"""
-    return "\n\n".join(render_card_sections(assembled))
+    return "\n\n".join(render_card_sections(assembled, owner_name=owner_name))
 
 
 def _section_exit_link(section: Mapping[str, Any]) -> str:
@@ -432,7 +442,10 @@ def _other_people_line(items: Sequence[Mapping[str, Any]]) -> str:
     return "还有" + "、".join(names)
 
 
-WEEK_VISIT_LABEL = "本周已拜访"
+WEEK_SECTION_TITLE = "本周"
+TASK_BUTTON_LABEL = "待完成"
+VISIT_BUTTON_LABEL = "已拜访"
+MEETING_BUTTON_LABEL = "例会复盘"
 
 
 def _report_day(assembled: Mapping[str, Any]) -> Optional[date]:
@@ -453,14 +466,38 @@ def _visit_department_names(assembled: Mapping[str, Any]) -> list[str]:
     return list(dict.fromkeys(names))
 
 
-def card_footer_buttons(assembled: Mapping[str, Any]) -> list[tuple[str, str]]:
-    """本周已拜访：周一不放。周一、周五有拜访对照时，入口改在那段末尾，这里不再重复。"""
-    watch = assembled.get("visit_watch") or {}
-    if _text(watch.get("url")):
-        return []
-    report_day = _report_day(assembled)
-    if report_day is None or report_day.weekday() == 0:
-        return []
+def _meeting_review_button(report_day: date) -> Optional[tuple[str, str]]:
+    """例会复盘：周一不放。其余日子筛本周一到本周日。"""
+    if report_day.weekday() == 0:
+        return None
+    week_start, week_end = get_week_range_from_date(report_day)
+    url = build_leader_meeting_review_list_url(week_start.isoformat(), week_end.isoformat())
+    if not url:
+        return None
+    return (MEETING_BUTTON_LABEL, url)
+
+
+def _week_task_button(owner_name: str, report_day: date) -> Optional[tuple[str, str]]:
+    """待完成：本人、预计完成日在本周一到本周日、状态未完成。"""
+    name = _text(owner_name)
+    if not name or name == "Unknown":
+        return None
+    week_start, week_end = get_week_range_from_date(report_day)
+    url = build_task_list_page_url(
+        owner_name=name,
+        due_date__gte=week_start.isoformat(),
+        due_date__lte=week_end.isoformat(),
+        status__in=list(INCOMPLETE_TASK_STATUSES),
+    )
+    if not url:
+        return None
+    return (TASK_BUTTON_LABEL, url)
+
+
+def _week_visit_button(assembled: Mapping[str, Any], report_day: date) -> Optional[tuple[str, str]]:
+    """已拜访：周一不放。周五对照里不再另放「查看本周拜访」。"""
+    if report_day.weekday() == 0:
+        return None
     week_start, week_end = get_week_range_from_date(report_day)
     url = build_week_visit_list_url(
         week_start.isoformat(),
@@ -468,12 +505,58 @@ def card_footer_buttons(assembled: Mapping[str, Any]) -> list[tuple[str, str]]:
         _visit_department_names(assembled),
     )
     if not url:
+        return None
+    return (VISIT_BUTTON_LABEL, url)
+
+
+def card_footer_buttons(
+    assembled: Mapping[str, Any],
+    *,
+    owner_name: str = "",
+) -> list[tuple[str, str]]:
+    """本周按钮。周一不放已拜访和例会复盘。"""
+    report_day = _report_day(assembled)
+    if report_day is None:
         return []
-    return [(WEEK_VISIT_LABEL, url)]
+    buttons: list[tuple[str, str]] = []
+    task = _week_task_button(owner_name, report_day)
+    if task:
+        buttons.append(task)
+    visit = _week_visit_button(assembled, report_day)
+    if visit:
+        buttons.append(visit)
+    meeting = _meeting_review_button(report_day)
+    if meeting:
+        buttons.append(meeting)
+    return buttons
 
 
-def render_dingtalk_markdown(assembled: Mapping[str, Any], *, title: str) -> str:
-    """钉钉 sampleMarkdown：一级标题、二级小节、引用说明。底部链接不用列表，避免看成「更多」的展开。"""
+def _week_heading(assembled: Mapping[str, Any], *, owner_name: str = "") -> str:
+    if not card_footer_buttons(assembled, owner_name=owner_name):
+        return ""
+    return f"**{WEEK_SECTION_TITLE}**"
+
+
+def _watch_section(assembled: Mapping[str, Any], *, dingtalk: bool = False) -> str:
+    """周五对照不再写「查看本周拜访」，底部「已拜访」承担这个入口。"""
+    report_day = _report_day(assembled)
+    include_detail = not (report_day is not None and report_day.weekday() == 4)
+    return "\n".join(
+        visit_watch_lines(
+            assembled.get("visit_watch"),
+            dingtalk=dingtalk,
+            include_detail=include_detail,
+        )
+    )
+
+
+def render_dingtalk_markdown(
+    assembled: Mapping[str, Any],
+    *,
+    title: str,
+    owner_name: str = "",
+) -> str:
+    """钉钉 sampleMarkdown：一级标题、二级小节、引用说明。底部入口前加分隔线，链接不用列表。"""
     lines: list[str] = [f"# {title}"]
     sections = list(assembled.get("sections") or [])
     section = sections[0] if sections else None
@@ -490,7 +573,8 @@ def render_dingtalk_markdown(assembled: Mapping[str, Any], *, title: str) -> str
         exit_link = _section_exit_link(section)
         if exit_link:
             lines.append(exit_link)
-    watch_lines = visit_watch_lines(assembled.get("visit_watch"), dingtalk=True)
+    watch_text = _watch_section(assembled, dingtalk=True)
+    watch_lines = watch_text.split("\n") if watch_text else []
     if lines and watch_lines:
         lines.append("")
     lines.extend(watch_lines)
@@ -502,10 +586,11 @@ def render_dingtalk_markdown(assembled: Mapping[str, Any], *, title: str) -> str
         lines.append("")
     lines.extend(report_lines)
     body = "\n".join(lines)
-    tail = "  ".join(f"[{label}]({url})" for label, url in card_footer_buttons(assembled))
+    buttons = card_footer_buttons(assembled, owner_name=owner_name)
+    tail = "  ".join(f"[{label}]({url})" for label, url in buttons)
     if not tail:
         return body
-    return f"{body}\n\n\n{tail}"
+    return f"{body}\n\n---\n\n**{WEEK_SECTION_TITLE}**\n{tail}"
 
 
 def _dingtalk_item_lines(item: Mapping[str, Any]) -> list[str]:
@@ -843,10 +928,11 @@ def deliver_department_highlight_card(
 
     day = assembled.get("report_date")
     title = f"今日重点｜{day}"
-    sections = render_card_sections(assembled)
+    owner_name = _text(recipient.get("name"))
+    sections = render_card_sections(assembled, owner_name=owner_name)
     body = sections[0] if sections else ""
     extra = sections[1:]
-    buttons = card_footer_buttons(assembled)
+    buttons = card_footer_buttons(assembled, owner_name=owner_name)
     platform = _text(recipient.get("platform"))
     if platform in (PLATFORM_FEISHU, PLATFORM_LARK):
         card = platform_notification_service.build_feishu_markdown_card(
@@ -871,7 +957,7 @@ def deliver_department_highlight_card(
             "failed_recipients": failed,
         }
 
-    text = render_dingtalk_markdown(assembled, title=title)
+    text = render_dingtalk_markdown(assembled, title=title, owner_name=owner_name)
     if platform == PLATFORM_DINGTALK or platform:
         return platform_notification_service.send_platform_notification(
             db_session,

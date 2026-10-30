@@ -170,10 +170,10 @@ def test_user_rows_stay_off_the_leader_card(monkeypatch):
     assert "今天找张三确认折扣上限" in body
     assert "甲客户" in body and "乙商机" in body
     assert "一线立即处理" not in body
-    assert body.rstrip().endswith(
+    assert (
         "[更多（1）](https://example.com/v2/department-highlights"
         "?date=2026-10-12&department_id=dept-1&tab=leader_intervene)"
-    )
+    ) in body
     assert card_footer_buttons(assembled) == []
 
 
@@ -898,6 +898,7 @@ def test_week_visit_button_filters_the_team(monkeypatch):
         "https://example.com",
     )
     monkeypatch.setattr("app.utils.push_page_urls.settings.VISIT_DETAIL_PAGE_URL", "/v2/behavior")
+    monkeypatch.setattr("app.utils.push_page_urls.settings.CRM_SALES_TASK_PAGE_URL", "/v2/task")
     monkeypatch.setattr(
         "app.utils.push_page_urls.settings.CRM_DAILY_REPORT_VISIT_DATE_FIELD",
         CRMDailyReportVisitDateField.LAST_MODIFIED_TIME,
@@ -918,18 +919,55 @@ def test_week_visit_button_filters_the_team(monkeypatch):
         department_name="华北销售",
     )
     buttons = card_footer_buttons(assembled)
+    meeting = (
+        "https://example.com/v2/business/leader-meeting-review"
+        "?start_date=2026-10-12&end_date=2026-10-18"
+    )
     assert buttons == [
         (
-            "本周已拜访",
+            "已拜访",
             "https://example.com/v2/behavior"
             "?visit_communication_date_start=2026-10-12"
             "&visit_communication_date_end=2026-10-18"
             "&department_name=%E5%8D%8E%E5%8C%97%E9%94%80%E5%94%AE",
-        )
+        ),
+        ("例会复盘", meeting),
     ]
     merged = assemble_leader_highlights([assembled], TUESDAY)
     merged_buttons = card_footer_buttons(merged)
     assert merged_buttons == buttons
+    named = card_footer_buttons(assembled, owner_name="王经理")
+    assert named[0] == (
+        "待完成",
+        "https://example.com/v2/task"
+        "?owner_name=%E7%8E%8B%E7%BB%8F%E7%90%86"
+        "&due_date__gte=2026-10-12"
+        "&due_date__lte=2026-10-18"
+        "&status__in=IN_PROGRESS"
+        "&status__in=PENDING",
+    )
+    assert named[1:] == buttons
+    friday = assemble_department_highlights(
+        [_row({"claim": "拍板", "related_user_id": "oauth-zhang"})],
+        date(2026, 10, 16),
+        "dept-1",
+        _names(),
+        department_name="华北销售",
+    )
+    friday["visit_watch"] = {
+        "label": "本周",
+        "visit_total": 3,
+        "url": "https://example.com/visits",
+    }
+    friday_body = render_card_markdown(friday)
+    assert "查看本周拜访" not in friday_body
+    assert "[例会复盘](" not in friday_body
+    friday_buttons = card_footer_buttons(friday)
+    assert [label for label, _url in friday_buttons] == ["已拜访", "例会复盘"]
+    assert friday_buttons[1][1] == meeting
+    monday_body = render_card_markdown(monday)
+    assert "例会复盘" not in monday_body
+    assert "例会复盘" not in [label for label, _url in card_footer_buttons(monday, owner_name="王经理")]
 
 
 def test_card_title_omits_department_name(monkeypatch):
@@ -972,6 +1010,10 @@ def test_card_title_omits_department_name(monkeypatch):
 
 def test_feishu_card_splits_visit_watch_from_intervention(monkeypatch):
     captured = {}
+    monkeypatch.setattr(
+        "app.utils.push_page_urls.settings.REVIEW_REPORT_HOST",
+        "https://example.com",
+    )
     assembled = assemble_department_highlights(
         [_row({"claim": "拍板", "leader_action": "今天确认", "related_user_id": "oauth-zhang"})],
         DAY,
@@ -1015,6 +1057,7 @@ def test_feishu_card_splits_visit_watch_from_intervention(monkeypatch):
         "**上周拜访**\n总拜访 0 条\n[查看上周拜访](https://example.com/visits)",
         "[团队人效](https://example.com/persona)",
     ]
+    assert "例会复盘" not in captured["body"]
 
 
 def test_dingtalk_card_puts_title_in_the_body(monkeypatch):
