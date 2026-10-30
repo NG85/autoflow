@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Mapping, Optional, Sequence
 
@@ -25,6 +26,7 @@ from app.services.subject_interaction import (
     load_threads,
     save_subject_comments,
 )
+from app.utils.crm_comments import resolve_comment_notify_recipients
 
 logger = logging.getLogger(__name__)
 
@@ -330,6 +332,154 @@ def link_meeting_review_task(
         "adopted": bool(adopt),
         "status": interaction_fields(row)["status"],
     }
+
+
+def local_user_id_for_oauth(session: Session, oauth_user_id: str) -> str:
+    """抽取行上的 subject_id 是 oauth id，评论提醒用本地 user id。"""
+    from app.repositories.user_profile import user_profile_repo
+
+    oauth_id = _text(oauth_user_id)
+    if not oauth_id:
+        return ""
+    profile = user_profile_repo.get_by_oauth_user_id(session, oauth_id)
+    return _text(getattr(profile, "user_id", None)) if profile is not None else ""
+
+
+def _row_payload(row: Any) -> dict[str, Any]:
+    raw = getattr(row, "payload", None)
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8")
+    if isinstance(raw, str) and raw.strip():
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _comment_link_text(row: Any) -> str:
+    payload = _row_payload(row)
+    if _text(getattr(row, "item_type", None)) == ITEM_EVENT:
+        parts = [
+            _text(payload.get("business_object")),
+            _text(payload.get("management_issue")),
+        ]
+        text = " · ".join(part for part in parts if part)
+    else:
+        text = " ".join(
+            part
+            for part in (
+                _text(payload.get("assignee_name")),
+                _text(payload.get("action")),
+            )
+            if part
+        )
+    return text or _text(payload.get("claim")) or "例会复盘"
+
+
+def _comment_preview(content: Any) -> str:
+    preview = _text(content)
+    if len(preview) > 200:
+        return preview[:197] + "..."
+    return preview
+
+
+def notify_meeting_review_comments(
+    session: Session,
+    row: CRMSkillExtractItem,
+    *,
+    current_user_id: str,
+    author: str,
+    comments: Sequence[Mapping[str, Any]],
+    saved_comments: Sequence[Mapping[str, Any]],
+    recipient_user_ids: Optional[Sequence[Any]] = None,
+) -> None:
+    """保存成功后推送。失败不影响已保存的评论。
+
+    未指定接收人时，顶层评论发给上传人，回复发给被回复作者。
+    指定了非空名单则只发给这些人。点名写在正文里，名单不落库。
+    """
+    try:
+        from app.services.platform_notification_service import platform_notification_service
+        from app.utils.push_page_urls import build_leader_meeting_review_section_url
+
+        saved_by_id: dict[str, Mapping[str, Any]] = {}
+        for raw in saved_comments or []:
+            if not isinstance(raw, Mapping):
+                continue
+            comment_id = _text(raw.get("id"))
+            if comment_id:
+                saved_by_id[comment_id] = raw
+
+        author_name = _text(author) or "有人"
+        actor = _text(current_user_id)
+        uploader_user_id = local_user_id_for_oauth(session, getattr(row, "subject_id", None))
+        section = (
+            "management_events"
+            if _text(getattr(row, "item_type", None)) == ITEM_EVENT
+            else "employee_todo_candidates"
+        )
+        report_day = getattr(row, "report_date", None)
+        day = report_day.isoformat() if hasattr(report_day, "isoformat") else _text(report_day)[:10]
+        url = build_leader_meeting_review_section_url(
+            _text(getattr(row, "source_report_unique_id", None)),
+            day,
+            section,
+        )
+        link_text = _comment_link_text(row)
+
+        for item in comments or []:
+            if not isinstance(item, Mapping):
+                continue
+            comment_id = _text(item.get("id"))
+            saved = saved_by_id.get(comment_id) if comment_id else None
+            edited = saved is not None
+            reply_to_id = _text(item.get("reply_to_id"))
+            if not reply_to_id and saved is not None:
+                reply_to_id = _text(saved.get("reply_to_id"))
+            preview = _comment_preview(item.get("content")) or "--"
+            suffix = "（编辑过）" if edited else ""
+            if reply_to_id:
+                parent = saved_by_id.get(reply_to_id) or {}
+                default_recipient = _text(parent.get("author_id"))
+                title = f"{author_name}回复了你的评论{suffix}"
+                label = "回复"
+            else:
+                default_recipient = uploader_user_id
+                title = f"{author_name}评论了例会复盘{suffix}"
+                label = "评论"
+            lines = [title]
+            if url:
+                lines.append(f"[{link_text}]({url})")
+            lines.append(f"{label}：{preview}")
+            text = "\n".join(lines) + "\n"
+            recipients = resolve_comment_notify_recipients(
+                specified=recipient_user_ids,
+                default_user_id=default_recipient,
+                current_user_id=actor,
+            )
+            if not recipients:
+                logger.info(
+                    "leader_meeting_review_comment notify skipped: unique_id=%s, reply_to_id=%s, reason=invalid_recipient_or_self_notification",
+                    getattr(row, "unique_id", None),
+                    reply_to_id or None,
+                )
+                continue
+            for recipient_user_id in recipients:
+                platform_notification_service.send_leader_meeting_review_comment_notification(
+                    session,
+                    recipient_user_id=recipient_user_id,
+                    message_text=text,
+                )
+                logger.info(
+                    "leader_meeting_review_comment notify sent: unique_id=%s, kind=%s, recipient_user_id=%s, author_name=%s",
+                    getattr(row, "unique_id", None),
+                    "reply" if reply_to_id else "comment",
+                    recipient_user_id,
+                    author_name,
+                )
+    except Exception as exc:
+        logger.warning("发送例会复盘评论提醒失败（不影响保存评论）：%s", exc)
 
 
 def save_meeting_review_comments(

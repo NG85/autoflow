@@ -18,7 +18,7 @@
 - `POST /crm/leader-meeting-reviews/items/{unique_id}/feedback`：经营事项和员工待办。
 - `POST /crm/leader-meeting-reviews/items/decisions`：只处理员工待办。经营事项 `ok` 为 false。
 - `POST /crm/leader-meeting-reviews/items/{unique_id}/tasks`：只挂员工待办。任务须已存在。`adopt=true` 时同时标为已采纳。
-- `POST /crm/leader-meeting-reviews/items/{unique_id}/comments`：两类都能追加和回复。带已有 `id` 时只改当前用户自己那条的正文。
+- `POST /crm/leader-meeting-reviews/items/{unique_id}/comments`：两类都能追加、回复和修改本人正文。`recipient_user_ids` 非空时只推给这些人；不传时顶层推给上传人，回复推给被回复作者。点名写在正文 `@姓名` 里。提醒链到抽取页。
 
 ## 卡片
 

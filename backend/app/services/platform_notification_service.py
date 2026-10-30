@@ -3055,6 +3055,20 @@ class PlatformNotificationService:
             message_text=message_text,
         )
 
+    def send_leader_meeting_review_comment_notification(
+        self,
+        db_session: Session,
+        *,
+        recipient_user_id: str,
+        message_text: str,
+    ) -> Dict[str, Any]:
+        """例会复盘评论提醒。链接按收件人平台改成飞书 / Lark / 钉钉侧栏协议。"""
+        return self.send_weekly_followup_comment_notification(
+            db_session,
+            recipient_user_id=recipient_user_id,
+            message_text=message_text,
+        )
+
     def send_today_highlight_comment_notification(
         self,
         db_session: Session,

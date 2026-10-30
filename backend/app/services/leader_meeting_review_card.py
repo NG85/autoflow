@@ -83,6 +83,7 @@ def empty_extracts(report_id: str) -> dict[str, Any]:
         "items": {},
         "card_links": [],
         "can_manage": False,
+        "uploader_user_id": None,
     }
 
 
@@ -228,7 +229,11 @@ def extracts_for_viewer(
     if not rid or (not viewer and not company_manager):
         return empty_extracts(rid)
     rows = load_report_extract_rows(session, rid)
-    from app.services.leader_meeting_review_actions import attach_todo_tasks, select_visible_rows
+    from app.services.leader_meeting_review_actions import (
+        attach_todo_tasks,
+        local_user_id_for_oauth,
+        select_visible_rows,
+    )
 
     visible, can_manage = select_visible_rows(
         session,
@@ -242,6 +247,9 @@ def extracts_for_viewer(
     assembled = assemble_extracts(visible, rid, resolve_report_date(None, visible))
     attach_todo_tasks(session, visible, assembled)
     assembled["can_manage"] = can_manage
+    assembled["uploader_user_id"] = (
+        local_user_id_for_oauth(session, getattr(visible[0], "subject_id", None)) or None
+    )
     return assembled
 
 

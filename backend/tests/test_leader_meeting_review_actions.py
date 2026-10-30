@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 from app.services.leader_meeting_review_actions import (
     link_meeting_review_task,
     load_meeting_review_item,
+    notify_meeting_review_comments,
     save_meeting_review_comments,
     save_meeting_review_decisions,
     save_meeting_review_feedback,
@@ -263,3 +264,92 @@ def test_comments_can_be_added_replied_and_edited_by_the_author():
         assert "只能编辑本人的评论" in str(exc)
     else:
         raise AssertionError("expected own-comment edit only")
+
+
+def test_comment_notifications_cover_reply_mention_and_edit(monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        "app.repositories.user_profile.user_profile_repo.get_by_oauth_user_id",
+        lambda session, oauth_id: SimpleNamespace(user_id="uploader-user"),
+    )
+    monkeypatch.setattr(
+        "app.utils.push_page_urls.build_leader_meeting_review_section_url",
+        lambda report_id, report_date, section: f"https://example.com/{report_id}/{section}",
+    )
+    monkeypatch.setattr(
+        "app.services.platform_notification_service.platform_notification_service.send_leader_meeting_review_comment_notification",
+        lambda db, *, recipient_user_id, message_text: sent.append((recipient_user_id, message_text)) or {"success": True},
+    )
+    row = _row(
+        "MANAGEMENT_EVENT",
+        payload={
+            "claim": "事项",
+            "business_object": "甲客户",
+            "management_issue": "关键人",
+        },
+    )
+    saved = [
+        {"id": "c1", "author_id": "uploader-user", "reply_to_id": None, "content": "先确认"},
+        {"id": "c2", "author_id": "leader-1", "reply_to_id": "c1", "content": "周五前"},
+    ]
+
+    notify_meeting_review_comments(
+        MagicMock(),
+        row,
+        current_user_id="leader-1",
+        author="乙",
+        comments=[{"content": "先确认范围"}],
+        saved_comments=saved,
+    )
+    assert sent[0][0] == "uploader-user"
+    assert "乙评论了例会复盘" in sent[0][1]
+    assert "[甲客户 · 关键人](https://example.com/RPT-1/management_events)" in sent[0][1]
+    assert "评论：先确认范围" in sent[0][1]
+
+    sent.clear()
+    notify_meeting_review_comments(
+        MagicMock(),
+        row,
+        current_user_id="uploader-user",
+        author="甲",
+        comments=[{"content": "自己记一笔"}],
+        saved_comments=saved,
+    )
+    assert sent == []
+
+    notify_meeting_review_comments(
+        MagicMock(),
+        row,
+        current_user_id="leader-1",
+        author="乙",
+        comments=[{"content": "周五前给结论", "reply_to_id": "c1"}],
+        saved_comments=saved,
+    )
+    assert sent[0][0] == "uploader-user"
+    assert "回复了你的评论" in sent[0][1]
+    assert "回复：周五前给结论" in sent[0][1]
+
+    sent.clear()
+    notify_meeting_review_comments(
+        MagicMock(),
+        row,
+        current_user_id="leader-1",
+        author="乙",
+        comments=[{"content": "@王磊 你来跟"}],
+        saved_comments=saved,
+        recipient_user_ids=["mentioned-1", "leader-1"],
+    )
+    assert [item[0] for item in sent] == ["mentioned-1"]
+
+    sent.clear()
+    notify_meeting_review_comments(
+        MagicMock(),
+        row,
+        current_user_id="leader-1",
+        author="乙",
+        comments=[{"id": "c2", "content": "改成下周一"}],
+        saved_comments=saved,
+    )
+    assert sent[0][0] == "uploader-user"
+    assert "回复了你的评论（编辑过）" in sent[0][1]
+    assert "回复：改成下周一" in sent[0][1]

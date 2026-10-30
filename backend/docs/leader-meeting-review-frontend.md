@@ -93,7 +93,7 @@
 
 ## 3. 抽取页：两个 tab
 
-独立页面，对照拜访复盘的 `/extract`。交互对齐团队今日重点里的「今日需介入」（`FeedbackButtons`、`DecisionButtons`、评论、建任务用现有 `createTodos`）。写入地址用下面第 4 到第 7 节，不要调用今日重点的赞踩、采纳、评论、挂任务接口。评论比今日需介入多一个能力：作者可以改自己的正文。这里没有 `recipient_user_ids`，保存评论不会发提醒。
+独立页面，对照拜访复盘的 `/extract`。交互对齐团队今日重点里的「今日需介入」（`FeedbackButtons`、`DecisionButtons`、评论、建任务用现有 `createTodos`）。写入地址用下面第 4 到第 7 节，不要调用今日重点的赞踩、采纳、评论、挂任务接口。评论比今日需介入多一个能力：作者可以改自己的正文。点名和回复的提醒见第 7 节，规则与 `backend/docs/comment-notify-frontend.md` 相同。
 
 ```http
 GET /api/v1/crm/leader-meeting-reviews/{report_id}/extracts
@@ -118,12 +118,13 @@ GET /api/v1/crm/leader-meeting-reviews/{report_id}/extracts
       { "key": "management_events", "title": "经营事项", "url": "https://.../v2/business/leader-meeting-review/RPT-1/extract?tab=management_events&date=2026-10-28" },
       { "key": "employee_todo_candidates", "title": "员工待办", "url": "https://.../v2/business/leader-meeting-review/RPT-1/extract?tab=employee_todo_candidates&date=2026-10-28" }
     ],
-    "can_manage": true
+    "can_manage": true,
+    "uploader_user_id": "上传人的本地 user id"
   }
 }
 ```
 
-`can_manage` 为 `false` 时整页只读：抽取照常展示，不要画第 4 到第 7 节的操作。上传人或汇报链上级打开时为 `true`。
+`can_manage` 为 `false` 时整页只读：抽取照常展示，不要画第 4 到第 7 节的操作。上传人或汇报链上级打开时为 `true`。`uploader_user_id` 是这份报告上传人的本地 user id，评论点名时用来放进接收人名单。对不上或查不到档案时为 `null`。
 
 tab 不写死。按 `card_links` 的顺序渲染，文案用 `title`，条数用 `items[key].length`。没有的类型不出现，不要留空 tab。`tab` 能对上某个 `key` 时打开它；对不上或没传时打开第一个，并把 `tab` 写回地址栏。切换 tab 时只改 `tab`，路径里的 `report_id` 和 `date` 保持不变。
 
@@ -273,21 +274,42 @@ POST /api/v1/crm/leader-meeting-reviews/items/{unique_id}/tasks
 
 ## 7. 评论
 
-经营事项和员工待办都走这个地址。不要调今日需介入的评论接口，也不要传 `recipient_user_ids`。这个接口不发评论提醒。
+经营事项和员工待办都走这个地址。不要调今日需介入的评论接口。
 
-能看到这条抽取的人（上传人，或其汇报链上的上级）都可以写新评论、回复任意一条已有评论。`author_id` 等于当前登录用户时才显示「修改」。不能改别人的正文，也不能删除。
+能改这条抽取的人（上传人，或其汇报链上两级内的上级）都可以写新评论、回复任意一条已有评论。`author_id` 等于当前登录用户时才显示「修改」。不能改别人的正文，也不能删除。点名把 `@姓名` 写进 `content`，接收人放进 `recipient_user_ids`。名单不落库，刷新后只看正文里的 `@姓名`。
+
+保存成功后发评论提醒。推送失败不影响评论已经保存。自己给自己不推。提醒带抽取页链接，打开对应 tab。
+
+| 操作 | `recipient_user_ids` | 谁收到 |
+| --- | --- | --- |
+| 顶层，不点名 | 不传或 `[]` | 上传人。上传人自己写的不推 |
+| 顶层，点名了 | 传 | 只发给名单里的人。要同时通知上传人，把 `uploader_user_id` 放进去 |
+| 回复 | 传 | 被回复评论的 `author_id`，再加上点名人。不放原作者，原作者收不到 |
+| 修改自己的正文 | 与上面相同 | 再推一次，标题带「编辑过」 |
 
 ```http
 POST /api/v1/crm/leader-meeting-reviews/items/{unique_id}/comments
 ```
 
-新评论、回复、修改自己的正文可以放在同一次请求里：
+回复并点名一个人：
 
 ```json
 {
   "comments": [
-    { "content": "先确认范围" },
-    { "content": "周五前给结论", "reply_to_id": "被回复评论的 id" },
+    {
+      "content": "@王磊 周五前给结论",
+      "reply_to_id": "被回复评论的 id"
+    }
+  ],
+  "recipient_user_ids": ["被回复评论的 author_id", "王磊的本地 user id"]
+}
+```
+
+修改自己的正文不改回复关系：
+
+```json
+{
+  "comments": [
     { "id": "自己那条评论的 id", "content": "改后的正文" }
   ]
 }
@@ -295,11 +317,12 @@ POST /api/v1/crm/leader-meeting-reviews/items/{unique_id}/comments
 
 | 字段 | 约束 |
 | --- | --- |
-| `comments` | 1 到 20 条 |
-| `content` | 不能为空白，最长 2000 |
+| `comments` | 1 到 20 条。页面一次发一条 |
+| `content` | 不能为空白，最长 2000。点了名就把 `@姓名` 写在正文里 |
 | `reply_to_id` | 回复时填写，必须是本条已有评论的 `id`，包括回复的回复。新评论和修改都不填 |
-| `id` | 只在修改时填写。不存在，或 `author_id` 不是当前用户，整次请求失败，本次都不会写入 |
+| `id` | 只在修改时填写。不存在，或不是当前用户写的，整次请求失败，本次都不会写入 |
 | `author_id` | 可不传。传了必须是当前登录用户的本地 user id |
+| `recipient_user_ids` | 本地 user id。按上面的表组装。不传或空列表走默认接收人 |
 
 查询和写入返回的每条评论：
 

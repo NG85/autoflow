@@ -13,6 +13,7 @@ from app.services.visit_record_insight_reader import collect_profile_open_ids
 from app.services.leader_meeting_review_actions import (
     link_meeting_review_task,
     load_meeting_review_item,
+    notify_meeting_review_comments,
     save_meeting_review_comments,
     viewer_is_company_manager,
     save_meeting_review_decisions,
@@ -78,6 +79,10 @@ class MeetingReviewCommentIn(BaseModel):
 
 class MeetingReviewCommentsUpdate(BaseModel):
     comments: List[MeetingReviewCommentIn] = Field(min_length=1, max_length=20)
+    recipient_user_ids: Optional[List[str]] = Field(
+        default=None,
+        description="可选。非空时评论提醒只发给这些人（本地 user id）。不传或空列表时，顶层评论发给上传人，回复发给被回复作者。",
+    )
 
 
 class MeetingReviewTaskLink(BaseModel):
@@ -185,12 +190,23 @@ def save_leader_meeting_review_comments(
         row = load_meeting_review_item(db_session, oauth_id, unique_id, open_ids=open_ids)
         if row is None:
             raise HTTPException(status_code=404, detail=_MISSING)
+        author = _author_name(db_session, user)
+        incoming = [item.model_dump() for item in payload.comments]
         comments = save_meeting_review_comments(
             db_session,
             row,
             user_id=actor,
-            author=_author_name(db_session, user),
-            comments=[item.model_dump() for item in payload.comments],
+            author=author,
+            comments=incoming,
+        )
+        notify_meeting_review_comments(
+            db_session,
+            row,
+            current_user_id=actor,
+            author=author,
+            comments=incoming,
+            saved_comments=comments,
+            recipient_user_ids=payload.recipient_user_ids,
         )
         return {"code": 0, "message": "success", "data": {"unique_id": unique_id, "comments": comments}}
     except HTTPException:
