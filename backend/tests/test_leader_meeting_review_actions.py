@@ -302,7 +302,8 @@ def test_comment_notifications_cover_reply_mention_and_edit(monkeypatch):
         saved_comments=saved,
     )
     assert sent[0][0] == "uploader-user"
-    assert "乙评论了例会复盘" in sent[0][1]
+    assert sent[0][1].startswith("新评论\n")
+    assert "@乙在例会复盘 甲客户 · 关键人 中给你留了评论" in sent[0][1]
     assert "[甲客户 · 关键人](https://example.com/RPT-1/management_events)" in sent[0][1]
     assert "评论：先确认范围" in sent[0][1]
 
@@ -326,8 +327,9 @@ def test_comment_notifications_cover_reply_mention_and_edit(monkeypatch):
         saved_comments=saved,
     )
     assert sent[0][0] == "uploader-user"
-    assert "回复了你的评论" in sent[0][1]
-    assert "回复：周五前给结论" in sent[0][1]
+    assert sent[0][1].startswith("评论回复\n")
+    assert "@乙在例会复盘 甲客户 · 关键人 中回复了你的评论" in sent[0][1]
+    assert "评论：先确认\n周五前给结论" in sent[0][1]
 
     sent.clear()
     notify_meeting_review_comments(
@@ -340,6 +342,24 @@ def test_comment_notifications_cover_reply_mention_and_edit(monkeypatch):
         recipient_user_ids=["mentioned-1", "leader-1"],
     )
     assert [item[0] for item in sent] == ["mentioned-1"]
+    assert sent[0][1].startswith("评论提及\n")
+    assert "@乙在例会复盘 甲客户 · 关键人 中提到了你" in sent[0][1]
+    assert "[甲客户 · 关键人](https://example.com/RPT-1/management_events)" in sent[0][1]
+    assert "评论：@王磊 你来跟" in sent[0][1]
+
+    sent.clear()
+    notify_meeting_review_comments(
+        MagicMock(),
+        row,
+        current_user_id="leader-1",
+        author="乙",
+        comments=[{"content": "@王磊 周五前", "reply_to_id": "c1"}],
+        saved_comments=saved,
+        recipient_user_ids=["mentioned-1"],
+    )
+    assert sent[0][1].startswith("评论提及\n")
+    assert "[甲客户 · 关键人](https://example.com/RPT-1/management_events)" in sent[0][1]
+    assert "评论：先确认\n@王磊 周五前" in sent[0][1]
 
     sent.clear()
     notify_meeting_review_comments(
@@ -351,5 +371,6 @@ def test_comment_notifications_cover_reply_mention_and_edit(monkeypatch):
         saved_comments=saved,
     )
     assert sent[0][0] == "uploader-user"
-    assert "回复了你的评论（编辑过）" in sent[0][1]
-    assert "回复：改成下周一" in sent[0][1]
+    assert sent[0][1].startswith("评论回复（编辑过）\n")
+    assert "@乙在例会复盘 甲客户 · 关键人 中回复了你的评论" in sent[0][1]
+    assert "评论：先确认\n改成下周一" in sent[0][1]

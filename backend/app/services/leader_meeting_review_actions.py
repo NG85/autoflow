@@ -26,7 +26,12 @@ from app.services.subject_interaction import (
     load_threads,
     save_subject_comments,
 )
-from app.utils.crm_comments import resolve_comment_notify_recipients
+from app.utils.crm_comments import (
+    comment_message_tail,
+    comment_notify_lines,
+    comment_subject_label,
+    resolve_comment_notify_recipients,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -185,7 +190,8 @@ def select_visible_rows(
     *,
     company_manager: bool = False,
 ) -> tuple[list[Any], bool]:
-    """返回可见行，以及当前用户能不能改这些行。公司级管理人员只看。"""
+    """返回未作废的抽取，以及当前用户能不能改。查看不看身份。"""
+    del company_manager
     live = [row for row in rows if _is_live_review_row(row, todo_only=False)]
     cache: dict[str, set[str]] = {}
     manageable = [
@@ -200,7 +206,7 @@ def select_visible_rows(
             cache=cache,
         )
     ]
-    visible = live if company_manager else manageable
+    visible = live
     visible_ids = {_text(getattr(row, "unique_id", None)) for row in visible}
     manageable_ids = {_text(getattr(row, "unique_id", None)) for row in manageable}
     can_manage = bool(visible_ids) and visible_ids <= manageable_ids
@@ -364,17 +370,10 @@ def _comment_link_text(row: Any) -> str:
             _text(payload.get("business_object")),
             _text(payload.get("management_issue")),
         ]
-        text = " · ".join(part for part in parts if part)
+        text = comment_subject_label(*parts, separator=" · ")
     else:
-        text = " ".join(
-            part
-            for part in (
-                _text(payload.get("assignee_name")),
-                _text(payload.get("action")),
-            )
-            if part
-        )
-    return text or _text(payload.get("claim")) or "例会复盘"
+        text = comment_subject_label(payload.get("assignee_name"), payload.get("action"), separator=" ")
+    return text or comment_subject_label(payload.get("claim")) or "例会复盘"
 
 
 def _comment_preview(content: Any) -> str:
@@ -439,20 +438,21 @@ def notify_meeting_review_comments(
                 reply_to_id = _text(saved.get("reply_to_id"))
             preview = _comment_preview(item.get("content")) or "--"
             suffix = "（编辑过）" if edited else ""
+            parent_content = ""
             if reply_to_id:
                 parent = saved_by_id.get(reply_to_id) or {}
                 default_recipient = _text(parent.get("author_id"))
-                title = f"{author_name}回复了你的评论{suffix}"
+                parent_content = _text(parent.get("content"))
                 label = "回复"
             else:
                 default_recipient = uploader_user_id
-                title = f"{author_name}评论了例会复盘{suffix}"
                 label = "评论"
-            lines = [title]
-            if url:
-                lines.append(f"[{link_text}]({url})")
-            lines.append(f"{label}：{preview}")
-            text = "\n".join(lines) + "\n"
+            tail = comment_message_tail(
+                content=preview,
+                parent_content=parent_content,
+                include_parent=bool(reply_to_id),
+                label=label,
+            )
             recipients = resolve_comment_notify_recipients(
                 specified=recipient_user_ids,
                 default_user_id=default_recipient,
@@ -466,6 +466,20 @@ def notify_meeting_review_comments(
                 )
                 continue
             for recipient_user_id in recipients:
+                header, sentence = comment_notify_lines(
+                    author_name=author_name,
+                    scene="例会复盘",
+                    entity_name=link_text,
+                    recipient_user_id=recipient_user_id,
+                    addressed_user_id=default_recipient,
+                    is_reply=bool(reply_to_id),
+                    suffix=suffix,
+                )
+                lines = [header, sentence]
+                if url:
+                    lines.append(f"[{link_text}]({url})")
+                lines.extend(tail)
+                text = "\n".join(lines) + "\n"
                 platform_notification_service.send_leader_meeting_review_comment_notification(
                     session,
                     recipient_user_id=recipient_user_id,

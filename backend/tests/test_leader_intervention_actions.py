@@ -404,8 +404,9 @@ def test_notify_item_comments_sends_to_specified_recipients(monkeypatch):
 
     assert [item[0] for item in sent] == ["user-2"]
     text = sent[0][1]
-    assert text.startswith("王经理给你留了评论\n")
-    assert "甲客户  乙商机" in text
+    assert text.startswith("负责人留言\n@王经理就「甲客户  乙商机」给你留言\n")
+    assert "事项：特价必须今天拍板" in text
+    assert "今日需介入" not in text
     assert "评论：先问客户周五前能不能定" in text
     assert "http" not in text
     assert "[" not in text
@@ -439,8 +440,10 @@ def test_notify_item_comments_reply_defaults_to_parent_author(monkeypatch):
     )
 
     assert [item[0] for item in sent] == ["user-9"]
-    assert sent[0][1].startswith("李经理回复了你的评论\n")
-    assert "回复：我来跟" in sent[0][1]
+    assert sent[0][1].startswith("负责人留言\n@李经理就「甲客户  乙商机」给你留言\n")
+    assert "事项：特价必须今天拍板" in sent[0][1]
+    assert "今日需介入" not in sent[0][1]
+    assert "评论：先问客户\n我来跟" in sent[0][1]
     assert "http" not in sent[0][1]
 
 

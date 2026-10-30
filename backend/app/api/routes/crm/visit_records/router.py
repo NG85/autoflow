@@ -44,7 +44,13 @@ from app.repositories.visit_record import (
     visit_record_repo,
 )
 from app.services.crm_config_service import build_customer_attribute_options, get_resolved_field_mapping
-from app.utils.crm_comments import resolve_comment_notify_recipients
+from app.utils.crm_comments import (
+    comment_message_tail,
+    comment_notify_lines,
+    comment_subject_label,
+    incoming_author_matches_current_user,
+    resolve_comment_notify_recipients,
+)
 from app.utils.crm_followup_object import FOLLOWUP_OBJECT_TYPES, resolve_followup_object_from_record
 from app.utils.excel_sanitize import sanitize_excel_row
 from app.utils.visit_record_export import (
@@ -1102,7 +1108,7 @@ def update_visit_record_comments(
     追加或编辑指定跟进记录的评论（comments，JSON数组）。
     - 无 id，或 id 未命中已有条目：追加。type=comment 时 id 由服务端生成；type=task 时 id 可选由前端传入，未传则保持为空
     - 传入已有 id：编辑该条，只更新 content（不改作者、回复关系、类型、创建时间）；只能编辑本人评论，否则返回 400
-    - 每条评论的 author_id 须与当前登录用户一致，否则返回 400
+    - author_id 可不传。传了必须是当前登录用户，否则返回 400。落库 author_id 为当前登录用户
     - 复用跟进记录的权限控制逻辑：无权限/不存在返回 404
     - 支持 reply_to_id 回复已有评论；无效 reply_to_id 返回 400
     - 保存成功后：type=comment 推送提醒，编辑在首行末尾追加「（MM-DD HH:mm 编辑过）」。未指定 recipient_user_ids 时，顶层评论向记录人推送，回复向被回复评论作者推送；指定了非空名单则只发给这些人。type=task 不推送
@@ -1110,7 +1116,7 @@ def update_visit_record_comments(
     try:
         current_user_id_str = str(user.id)
         for c in payload.comments or []:
-            if str(c.author_id or "").strip() != current_user_id_str:
+            if not incoming_author_matches_current_user(c.author_id, current_user_id_str):
                 raise HTTPException(
                     status_code=400,
                     detail="存在 author_id 与当前登录用户不一致的评论，禁止代他人提交；请仅附加以本人身份发表的评论。",
@@ -1170,7 +1176,7 @@ def update_visit_record_comments(
                 or ""
             )
             opp = (getattr(record, "opportunity_name", None) or "") or ""
-            link_text = f"{title}  {opp}".strip() or "跟进记录"
+            link_text = comment_subject_label(title, opp) or "跟进记录"
 
             def _notify_comment(item: dict, *, edited: bool) -> None:
                 item_type = str(item.get("type") or "comment").strip().lower()
@@ -1194,23 +1200,23 @@ def update_visit_record_comments(
                     edited_suffix = f"（{edited_label} 编辑过）" if edited_label else "（编辑过）"
 
                 reply_to_id = str(item.get("reply_to_id") or "").strip()
+                parent_content = ""
                 if reply_to_id:
                     parent = comment_by_id.get(reply_to_id)
                     default_recipient = str((parent or {}).get("author_id") or "").strip()
+                    parent_content = str((parent or {}).get("content") or "")
                     notify_kind = "reply_edit" if edited else "reply"
-                    text = (
-                        f"{author_name}回复了你的评论{edited_suffix}\n"
-                        f"[{link_text}]({jump_url})\n"
-                        f"回复：{comment_preview or '--'}\n"
-                    )
+                    body_label = "回复"
                 else:
                     default_recipient = recorder_user_id
                     notify_kind = "comment_edit" if edited else "comment"
-                    text = (
-                        f"{author_name}评论了你的跟进记录{edited_suffix}\n"
-                        f"[{link_text}]({jump_url})\n"
-                        f"评论：{comment_preview or '--'}\n"
-                    )
+                    body_label = "评论"
+                tail = comment_message_tail(
+                    content=comment_preview,
+                    parent_content=parent_content,
+                    include_parent=bool(reply_to_id),
+                    label=body_label,
+                )
 
                 recipients = resolve_comment_notify_recipients(
                     specified=payload.recipient_user_ids,
@@ -1226,6 +1232,16 @@ def update_visit_record_comments(
                     )
                     return
                 for recipient_user_id in recipients:
+                    header, sentence = comment_notify_lines(
+                        author_name=author_name,
+                        scene="跟进记录",
+                        entity_name=link_text,
+                        recipient_user_id=recipient_user_id,
+                        addressed_user_id=default_recipient,
+                        is_reply=bool(reply_to_id),
+                        suffix=edited_suffix,
+                    )
+                    text = "\n".join([header, sentence, f"[{link_text}]({jump_url})", *tail]) + "\n"
                     platform_notification_service.send_visit_record_comment_notification(
                         db_session,
                         recipient_user_id=recipient_user_id,

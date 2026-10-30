@@ -29,7 +29,12 @@ from app.services.subject_interaction import (
     load_task_summaries,
     load_threads,
 )
-from app.utils.crm_comments import resolve_comment_notify_recipients
+from app.utils.crm_comments import (
+    comment_message_tail,
+    comment_note_lines,
+    comment_subject_label,
+    resolve_comment_notify_recipients,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -318,7 +323,7 @@ def _highlight_comment_context(session: Session, row: CRMSkillExtractItem) -> st
     opportunity_id = _text(getattr(row, "opportunity_id", None) or payload.get("opportunity_id"))
     account = _text((names.get("accounts") or {}).get(account_id))
     opportunity = _text((names.get("opportunities") or {}).get(opportunity_id))
-    return f"{account}  {opportunity}".strip() or _text(payload.get("claim"))
+    return comment_subject_label(account, opportunity) or comment_subject_label(payload.get("claim"))
 
 
 def notify_item_comments(
@@ -345,6 +350,7 @@ def notify_item_comments(
 
         author_name = _text(author) or "有人"
         context = _highlight_comment_context(session, row)
+        matter = _text(_payload(row).get("claim"))
         current_user_id_str = _text(current_user_id)
 
         for item in comments or []:
@@ -352,20 +358,21 @@ def notify_item_comments(
                 continue
             preview = _comment_preview(item.get("content")) or "--"
             reply_to_id = _text(item.get("reply_to_id"))
+            parent_content = ""
             if reply_to_id:
                 parent = comment_by_id.get(reply_to_id)
                 default_recipient = _text((parent or {}).get("author_id"))
-                title = f"{author_name}回复了你的评论"
+                parent_content = _text((parent or {}).get("content"))
                 label = "回复"
             else:
                 default_recipient = ""
-                title = f"{author_name}给你留了评论"
                 label = "评论"
-            lines = [title]
-            if context:
-                lines.append(context)
-            lines.append(f"{label}：{preview}")
-            text = "\n".join(lines) + "\n"
+            tail = comment_message_tail(
+                content=preview,
+                parent_content=parent_content,
+                include_parent=bool(reply_to_id),
+                label=label,
+            )
             recipients = resolve_comment_notify_recipients(
                 specified=recipient_user_ids,
                 default_user_id=default_recipient,
@@ -379,6 +386,16 @@ def notify_item_comments(
                 )
                 continue
             for recipient_user_id in recipients:
+                header, sentence, matter_line = comment_note_lines(
+                    author_name=author_name,
+                    entity_name=context,
+                    matter=matter,
+                )
+                lines = [header, sentence]
+                if matter_line:
+                    lines.append(matter_line)
+                lines.extend(tail)
+                text = "\n".join(lines) + "\n"
                 platform_notification_service.send_today_highlight_comment_notification(
                     session,
                     recipient_user_id=recipient_user_id,

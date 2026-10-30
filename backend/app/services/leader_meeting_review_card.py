@@ -223,10 +223,10 @@ def extracts_for_viewer(
     *,
     company_manager: bool = False,
 ) -> dict[str, Any]:
-    """上传人、其汇报链上级可以看和改。公司级管理人员只能看。对不上时返回空。"""
+    """登录后都能看该报告的抽取。can_manage 仅上传人或汇报链上级为 true。没有抽取时返回空。"""
     rid = _text(report_id)
     viewer = _text(oauth_user_id)
-    if not rid or (not viewer and not company_manager):
+    if not rid:
         return empty_extracts(rid)
     rows = load_report_extract_rows(session, rid)
     from app.services.leader_meeting_review_actions import (

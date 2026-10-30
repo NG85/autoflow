@@ -35,3 +35,5 @@
 | `2026-10-27-comment-im-applink.md` | 2026-10-27，评论推送链接走飞书 / 钉钉侧栏 |
 | `2026-10-27-comment-notify.md` | 2026-10-27，评论提醒可指定接收人（含今日需介入） |
 | `2026-10-29-leader-meeting-review-card.md` | 2026-10-29，例会复盘抽取卡片发给上传人 |
+| `2026-10-30-comment-card.md` | 2026-10-30，评论卡片文案、回复原文与作者名 |
+| `2026-10-30-leader-meeting-review-extract-read.md` | 2026-10-30，例会复盘抽取登录即可查看 |

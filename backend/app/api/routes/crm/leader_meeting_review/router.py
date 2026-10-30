@@ -15,12 +15,11 @@ from app.services.leader_meeting_review_actions import (
     load_meeting_review_item,
     notify_meeting_review_comments,
     save_meeting_review_comments,
-    viewer_is_company_manager,
     save_meeting_review_decisions,
     save_meeting_review_feedback,
 )
 from app.services.subject_interaction import SubjectInteractionError
-from app.services.leader_meeting_review_card import empty_extracts, extracts_for_viewer
+from app.services.leader_meeting_review_card import extracts_for_viewer
 
 logger = logging.getLogger(__name__)
 
@@ -98,20 +97,15 @@ def get_leader_meeting_review_extracts(
     db_session: SessionDep,
     user: CurrentUserDep,
 ):
-    """上传人、汇报链上级可以看和改。公司级管理人员只能看。"""
+    """登录即可查看。写入仍限上传人和汇报链上级。"""
     try:
         oauth_id, open_ids = _viewer_identity(db_session, user)
-        company_manager = viewer_is_company_manager(user.id)
-        if not oauth_id and not company_manager:
-            data = empty_extracts(report_id.strip())
-        else:
-            data = extracts_for_viewer(
-                db_session,
-                report_id,
-                oauth_id,
-                open_ids,
-                company_manager=company_manager,
-            )
+        data = extracts_for_viewer(
+            db_session,
+            report_id,
+            oauth_id,
+            open_ids,
+        )
         return {"code": 0, "message": "success", "data": data}
     except Exception as exc:
         logger.exception(exc)

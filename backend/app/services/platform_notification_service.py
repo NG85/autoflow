@@ -3009,33 +3009,46 @@ class PlatformNotificationService:
         """把评论类三行文案拆成标题、正文（引用）、整行链接按钮。"""
         lines = [ln.strip() for ln in (message_text or "").splitlines() if ln.strip()]
         title = lines[0] if lines else "通知"
+        buttons: List[Tuple[str, str]] = []
+        body_parts: List[str] = []
         context: List[str] = []
         quotes: List[str] = []
-        buttons: List[Tuple[str, str]] = []
+
+        def flush_context() -> None:
+            if context:
+                body_parts.append("\n\n".join(context))
+                context.clear()
+
+        def flush_quotes() -> None:
+            if not quotes:
+                return
+            quoted_lines: List[str] = []
+            for block in quotes:
+                for row in block.splitlines() or [block]:
+                    quoted_lines.append(f"> {row}" if row else ">")
+            body_parts.append("\n".join(quoted_lines))
+            quotes.clear()
+
         for line in lines[1:]:
             link = _FULL_LINE_MD_LINK.match(line)
             if link:
                 buttons.append((link.group(1).strip() or "查看详情", link.group(2)))
                 continue
-            quoted = False
+            quoted = ""
             for prefix in _COMMENT_QUOTE_PREFIXES:
                 if line.startswith(prefix):
-                    quotes.append(line[len(prefix):].strip() or "--")
-                    quoted = True
+                    quoted = line[len(prefix):].strip() or "--"
                     break
+            if not quoted and line.startswith("> "):
+                quoted = line[2:]
             if quoted:
+                flush_context()
+                quotes.append(quoted)
                 continue
-            if line.startswith("> "):
-                quotes.append(line[2:])
-                continue
+            flush_quotes()
             context.append(line)
-        body_parts = list(context)
-        if quotes:
-            quoted_lines: List[str] = []
-            for block in quotes:
-                for row in (block.splitlines() or [block]):
-                    quoted_lines.append(f"> {row}" if row else ">")
-            body_parts.append("\n".join(quoted_lines))
+        flush_context()
+        flush_quotes()
         return title, "\n\n".join(body_parts), buttons
 
     def send_visit_record_comment_notification(

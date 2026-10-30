@@ -82,6 +82,33 @@ class UserProfileRepo(BaseRepo):
         )
         return list(db_session.exec(query).all())
 
+    def get_names_by_user_ids(self, db_session: Session, user_ids: List[str]) -> Dict[str, str]:
+        """按 users.id 取档案姓名。停用档案也返回，便于历史评论补显示名。"""
+        uuids: List[UUID] = []
+        seen: set[str] = set()
+        for raw in user_ids:
+            text = str(raw or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            try:
+                uuids.append(UUID(text))
+            except (ValueError, TypeError):
+                continue
+        if not uuids:
+            return {}
+        rows = db_session.exec(
+            select(UserProfile.user_id, UserProfile.name).where(UserProfile.user_id.in_(uuids))
+        ).all()
+        names: Dict[str, str] = {}
+        for user_id, name in rows:
+            cleaned = str(name or "").strip()
+            if not user_id or not cleaned:
+                continue
+            names[str(user_id)] = cleaned
+            names[user_id.hex] = cleaned
+        return names
+
     def get_crm_user_id_by_user_id(self, db_session: Session, user_id: UUID) -> Optional[str]:
         """根据系统 user_id(UUID) 获取 CRM user id（user_profiles.crm_user_id）"""
         row = db_session.exec(

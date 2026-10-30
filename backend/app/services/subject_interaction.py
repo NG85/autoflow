@@ -17,6 +17,7 @@ from sqlalchemy import text
 from sqlmodel import Session, select
 
 from app.models.crm_subject_interaction import CRMSubjectInteraction
+from app.utils.crm_comments import fill_missing_comment_authors
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +132,10 @@ def load_threads(
             task_id = _text(getattr(row, "todo_id", None))
             if task_id and task_id not in bucket["todo_ids"]:
                 bucket["todo_ids"].append(task_id)
+    fill_missing_comment_authors(
+        session,
+        [comment for bucket in found.values() for comment in bucket["comments"]],
+    )
     return found
 
 
@@ -250,7 +255,9 @@ def append_comments(
     for comment in pending:
         session.add(comment)
     session.commit()
-    return [_comment_dict(row) for row in [*existing, *pending]]
+    comments = [_comment_dict(row) for row in [*existing, *pending]]
+    fill_missing_comment_authors(session, comments)
+    return comments
 
 
 def save_subject_comments(
@@ -319,7 +326,9 @@ def save_subject_comments(
             saved.append(comment)
     if not saved:
         saved = [*existing, *pending]
-    return [_comment_dict(row) for row in saved]
+    comments = [_comment_dict(row) for row in saved]
+    fill_missing_comment_authors(session, comments)
+    return comments
 
 
 def append_todo_id(

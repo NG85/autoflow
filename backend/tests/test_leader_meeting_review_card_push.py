@@ -151,11 +151,13 @@ def test_viewer_without_rows_gets_an_empty_payload(monkeypatch):
     )
     own = extracts_for_viewer(MagicMock(), "RPT-1", "uploader-1")
     assert list(own["items"]) == ["management_events"]
+    assert own["can_manage"] is True
     other = extracts_for_viewer(MagicMock(), "RPT-1", "someone-else")
-    assert other["items"] == {}
-    assert other["card_links"] == []
+    assert list(other["items"]) == ["management_events"]
+    assert other["can_manage"] is False
     missing = extracts_for_viewer(MagicMock(), "RPT-1", "")
-    assert missing["items"] == {}
+    assert list(missing["items"]) == ["management_events"]
+    assert missing["can_manage"] is False
 
 
 def test_push_skips_when_empty_or_missing_open_id(monkeypatch):
