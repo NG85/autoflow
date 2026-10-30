@@ -772,7 +772,7 @@ class VisitRecordCommentsUpdate(BaseModel):
 
     comments: Optional[List[CRMComment]] = Field(
         default=None,
-        description="本次新增或编辑的评论条目。编辑时传入已有 id，且该条须为当前登录用户所发，只更新 content；无 id 时在既有 comments 后追加。每条 author_id 须为当前登录用户",
+        description="本次新增或编辑的评论条目。编辑时传入已有 id，且该条须为当前登录用户所发，只更新 content；无 id 时在既有 comments 后追加。author_id 可不传，传了必须是当前登录用户",
     )
     recipient_user_ids: Optional[List[str]] = Field(
         default=None,
@@ -1276,7 +1276,7 @@ class SaveWeeklyFollowupCommentsIn(BaseModel):
 
     comments: List[CRMComment] = Field(
         default_factory=list,
-        description="本次新增或编辑的评论/任务条目。编辑时传入已有 id，且该条须为当前登录用户所发，只更新 content；无 id 时在既有 comments 后追加。每条 author_id 须为当前登录用户",
+        description="本次新增或编辑的评论/任务条目。编辑时传入已有 id，且该条须为当前登录用户所发，只更新 content；无 id 时在既有 comments 后追加。author_id 可不传，传了必须是当前登录用户",
     )
     recipient_user_ids: Optional[List[str]] = Field(
         default=None,

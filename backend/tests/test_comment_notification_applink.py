@@ -35,6 +35,11 @@ def test_layout_comment_style_message_quotes_and_buttons():
     assert "周总结（2026-10-20~2026-10-26）" in body
     assert body.endswith("> 你好")
     assert buttons == [("客户", jump)]
+    reply_title, reply_body, _reply_buttons = PlatformNotificationService._layout_comment_style_message(
+        "评论回复\n@乙在跟进记录 甲客户 中回复了你的评论\n评论：先问客户\n周五前给结论\n"
+    )
+    assert reply_title == "评论回复"
+    assert reply_body == "@乙在跟进记录 甲客户 中回复了你的评论\n\n> 先问客户\n\n周五前给结论"
 
 
 def test_visit_comment_feishu_uses_sidebar_button(monkeypatch):

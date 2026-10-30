@@ -1,15 +1,26 @@
-"""CRM JSON 评论列表的合并与校验（拜访记录、周跟进等复用）。"""
+"""CRM JSON 评论的追加、修改与校验（拜访记录、周跟进等复用）。"""
 
+import logging
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from app.utils.date_utils import convert_utc_to_local_timezone
 
+logger = logging.getLogger(__name__)
+
 
 class CRMCommentValidationError(ValueError):
     """评论 payload 校验失败。"""
+
+
+def incoming_author_matches_current_user(author_id: object, current_user_id: str) -> bool:
+    """空 author_id 视为当前用户。非空则必须与当前登录用户一致。"""
+    incoming = str(author_id or "").strip()
+    if not incoming:
+        return True
+    return incoming == str(current_user_id or "").strip()
 
 
 def ensure_comment_id(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -23,51 +34,47 @@ def ensure_comment_id(item: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def merge_append_crm_comments(
+def append_or_edit_crm_comments(
     existing_raw: object,
     new_comments: Optional[List[Dict[str, Any]]],
     current_user_id: str,
     *,
     now: Optional[datetime] = None,
-    allow_edit: bool = False,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
-    在既有评论后追加当前用户的新评论；为历史 comment 懒补 id（历史 task 无 id 时不填充）。
-    allow_edit=True 时，若条目 id 命中已有评论且作者为当前用户，则只更新 content 与 updated_at，
-    不改 id、author、reply_to_id、type、created_at；该条计入 edited，不计入 appended。
-    命中他人评论时抛出 CRMCommentValidationError。
-    返回 (merged_sorted, appended, edited)。
+    在既有评论后追加，或按 id 修改本人评论的正文。不拆分、不重排已有列表。
+    历史 comment 懒补 id；历史 task 无 id 时不补，因此无法被编辑命中。
+    id 命中时只写 content 与 updated_at，不改 id、author、reply_to_id、type、created_at。
+    命中他人评论，或 author_id 非空且不是当前用户时，抛出 CRMCommentValidationError。
+    无 id，或 id 未命中：追加。type=comment 生成新 id；type=task 沿用客户端 id，未传则不生成。
+    返回 (comments, appended, edited)。
     """
     current_user_id_str = str(current_user_id or "")
     now_bj = now or datetime.now(ZoneInfo("Asia/Shanghai"))
 
     existing_list = existing_raw if isinstance(existing_raw, list) else []
-    kept_others: List[Dict[str, Any]] = []
-    existing_my: List[Dict[str, Any]] = []
+    stored: List[Dict[str, Any]] = []
+    comment_by_id: Dict[str, Dict[str, Any]] = {}
     for item in existing_list:
         if not isinstance(item, dict):
             continue
         normalized = ensure_comment_id(item)
-        if str(normalized.get("author_id") or "") != current_user_id_str:
-            kept_others.append(normalized)
-        else:
-            existing_my.append(normalized)
-
-    comment_by_id: Dict[str, Dict[str, Any]] = {}
-    for item in kept_others + existing_my:
-        cid = str(item.get("id") or "").strip()
+        stored.append(normalized)
+        cid = str(normalized.get("id") or "").strip()
         if cid:
-            comment_by_id[cid] = item
+            comment_by_id[cid] = normalized
 
     appended: List[Dict[str, Any]] = []
     edited: List[Dict[str, Any]] = []
     for c in (new_comments or []):
         if not isinstance(c, dict):
             continue
-        if str(c.get("author_id") or "") != current_user_id_str:
-            continue
+        if not incoming_author_matches_current_user(c.get("author_id"), current_user_id_str):
+            raise CRMCommentValidationError(
+                "存在 author_id 与当前登录用户不一致的评论，禁止代他人提交；请仅附加以本人身份发表的评论。"
+            )
         incoming_id = str(c.get("id") or "").strip()
-        if allow_edit and incoming_id and incoming_id in comment_by_id:
+        if incoming_id and incoming_id in comment_by_id:
             existing = comment_by_id[incoming_id]
             if str(existing.get("author_id") or "").strip() != current_user_id_str:
                 raise CRMCommentValidationError("只能编辑本人的评论")
@@ -107,21 +114,12 @@ def merge_append_crm_comments(
             new_comment["id"] = new_id
         if reply_to_id:
             new_comment["reply_to_id"] = reply_to_id
+        stored.append(new_comment)
         appended.append(new_comment)
         if new_id:
             comment_by_id[new_id] = new_comment
 
-    merged: List[Dict[str, Any]] = kept_others + existing_my + appended
-
-    def _sort_key(x: Dict[str, Any]) -> tuple[int, str]:
-        v = str(x.get("created_at") or "")
-        try:
-            return (0, datetime.fromisoformat(v).isoformat())
-        except Exception:
-            return (1, v)
-
-    merged.sort(key=_sort_key)
-    return merged, appended, edited
+    return stored, appended, edited
 
 
 def _user_id_key(raw: object) -> str:
@@ -158,6 +156,156 @@ def resolve_comment_notify_recipients(
         seen.add(key)
         result.append(uid)
     return result
+
+
+_SUBJECT_LABEL_LIMIT = 40
+
+
+def _clip_label(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    if limit <= 3:
+        return text[:limit]
+    return text[: limit - 3].rstrip() + "..."
+
+
+def comment_subject_label(*parts: object, separator: str = "  ", limit: int = _SUBJECT_LABEL_LIMIT) -> str:
+    """拼客户名、商机名。缺的部分不留空位；有多段时每段都露出来，过长则截断。"""
+    names = [str(part or "").strip() for part in parts]
+    names = [name for name in names if name]
+    if not names:
+        return ""
+    if len(names) == 1:
+        return _clip_label(names[0], limit)
+    sep_len = len(separator) * (len(names) - 1)
+    each = max((limit - sep_len) // len(names), 8)
+    clipped = [_clip_label(name, each) for name in names]
+    return _clip_label(separator.join(clipped), limit)
+
+
+_NOTE_MATTER_LIMIT = 80
+
+
+def comment_note_lines(
+    *,
+    author_name: str,
+    entity_name: str,
+    matter: str = "",
+    suffix: str = "",
+) -> Tuple[str, str, str]:
+    """进不了页面的收件人。不写内部场景名，事项和评论都在这条消息里。"""
+    author = str(author_name or "").strip() or "有人"
+    name = comment_subject_label(entity_name)
+    header = f"负责人留言{suffix}" if suffix else "负责人留言"
+    sentence = f"@{author}就「{name}」给你留言" if name else f"@{author}给你留言"
+    matter_text = _clip_label(str(matter or "").strip(), _NOTE_MATTER_LIMIT)
+    matter_line = f"事项：{matter_text}" if matter_text and matter_text != name else ""
+    return header, sentence, matter_line
+
+
+def _comment_preview_text(content: object, limit: int = 200) -> str:
+    text = " ".join(str(content or "").split())
+    if len(text) > limit:
+        return text[: limit - 3].rstrip() + "..."
+    return text
+
+
+def comment_message_tail(
+    *,
+    content: object,
+    parent_content: object = "",
+    include_parent: bool = False,
+    label: str = "评论",
+) -> List[str]:
+    """回复时先引用被回复原文，新写的话放在引用下面。顶层评论只引用这次新写的话。"""
+    new_text = _comment_preview_text(content) or "--"
+    if include_parent:
+        parent = _comment_preview_text(parent_content) or "--"
+        return [f"评论：{parent}", new_text]
+    marker = str(label or "").strip() or "评论"
+    return [f"{marker}：{new_text}"]
+
+
+def comment_notify_lines(
+    *,
+    author_name: str,
+    scene: str,
+    entity_name: str,
+    recipient_user_id: str,
+    addressed_user_id: str,
+    is_reply: bool,
+    suffix: str = "",
+) -> Tuple[str, str]:
+    """返回卡片短标题和正文首句。首句写成「@谁在场景 对象 中…」，对齐飞书文档评论通知。"""
+    author = str(author_name or "").strip() or "有人"
+    place = str(scene or "").strip() or "评论"
+    name = comment_subject_label(entity_name)
+    where = f"{place} {name} 中" if name and name != place else f"{place}中"
+    addressed = _user_id_key(addressed_user_id)
+    direct = bool(addressed) and addressed == _user_id_key(recipient_user_id)
+    if direct and is_reply:
+        header = "评论回复"
+        sentence = f"@{author}在{where}回复了你的评论"
+    elif direct:
+        header = "新评论"
+        sentence = f"@{author}在{where}给你留了评论"
+    else:
+        header = "评论提及"
+        sentence = f"@{author}在{where}提到了你"
+    if suffix:
+        header = f"{header}{suffix}"
+    return header, sentence
+
+
+def _comment_field(item: Any, key: str) -> str:
+    if isinstance(item, Mapping):
+        return str(item.get(key) or "").strip()
+    return str(getattr(item, key, "") or "").strip()
+
+
+def _profile_name(names: Mapping[str, str], author_id: str) -> str:
+    raw = str(author_id or "").strip()
+    if not raw:
+        return ""
+    found = str(names.get(raw) or "").strip()
+    if found:
+        return found
+    try:
+        parsed = UUID(raw)
+    except (ValueError, TypeError):
+        return ""
+    return str(names.get(str(parsed)) or names.get(parsed.hex) or "").strip()
+
+
+def fill_missing_comment_authors(session: Any, comments: Sequence[Any]) -> None:
+    """author 为空且 author_id 有值时，用档案姓名补显示名。只改本次返回，不写库。"""
+    missing: List[Any] = []
+    author_ids: List[str] = []
+    for item in comments or []:
+        if _comment_field(item, "author"):
+            continue
+        author_id = _comment_field(item, "author_id")
+        if not author_id:
+            continue
+        missing.append(item)
+        author_ids.append(author_id)
+    if not missing:
+        return
+    try:
+        from app.repositories.user_profile import user_profile_repo
+
+        names = user_profile_repo.get_names_by_user_ids(session, author_ids)
+    except Exception as exc:
+        logger.warning("补齐评论作者姓名失败: %s", exc)
+        return
+    for item in missing:
+        name = _profile_name(names, _comment_field(item, "author_id"))
+        if not name:
+            continue
+        if isinstance(item, Mapping):
+            item["author"] = name
+        else:
+            item.author = name
 
 
 def has_nonempty_comments(comments_raw: object) -> bool:

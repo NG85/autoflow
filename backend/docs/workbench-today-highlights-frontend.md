@@ -475,7 +475,7 @@ POST /api/v1/crm/today-highlights/departments/items/{unique_id}/comments
 | `content` | 1 到 2000 字。点名要写进正文，例如 `@张三 先问客户周五前能不能定`。名单不落库。 |
 | `reply_to_id` | 不回复则省略或 `null`。回复时必须是这条介入里已经返回的评论 `id`。 |
 | `author_id` | 不要传。传了就必须等于当前用户，否则 **400**。作者名由服务端从用户档案取。 |
-| `recipient_user_ids` | 按 `backend/docs/comment-notify-frontend.md` 组装。本地 user id，不是条目上的 `related_user_id`。回复时把被回复评论的 `author_id` 放进名单，点名人一并放进去。顶层不点名则不传（不推）；点名销售则只放销售。提醒没有跳转。 |
+| `recipient_user_ids` | 按 `backend/docs/comment-notify-frontend.md` 组装。本地 user id，不是条目上的 `related_user_id`。回复时把被回复评论的 `author_id` 放进名单，点名人一并放进去。顶层不点名则不传（不推）；点名销售则只放销售。提醒没有跳转，标题是「负责人留言」，文案见该文档第 5.2 节。回复先引用被回复的原文。 |
 
 成功的 `data.comments` 是追加之后的整段线程，直接替换这张卡上的评论列表。
 
