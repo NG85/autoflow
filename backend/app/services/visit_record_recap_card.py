@@ -15,7 +15,7 @@ DINGTALK_PARAGRAPH_GAP = "\u00a0"
 _RECAP_BODY_MAX_CHARS = 800
 _TITLE_MAX_LEN = 50
 _REVISED_NOTICE = "【修改后】"
-_VISIT_DETAIL_LABEL = "查看行为详情"
+_VISIT_DETAIL_LABEL = "跟进详情"
 _RECAP_REPORT_LABEL = "完整复盘报告"
 _PRIMARY_ACTION_SEP = "  "
 _EMPTY_MARKERS = frozenset({"--", "-", "—", "－"})
@@ -35,7 +35,7 @@ class RecapLiteCard:
     dingtalk_text: str
     # 飞书复盘摘要（与 meta 分块，间距与操作区一致）。
     feishu_summary: str = ""
-    # 飞书操作区：行为详情 / 完整复盘蓝链，渲染在抽取按钮之前。
+    # 飞书操作区：跟进详情 / 完整复盘蓝链，渲染在抽取按钮之前。
     feishu_action_links: str = ""
     # 飞书抽取入口：(文案, url)；空则不渲染。钉钉仍用 markdown 链接写在 dingtalk_text。
     feishu_extract_actions: tuple[tuple[str, str], ...] = ()
