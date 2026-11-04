@@ -134,6 +134,10 @@ class DepartmentTodayHighlightsPushRequest(BaseModel):
         default=None,
         description="YYYY-MM-DD；不传则北京时间当天",
     )
+    recipient_user_ids: Optional[List[str]] = Field(
+        default=None,
+        description="可选 OAuth id；不传则发给当天有卡片的全部负责人",
+    )
 
 
 class DailyVisitReportPushRequest(BaseModel):

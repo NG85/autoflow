@@ -721,6 +721,7 @@ def _handle_department_today_highlights_push(
         return handle_department_today_highlights(
             db_session,
             report_date=payload.report_date,
+            recipient_user_ids=payload.recipient_user_ids,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

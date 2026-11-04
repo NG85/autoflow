@@ -115,7 +115,98 @@ def test_schema_defaults():
     payload = DepartmentTodayHighlightsPushRequest()
     assert payload.type == "department_today_highlights"
     assert payload.report_date is None
+    assert payload.recipient_user_ids is None
     assert "department_id" not in DepartmentTodayHighlightsPushRequest.model_fields
+
+
+def test_recipient_user_ids_sends_only_named_leaders(monkeypatch):
+    sent = []
+    loaded = {}
+    _enable(monkeypatch)
+    _stub_department_leaders(
+        monkeypatch,
+        {
+            "华北销售": _leader("leader-keep"),
+            "华东销售": _leader("leader-other"),
+        },
+    )
+    profiles = {
+        "oauth-keep": _profile(
+            oauth_id="oauth-keep",
+            user_id="leader-keep",
+            open_id="ou_keep",
+            name="保留",
+        ),
+        "oauth-other": _profile(
+            oauth_id="oauth-other",
+            user_id="leader-other",
+            open_id="ou_other",
+            name="其他",
+        ),
+    }
+    monkeypatch.setattr(
+        "app.repositories.user_profile.user_profile_repo.get_by_oauth_user_id",
+        lambda session, oauth_id: profiles.get(oauth_id),
+    )
+    monkeypatch.setattr(
+        "app.services.department_today_highlights.leader_oauth_id",
+        lambda session, user_id: {
+            "leader-keep": "oauth-keep",
+            "leader-other": "oauth-other",
+        }.get(str(user_id), ""),
+    )
+
+    def fake_load(session, report_date, oauth_user_ids=None):
+        loaded["ids"] = list(oauth_user_ids or [])
+        return [
+            _row(
+                {"claim": "保留事项", "related_user_id": "oauth-zhang", "confidence": 0.9},
+                unique_id="keep",
+                subject_id="oauth-keep",
+            ),
+            _row(
+                {"claim": "其他人事项", "related_user_id": "oauth-li", "confidence": 0.8},
+                unique_id="other",
+                subject_id="oauth-other",
+            ),
+        ]
+
+    monkeypatch.setattr(
+        "app.services.department_today_highlights.load_department_extract_rows",
+        fake_load,
+    )
+    monkeypatch.setattr(
+        "app.services.department_today_highlights.load_display_names",
+        lambda *args, **kwargs: _names(),
+    )
+
+    def fake_send(session, recipient, assembled):
+        sent.append(recipient["user_id"])
+        return {"success": True}
+
+    monkeypatch.setattr(
+        "app.services.department_today_highlights.deliver_department_highlight_card",
+        fake_send,
+    )
+    result = handle_department_today_highlights(
+        MagicMock(),
+        report_date=DAY,
+        recipient_user_ids=["oauth-keep", ""],
+    )
+    assert result["success"] is True
+    assert result["success_count"] == 1
+    assert sent == ["leader-keep"]
+    assert loaded["ids"] == ["oauth-keep", ""]
+
+    sent.clear()
+    empty = handle_department_today_highlights(
+        MagicMock(),
+        report_date=DAY,
+        recipient_user_ids=[],
+    )
+    assert empty["success_count"] == 0
+    assert empty["skipped"] is True
+    assert sent == []
 
 
 def test_user_rows_stay_off_the_leader_card(monkeypatch):
@@ -898,30 +989,40 @@ def test_leader_without_open_id_is_skipped(monkeypatch):
     assert sent["count"] == 0
 
 
-def test_daily_report_link_uses_the_card_date(monkeypatch):
+def test_monday_omits_the_daily_report_and_other_days_use_yesterday(monkeypatch):
     monkeypatch.setattr(
         "app.utils.push_page_urls.settings.REVIEW_REPORT_HOST",
         "https://example.com",
     )
     monkeypatch.setattr("app.utils.push_page_urls.settings.CRM_SALES_TASK_PAGE_URL", "/v2/task")
-    assembled = assemble_department_highlights(
+    monday = assemble_department_highlights(
         [_row({"claim": "拍板", "related_user_id": "oauth-zhang"})],
         DAY,
         "dept-1",
         _names(),
         department_name="华北销售",
     )
-    link = "[日报](https://example.com/v2/business/reports?tab=daily-team&date=2026-10-11)"
-    body = render_card_markdown(assembled, owner_name="王经理")
-    assert link in body
-    assert body.index("今日需介入") < body.index(link)
-    assert body.index(link) < body.index("**本周**")
-    assert "日报" not in [label for label, _url in card_footer_buttons(assembled, owner_name="王经理")]
-    dingtalk = render_dingtalk_markdown(assembled, title="团队今日重点｜2026-10-12", owner_name="王经理")
-    assert link in dingtalk
-    assert dingtalk.index(link) < dingtalk.index("\n\n---\n\n**本周**\n")
+    body = render_card_markdown(monday, owner_name="王经理")
+    assert "daily-team" not in body
+    assert "[日报](" not in body
+    dingtalk = render_dingtalk_markdown(monday, title="团队今日重点｜2026-10-12", owner_name="王经理")
+    assert "daily-team" not in dingtalk
+    assert "[日报](" not in dingtalk
+    tuesday = assemble_department_highlights(
+        [_row({"claim": "拍板", "related_user_id": "oauth-zhang"})],
+        TUESDAY,
+        "dept-1",
+        _names(),
+        department_name="华北销售",
+    )
+    daily = "[日报](https://example.com/v2/business/reports?tab=daily-team&date=2026-10-12)"
+    tuesday_body = render_card_markdown(tuesday, owner_name="王经理")
+    assert daily in tuesday_body
+    assert tuesday_body.index("今日需介入") < tuesday_body.index(daily)
+    assert tuesday_body.index(daily) < tuesday_body.index("**本周**")
+    assert "日报" not in [label for label, _url in card_footer_buttons(tuesday, owner_name="王经理")]
     monkeypatch.setattr("app.utils.push_page_urls.settings.REVIEW_REPORT_HOST", "")
-    assert "日报" not in render_card_markdown(assembled)
+    assert "[日报](" not in render_card_markdown(tuesday)
 
 
 def test_week_visit_button_filters_the_team(monkeypatch):
@@ -1090,7 +1191,6 @@ def test_feishu_card_splits_visit_watch_from_intervention(monkeypatch):
     assert captured["extra_sections"] == [
         "**上周拜访**\n总拜访 0 条\n[查看上周拜访](https://example.com/visits)",
         "[团队人效](https://example.com/persona)",
-        "[日报](https://example.com/v2/business/reports?tab=daily-team&date=2026-10-11)",
     ]
     assert "例会复盘" not in captured["body"]
 
