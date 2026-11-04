@@ -49,7 +49,16 @@ from app.services.crm_weekly_followup_engagement_service import crm_weekly_follo
 from app.utils.crm_weekly_followup_week_boundary import format_weekly_followup_period
 from app.permissions.weekly_followup_permission_service import weekly_followup_permission_service
 from app.utils.crm_account_tags import parse_account_tags
-from app.utils.crm_comments import CRMCommentValidationError, merge_append_crm_comments
+from app.utils.crm_comments import (
+    CRMCommentValidationError,
+    append_or_edit_crm_comments,
+    comment_message_tail,
+    comment_notify_lines,
+    comment_subject_label,
+    fill_missing_comment_authors,
+    incoming_author_matches_current_user,
+    resolve_comment_notify_recipients,
+)
 from app.utils.crm_followup_object import FOLLOWUP_OBJECT_TYPES
 from app.utils.crm_followup_object_type import resolve_customer_attribute_display_label_for_object
 
@@ -390,6 +399,11 @@ def _weekly_followup_entities_to_row_out(
                 expected_closing_date=entity.expected_closing_date,
                 comments=_to_comments(entity.comments) if include_comments else [],
             )
+        )
+    if include_comments:
+        fill_missing_comment_authors(
+            db_session,
+            [comment for row in rows for comment in row.comments],
         )
     return rows
 
@@ -989,9 +1003,9 @@ def save_weekly_followup_comments(
     追加或编辑周跟进实体评论（comments，JSON 数组）。
     - 无 id，或 id 未命中已有条目：追加。type=comment 时 id 由服务端生成；type=task 时 id 可选由前端传入，未传则保持为空
     - 传入已有 id：编辑该条，只更新 content；只能编辑本人评论，否则返回 400
-    - 每条评论的 author_id 须与当前登录用户一致，否则返回 400
+    - author_id 可不传。传了必须是当前登录用户，否则返回 400。落库 author_id 为当前登录用户
     - 支持 reply_to_id 回复已有评论；无效 reply_to_id 返回 400
-    - 保存成功后：type=comment 推送提醒，编辑在首行末尾追加「（MM-DD HH:mm 编辑过）」。顶层评论向负责人推送；带 reply_to_id 的回复向被回复评论作者推送（type=task 不推送）
+    - 保存成功后：type=comment 推送提醒，编辑在首行末尾追加「（MM-DD HH:mm 编辑过）」。未指定 recipient_user_ids 时，顶层评论向负责人推送，回复向被回复评论作者推送；指定了非空名单则只发给这些人。type=task 不推送
     """
     # can_edit, is_company_admin, user_dept_id, user_dept_name = _can_edit_weekly_followup_comments(db_session, user)
     # if not can_edit:
@@ -999,7 +1013,7 @@ def save_weekly_followup_comments(
 
     current_user_id = str(getattr(user, "id", "") or "")
     for c in payload.comments or []:
-        if str(c.author_id or "").strip() != current_user_id:
+        if not incoming_author_matches_current_user(c.author_id, current_user_id):
             raise HTTPException(
                 status_code=400,
                 detail="存在 author_id 与当前登录用户不一致的评论，禁止代他人提交；请仅附加以本人身份发表的评论。",
@@ -1018,7 +1032,7 @@ def save_weekly_followup_comments(
     now_bj = datetime.now(ZoneInfo("Asia/Shanghai"))
 
     try:
-        merged, appended, edited = merge_append_crm_comments(
+        saved_comments, appended, edited = append_or_edit_crm_comments(
             entity.comments,
             [
                 {
@@ -1030,12 +1044,11 @@ def save_weekly_followup_comments(
             ],
             current_user_id,
             now=now_bj,
-            allow_edit=True,
         )
     except CRMCommentValidationError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
-    entity.comments = merged
+    entity.comments = saved_comments
     db_session.add(entity)
     db_session.commit()
     db_session.refresh(entity)
@@ -1098,7 +1111,10 @@ def save_weekly_followup_comments(
             week_end=entity.week_end.isoformat(),
             department_name=dept_name or None,
         )
-        link_text = f"{entity.account_name or entity.partner_name}  {entity.opportunity_name}".strip()
+        link_text = comment_subject_label(
+            entity.account_name or entity.partner_name,
+            entity.opportunity_name,
+        ) or "周跟进总结"
 
         def _notify_comment(item: dict, *, is_edited: bool) -> None:
             item_type = str(item.get("type") or "comment").strip().lower()
@@ -1122,32 +1138,45 @@ def save_weekly_followup_comments(
                 edited_suffix = f"（{edited_label} 编辑过）" if edited_label else "（编辑过）"
 
             reply_to_id = str(item.get("reply_to_id") or "").strip()
+            parent_content = ""
             if reply_to_id:
                 parent = comment_by_id.get(reply_to_id)
-                recipient_user_id = str((parent or {}).get("author_id") or "").strip()
-                if not recipient_user_id or recipient_user_id == current_user_id:
-                    return
-                text = (
-                    f"{author_name}回复了你的评论{edited_suffix}\n"
-                    f"[{link_text}]({jump_url})\n"
-                    f"周总结（{week_part}）\n"
-                    f"回复：{comment_preview or '--'}\n"
-                )
+                default_recipient = str((parent or {}).get("author_id") or "").strip()
+                parent_content = str((parent or {}).get("content") or "")
+                body_label = "回复"
             else:
-                recipient_user_id = owner_user_id
-                if not recipient_user_id or recipient_user_id == current_user_id:
-                    return
-                text = (
-                    f"{author_name}评论了你的周跟进总结（{week_part}）{edited_suffix}\n"
-                    f"[{link_text}]({jump_url})\n"
-                    f"评论：{comment_preview or '--'}\n"
-                )
-
-            platform_notification_service.send_weekly_followup_comment_notification(
-                db_session,
-                recipient_user_id=recipient_user_id,
-                message_text=text,
+                default_recipient = owner_user_id
+                body_label = "评论"
+            tail = comment_message_tail(
+                content=comment_preview,
+                parent_content=parent_content,
+                include_parent=bool(reply_to_id),
+                label=body_label,
             )
+
+            recipients = resolve_comment_notify_recipients(
+                specified=payload.recipient_user_ids,
+                default_user_id=default_recipient,
+                current_user_id=current_user_id,
+            )
+            for recipient_user_id in recipients:
+                header, sentence = comment_notify_lines(
+                    author_name=author_name,
+                    scene="周跟进总结",
+                    entity_name=link_text,
+                    recipient_user_id=recipient_user_id,
+                    addressed_user_id=default_recipient,
+                    is_reply=bool(reply_to_id),
+                    suffix=edited_suffix,
+                )
+                text = "\n".join(
+                    [header, sentence, f"[{link_text}]({jump_url})", f"周总结（{week_part}）", *tail]
+                ) + "\n"
+                platform_notification_service.send_weekly_followup_comment_notification(
+                    db_session,
+                    recipient_user_id=recipient_user_id,
+                    message_text=text,
+                )
 
         for item in appended:
             _notify_comment(item, is_edited=False)

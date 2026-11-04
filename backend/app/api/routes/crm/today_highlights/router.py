@@ -13,6 +13,7 @@ from app.services.department_today_highlights import highlights_for_leader
 from app.services.leader_intervention_actions import (
     link_item_task,
     load_actionable_item,
+    notify_item_comments,
     save_decisions,
     save_feedback,
     save_item_comments,
@@ -70,7 +71,7 @@ def get_department_today_highlights(
         description="业务日 YYYY-MM-DD，默认北京时间当天",
     ),
 ):
-    """当前负责人自己的今日需介入。subject_id 是其 oauth id。"""
+    """当前负责人自己的今日需介入和报告。subject_id 是其 oauth id。"""
     try:
         target = parse_report_date(report_date)
     except ValueError as exc:
@@ -121,6 +122,10 @@ class InterventionCommentIn(BaseModel):
 
 class InterventionCommentsUpdate(BaseModel):
     comments: List[InterventionCommentIn] = Field(min_length=1, max_length=20)
+    recipient_user_ids: Optional[List[str]] = Field(
+        default=None,
+        description="可选。非空时评论提醒发给这些人（本地 user id）；不传或空列表时，顶层评论不推送，回复发给被回复作者",
+    )
 
 
 class InterventionTaskLink(BaseModel):
@@ -248,7 +253,11 @@ def save_department_highlight_comments(
     unique_id: str,
     payload: InterventionCommentsUpdate,
 ):
-    """负责人追加评论。reply_to_id 指向本条已有评论，用来盖楼。"""
+    """负责人追加评论。reply_to_id 指向本条已有评论，用来盖楼。
+
+    保存成功后 type=comment 推送提醒。未指定 recipient_user_ids 时，顶层评论不推送，
+    回复发给被回复作者；指定了非空名单则只发给这些人。
+    """
     try:
         actor = str(user.id)
         for item in payload.comments:
@@ -257,12 +266,23 @@ def save_department_highlight_comments(
             if item.author_id and item.author_id.strip() != actor:
                 raise HTTPException(status_code=400, detail="author_id 必须是当前用户")
         row = _require_intervention_item(db_session, user, unique_id)
+        author = _author_name(db_session, user)
+        incoming = [item.model_dump() for item in payload.comments]
         comments = save_item_comments(
             db_session,
             row,
             user_id=actor,
-            author=_author_name(db_session, user),
-            comments=[item.model_dump() for item in payload.comments],
+            author=author,
+            comments=incoming,
+        )
+        notify_item_comments(
+            db_session,
+            row,
+            current_user_id=actor,
+            author=author,
+            comments=incoming,
+            saved_comments=comments,
+            recipient_user_ids=payload.recipient_user_ids,
         )
         return {"code": 0, "message": "success", "data": {"unique_id": unique_id, "comments": comments}}
     except HTTPException:

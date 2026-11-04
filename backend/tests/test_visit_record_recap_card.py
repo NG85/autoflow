@@ -61,7 +61,7 @@ def test_build_recap_lite_card_feishu_and_dingtalk(monkeypatch):
         recorder_name="李华",
         insight={"severity": "LOW", "summary": "客户确认下季度扩容，下周出方案。"},
     )
-    visit_detail = "[查看行为详情](https://app.example/v2/behavior/rec-1)"
+    visit_detail = "[跟进详情](https://app.example/v2/behavior/rec-1)"
     report = "[完整复盘报告](https://app.example/v2/behavior/rec-1/recap)"
     assert card.title == "正常 · 9月20日 · 星辰科技"
     assert card.header_template == "green"
@@ -104,7 +104,7 @@ def test_blank_opportunity_is_omitted_from_lite_card(monkeypatch):
         assert "商机" not in card.feishu_body
         assert "商机" not in card.dingtalk_text
         assert card.feishu_body == "跟进人：高娜\n创建时间：9月24日 15:17"
-        assert "[查看行为详情](https://app.example/v2/behavior/rec-1)" in card.feishu_action_links
+        assert "[跟进详情](https://app.example/v2/behavior/rec-1)" in card.feishu_action_links
 
 
 def test_build_recap_lite_card_uses_insight_summary_not_followup_record(monkeypatch):
@@ -186,7 +186,7 @@ def test_sales_lite_card_appends_extract_links(monkeypatch):
             },
         ],
     )
-    visit_detail = "[查看行为详情](https://app.example/v2/behavior/rec-1)"
+    visit_detail = "[跟进详情](https://app.example/v2/behavior/rec-1)"
     report = "[完整复盘报告](https://app.example/v2/behavior/rec-1/recap)"
     follow_ups_url = "https://app.example/v2/behavior/rec-1/extract?tab=follow_ups"
     key_issues_url = "https://app.example/v2/behavior/rec-1/extract?tab=key_issues"

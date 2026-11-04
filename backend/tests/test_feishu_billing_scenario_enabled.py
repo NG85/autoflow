@@ -84,8 +84,10 @@ def test_shared_sku_gates_both_scenarios(monkeypatch):
         sku_map=_sku_map(disabled=("sales_team_daily_report",)),
     )
     assert facade.is_scenario_enabled(BillingScenario.CRM_SALES_PERSONAL_DAILY) is True
+    assert facade.is_scenario_enabled(BillingScenario.CRM_SALES_TODAY_HIGHLIGHTS) is True
     assert facade.is_scenario_enabled(BillingScenario.CRM_SALES_TEAM_DEPARTMENT_DAILY) is False
     assert facade.is_scenario_enabled(BillingScenario.CRM_SALES_TEAM_COMPANY_DAILY) is False
+    assert facade.is_scenario_enabled(BillingScenario.CRM_DEPARTMENT_TODAY_HIGHLIGHTS) is False
 
     _patch_enabled(
         monkeypatch,
@@ -94,6 +96,7 @@ def test_shared_sku_gates_both_scenarios(monkeypatch):
     )
     assert facade.is_scenario_enabled(BillingScenario.CRM_SALES_TEAM_DEPARTMENT_DAILY) is True
     assert facade.is_scenario_enabled(BillingScenario.CRM_SALES_TEAM_COMPANY_DAILY) is True
+    assert facade.is_scenario_enabled(BillingScenario.CRM_DEPARTMENT_TODAY_HIGHLIGHTS) is True
 
 
 def test_billing_off_ignores_sku_flags(monkeypatch):

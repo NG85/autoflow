@@ -72,7 +72,12 @@ def select_visit_watch(members: Sequence[Mapping[str, Any]]) -> dict[str, list[d
     return {"low_entry": low_entry, "high_severity": high_severity}
 
 
-def visit_watch_lines(watch: Optional[Mapping[str, Any]], *, dingtalk: bool = False) -> list[str]:
+def visit_watch_lines(
+    watch: Optional[Mapping[str, Any]],
+    *,
+    dingtalk: bool = False,
+    include_detail: bool = True,
+) -> list[str]:
     """先写团队总数和复盘分级，再点名。没有统计、也没有要点名的人时不加这一段。"""
     if not watch:
         return []
@@ -90,9 +95,10 @@ def visit_watch_lines(watch: Optional[Mapping[str, Any]], *, dingtalk: bool = Fa
         lines.append(f"{LOW_ENTRY_LABEL}：" + "、".join(f"{item['name']} {item['visit_total']} 条" for item in low_entry))
     if high_severity:
         lines.append(f"{HIGH_HEAVY_LABEL}：" + "、".join(f"{item['name']} {item['high_count']} 条" for item in high_severity))
-    detail = _detail_link(watch.get("url"), label)
-    if detail:
-        lines.append(detail)
+    if include_detail:
+        detail = _detail_link(watch.get("url"), label)
+        if detail:
+            lines.append(detail)
     return lines
 
 

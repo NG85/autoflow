@@ -28,8 +28,9 @@ from app.utils.crm_account_tags import parse_account_tags, resolve_followup_acco
 from app.permissions.follow_up_permission_service import follow_up_permission_service
 from app.utils.crm_comments import (
     CRMCommentValidationError,
+    append_or_edit_crm_comments,
+    fill_missing_comment_authors,
     has_nonempty_comments,
-    merge_append_crm_comments,
 )
 from app.utils.crm_followup_object import (
     FOLLOWUP_OBJECT_TYPE_END_CUSTOMER,
@@ -430,6 +431,10 @@ def _convert_to_response(
     # 使用处理后的字典创建VisitRecordResponse
     from app.api.routes.crm.models import AccountTagOptionOut
 
+    comments = record_dict.get("comments")
+    if isinstance(comments, list):
+        record_dict["comments"] = [dict(item) if isinstance(item, dict) else item for item in comments]
+
     apply_followup_object_to_response_dict(record_dict)
     response = VisitRecordResponse.model_validate(record_dict)
     
@@ -444,6 +449,17 @@ def _convert_to_response(
     response.has_comments = has_nonempty_comments(record.comments)
 
     return response
+
+
+def _fill_comment_authors(session: Session, responses: list) -> None:
+    """返回前补评论作者名。评论字典已从库对象复制，不会写回。"""
+    comments = [
+        item
+        for response in responses
+        for item in (getattr(response, "comments", None) or [])
+        if isinstance(item, dict)
+    ]
+    fill_missing_comment_authors(session, comments)
 
 
 def _fill_has_recap(
@@ -1038,6 +1054,7 @@ class VisitRecordRepo(BaseRepo):
                 response.permissions = row_permissions_map[record_id]
             items.append(response)
 
+        _fill_comment_authors(session, items)
         if include_has_recap:
             _fill_has_recap(session, current_user_id, list(zip(page_records, items)))
 
@@ -1144,6 +1161,7 @@ class VisitRecordRepo(BaseRepo):
             department,
             followup_extra=followup_extra if isinstance(followup_extra, dict) else None,
         )
+        _fill_comment_authors(session, [response])
         _fill_has_recap(session, current_user_id, [(record, response)])
         return response
 
@@ -1173,8 +1191,7 @@ class VisitRecordRepo(BaseRepo):
         更新指定拜访记录的 comments 字段（JSON数组）。
         调用方传入本次新增或编辑的条目：无 id（或 id 不存在）时追加；
         id 命中已有条目时只更新本人评论的 content。
-        安全保护：不得修改/删除他人评论。HTTP 接口应在入口处校验 payload 的 author_id；
-        此处仍忽略 author_id 非当前用户的条目，以防绕过 API 直接调用本方法。
+        空 author_id 视为当前用户。非空且不是当前用户时拒绝整次写入。
         返回 (记录, 本次追加的条目, 本次编辑的条目)；记录不存在或无权限时返回 None。
         """
         # 更新评论只需要查询拜访记录主表即可
@@ -1193,20 +1210,20 @@ class VisitRecordRepo(BaseRepo):
             return None
 
         current_user_id_str = str(current_user_id or "")
-        merged, appended, edited = merge_append_crm_comments(
+        comments_saved, appended, edited = append_or_edit_crm_comments(
             record.comments,
             comments,
             current_user_id_str,
             now=datetime.now(ZoneInfo("Asia/Shanghai")),
-            allow_edit=True,
         )
-        record.comments = merged
+        record.comments = comments_saved
         session.add(record)
         session.commit()
         session.refresh(record)
 
         # 返回完整记录（便于上层推送消息等后续处理）、本次追加条目和本次编辑条目
         response = _convert_to_response(record, None, None, None)
+        _fill_comment_authors(session, [response])
         _fill_has_recap(session, current_user_id, [(record, response)])
         return response, appended, edited
 
