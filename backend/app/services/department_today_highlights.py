@@ -1,6 +1,7 @@
-"""销售负责人今日重点：只读 USER + audience=leader 的 TODAY_INTERVENTION。
+"""销售负责人今日重点：需介入只读 USER + audience=leader 的 TODAY_INTERVENTION。
 
-subject_id 是负责人 oauth id。不消费一线 audience=sales 的抽取，不进部门群，不抄送。
+subject_id 是负责人 oauth id。不进部门群，不抄送。
+一线 audience=sales 的抽取不进入需介入列表。团队卡发出时，可另成一节「立即处理」。
 入口标题用抽取行上的 card_links 快照。
 """
 
@@ -8,8 +9,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from sqlmodel import Session, select
@@ -27,6 +29,7 @@ from app.services.leader_visit_watch import load_leader_visit_watch, visit_watch
 from app.services.notification_delivery_preference import filter_opted_out_recipients
 from app.services.notification_scene_catalog import (
     SCENE_DEPARTMENT_HIGHLIGHTS,
+    SCENE_SALES_DAILY,
     VARIANT_TODAY_HIGHLIGHTS,
 )
 from app.services.report_push_policy import load_report_push_policy
@@ -34,12 +37,18 @@ from app.services.today_highlights_billing import (
     check_today_highlights_quota,
     report_today_highlights_usage,
 )
-from app.services.sales_today_highlights import INCOMPLETE_TASK_STATUSES, parse_report_date
+from app.services.sales_today_highlights import (
+    INCOMPLETE_TASK_STATUSES,
+    parse_report_date,
+    render_embedded_personal_dingtalk,
+    render_embedded_personal_markdown,
+)
 from app.utils.date_utils import get_week_range_from_date
 from app.utils.push_page_urls import (
     build_department_highlights_url,
     build_leader_meeting_review_list_url,
     build_task_list_page_url,
+    build_team_daily_report_url,
     build_week_visit_list_url,
 )
 
@@ -53,7 +62,10 @@ STATUS_REJECTED = "REJECTED"
 _DECIDED = {STATUS_ADOPTED, STATUS_REJECTED}
 ITEM_INTERVENTION = "TODAY_INTERVENTION"
 SECTION_KEY = "leader_intervene"
+INTERVENTION_TITLE = "今日需介入"
 REPORTS_ONLY_LEAD = "今天没有需介入事项，可以先看这些报告。"
+TEAM_CARD_TITLE = "团队今日重点"
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 
 
 def _text(value: Any) -> str:
@@ -143,6 +155,9 @@ def _serialize_item(row: Any, names: Mapping[str, Mapping[str, str]]) -> dict[st
     related_user_id = _text(payload.get("related_user_id")) or None
     evidence = payload.get("evidence")
     people = names.get("people") or {}
+    related_user_name = people.get(related_user_id or "") or None
+    if not related_user_name and related_user_id and _CJK_RE.search(related_user_id):
+        related_user_name = related_user_id
     return {
         "unique_id": _text(_row_value(row, "unique_id")) or None,
         "item_type": ITEM_INTERVENTION,
@@ -156,7 +171,7 @@ def _serialize_item(row: Any, names: Mapping[str, Mapping[str, str]]) -> dict[st
         "opportunity_id": opportunity_id,
         "opportunity_name": (names.get("opportunities") or {}).get(opportunity_id or "") or None,
         "related_user_id": related_user_id,
-        "related_user_name": people.get(related_user_id or "") or None,
+        "related_user_name": related_user_name,
         "management_issue": _text(payload.get("management_issue")) or None,
         "today_window": _text(payload.get("today_window")) or None,
         "leader_action": _text(payload.get("leader_action")) or None,
@@ -388,29 +403,61 @@ def _intervention_markdown(assembled: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _personal_markdown(assembled: Mapping[str, Any]) -> str:
+    personal = assembled.get("personal_highlights")
+    if not isinstance(personal, Mapping):
+        return ""
+    return render_embedded_personal_markdown(personal)
+
+
+def _daily_report_line(assembled: Mapping[str, Any]) -> str:
+    """团队日报。日期是今日重点业务日的前一天，不进「本周」按钮。"""
+    report_day = _report_day(assembled)
+    if report_day is None:
+        return ""
+    url = build_team_daily_report_url((report_day - timedelta(days=1)).isoformat())
+    if not url:
+        return ""
+    return f"[{DAILY_REPORT_LINK_LABEL}]({url})"
+
+
 def render_card_sections(
     assembled: Mapping[str, Any],
     *,
     owner_name: str = "",
 ) -> list[str]:
-    """飞书按块发送。介入一块；周一、周五的拜访对照单独一块；报告入口再一块；本周按钮前一块标题。"""
+    """飞书按块发送。个人立即处理在最前；然后是介入、拜访对照、报告入口、日报、本周标题。"""
+    personal = _personal_markdown(assembled)
     intervention = _intervention_markdown(assembled)
     watch = _watch_section(assembled)
     reports = "\n".join(
         _report_card_lines(assembled, has_other_blocks=bool(intervention or watch))
     )
+    daily = _daily_report_line(assembled)
     week = _week_heading(assembled, owner_name=owner_name)
-    return [part for part in (intervention, watch, reports, week) if part]
+    return [part for part in (personal, intervention, watch, reports, daily, week) if part]
 
 
-def _report_card_lines(assembled: Mapping[str, Any], *, has_other_blocks: bool) -> list[str]:
-    """报告入口一行蓝链。只有报告时先补一句说明，避免卡片太空。"""
+def _reports_only_heading(*, dingtalk: bool) -> str:
+    """没有需介入条目时仍写出标题，和上面的「立即处理」对齐。"""
+    if dingtalk:
+        return f"## {INTERVENTION_TITLE}"
+    return f"**{INTERVENTION_TITLE}**"
+
+
+def _report_card_lines(
+    assembled: Mapping[str, Any],
+    *,
+    has_other_blocks: bool,
+    dingtalk: bool = False,
+) -> list[str]:
+    """报告入口一行蓝链。只有报告时先写需介入标题和一句说明，避免和立即处理粘在一起。"""
     links = report_entry_lines(assembled.get("report_entries"))
     if not links:
         return []
     if has_other_blocks:
         return links
-    return [REPORTS_ONLY_LEAD, *links]
+    return [_reports_only_heading(dingtalk=dingtalk), REPORTS_ONLY_LEAD, *links]
 
 
 def render_card_markdown(assembled: Mapping[str, Any], *, owner_name: str = "") -> str:
@@ -446,6 +493,7 @@ WEEK_SECTION_TITLE = "本周"
 TASK_BUTTON_LABEL = "待完成"
 VISIT_BUTTON_LABEL = "已拜访"
 MEETING_BUTTON_LABEL = "例会复盘"
+DAILY_REPORT_LINK_LABEL = "日报"
 
 
 def _report_day(assembled: Mapping[str, Any]) -> Optional[date]:
@@ -556,8 +604,10 @@ def render_dingtalk_markdown(
     title: str,
     owner_name: str = "",
 ) -> str:
-    """钉钉 sampleMarkdown：一级标题、二级小节、引用说明。底部入口前加分隔线，链接不用列表。"""
+    """钉钉 sampleMarkdown：一级标题、二级小节、引用说明。立即处理和需介入之间、底部入口前各加分隔线。"""
     lines: list[str] = [f"# {title}"]
+    personal = render_embedded_personal_dingtalk(assembled.get("personal_highlights") or {})
+    team: list[str] = []
     sections = list(assembled.get("sections") or [])
     section = sections[0] if sections else None
     items = list((section or {}).get("items") or [])
@@ -565,26 +615,40 @@ def render_dingtalk_markdown(
         heading = _text(section.get("title"))
         key = _text(section.get("key"))
         if heading and heading != key:
-            lines.append(f"## {heading}")
-        lines.extend(_dingtalk_item_lines(items[0]))
+            team.append(f"## {heading}")
+        team.extend(_dingtalk_item_lines(items[0]))
         others = _other_people_line(items)
         if others:
-            lines.append(others)
+            team.append(others)
         exit_link = _section_exit_link(section)
         if exit_link:
-            lines.append(exit_link)
+            team.append(exit_link)
     watch_text = _watch_section(assembled, dingtalk=True)
     watch_lines = watch_text.split("\n") if watch_text else []
-    if lines and watch_lines:
-        lines.append("")
-    lines.extend(watch_lines)
+    if team and watch_lines:
+        team.append("")
+    team.extend(watch_lines)
     report_lines = _report_card_lines(
         assembled,
         has_other_blocks=bool(items) or bool(watch_lines),
+        dingtalk=True,
     )
-    if lines and report_lines:
+    if team and report_lines:
+        team.append("")
+    team.extend(report_lines)
+    daily = _daily_report_line(assembled)
+    if daily:
+        if team:
+            team.append("")
+        team.append(daily)
+    if personal:
         lines.append("")
-    lines.extend(report_lines)
+        lines.extend(personal.split("\n"))
+    if personal and team:
+        lines.extend(["", "---", ""])
+    elif team:
+        lines.append("")
+    lines.extend(team)
     body = "\n".join(lines)
     buttons = card_footer_buttons(assembled, owner_name=owner_name)
     tail = "  ".join(f"[{label}]({url})" for label, url in buttons)
@@ -927,7 +991,7 @@ def deliver_department_highlight_card(
     from app.services.platform_notification_service import platform_notification_service
 
     day = assembled.get("report_date")
-    title = f"今日重点｜{day}"
+    title = f"{TEAM_CARD_TITLE}｜{day}"
     owner_name = _text(recipient.get("name"))
     sections = render_card_sections(assembled, owner_name=owner_name)
     body = sections[0] if sections else ""
@@ -982,6 +1046,7 @@ def _base_result(report_date: date) -> dict[str, Any]:
         "success_count": 0,
         "failed_recipients": [],
         "items": [],
+        "sent_oauth_user_ids": [],
     }
 
 
@@ -1091,6 +1156,56 @@ def _visit_only_leader_buckets(
     return leaders
 
 
+def personal_highlights_for_leader(
+    db_session: Session,
+    oauth_user_id: str,
+    report_date: date,
+    recipient: Mapping[str, Any],
+    policy,
+) -> Optional[dict[str, Any]]:
+    """一线开关开着、本人没关掉、当天有抽取时，折进团队卡。不看个人额度。"""
+    oauth_id = _text(oauth_user_id)
+    if not oauth_id or not recipient:
+        return None
+    if not policy.variant_enabled(SCENE_SALES_DAILY, VARIANT_TODAY_HIGHLIGHTS):
+        return None
+    from app.services.sales_today_highlights import (
+        assemble_sales_highlights,
+        load_display_names as load_sales_display_names,
+        load_sales_extract_rows,
+    )
+
+    try:
+        rows = load_sales_extract_rows(db_session, report_date, oauth_user_ids=[oauth_id])
+    except Exception:
+        logger.exception("load personal highlights failed oauth=%s", oauth_id)
+        return None
+    if not rows:
+        return None
+    try:
+        names = load_sales_display_names(db_session, rows)
+        assembled = assemble_sales_highlights(rows, report_date, names)
+    except Exception:
+        logger.exception("assemble personal highlights failed oauth=%s", oauth_id)
+        return None
+    if not assembled.get("has_content"):
+        return None
+    try:
+        kept = filter_opted_out_recipients(
+            db_session,
+            [dict(recipient)],
+            scene=SCENE_SALES_DAILY,
+            variant=VARIANT_TODAY_HIGHLIGHTS,
+            department_ids=[""],
+        )
+    except Exception:
+        logger.exception("personal highlights opt-out check failed oauth=%s", oauth_id)
+        return None
+    if not kept:
+        return None
+    return assembled
+
+
 def handle_department_today_highlights(
     db_session: Session,
     *,
@@ -1121,6 +1236,7 @@ def handle_department_today_highlights(
     failed: List[Dict[str, Any]] = []
     success_count = 0
     recipients_count = 0
+    sent_oauth_user_ids: list[str] = []
     leaders: dict[str, dict[str, Any]] = {}
 
     for subject_id, subject_rows in grouped.items():
@@ -1151,7 +1267,11 @@ def handle_department_today_highlights(
         if not kept:
             items.append(_skipped_department(subject_id, "opted_out"))
             continue
-        leaders[recipient["user_id"]] = {"recipient": kept[0], "cards": [assembled]}
+        leaders[recipient["user_id"]] = {
+            "recipient": kept[0],
+            "cards": [assembled],
+            "oauth_user_id": subject_id,
+        }
     for user_id, bucket in _visit_only_leader_buckets(db_session, target, "").items():
         leaders.setdefault(user_id, bucket)
 
@@ -1183,6 +1303,16 @@ def handle_department_today_highlights(
                 }
             )
             continue
+        oauth_id = _text(bucket.get("oauth_user_id")) or leader_oauth_id(db_session, user_id)
+        personal = personal_highlights_for_leader(
+            db_session,
+            oauth_id,
+            target,
+            bucket["recipient"],
+            policy,
+        )
+        if personal:
+            card["personal_highlights"] = personal
         if watch:
             card["visit_watch"] = watch
         if reports:
@@ -1199,6 +1329,8 @@ def handle_department_today_highlights(
         }
         if sent.get("success"):
             success_count += 1
+            if oauth_id and oauth_id not in sent_oauth_user_ids:
+                sent_oauth_user_ids.append(oauth_id)
             try:
                 report_today_highlights_usage(
                     "department",
@@ -1226,4 +1358,5 @@ def handle_department_today_highlights(
         "success_count": success_count,
         "failed_recipients": failed,
         "items": items,
+        "sent_oauth_user_ids": sent_oauth_user_ids,
     }

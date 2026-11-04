@@ -239,11 +239,11 @@ def test_reports_only_card_adds_a_lead_in():
         ],
     }
     body = render_card_markdown(assembled)
-    assert body.startswith(REPORTS_ONLY_LEAD)
+    assert body.startswith(f"**今日需介入**\n{REPORTS_ONLY_LEAD}")
     assert "[重点商机](https://example.com/deals)" in body
-    assert "今日需介入" not in body
     dingtalk = render_dingtalk_markdown(assembled, title="今日重点｜2026-10-13")
-    assert REPORTS_ONLY_LEAD in dingtalk
+    assert "## 今日需介入" in dingtalk
+    assert dingtalk.index("## 今日需介入") < dingtalk.index(REPORTS_ONLY_LEAD)
     assert dingtalk.index(REPORTS_ONLY_LEAD) < dingtalk.index("[重点商机](")
 
 

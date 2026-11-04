@@ -52,6 +52,9 @@ INCOMPLETE_TASK_STATUSES = ("IN_PROGRESS", "PENDING")
 # 区块顺序与类型是销售卡合同。标题只从 card_links 快照读取。
 # 快照 title：immediate_today=立即处理，open_risks=建议关注，next_week_confirm=下周待确认。
 # 旧快照里的「商机风险」仍按「建议关注」展示。
+# 折进团队卡时小节标题固定为「立即处理」。
+SALES_CARD_TITLE = "我的今日重点"
+EMBEDDED_PERSONAL_TITLE = "立即处理"
 SECTION_ORDER: tuple[tuple[str, str], ...] = (
     ("immediate_today", ITEM_IMMEDIATE),
     ("open_risks", ITEM_RISK),
@@ -511,6 +514,46 @@ def render_card_links(assembled: Mapping[str, Any]) -> str:
     return "  ".join(f"[{label}]({url})" for label, url in card_blue_links(assembled))
 
 
+def render_embedded_personal_markdown(assembled: Mapping[str, Any]) -> str:
+    """团队卡上的个人区块。不含本周按钮，出口仍进一线今日重点页。"""
+    if not assembled or not assembled.get("has_content"):
+        return ""
+    lines = [f"**{EMBEDDED_PERSONAL_TITLE}**"]
+    section = _section_by_key(assembled, "immediate_today")
+    items = list((section or {}).get("items") or [])
+    if section and items:
+        lines.append(_card_line("immediate_today", items[0], None))
+        more = _section_exit_link(section)
+        if more:
+            lines.append(more)
+    links = render_card_links(assembled)
+    if links:
+        lines.append(links)
+    if len(lines) == 1:
+        return ""
+    return "\n".join(lines)
+
+
+def render_embedded_personal_dingtalk(assembled: Mapping[str, Any]) -> str:
+    """钉钉团队卡上的个人区块。二级标题，不含本周按钮。"""
+    if not assembled or not assembled.get("has_content"):
+        return ""
+    lines = [f"## {EMBEDDED_PERSONAL_TITLE}"]
+    section = _section_by_key(assembled, "immediate_today")
+    items = list((section or {}).get("items") or [])
+    if section and items:
+        lines.extend(_dingtalk_item_lines("immediate_today", items[0]))
+        exit_link = _section_exit_link(section)
+        if exit_link:
+            lines.append(exit_link)
+    links = render_card_links(assembled)
+    if links:
+        lines.append(links)
+    if len(lines) == 1:
+        return ""
+    return "\n".join(lines)
+
+
 def render_action_buttons(buttons: Sequence[tuple[str, str]]) -> str:
     return "  ".join(f"[{label}]({url})" for label, url in buttons)
 
@@ -767,7 +810,7 @@ def deliver_highlight_card(
     """飞书 / Lark：正文一条立即处理，风险为蓝链。本周待完成每天都有，周一以外再加本周已拜访。"""
     from app.services.platform_notification_service import platform_notification_service
 
-    title = f"今日重点｜{assembled.get('report_date')}"
+    title = f"{SALES_CARD_TITLE}｜{assembled.get('report_date')}"
     body = render_card_markdown(assembled)
     links = render_card_links(assembled)
     buttons = card_action_buttons(assembled, owner_name=_text(recipient.get("name")))
@@ -832,8 +875,12 @@ def handle_sales_today_highlights(
     *,
     report_date: Optional[date | str] = None,
     recipient_user_ids: Optional[Sequence[str]] = None,
+    exclude_oauth_user_ids: Optional[Sequence[str]] = None,
 ) -> dict[str, Any]:
-    """推送一线销售今日重点。变体关闭、空日、无 open_id、本人关掉都不发空卡。"""
+    """推送一线销售今日重点。变体关闭、空日、无 open_id、本人关掉都不发空卡。
+
+    exclude_oauth_user_ids 是当天团队卡已经送达的负责人。他们的立即处理在团队卡上，这里不再发第二张。
+    """
     from app.repositories.user_profile import user_profile_repo
 
     target = parse_report_date(report_date)
@@ -858,11 +905,23 @@ def handle_sales_today_highlights(
     if recipient_user_ids is not None:
         wanted = {_text(item) for item in recipient_user_ids if _text(item)}
         grouped = {key: value for key, value in grouped.items() if key in wanted}
-    if not grouped:
+    excluded = {_text(item) for item in (exclude_oauth_user_ids or []) if _text(item)}
+    covered = [key for key in grouped if key in excluded]
+    if excluded:
+        grouped = {key: value for key, value in grouped.items() if key not in excluded}
+    items: List[Dict[str, Any]] = [
+        {
+            "subject_id": subject_id,
+            "sent": False,
+            "skipped": True,
+            "skip_reason": "covered_by_team_card",
+        }
+        for subject_id in covered
+    ]
+    if not grouped and not items:
         return {**result, "skipped": True, "skip_reason": "empty_highlights"}
 
     names = load_display_names(db_session, rows)
-    items: List[Dict[str, Any]] = []
     failed: List[Dict[str, Any]] = []
     success_count = 0
     recipients_count = 0

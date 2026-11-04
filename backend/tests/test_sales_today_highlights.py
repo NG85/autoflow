@@ -19,6 +19,7 @@ from app.services.sales_today_highlights import (
     load_sales_extract_rows,
     render_card_links,
     render_card_markdown,
+    render_embedded_personal_markdown,
     week_followup_link,
     week_task_summary_link,
 )
@@ -382,7 +383,7 @@ def test_dingtalk_card_puts_title_in_the_body(monkeypatch):
         assembled,
     )
     content = captured["content"]
-    assert content.startswith("# 今日重点｜2026-10-08\n")
+    assert content.startswith("# 我的今日重点｜2026-10-08\n")
     assert "## 立即处理\n" in content
     assert "> 今天要定" in content
     assert "[查看](" in content
@@ -755,13 +756,22 @@ def test_highlights_task_runs_apart_from_daily_report(monkeypatch):
     monkeypatch.setattr("app.tasks.cron_jobs.Session", lambda engine: _Session())
     seen = {}
 
-    def fake_sales(session, report_date=None, recipient_user_ids=None):
+    def fake_sales(session, report_date=None, recipient_user_ids=None, exclude_oauth_user_ids=None):
         seen["sales"] = report_date
+        seen["excluded"] = list(exclude_oauth_user_ids or [])
+        seen.setdefault("order", []).append("sales")
         return {"success": True, "skipped": False, "skip_reason": None, "success_count": 1}
 
     def fake_department(session, *, report_date=None, department_id=None):
         seen["department"] = report_date
-        return {"success": True, "skipped": False, "skip_reason": None, "success_count": 2}
+        seen.setdefault("order", []).append("department")
+        return {
+            "success": True,
+            "skipped": False,
+            "skip_reason": None,
+            "success_count": 2,
+            "sent_oauth_user_ids": ["oauth-leader"],
+        }
 
     monkeypatch.setattr(
         "app.services.sales_today_highlights.handle_sales_today_highlights",
@@ -772,8 +782,10 @@ def test_highlights_task_runs_apart_from_daily_report(monkeypatch):
         fake_department,
     )
     result = push_crm_today_highlights(report_date_str="2026-10-08")
+    assert seen["order"] == ["department", "sales"]
     assert seen["sales"] == date(2026, 10, 8)
     assert seen["department"] == date(2026, 10, 8)
+    assert seen["excluded"] == ["oauth-leader"]
     assert result["sales_today_highlights"]["success_count"] == 1
     assert result["department_today_highlights"]["success_count"] == 2
 
@@ -781,14 +793,144 @@ def test_highlights_task_runs_apart_from_daily_report(monkeypatch):
     result = push_crm_today_highlights()
     assert seen["sales"] is None
     assert seen["department"] is None
+    assert seen["excluded"] == ["oauth-leader"]
     assert result["report_date"] is None
 
     seen.clear()
     result = push_crm_today_highlights(report_date_str="2026-10-08", audience="sales")
-    assert seen == {"sales": date(2026, 10, 8)}
+    assert seen["sales"] == date(2026, 10, 8)
+    assert "department" not in seen
+    assert seen["excluded"] == []
     assert result["department_today_highlights"] is None
 
     bad = push_crm_today_highlights(report_date_str="10/08")
     assert bad["success"] is False
     assert bad["sales_today_highlights"] is None
     assert bad["department_today_highlights"] is None
+
+
+def test_embedded_personal_block_keeps_sales_links_without_week_buttons(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.sales_today_highlights.build_sales_today_highlights_url",
+        lambda report_date, section: f"https://example.com/today?date={report_date}&tab={section}",
+    )
+    assembled = assemble_sales_highlights(
+        [
+            _row(
+                "IMMEDIATE_ACTION",
+                {"claim": "今天回访", "why_today": "答应今天", "confidence": 0.9},
+                card_links=[
+                    {"key": "immediate_today", "title": "立即处理"},
+                    {"key": "open_risks", "title": "建议关注"},
+                ],
+            ),
+            _row(
+                "OPEN_RISK",
+                {"claim": "价格松动", "risk_change": "new", "confidence": 0.4},
+                unique_id="risk",
+                card_links=[{"key": "open_risks", "title": "建议关注"}],
+            ),
+        ],
+        THURSDAY,
+        _names(),
+    )
+    body = render_embedded_personal_markdown(assembled)
+    assert body.startswith("**立即处理**")
+    assert "今天回访" in body
+    assert "[建议关注](https://example.com/today?date=2026-10-08&tab=open_risks)" in body
+    assert "本周待完成" not in body
+    assert "本周已拜访" not in body
+
+
+def test_delivered_team_card_skips_the_sales_card(monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        "app.services.sales_today_highlights.load_report_push_policy",
+        lambda: parse_report_push_policy({"sales_daily": {"today_highlights": True}}),
+    )
+    monkeypatch.setattr(
+        "app.services.sales_today_highlights.load_sales_extract_rows",
+        lambda *args, **kwargs: [
+            _row(
+                "IMMEDIATE_ACTION",
+                {"claim": "负责人自己的", "why_today": "今天"},
+                subject_id="oauth-leader",
+                unique_id="leader",
+            ),
+            _row(
+                "IMMEDIATE_ACTION",
+                {"claim": "一线的", "why_today": "今天"},
+                subject_id="oauth-sales",
+                unique_id="sales",
+            ),
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.sales_today_highlights.load_display_names",
+        lambda *args, **kwargs: {"accounts": {}, "opportunities": {}},
+    )
+    monkeypatch.setattr(
+        "app.repositories.user_profile.user_profile_repo.get_by_oauth_user_id",
+        lambda session, oauth_id: SimpleNamespace(
+            is_active=True,
+            user_id=oauth_id,
+            name="张三",
+            department="销售",
+            oauth_user=SimpleNamespace(open_id=f"ou_{oauth_id}", provider="feishu"),
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.sales_today_highlights.filter_opted_out_recipients",
+        lambda session, recipients, **kwargs: list(recipients),
+    )
+    monkeypatch.setattr(
+        "app.services.sales_today_highlights.deliver_highlight_card",
+        lambda session, recipient, assembled: sent.append(recipient["user_id"]) or {"success": True},
+    )
+    monkeypatch.setattr(
+        "app.services.sales_today_highlights.report_today_highlights_usage",
+        lambda *args, **kwargs: None,
+    )
+    result = handle_sales_today_highlights(
+        MagicMock(),
+        report_date=THURSDAY,
+        exclude_oauth_user_ids=["oauth-leader"],
+    )
+    assert sent == ["oauth-sales"]
+    assert result["success_count"] == 1
+    covered = [item for item in result["items"] if item["subject_id"] == "oauth-leader"]
+    assert covered[0]["skip_reason"] == "covered_by_team_card"
+
+
+def test_team_push_failure_still_sends_sales_cards(monkeypatch):
+    from app.tasks.cron_jobs import push_crm_today_highlights
+
+    class _Session:
+        def __enter__(self):
+            return MagicMock()
+
+        def __exit__(self, *args):
+            return False
+
+    seen = {}
+
+    def fake_sales(session, report_date=None, recipient_user_ids=None, exclude_oauth_user_ids=None):
+        seen["excluded"] = list(exclude_oauth_user_ids or [])
+        return {"success": True, "skipped": False, "skip_reason": None, "success_count": 1}
+
+    def explode(session, *, report_date=None):
+        raise RuntimeError("department broke")
+
+    monkeypatch.setattr("app.tasks.cron_jobs.Session", lambda engine: _Session())
+    monkeypatch.setattr(
+        "app.services.sales_today_highlights.handle_sales_today_highlights",
+        fake_sales,
+    )
+    monkeypatch.setattr(
+        "app.services.department_today_highlights.handle_department_today_highlights",
+        explode,
+    )
+    result = push_crm_today_highlights(report_date_str="2026-10-08")
+    assert result["department_today_highlights"]["skip_reason"] == "push_failed"
+    assert result["sales_today_highlights"]["success_count"] == 1
+    assert seen["excluded"] == []

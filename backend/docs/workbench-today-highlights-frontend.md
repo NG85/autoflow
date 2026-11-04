@@ -234,6 +234,8 @@ POST /api/v1/crm/today-highlights/sales/items/{unique_id}/feedback
 | 团队人效 | `leader_efficiency_insight` | `/v2/department-highlights?date=YYYY-MM-DD&tab=leader_efficiency_insight` |
 | 经营趋势 | `team_operating_trend` | `/v2/department-highlights?date=YYYY-MM-DD&tab=team_operating_trend` |
 
+报告入口后面固定一条「日报」，打开 `/v2/business/reports?tab=daily-team&date=YYYY-MM-DD`，日期是卡片业务日的前一天。不放进「本周」按钮。页面里不用再做这条。
+
 报告按负责人本人取，和需介入抽取同一套人：`crm_entity_insight.entity_type=USER`，`entity_id` 是 oauth id。链接不带 `department_id`。`period_key` 等于当天 `report_date`（写入方当天执行，存的是执行日）。需介入对应 `DAILY_LEADER_INTERVENE`；重点商机是 `KEY_DEAL_REVIEW`；团队人效是 `LEADER_EFFICIENCY_INSIGHT`；经营趋势是 `TEAM_OPERATING_TREND`。这三项有匹配时就会发卡片，不必再等需介入或拜访对照。需介入、拜访对照、报告都没有才跳过。
 
 ---
@@ -334,7 +336,7 @@ tab 名用 `card_links[].title`（重点商机 / 团队人效 / 经营趋势）�
 | `why` | 原因，可折叠。 |
 | `evidence` | 依据，数组。没有时是 `[]`。 |
 | `confidence` | 数字或空。只参与排序，不必做成控件。 |
-| `related_user_id` / `related_user_name` | 相关销售。名字可能为空，空则显示 id。 |
+| `related_user_id` / `related_user_name` | 相关销售。有 oauth id 时用档案姓名。报告只有姓名时，`related_user_id` 里就是这个姓名，接口同时把它填进 `related_user_name`。两边都空才不显示人。 |
 | `account_id` / `account_name` | 客户。名字查不到时为 `null`。 |
 | `opportunity_id` / `opportunity_name` | 商机。同上。 |
 | `management_issue` | 管理问题，可空。 |
