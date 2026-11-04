@@ -215,6 +215,17 @@ def test_build_weekly_followup_summary_page_url_without_host(monkeypatch):
     )
 
 
+def test_build_team_daily_report_url(monkeypatch):
+    monkeypatch.setattr(urls.settings, "REVIEW_REPORT_HOST", "https://example.com")
+    assert (
+        urls.build_team_daily_report_url("2026-11-04")
+        == "https://example.com/v2/business/reports?tab=daily-team&date=2026-11-04"
+    )
+    assert urls.build_team_daily_report_url("  ") == ""
+    monkeypatch.setattr(urls.settings, "REVIEW_REPORT_HOST", "")
+    assert urls.build_team_daily_report_url("2026-11-04") == ""
+
+
 def test_build_visit_guide_page_url(monkeypatch):
     monkeypatch.setattr(urls.settings, "REVIEW_REPORT_HOST", "https://example.com")
     assert (

@@ -218,6 +218,15 @@ def build_task_detail_page_url(task_id: str) -> str:
     return f"{base}/{quote(tid, safe='')}"
 
 
+def build_team_daily_report_url(report_date: str) -> str:
+    """团队日报页：/v2/business/reports?tab=daily-team&date=。"""
+    host = _host()
+    day = (report_date or "").strip()
+    if not host or not day:
+        return ""
+    return f"{host}/v2/business/reports?tab=daily-team&date={quote(day, safe='')}"
+
+
 def build_leader_meeting_review_list_url(start_date: str, end_date: str) -> str:
     """例会复盘列表。只带起止日期，两端都包含，不必按周对齐。上传人由打开页面的查询接口按权限决定。"""
     host = _host()

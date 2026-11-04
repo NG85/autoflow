@@ -37,3 +37,4 @@
 | `2026-10-29-leader-meeting-review-card.md` | 2026-10-29，例会复盘抽取卡片发给上传人 |
 | `2026-10-30-comment-card.md` | 2026-10-30，评论卡片文案、回复原文与作者名 |
 | `2026-10-30-leader-meeting-review-extract-read.md` | 2026-10-30，例会复盘抽取登录即可查看 |
+| `2026-11-04-today-highlights-one-card.md` | 2026-11-04，今日重点一人一天一张卡 |
