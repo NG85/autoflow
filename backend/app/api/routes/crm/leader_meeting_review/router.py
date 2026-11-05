@@ -97,7 +97,7 @@ def get_leader_meeting_review_extracts(
     db_session: SessionDep,
     user: CurrentUserDep,
 ):
-    """登录即可查看。写入仍限上传人和汇报链上级。"""
+    """登录即可查看。写入给负责人、提交人和汇报链上级。"""
     try:
         oauth_id, open_ids = _viewer_identity(db_session, user)
         data = extracts_for_viewer(
