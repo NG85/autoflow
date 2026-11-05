@@ -1,4 +1,4 @@
-"""leader_meeting_review_card reads extracts and sends one card to the uploader."""
+"""leader_meeting_review_card reads extracts and sends one card to each recipient."""
 
 from datetime import date
 from types import SimpleNamespace
@@ -254,3 +254,86 @@ def test_push_sends_when_the_uploader_can_be_reached(monkeypatch):
     assert sent["recipient"]["open_id"] == "ou_1"
     assert "employee_todo_candidates" in sent["assembled"]["items"]
     assert "management_events" not in sent["assembled"]["items"]
+
+
+def test_push_sends_the_same_card_to_owner_and_creator(monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        "app.services.leader_meeting_review_card.load_extract_rows",
+        lambda session, report_id, owner_id: [
+            _row(
+                "MANAGEMENT_EVENT",
+                "事项",
+                confidence=0.9,
+                unique_id="event-1",
+                payload_extra={
+                    "business_object": "甲",
+                    "management_issue": "乙",
+                    "change_summary": "变化",
+                    "leader_management": "动作",
+                },
+            )
+        ],
+    )
+
+    def profile_for(session, oauth_id):
+        if oauth_id == "missing-open-id":
+            return None
+        return SimpleNamespace(
+            is_active=True,
+            user_id=oauth_id,
+            name=oauth_id,
+            department="华北",
+            oauth_user=SimpleNamespace(open_id=f"ou_{oauth_id}", provider="feishu"),
+        )
+
+    monkeypatch.setattr(
+        "app.repositories.user_profile.user_profile_repo.get_by_oauth_user_id",
+        profile_for,
+    )
+
+    def fake_deliver(session, recipient, assembled):
+        sent.append(recipient["open_id"])
+        return {"success": True}
+
+    monkeypatch.setattr(
+        "app.services.leader_meeting_review_card.deliver_card",
+        fake_deliver,
+    )
+    both = _handle_leader_meeting_review_card_push(
+        MagicMock(),
+        LeaderMeetingReviewCardPushRequest(
+            report_id="RPT-1",
+            owner_id="leader-1",
+            creator_id="ops-1",
+        ),
+    )
+    assert both["pushed"] is True
+    assert both["reason"] is None
+    assert both["creator_id"] == "ops-1"
+    assert sent == ["ou_leader-1", "ou_ops-1"]
+
+    sent.clear()
+    same = _handle_leader_meeting_review_card_push(
+        MagicMock(),
+        LeaderMeetingReviewCardPushRequest(
+            report_id="RPT-1",
+            owner_id="leader-1",
+            creator_id="leader-1",
+        ),
+    )
+    assert same["pushed"] is True
+    assert sent == ["ou_leader-1"]
+
+    sent.clear()
+    partial = _handle_leader_meeting_review_card_push(
+        MagicMock(),
+        LeaderMeetingReviewCardPushRequest(
+            report_id="RPT-1",
+            owner_id="leader-1",
+            creator_id="missing-open-id",
+        ),
+    )
+    assert partial["pushed"] is True
+    assert partial["reason"] is None
+    assert sent == ["ou_leader-1"]

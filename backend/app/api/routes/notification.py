@@ -917,13 +917,14 @@ def _handle_leader_meeting_review_card_push(
     db_session: SessionDep,
     payload: LeaderMeetingReviewCardPushRequest,
 ) -> Dict[str, Any]:
-    """按抽取项给上传人发例会复盘卡片。"""
+    """按抽取项给业务负责人和提交人发例会复盘卡片。"""
     from app.services.leader_meeting_review_card import handle_leader_meeting_review_card
 
     return handle_leader_meeting_review_card(
         db_session,
         report_id=payload.report_id,
         owner_id=payload.owner_id,
+        creator_id=payload.creator_id,
         report_date=payload.report_date,
     )
 

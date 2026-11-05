@@ -6,6 +6,7 @@ import json
 import logging
 from typing import Any, Mapping, Optional, Sequence
 
+from sqlalchemy import text
 from sqlmodel import Session, select
 
 from app.models.crm_skill_extract_items import CRMSkillExtractItem
@@ -148,6 +149,38 @@ def can_manage_uploader(
     return bool(_identity_tokens(viewer, viewer_open_ids) & remembered[owner])
 
 
+def report_submitter_id(
+    session: Session,
+    report_id: str,
+    cache: Optional[dict[str, str]] = None,
+) -> str:
+    """提交人是 bi_reports.created_by。读不到时为空，不因此放行。"""
+    rid = _text(report_id)
+    remembered = cache if cache is not None else {}
+    if not rid:
+        return ""
+    if rid in remembered:
+        return remembered[rid]
+    submitter = ""
+    try:
+        found = session.execute(
+            text(
+                "SELECT created_by FROM bi_reports "
+                "WHERE report_id = :report_id "
+                "ORDER BY updated_at DESC, id DESC LIMIT 1"
+            ),
+            {"report_id": rid},
+        ).first()
+        raw = found[0] if found is not None else None
+        if isinstance(raw, str):
+            submitter = raw.strip()
+    except Exception as exc:
+        logger.warning("例会复盘读取提交人失败 report_id=%s: %s", rid, exc)
+        submitter = ""
+    remembered[rid] = submitter
+    return submitter
+
+
 def _is_live_review_row(row: Any, *, todo_only: bool) -> bool:
     if row is None:
         return False
@@ -170,16 +203,26 @@ def _matches(
     *,
     todo_only: bool,
     cache: dict[str, set[str]],
+    submitter_cache: Optional[dict[str, str]] = None,
 ) -> bool:
     if not _text(viewer_oauth_id) or not _is_live_review_row(row, todo_only=todo_only):
         return False
-    return can_manage_uploader(
+    if can_manage_uploader(
         session,
         viewer_oauth_id,
         _text(getattr(row, "subject_id", None)),
         viewer_open_ids,
         cache,
+    ):
+        return True
+    submitter = report_submitter_id(
+        session,
+        _text(getattr(row, "source_report_unique_id", None)),
+        submitter_cache,
     )
+    if not submitter:
+        return False
+    return bool(_identity_tokens(viewer_oauth_id, viewer_open_ids) & _identity_tokens(submitter))
 
 
 def select_visible_rows(
@@ -194,6 +237,7 @@ def select_visible_rows(
     del company_manager
     live = [row for row in rows if _is_live_review_row(row, todo_only=False)]
     cache: dict[str, set[str]] = {}
+    submitter_cache: dict[str, str] = {}
     manageable = [
         row
         for row in live
@@ -204,6 +248,7 @@ def select_visible_rows(
             viewer_open_ids,
             todo_only=False,
             cache=cache,
+            submitter_cache=submitter_cache,
         )
     ]
     visible = live
@@ -221,14 +266,22 @@ def load_meeting_review_item(
     todo_only: bool = False,
     open_ids: Sequence[str] = (),
 ) -> Optional[CRMSkillExtractItem]:
-    """上传人或其汇报链上级的经营事项、员工待办。todo_only 时经营事项不算。"""
+    """负责人、提交人或汇报链上级的经营事项、员工待办。todo_only 时经营事项不算。"""
     item_id = _text(unique_id)
     if not item_id or not _text(oauth_id):
         return None
     row = session.exec(
         select(CRMSkillExtractItem).where(CRMSkillExtractItem.unique_id == item_id)
     ).first()
-    if not _matches(session, row, oauth_id, open_ids, todo_only=todo_only, cache={}):
+    if not _matches(
+        session,
+        row,
+        oauth_id,
+        open_ids,
+        todo_only=todo_only,
+        cache={},
+        submitter_cache={},
+    ):
         return None
     return row
 
@@ -276,6 +329,7 @@ def save_meeting_review_decisions(
     results: list[dict[str, Any]] = []
     applied = False
     cache: dict[str, set[str]] = {}
+    submitter_cache: dict[str, str] = {}
     for item in normalized:
         current = found.get(item["unique_id"])
         if current is None or not _matches(
@@ -285,6 +339,7 @@ def save_meeting_review_decisions(
             open_ids,
             todo_only=True,
             cache=cache,
+            submitter_cache=submitter_cache,
         ):
             results.append({"unique_id": item["unique_id"], "ok": False})
             continue

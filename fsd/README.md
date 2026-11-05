@@ -39,3 +39,4 @@
 | `2026-10-30-leader-meeting-review-extract-read.md` | 2026-10-30，例会复盘抽取登录即可查看 |
 | `2026-11-04-today-highlights-one-card.md` | 2026-11-04，今日重点一人一天一张卡 |
 | `2026-11-04-today-highlights-monday-omits-daily-report.md` | 2026-11-04，周一今日重点不放日报 |
+| `2026-11-05-leader-meeting-review-two-recipients.md` | 2026-11-05，例会复盘卡片发给负责人和提交人 |
