@@ -421,21 +421,49 @@ def _team_report_line(assembled: Mapping[str, Any]) -> str:
     return f"[{DAILY_REPORT_LINK_LABEL}]({url})"
 
 
+def _team_tail_lines(
+    assembled: Mapping[str, Any],
+    *,
+    has_other_blocks: bool,
+    dingtalk: bool = False,
+) -> list[str]:
+    """报告入口和日报写成一行蓝链。没有需介入时，前面仍带标题和说明。"""
+    lines = list(
+        _report_card_lines(
+            assembled,
+            has_other_blocks=has_other_blocks,
+            dingtalk=dingtalk,
+        )
+    )
+    daily = _team_report_line(assembled)
+    if not daily:
+        return lines
+    if lines and lines[-1].startswith("["):
+        lines[-1] = f"{lines[-1]}  {daily}"
+        return lines
+    return [*lines, daily]
+
+
+def _team_markdown(assembled: Mapping[str, Any]) -> str:
+    """团队今日重点一块：需介入、拜访对照，末尾一行蓝链。"""
+    intervention = _intervention_markdown(assembled)
+    watch = _watch_section(assembled)
+    tail = "\n".join(
+        _team_tail_lines(assembled, has_other_blocks=bool(intervention or watch))
+    )
+    return "\n\n".join(part for part in (intervention, watch, tail) if part)
+
+
 def render_card_sections(
     assembled: Mapping[str, Any],
     *,
     owner_name: str = "",
 ) -> list[str]:
-    """飞书按块发送。个人立即处理在最前；然后是介入、拜访对照、报告入口、周二到周日的日报、本周标题。"""
+    """飞书按块发送。个人立即处理单独一块；团队内容合在一块；本周标题在按钮前。"""
     personal = _personal_markdown(assembled)
-    intervention = _intervention_markdown(assembled)
-    watch = _watch_section(assembled)
-    reports = "\n".join(
-        _report_card_lines(assembled, has_other_blocks=bool(intervention or watch))
-    )
-    daily = _team_report_line(assembled)
+    team = _team_markdown(assembled)
     week = _week_heading(assembled, owner_name=owner_name)
-    return [part for part in (personal, intervention, watch, reports, daily, week) if part]
+    return [part for part in (personal, team, week) if part]
 
 
 def _reports_only_heading(*, dingtalk: bool) -> str:
@@ -628,7 +656,7 @@ def render_dingtalk_markdown(
     if team and watch_lines:
         team.append("")
     team.extend(watch_lines)
-    report_lines = _report_card_lines(
+    report_lines = _team_tail_lines(
         assembled,
         has_other_blocks=bool(items) or bool(watch_lines),
         dingtalk=True,
@@ -636,11 +664,6 @@ def render_dingtalk_markdown(
     if team and report_lines:
         team.append("")
     team.extend(report_lines)
-    daily = _team_report_line(assembled)
-    if daily:
-        if team:
-            team.append("")
-        team.append(daily)
     if personal:
         lines.append("")
         lines.extend(personal.split("\n"))

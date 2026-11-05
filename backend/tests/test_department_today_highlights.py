@@ -1020,6 +1020,17 @@ def test_monday_omits_the_daily_report_and_other_days_use_yesterday(monkeypatch)
     assert daily in tuesday_body
     assert tuesday_body.index("今日需介入") < tuesday_body.index(daily)
     assert tuesday_body.index(daily) < tuesday_body.index("**本周**")
+    tuesday["report_entries"] = [
+        {"key": "team_operating_trend", "label": "经营趋势", "url": "https://example.com/trend"},
+    ]
+    linked = render_card_markdown(tuesday, owner_name="王经理")
+    assert "[经营趋势](https://example.com/trend)  " + daily in linked
+    dingtalk_linked = render_dingtalk_markdown(
+        tuesday,
+        title="团队今日重点｜2026-10-13",
+        owner_name="王经理",
+    )
+    assert "[经营趋势](https://example.com/trend)  " + daily in dingtalk_linked
     assert "日报" not in [label for label, _url in card_footer_buttons(tuesday, owner_name="王经理")]
     monkeypatch.setattr("app.utils.push_page_urls.settings.REVIEW_REPORT_HOST", "")
     assert "[日报](" not in render_card_markdown(tuesday)
@@ -1143,7 +1154,7 @@ def test_card_title_omits_department_name(monkeypatch):
     assert "华北销售" not in captured["title"]
 
 
-def test_feishu_card_splits_visit_watch_from_intervention(monkeypatch):
+def test_feishu_card_keeps_team_highlights_in_one_section(monkeypatch):
     captured = {}
     monkeypatch.setattr(
         "app.utils.push_page_urls.settings.REVIEW_REPORT_HOST",
@@ -1186,13 +1197,45 @@ def test_feishu_card_splits_visit_watch_from_intervention(monkeypatch):
     )
     assert "**今日需介入**" in captured["body"]
     assert "**张三**" in captured["body"]
-    assert "上周拜访" not in captured["body"]
-    assert captured["divide_extra_sections"] is True
-    assert captured["extra_sections"] == [
-        "**上周拜访**\n总拜访 0 条\n[查看上周拜访](https://example.com/visits)",
-        "[团队人效](https://example.com/persona)",
-    ]
+    assert "**上周拜访**" in captured["body"]
+    assert "[团队人效](https://example.com/persona)" in captured["body"]
+    assert captured["body"].index("今日需介入") < captured["body"].index("上周拜访")
+    assert captured["body"].index("上周拜访") < captured["body"].index("[团队人效](")
+    assert captured.get("extra_sections") in (None, [])
+    assert captured["divide_extra_sections"] is False
     assert "例会复盘" not in captured["body"]
+
+    assembled["report_date"] = TUESDAY.isoformat()
+    assembled["personal_highlights"] = {
+        "has_content": True,
+        "report_date": TUESDAY.isoformat(),
+        "sections": [
+            {
+                "key": "immediate_today",
+                "title": "立即处理",
+                "url": "https://example.com/today",
+                "items": [{"claim": "今天回访"}],
+            }
+        ],
+    }
+    assembled["report_entries"] = [
+        {"key": "team_operating_trend", "label": "经营趋势", "url": "https://example.com/trend"},
+    ]
+    captured.clear()
+    deliver_department_highlight_card(
+        MagicMock(),
+        {"platform": "feishu", "user_id": "leader-1", "open_id": "ou_leader", "name": "王经理"},
+        assembled,
+    )
+    daily = "[日报](https://example.com/v2/business/reports?tab=daily-team&date=2026-10-12)"
+    assert captured["body"].startswith("**立即处理**")
+    assert "经营趋势" not in captured["body"]
+    team = captured["extra_sections"][0]
+    assert "**今日需介入**" in team
+    assert "**上周拜访**" in team
+    assert "[经营趋势](https://example.com/trend)  " + daily in team
+    assert team.index("今日需介入") < team.index("上周拜访") < team.index("[经营趋势](")
+    assert captured["extra_sections"][1] == "**本周**"
 
 
 def test_dingtalk_card_puts_title_in_the_body(monkeypatch):

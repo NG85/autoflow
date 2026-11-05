@@ -21,4 +21,4 @@
 
 ## 2. 日期
 
-`report_date.weekday() == 0` 时 `_team_report_line` 返回空串，不占块。其余日子用 `report_date - 1 day` 调用 `build_team_daily_report_url`。路径是 `/v2/business/reports?tab=daily-team&date=`。host 为空时同样不放。它仍不是 `card_footer_buttons` 的一项。
+`report_date.weekday() == 0` 时 `_team_report_line` 返回空串，不占位。其余日子用 `report_date - 1 day` 调用 `build_team_daily_report_url`。路径是 `/v2/business/reports?tab=daily-team&date=`。host 为空时同样不放。它跟报告入口写在同一行，不是 `card_footer_buttons` 的一项。

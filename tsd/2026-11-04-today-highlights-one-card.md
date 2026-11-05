@@ -57,13 +57,13 @@
 
 标题常量：一线 `SALES_CARD_TITLE` 为「我的今日重点」，团队 `TEAM_CARD_TITLE` 为「团队今日重点」。
 
-`render_card_sections` 顺序：立即处理、需介入、拜访对照、报告蓝链、日报、本周标题。飞书首块作正文，其余进 `extra_sections`，`divide_extra_sections=True`。
+`render_card_sections` 三块：立即处理、团队内容、本周标题。团队内容里需介入和拜访对照在前，重点商机、团队人效、经营趋势和周二到周日的日报写成同一行蓝链。飞书有多块时首块作正文，其余进 `extra_sections`，块与块之间加分隔线。
 
 `_report_card_lines` 的 `has_other_blocks` 只看需介入或拜访对照，不看立即处理。为假且有报告链接时，块首是 `_reports_only_heading`（「今日需介入」）再加原来的 `REPORTS_ONLY_LEAD`。钉钉标题用 `##`，飞书用加粗。
 
 钉钉把立即处理和个人以外的正文分成两段。两段都有时，中间插入 `---`。本周按钮前原有的 `---` 保留。
 
-`_daily_report_line` 用 `report_date - 1 day` 调用 `build_team_daily_report_url`。路径是 `/v2/business/reports?tab=daily-team&date=`。host 为空或没有业务日时返回空串，不占块。它不是 `card_footer_buttons` 的一项。
+`_team_report_line` 用 `report_date - 1 day` 调用 `build_team_daily_report_url`。路径是 `/v2/business/reports?tab=daily-team&date=`。host 为空或没有业务日时返回空串，不占位。它跟在报告入口后面，同一行，不是 `card_footer_buttons` 的一项。
 
 ## 5. 相关销售姓名
 
@@ -72,7 +72,7 @@
 ## 6. 测试
 
 - 团队卡标题、折入顺序、不计个人用量、销售关订时不出现立即处理、发送失败不写入 `sent_oauth_user_ids`。
-- 日报链接日期为业务日前一天，且不出现在本周按钮里。飞书分块在报告入口之后包含这条链接。
+- 日报链接日期为业务日前一天，且不出现在本周按钮里。它和报告入口写在团队内容同一行。
 - 一线卡标题、折入区块不含本周按钮、`covered_by_team_card`、团队任务失败后一线仍发送。
 - 合并任务先部门后销售；只推销售时排除名单为空。
 - 只有报告时，飞书和钉钉都以「今日需介入」起头。
