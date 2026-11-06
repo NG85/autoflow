@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 from app.services.leader_meeting_review_actions import (
     link_meeting_review_task,
     load_meeting_review_item,
+    report_submitter_id,
     notify_meeting_review_comments,
     save_meeting_review_comments,
     save_meeting_review_decisions,
@@ -111,6 +112,45 @@ def test_reporting_leader_can_view_and_reject(monkeypatch):
     )
     assert result["results"][0]["ok"] is True
     assert todo.status == "REJECTED"
+
+
+def test_submitter_can_change_items_owned_by_the_leader(monkeypatch):
+    todo = _row("EMPLOYEE_TODO_CANDIDATE", subject_id="leader-1")
+    monkeypatch.setattr(
+        "app.services.leader_meeting_review_actions.reporting_leader_tokens",
+        lambda session, uploader_oauth_id: set(),
+    )
+    monkeypatch.setattr(
+        "app.services.leader_meeting_review_actions.report_submitter_id",
+        lambda session, report_id, cache=None: "ops-1",
+    )
+    assert load_meeting_review_item(_session(todo), "ops-1", "item-1") is todo
+    assert load_meeting_review_item(_session(todo), "someone-else", "item-1") is None
+    monkeypatch.setattr(
+        "app.services.leader_meeting_review_card.load_report_extract_rows",
+        lambda session, report_id: [todo],
+    )
+    monkeypatch.setattr(
+        "app.services.leader_meeting_review_actions.load_threads",
+        lambda session, subject_type, subject_ids: {},
+    )
+    viewed = extracts_for_viewer(MagicMock(), "RPT-1", "ops-1")
+    assert viewed["can_manage"] is True
+    result = save_meeting_review_decisions(
+        _session(todo),
+        "ops-1",
+        [{"unique_id": "item-1", "action": "reject", "reject_reason": "先不做"}],
+    )
+    assert result["results"][0]["ok"] is True
+    assert todo.status == "REJECTED"
+
+
+def test_report_submitter_id_reads_created_by():
+    session = MagicMock()
+    session.execute.return_value.first.return_value = ("ops-1",)
+    assert report_submitter_id(session, "RPT-1") == "ops-1"
+    session.execute.return_value.first.return_value = (None,)
+    assert report_submitter_id(session, "RPT-2") == ""
 
 
 def test_task_link_is_only_for_employee_todos(monkeypatch):

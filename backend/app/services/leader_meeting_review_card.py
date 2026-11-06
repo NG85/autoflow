@@ -1,4 +1,4 @@
-"""例会复盘卡片：按报告读取经营事项和员工待办，推给上传人。
+"""例会复盘卡片：按报告读取经营事项和员工待办，推给业务负责人和提交人。
 
 列表和报告正文在 base-api。这里只读 crm_skill_extract_items。
 """
@@ -223,7 +223,7 @@ def extracts_for_viewer(
     *,
     company_manager: bool = False,
 ) -> dict[str, Any]:
-    """登录后都能看该报告的抽取。can_manage 仅上传人或汇报链上级为 true。没有抽取时返回空。"""
+    """登录后都能看该报告的抽取。can_manage 对负责人、提交人或汇报链上级为 true。没有抽取时返回空。"""
     rid = _text(report_id)
     viewer = _text(oauth_user_id)
     if not rid:
@@ -372,8 +372,9 @@ def _result(
     report_date: Optional[str],
     pushed: bool,
     reason: Optional[str],
+    creator_id: Optional[str] = None,
 ) -> dict[str, Any]:
-    return {
+    body: dict[str, Any] = {
         "success": True,
         "pushed": pushed,
         "reason": reason,
@@ -381,6 +382,18 @@ def _result(
         "owner_id": owner_id,
         "report_date": report_date,
     }
+    if creator_id:
+        body["creator_id"] = creator_id
+    return body
+
+
+def _push_targets(owner_id: str, creator_id: Optional[str]) -> list[str]:
+    targets: list[str] = []
+    for raw in (owner_id, creator_id):
+        text = _text(raw)
+        if text and text not in targets:
+            targets.append(text)
+    return targets
 
 
 def handle_leader_meeting_review_card(
@@ -388,11 +401,17 @@ def handle_leader_meeting_review_card(
     *,
     report_id: str,
     owner_id: str,
+    creator_id: Optional[str] = None,
     report_date: Optional[str] = None,
 ) -> dict[str, Any]:
-    """按报告抽取项给上传人发一张卡。没有抽取或不发出时 HTTP 仍由路由返回 200。"""
+    """按业务负责人读取抽取，给负责人和提交人各发一张同样的卡。
+
+    抽取行挂在 owner_id 上。creator_id 缺省或与 owner_id 相同时只发一张。
+    没有抽取或不发出时 HTTP 仍由路由返回 200。有一人发出则 pushed 为 true。
+    """
     rid = _text(report_id)
     owner = _text(owner_id)
+    creator = _text(creator_id) or None
     rows = load_extract_rows(db_session, rid, owner)
     if not rows:
         logger.info(
@@ -403,6 +422,7 @@ def handle_leader_meeting_review_card(
         return _result(
             report_id=rid,
             owner_id=owner,
+            creator_id=creator,
             report_date=_text(report_date) or None,
             pushed=False,
             reason="empty_extracts",
@@ -411,35 +431,40 @@ def handle_leader_meeting_review_card(
     assembled = assemble_extracts(rows, rid, day)
     from app.repositories.user_profile import user_profile_repo
 
-    profile = user_profile_repo.get_by_oauth_user_id(db_session, owner)
-    recipient = _recipient_from_profile(profile)
-    if recipient is None:
-        return _result(
-            report_id=rid,
-            owner_id=owner,
-            report_date=day.isoformat(),
-            pushed=False,
-            reason="no_open_id",
+    pushed_any = False
+    saw_send_failed = False
+    for target in _push_targets(owner, creator):
+        profile = user_profile_repo.get_by_oauth_user_id(db_session, target)
+        recipient = _recipient_from_profile(profile)
+        if recipient is None:
+            logger.info(
+                "leader_meeting_review_card no open_id report_id=%s recipient=%s",
+                rid,
+                target,
+            )
+            continue
+        sent = deliver_card(db_session, recipient, assembled)
+        if sent.get("success"):
+            pushed_any = True
+            continue
+        saw_send_failed = True
+        logger.warning(
+            "leader_meeting_review_card send failed report_id=%s recipient=%s message=%s",
+            rid,
+            target,
+            sent.get("message"),
         )
-    sent = deliver_card(db_session, recipient, assembled)
-    if sent.get("success"):
-        return _result(
-            report_id=rid,
-            owner_id=owner,
-            report_date=day.isoformat(),
-            pushed=True,
-            reason=None,
-        )
-    logger.warning(
-        "leader_meeting_review_card send failed report_id=%s owner_id=%s message=%s",
-        rid,
-        owner,
-        sent.get("message"),
-    )
+    if pushed_any:
+        reason = None
+    elif saw_send_failed:
+        reason = "send_failed"
+    else:
+        reason = "no_open_id"
     return _result(
         report_id=rid,
         owner_id=owner,
+        creator_id=creator,
         report_date=day.isoformat(),
-        pushed=False,
-        reason="send_failed",
+        pushed=pushed_any,
+        reason=reason,
     )

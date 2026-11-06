@@ -410,10 +410,10 @@ def _personal_markdown(assembled: Mapping[str, Any]) -> str:
     return render_embedded_personal_markdown(personal)
 
 
-def _daily_report_line(assembled: Mapping[str, Any]) -> str:
-    """团队日报。日期是今日重点业务日的前一天，不进「本周」按钮。"""
+def _team_report_line(assembled: Mapping[str, Any]) -> str:
+    """周二到周日链到前一天的团队日报。周一不放。"""
     report_day = _report_day(assembled)
-    if report_day is None:
+    if report_day is None or report_day.weekday() == 0:
         return ""
     url = build_team_daily_report_url((report_day - timedelta(days=1)).isoformat())
     if not url:
@@ -421,21 +421,49 @@ def _daily_report_line(assembled: Mapping[str, Any]) -> str:
     return f"[{DAILY_REPORT_LINK_LABEL}]({url})"
 
 
+def _team_tail_lines(
+    assembled: Mapping[str, Any],
+    *,
+    has_other_blocks: bool,
+    dingtalk: bool = False,
+) -> list[str]:
+    """报告入口和日报写成一行蓝链。没有需介入时，前面仍带标题和说明。"""
+    lines = list(
+        _report_card_lines(
+            assembled,
+            has_other_blocks=has_other_blocks,
+            dingtalk=dingtalk,
+        )
+    )
+    daily = _team_report_line(assembled)
+    if not daily:
+        return lines
+    if lines and lines[-1].startswith("["):
+        lines[-1] = f"{lines[-1]}  {daily}"
+        return lines
+    return [*lines, daily]
+
+
+def _team_markdown(assembled: Mapping[str, Any]) -> str:
+    """团队今日重点一块：需介入、拜访对照，末尾一行蓝链。"""
+    intervention = _intervention_markdown(assembled)
+    watch = _watch_section(assembled)
+    tail = "\n".join(
+        _team_tail_lines(assembled, has_other_blocks=bool(intervention or watch))
+    )
+    return "\n\n".join(part for part in (intervention, watch, tail) if part)
+
+
 def render_card_sections(
     assembled: Mapping[str, Any],
     *,
     owner_name: str = "",
 ) -> list[str]:
-    """飞书按块发送。个人立即处理在最前；然后是介入、拜访对照、报告入口、日报、本周标题。"""
+    """飞书按块发送。个人立即处理单独一块；团队内容合在一块；本周标题在按钮前。"""
     personal = _personal_markdown(assembled)
-    intervention = _intervention_markdown(assembled)
-    watch = _watch_section(assembled)
-    reports = "\n".join(
-        _report_card_lines(assembled, has_other_blocks=bool(intervention or watch))
-    )
-    daily = _daily_report_line(assembled)
+    team = _team_markdown(assembled)
     week = _week_heading(assembled, owner_name=owner_name)
-    return [part for part in (personal, intervention, watch, reports, daily, week) if part]
+    return [part for part in (personal, team, week) if part]
 
 
 def _reports_only_heading(*, dingtalk: bool) -> str:
@@ -628,7 +656,7 @@ def render_dingtalk_markdown(
     if team and watch_lines:
         team.append("")
     team.extend(watch_lines)
-    report_lines = _report_card_lines(
+    report_lines = _team_tail_lines(
         assembled,
         has_other_blocks=bool(items) or bool(watch_lines),
         dingtalk=True,
@@ -636,11 +664,6 @@ def render_dingtalk_markdown(
     if team and report_lines:
         team.append("")
     team.extend(report_lines)
-    daily = _daily_report_line(assembled)
-    if daily:
-        if team:
-            team.append("")
-        team.append(daily)
     if personal:
         lines.append("")
         lines.extend(personal.split("\n"))
@@ -1210,8 +1233,12 @@ def handle_department_today_highlights(
     db_session: Session,
     *,
     report_date: Optional[date | str] = None,
+    recipient_user_ids: Optional[Sequence[str]] = None,
 ) -> dict[str, Any]:
-    """推送销售负责人今日重点。按负责人 oauth 一人一天一张卡，不进部门群。"""
+    """推送销售负责人今日重点。按负责人 oauth 一人一天一张卡，不进部门群。
+
+    recipient_user_ids 是可选 OAuth id。不传则发给当天有卡片的全部负责人。
+    """
     target = parse_report_date(report_date)
     result = _base_result(target)
     policy = load_report_push_policy()
@@ -1223,10 +1250,18 @@ def handle_department_today_highlights(
         logger.warning("department today highlights blocked by billing: %s", quota_msg)
         return {**result, "skipped": True, "skip_reason": "billing_blocked"}
 
-    rows = load_department_extract_rows(db_session, target)
+    rows = load_department_extract_rows(
+        db_session,
+        target,
+        oauth_user_ids=recipient_user_ids,
+    )
     if rows is None:
         return {**result, "skipped": True, "skip_reason": "source_unavailable"}
     grouped = _group_by_subject(rows)
+    wanted: Optional[set[str]] = None
+    if recipient_user_ids is not None:
+        wanted = {_text(item) for item in recipient_user_ids if _text(item)}
+        grouped = {key: value for key, value in grouped.items() if key in wanted}
 
     from app.repositories.user_profile import user_profile_repo
     from app.services.sales_today_highlights import _recipient_from_profile
@@ -1272,8 +1307,13 @@ def handle_department_today_highlights(
             "cards": [assembled],
             "oauth_user_id": subject_id,
         }
-    for user_id, bucket in _visit_only_leader_buckets(db_session, target, "").items():
-        leaders.setdefault(user_id, bucket)
+    if wanted is None or wanted:
+        for user_id, bucket in _visit_only_leader_buckets(db_session, target, "").items():
+            if wanted is not None:
+                oauth_id = _text(bucket.get("oauth_user_id")) or leader_oauth_id(db_session, user_id)
+                if oauth_id not in wanted:
+                    continue
+            leaders.setdefault(user_id, bucket)
 
     for user_id, bucket in leaders.items():
         card = assemble_leader_highlights(bucket["cards"], target)

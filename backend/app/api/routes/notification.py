@@ -721,6 +721,7 @@ def _handle_department_today_highlights_push(
         return handle_department_today_highlights(
             db_session,
             report_date=payload.report_date,
+            recipient_user_ids=payload.recipient_user_ids,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -916,13 +917,14 @@ def _handle_leader_meeting_review_card_push(
     db_session: SessionDep,
     payload: LeaderMeetingReviewCardPushRequest,
 ) -> Dict[str, Any]:
-    """按抽取项给上传人发例会复盘卡片。"""
+    """按抽取项给业务负责人和提交人发例会复盘卡片。"""
     from app.services.leader_meeting_review_card import handle_leader_meeting_review_card
 
     return handle_leader_meeting_review_card(
         db_session,
         report_id=payload.report_id,
         owner_id=payload.owner_id,
+        creator_id=payload.creator_id,
         report_date=payload.report_date,
     )
 

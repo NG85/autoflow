@@ -79,11 +79,19 @@ class ReviewSessionPushRequest(BaseModel):
 
 
 class LeaderMeetingReviewCardPushRequest(BaseModel):
-    """Aldebaran 例会复盘抽取完成：按抽取项给上传人发卡片。"""
+    """Aldebaran 例会复盘抽取完成：按抽取项给业务负责人和提交人发卡片。"""
 
     type: Literal["leader_meeting_review_card"] = "leader_meeting_review_card"
     report_id: str = Field(..., min_length=1, description="bi_reports.report_id")
-    owner_id: str = Field(..., min_length=1, description="上传人 oauth id，卡片接收人")
+    owner_id: str = Field(
+        ...,
+        min_length=1,
+        description="业务负责人 oauth id，也是抽取行 subject_id",
+    )
+    creator_id: Optional[str] = Field(
+        default=None,
+        description="提交人 oauth id。与 owner_id 不同时再发一张同样的卡",
+    )
     report_date: Optional[str] = Field(
         default=None,
         description="YYYY-MM-DD",
@@ -133,6 +141,10 @@ class DepartmentTodayHighlightsPushRequest(BaseModel):
     report_date: Optional[str] = Field(
         default=None,
         description="YYYY-MM-DD；不传则北京时间当天",
+    )
+    recipient_user_ids: Optional[List[str]] = Field(
+        default=None,
+        description="可选 OAuth id；不传则发给当天有卡片的全部负责人",
     )
 
 
