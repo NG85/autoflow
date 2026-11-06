@@ -10,7 +10,7 @@
 
 登录态沿用现有 CRM 接口。列表和报告正文向 base-api 要。抽取项向本服务要。不要传别人的用户 id。
 
-登录后打开抽取链接就能看经营事项和员工待办，不按身份收窄。列表和报告正文仍向 base-api 要，权限由那边控制。
+登录后打开抽取链接就能看待办候选和经营事项，不按身份收窄。两类都有时，待办候选在前，经营事项在后。卡片正文是会议总结，总结下面是「完整复盘报告」，再下面用按钮打开这两类抽取。列表和报告正文仍向 base-api 要，权限由那边控制。
 
 能改的是业务负责人、报告提交人（`bi_reports.created_by`），以及负责人汇报链上两级内的上级（本部门负责人，以及再上一级）。公司级管理人员和其他人只看。查询结果里的 `can_manage` 为 `false` 时，不要画赞踩、采纳、拒绝、建任务、评论和回复。这些写入接口对他们返回 404。
 
@@ -40,20 +40,20 @@
 
 列表按这两个日期筛报告业务日，任意起止都可以，不要求凑成一整周。今日重点按钮在周二到周日出现，填入本周一到本周日。周一不放这个按钮。地址里没有 `owner_id`，也不要自己补。能看到哪些报告，由列表接口按当前登录人决定：本人上传的，以及下属上传的。
 
-抽取卡上的出口，直接打开抽取页：
+抽取卡上的「待办候选」「经营事项」按钮打开抽取页。总结下面的蓝链「完整复盘报告」打开单报告页，不带日期：
 
 ```text
-/v2/business/leader-meeting-review/<bi_reports.report_id>/extract?tab=management_events&date=2026-10-28
 /v2/business/leader-meeting-review/<bi_reports.report_id>/extract?tab=employee_todo_candidates&date=2026-10-28
+/v2/business/leader-meeting-review/<bi_reports.report_id>
 ```
 
 | 参数 | 含义 |
 | --- | --- |
 | 路径里的 `report_id` | `bi_reports.report_id`。抽取查询、报告详情都用它。不是 `execution_id` |
 | `date` | 业务日，只用于展示。调抽取接口不传它，查询按路径里的 `report_id` |
-| `tab` | `card_links[].key`。`management_events` 或 `employee_todo_candidates` |
+| `tab` | `card_links[].key`。待办候选是 `employee_todo_candidates`，经营事项是 `management_events` |
 
-卡片只展开每类置信度最高的一条。一条时出口是「查看」，还有没写上卡片的是「更多（N）」。两个出口都进抽取页，N 不是要再请求的条数。抽取页展示这一份报告的全部抽取。
+卡片正文是 `bi_reports.report_content` 里的 `summary`，不展开单条抽取。多于一条时按钮写成「待办候选（N）」「经营事项（N）」。钉钉没有这组按钮，抽取入口各占一行蓝链。抽取页展示这一份报告的待办候选和经营事项。
 
 ---
 
@@ -91,7 +91,7 @@
 
 ---
 
-## 3. 抽取页：两个 tab
+## 3. 抽取页
 
 独立页面，对照拜访复盘的 `/extract`。交互对齐团队今日重点里的「今日需介入」（`FeedbackButtons`、`DecisionButtons`、评论、建任务用现有 `createTodos`）。写入地址用下面第 4 到第 7 节，不要调用今日重点的赞踩、采纳、评论、挂任务接口。评论比今日需介入多一个能力：作者可以改自己的正文。点名和回复的提醒见第 7 节，规则与 `backend/docs/comment-notify-frontend.md` 相同。
 
@@ -111,12 +111,12 @@ GET /api/v1/crm/leader-meeting-reviews/{report_id}/extracts
     "report_id": "RPT-1",
     "report_date": "2026-10-28",
     "items": {
-      "management_events": [],
-      "employee_todo_candidates": []
+      "employee_todo_candidates": [],
+      "management_events": []
     },
     "card_links": [
-      { "key": "management_events", "title": "经营事项", "url": "https://.../v2/business/leader-meeting-review/RPT-1/extract?tab=management_events&date=2026-10-28" },
-      { "key": "employee_todo_candidates", "title": "员工待办", "url": "https://.../v2/business/leader-meeting-review/RPT-1/extract?tab=employee_todo_candidates&date=2026-10-28" }
+      { "key": "employee_todo_candidates", "title": "待办候选", "url": "https://.../v2/business/leader-meeting-review/RPT-1/extract?tab=employee_todo_candidates&date=2026-10-28" },
+      { "key": "management_events", "title": "经营事项", "url": "https://.../v2/business/leader-meeting-review/RPT-1/extract?tab=management_events&date=2026-10-28" }
     ],
     "can_manage": true,
     "uploader_user_id": "上传人的本地 user id"
@@ -130,35 +130,9 @@ tab 不写死。按 `card_links` 的顺序渲染，文案用 `title`，条数用
 
 服务端已按 `confidence` 从高到低排好。页面不要再排。
 
-### 经营事项 `management_events`
+### 待办候选 `employee_todo_candidates`
 
-赞踩和评论都要。不要画采纳、拒绝、建任务。
-
-```text
-甲客户 · 关键人
-路径要调整
-
-由区域负责人协助引荐                          赞  踩
-```
-
-| 字段 | 展示 |
-| --- | --- |
-| `unique_id` | 后续写入用。重新进页要再拉一次，不要缓存 |
-| `business_object` | 标题前半。空则不写 |
-| `management_issue` | 标题后半，中间用 ` · `。两个都空时退回 `claim` |
-| `change_summary` | 标题下面一行。空则用 `claim` |
-| `leader_management` | 再空一行。空则不写 |
-| `claim` | 上面两处的兜底，不要单独再画一行 |
-| `confidence` | 只参与服务端排序，不必做成控件 |
-| `status` | 行上的状态。这类不提供采纳或拒绝，不要画成「待判断 / 已采纳」 |
-| `feedback` | `up`、`down` 或 `null` |
-| `feedback_comment` | 赞踩附言。撤销后为 `null` |
-| `feedback_at` | 北京时间，无时区。未赞踩时 `null` |
-| `comments` | 评论线程，没有时是 `[]`。见第 7 节 |
-
-### 员工待办 `employee_todo_candidates`
-
-赞踩、采纳、拒绝、建任务、评论都要。
+排在经营事项前面。没有这类时不出现。赞踩、采纳、拒绝、建任务、评论都要。
 
 ```text
 王磊                                              待判断
@@ -188,6 +162,32 @@ tab 不写死。按 `card_links` 的顺序渲染，文案用 `title`，条数用
 | `confidence` | 不必做成控件 |
 
 拒绝后 `adopted_todo_id` 变为 `null`，`tasks` 不变。点进任务详情走现有任务页，用 `unique_id`。
+
+### 经营事项 `management_events`
+
+排在待办候选后面。没有这类时不出现。赞踩和评论都要。不要画采纳、拒绝、建任务。
+
+```text
+甲客户 · 关键人
+路径要调整
+
+由区域负责人协助引荐                          赞  踩
+```
+
+| 字段 | 展示 |
+| --- | --- |
+| `unique_id` | 后续写入用。重新进页要再拉一次，不要缓存 |
+| `business_object` | 标题前半。空则不写 |
+| `management_issue` | 标题后半，中间用 ` · `。两个都空时退回 `claim` |
+| `change_summary` | 标题下面一行。空则用 `claim` |
+| `leader_management` | 再空一行。空则不写 |
+| `claim` | 上面两处的兜底，不要单独再画一行 |
+| `confidence` | 只参与服务端排序，不必做成控件 |
+| `status` | 行上的状态。这类不提供采纳或拒绝，不要画成「待判断 / 已采纳」 |
+| `feedback` | `up`、`down` 或 `null` |
+| `feedback_comment` | 赞踩附言。撤销后为 `null` |
+| `feedback_at` | 北京时间，无时区。未赞踩时 `null` |
+| `comments` | 评论线程，没有时是 `[]`。见第 7 节 |
 
 ---
 

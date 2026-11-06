@@ -12,7 +12,7 @@
 - 一线销售今日重点：`POST /notification/push` `type=sales_today_highlights`（读 `crm_skill_extract_items`；仅本人）
 - 销售负责人今日重点：`POST /notification/push` `type=department_today_highlights`（读负责人 USER 粒度 `TODAY_INTERVENTION` 与 `crm_entity_insight` 报告；仅部门负责人，不进群）
 - 周拜访报告 Markdown：`POST /notification/push` `type=weekly_visit_report`（读 `crm_weekly_followup_summary.report_kind=visit_report`；公司/部门）
-- 例会复盘抽取卡片：`POST /notification/push` `type=leader_meeting_review_card`（Aldebaran 抽取成功后调用。按 `report_id` 和 `owner_id` 读抽取，给 `owner_id` 发卡；带了不同的 `creator_id` 时再给提交人发一张。字段与返回见 `fsd/2026-11-05-leader-meeting-review-two-recipients.md`）
+- 例会复盘抽取卡片：`POST /notification/push` `type=leader_meeting_review_card`（Aldebaran 抽取成功后调用。正文是 `bi_reports.report_content.summary`，后面蓝链「完整复盘报告」打开 `/v2/business/leader-meeting-review/{report_id}`。飞书按钮是待办候选、经营事项，待办候选在前。抽取页查询仍返回这两类。给 `owner_id` 发卡；带了不同的 `creator_id` 时再给提交人发一张。字段与返回见 `fsd/2026-11-06-leader-meeting-review-todo-candidates.md`）
 - 偏好表：`notification_delivery_preferences`
 
 拜访卡、未参加的 review 仍是实例路由，不加这种偏好层。旁观继续走 `notification_cc_rules`。群聊不走个人 opt-out。

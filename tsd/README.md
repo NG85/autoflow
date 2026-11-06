@@ -41,3 +41,4 @@
 | `2026-11-04-today-highlights-monday-omits-daily-report.md` | 2026-11-04，周一今日重点不放日报 |
 | `2026-11-05-leader-meeting-review-two-recipients.md` | 2026-11-05，例会复盘卡片发给负责人和提交人 |
 | `2026-11-06-today-highlights-monday-weekly-report.md` | 2026-11-06，周一今日重点放上周周报 |
+| `2026-11-06-leader-meeting-review-todo-candidates.md` | 2026-11-06，例会复盘卡片正文是会议总结和完整复盘报告 |
