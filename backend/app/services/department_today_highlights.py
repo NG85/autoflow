@@ -49,6 +49,7 @@ from app.utils.push_page_urls import (
     build_leader_meeting_review_list_url,
     build_task_list_page_url,
     build_team_daily_report_url,
+    build_team_weekly_report_url,
     build_week_visit_list_url,
 )
 
@@ -410,15 +411,27 @@ def _personal_markdown(assembled: Mapping[str, Any]) -> str:
     return render_embedded_personal_markdown(personal)
 
 
+def _previous_iso_week(report_day: date) -> tuple[int, int]:
+    """业务日往前 7 天所在的 ISO 周年和周序。周一因此落到刚结束的那一周。"""
+    iso = (report_day - timedelta(days=7)).isocalendar()
+    return iso.year, iso.week
+
+
 def _team_report_line(assembled: Mapping[str, Any]) -> str:
-    """周二到周日链到前一天的团队日报。周一不放。"""
+    """周一链到上一 ISO 周的团队周报。其余日子链到前一天的团队日报。"""
     report_day = _report_day(assembled)
-    if report_day is None or report_day.weekday() == 0:
+    if report_day is None:
         return ""
-    url = build_team_daily_report_url((report_day - timedelta(days=1)).isoformat())
+    if report_day.weekday() == 0:
+        year, week = _previous_iso_week(report_day)
+        url = build_team_weekly_report_url(year, week)
+        label = WEEKLY_REPORT_LINK_LABEL
+    else:
+        url = build_team_daily_report_url((report_day - timedelta(days=1)).isoformat())
+        label = DAILY_REPORT_LINK_LABEL
     if not url:
         return ""
-    return f"[{DAILY_REPORT_LINK_LABEL}]({url})"
+    return f"[{label}]({url})"
 
 
 def _team_tail_lines(
@@ -427,7 +440,7 @@ def _team_tail_lines(
     has_other_blocks: bool,
     dingtalk: bool = False,
 ) -> list[str]:
-    """报告入口和日报写成一行蓝链。没有需介入时，前面仍带标题和说明。"""
+    """报告入口和日报或周报写成一行蓝链。没有需介入时，前面仍带标题和说明。"""
     lines = list(
         _report_card_lines(
             assembled,
@@ -522,6 +535,7 @@ TASK_BUTTON_LABEL = "待完成"
 VISIT_BUTTON_LABEL = "已拜访"
 MEETING_BUTTON_LABEL = "例会复盘"
 DAILY_REPORT_LINK_LABEL = "日报"
+WEEKLY_REPORT_LINK_LABEL = "周报"
 
 
 def _report_day(assembled: Mapping[str, Any]) -> Optional[date]:
