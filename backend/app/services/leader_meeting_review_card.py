@@ -1,6 +1,7 @@
-"""例会复盘卡片：按报告读取经营事项和员工待办，推给业务负责人和提交人。
+"""例会复盘卡片：正文是会议总结，下面是抽取按钮，推给业务负责人和提交人。
 
-列表和报告正文在 base-api。这里只读 crm_skill_extract_items。
+列表和报告页仍由 base-api 提供。卡片读 bi_reports.report_content.summary，
+抽取按钮读 crm_skill_extract_items。页面查询同时返回经营事项，待办候选在前。
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ import logging
 from datetime import date
 from typing import Any, Mapping, Optional, Sequence
 
+from sqlalchemy import text
 from sqlmodel import Session, select
 
 from app.models.crm_skill_extract_items import CRMSkillExtractItem
@@ -17,7 +19,10 @@ from app.platforms.constants import PLATFORM_DINGTALK, PLATFORM_FEISHU, PLATFORM
 from app.services.leader_intervention_actions import interaction_fields
 from app.services.sales_today_highlights import _recipient_from_profile, parse_report_date
 from app.utils.date_utils import beijing_today_date
-from app.utils.push_page_urls import build_leader_meeting_review_section_url
+from app.utils.push_page_urls import (
+    build_leader_meeting_review_report_url,
+    build_leader_meeting_review_section_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,11 +33,13 @@ ITEM_TODO = "EMPLOYEE_TODO_CANDIDATE"
 SECTION_EVENT = "management_events"
 SECTION_TODO = "employee_todo_candidates"
 TITLE_EVENT = "经营事项"
-TITLE_TODO = "员工待办"
+TITLE_TODO = "待办候选"
+FULL_REPORT_LABEL = "完整复盘报告"
+DINGTALK_PARAGRAPH_GAP = "\u00a0"
 
 SECTIONS: tuple[tuple[str, str, str], ...] = (
-    (SECTION_EVENT, ITEM_EVENT, TITLE_EVENT),
     (SECTION_TODO, ITEM_TODO, TITLE_TODO),
+    (SECTION_EVENT, ITEM_EVENT, TITLE_EVENT),
 )
 
 
@@ -87,23 +94,25 @@ def empty_extracts(report_id: str) -> dict[str, Any]:
     }
 
 
-def _report_extract_statement(report_id: str):
+def _report_extract_statement(report_id: str, item_types: Sequence[str]):
     return select(CRMSkillExtractItem).where(
         CRMSkillExtractItem.source_report_unique_id == report_id,
         CRMSkillExtractItem.subject_type == SUBJECT_USER,
         CRMSkillExtractItem.is_deleted == 0,
         CRMSkillExtractItem.status != STATUS_SUPERSEDED,
-        CRMSkillExtractItem.item_type.in_([ITEM_EVENT, ITEM_TODO]),
+        CRMSkillExtractItem.item_type.in_(tuple(item_types)),
     )
 
 
 def load_extract_rows(session: Session, report_id: str, owner_id: str) -> list[Any]:
-    """读取这份报告挂在上传人身上的经营事项和员工待办。"""
+    """读取这份报告挂在上传人身上的待办候选和经营事项，用来做卡片按钮。"""
     rid = _text(report_id)
     owner = _text(owner_id)
     if not rid or not owner:
         return []
-    statement = _report_extract_statement(rid).where(CRMSkillExtractItem.subject_id == owner)
+    statement = _report_extract_statement(rid, (ITEM_TODO, ITEM_EVENT)).where(
+        CRMSkillExtractItem.subject_id == owner
+    )
     return [
         row
         for row in session.exec(statement).all()
@@ -112,13 +121,13 @@ def load_extract_rows(session: Session, report_id: str, owner_id: str) -> list[A
 
 
 def load_report_extract_rows(session: Session, report_id: str) -> list[Any]:
-    """读取这份报告上的经营事项和员工待办，不按上传人收窄。"""
+    """读取这份报告上的待办候选和经营事项，不按上传人收窄。"""
     rid = _text(report_id)
     if not rid:
         return []
     return [
         row
-        for row in session.exec(_report_extract_statement(rid)).all()
+        for row in session.exec(_report_extract_statement(rid, (ITEM_TODO, ITEM_EVENT))).all()
         if not _deleted(row)
     ]
 
@@ -253,73 +262,79 @@ def extracts_for_viewer(
     return assembled
 
 
-def _event_lines(item: Mapping[str, Any]) -> list[str]:
-    who = _text(item.get("business_object"))
-    issue = _text(item.get("management_issue"))
-    if who and issue:
-        head = f"**{who}** · {issue}"
-    elif who:
-        head = f"**{who}**"
-    else:
-        head = f"**{issue}**" if issue else ""
-    change = _text(item.get("change_summary")) or _text(item.get("claim"))
-    action = _text(item.get("leader_management"))
-    lines = [line for line in (head, change) if line]
-    if action:
-        if lines:
-            lines.append("")
-        lines.append(action)
-    return lines
-
-
-def _todo_lines(item: Mapping[str, Any]) -> list[str]:
-    name = _text(item.get("assignee_name"))
-    action = _text(item.get("action")) or _text(item.get("claim"))
-    due = _text(item.get("due_text"))
-    lines: list[str] = []
-    if name:
-        lines.append(f"**{name}**")
-    if action:
-        lines.append(action)
-    if due:
-        lines.append(f"截止 {due}")
-    return lines
-
-
-def _exit_link(total: int, url: str) -> str:
-    if total <= 0 or not url:
+def summary_from_report_content(raw: Any) -> str:
+    """bi_reports.report_content 是 JSON。会议总结在 summary。"""
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8")
+    parsed = raw if isinstance(raw, dict) else _parse_json(raw)
+    if not isinstance(parsed, dict):
         return ""
-    extra = total - 1
-    label = "查看" if extra <= 0 else f"更多（{extra}）"
-    return f"[{label}]({url})"
+    summary = parsed.get("summary")
+    return summary.strip() if isinstance(summary, str) else ""
 
 
-def render_card_sections(assembled: Mapping[str, Any]) -> list[str]:
-    """经营事项一块，员工待办一块。只展开置信度最高的一条。"""
+def load_report_summary(session: Session, report_id: str) -> str:
+    """读取这份报告最新一行的会议总结。读不到时为空，不因此报错。"""
+    rid = _text(report_id)
+    if not rid:
+        return ""
+    try:
+        found = session.execute(
+            text(
+                "SELECT report_content FROM bi_reports "
+                "WHERE report_id = :report_id "
+                "ORDER BY updated_at DESC, id DESC LIMIT 1"
+            ),
+            {"report_id": rid},
+        ).first()
+    except Exception as exc:
+        logger.warning("例会复盘读取会议总结失败 report_id=%s: %s", rid, exc)
+        return ""
+    raw = found[0] if found is not None else None
+    return summary_from_report_content(raw)
+
+
+def _full_report_link(assembled: Mapping[str, Any]) -> str:
+    """完整复盘报告。不带日期，打开这份报告页。"""
+    url = build_leader_meeting_review_report_url(_text(assembled.get("report_id")))
+    if not url:
+        return ""
+    return f"[{FULL_REPORT_LABEL}]({url})"
+
+
+def extract_action_buttons(assembled: Mapping[str, Any]) -> list[tuple[str, str]]:
+    """待办候选在前，经营事项在后。多于一条时按钮带上条数。没有链接的不放。"""
     items = assembled.get("items") or {}
-    urls = {_text(link.get("key")): _text(link.get("url")) for link in assembled.get("card_links") or []}
-    sections: list[str] = []
-    for key, _item_type, title in SECTIONS:
-        rows = list(items.get(key) or [])
-        if not rows:
+    buttons: list[tuple[str, str]] = []
+    for link in assembled.get("card_links") or []:
+        if not isinstance(link, Mapping):
             continue
-        lines = [f"**{title}**"]
-        body = _event_lines(rows[0]) if key == SECTION_EVENT else _todo_lines(rows[0])
-        lines.extend(body)
-        exit_link = _exit_link(len(rows), urls.get(key, ""))
-        if exit_link:
-            lines.append(exit_link)
-        sections.append("\n".join(line for line in lines if line is not None))
-    return [part for part in sections if part.strip()]
+        key = _text(link.get("key"))
+        title = _text(link.get("title"))
+        url = _text(link.get("url"))
+        count = len(list(items.get(key) or []))
+        if not key or not title or not url or count <= 0:
+            continue
+        label = f"{title}（{count}）" if count > 1 else title
+        buttons.append((label, url))
+    return buttons
+
+
+def feishu_card_parts(assembled: Mapping[str, Any]) -> tuple[str, str, list[tuple[str, str]]]:
+    """飞书：正文是总结，接着是完整复盘报告，下面是抽取按钮。"""
+    body = _text(assembled.get("summary")) or "--"
+    return body, _full_report_link(assembled), extract_action_buttons(assembled)
 
 
 def render_dingtalk_markdown(assembled: Mapping[str, Any], *, title: str) -> str:
-    lines = [f"# {title}"]
-    for index, section in enumerate(render_card_sections(assembled)):
-        if index:
-            lines.append("")
-        lines.append(section)
-    return "\n".join(lines)
+    """钉钉没有按钮组件。结构和拜访轻量卡一样：总结、报告链接、抽取入口各占一行。"""
+    body, report, buttons = feishu_card_parts(assembled)
+    parts = [f"### {title}", DINGTALK_PARAGRAPH_GAP, body]
+    if report:
+        parts.extend([DINGTALK_PARAGRAPH_GAP, report])
+    if buttons:
+        parts.extend([DINGTALK_PARAGRAPH_GAP, "\n".join(f"[{label}]({url})" for label, url in buttons)])
+    return "\n".join(parts)
 
 
 def deliver_card(db_session: Session, recipient: Mapping[str, Any], assembled: Mapping[str, Any]) -> dict[str, Any]:
@@ -327,16 +342,15 @@ def deliver_card(db_session: Session, recipient: Mapping[str, Any], assembled: M
     from app.services.platform_notification_service import platform_notification_service
 
     title = f"例会复盘｜{assembled.get('report_date')}"
-    sections = render_card_sections(assembled)
-    body = sections[0] if sections else ""
-    extra = sections[1:]
+    body, report_link, buttons = feishu_card_parts(assembled)
     platform = _text(recipient.get("platform"))
     if platform in (PLATFORM_FEISHU, PLATFORM_LARK):
         card = platform_notification_service.build_feishu_markdown_card(
             body,
             title=title,
-            extra_sections=extra or None,
-            divide_extra_sections=bool(extra),
+            footer=report_link or None,
+            footer_text_size="normal",
+            footer_buttons=buttons or None,
         )
         tokens = platform_notification_service._get_platform_tokens([platform])
         if platform not in tokens:
@@ -413,7 +427,8 @@ def handle_leader_meeting_review_card(
     owner = _text(owner_id)
     creator = _text(creator_id) or None
     rows = load_extract_rows(db_session, rid, owner)
-    if not rows:
+    summary = load_report_summary(db_session, rid)
+    if not rows and not summary:
         logger.info(
             "leader_meeting_review_card empty report_id=%s owner_id=%s",
             rid,
@@ -428,7 +443,24 @@ def handle_leader_meeting_review_card(
             reason="empty_extracts",
         )
     day = resolve_report_date(report_date, rows)
-    assembled = assemble_extracts(rows, rid, day)
+    assembled = assemble_extracts(rows, rid, day) if rows else empty_extracts(rid)
+    assembled["report_id"] = rid
+    assembled["report_date"] = day.isoformat()
+    assembled["summary"] = summary
+    if not summary and not assembled.get("items"):
+        logger.info(
+            "leader_meeting_review_card empty report_id=%s owner_id=%s",
+            rid,
+            owner,
+        )
+        return _result(
+            report_id=rid,
+            owner_id=owner,
+            creator_id=creator,
+            report_date=day.isoformat(),
+            pushed=False,
+            reason="empty_extracts",
+        )
     from app.repositories.user_profile import user_profile_repo
 
     pushed_any = False
