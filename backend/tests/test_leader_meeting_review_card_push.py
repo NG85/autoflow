@@ -15,7 +15,9 @@ from app.api.routes.notification_schemas import (
 from app.services.leader_meeting_review_card import (
     assemble_extracts,
     extracts_for_viewer,
-    render_card_sections,
+    feishu_card_parts,
+    render_dingtalk_markdown,
+    summary_from_report_content,
 )
 
 
@@ -63,35 +65,37 @@ def test_leader_meeting_review_card_requires_report_and_owner():
         LeaderMeetingReviewCardPushRequest(report_id="RPT-1", owner_id="")
 
 
-def test_card_expands_the_highest_confidence_item(monkeypatch):
+def test_summary_reads_the_json_field():
+    raw = '{"format": "markdown", "summary": "  团队周例会  ", "content": "ignored"}'
+    assert summary_from_report_content(raw) == "团队周例会"
+    assert summary_from_report_content({"summary": "一句"}) == "一句"
+    assert summary_from_report_content({"content": "没有总结"}) == ""
+    assert summary_from_report_content("not-json") == ""
+
+
+def test_card_puts_summary_then_report_link_then_extract_buttons(monkeypatch):
     monkeypatch.setattr(
         "app.services.leader_meeting_review_card.build_leader_meeting_review_section_url",
         lambda report_id, report_date, section: f"https://example.com/{section}",
     )
+    monkeypatch.setattr(
+        "app.services.leader_meeting_review_card.build_leader_meeting_review_report_url",
+        lambda report_id, report_date="": f"https://example.com/v2/business/leader-meeting-review/{report_id}",
+    )
     rows = [
         _row(
             "MANAGEMENT_EVENT",
-            "低置信",
-            confidence=0.2,
-            unique_id="event-low",
-            payload_extra={
-                "business_object": "乙客户",
-                "management_issue": "报价",
-                "change_summary": "报价还没定",
-                "leader_management": "下周再看",
-            },
+            "经营事项不进正文",
+            confidence=0.99,
+            unique_id="event-1",
+            payload_extra={"business_object": "甲客户", "management_issue": "关键人"},
         ),
         _row(
-            "MANAGEMENT_EVENT",
-            "高置信",
-            confidence=0.9,
-            unique_id="event-high",
-            payload_extra={
-                "business_object": "甲客户",
-                "management_issue": "关键人",
-                "change_summary": "路径要调整",
-                "leader_management": "由区域负责人协助引荐",
-            },
+            "EMPLOYEE_TODO_CANDIDATE",
+            "低置信",
+            confidence=0.2,
+            unique_id="todo-low",
+            payload_extra={"assignee_name": "李四", "action": "补材料", "due_text": "下周一"},
         ),
         _row(
             "EMPLOYEE_TODO_CANDIDATE",
@@ -107,27 +111,29 @@ def test_card_expands_the_highest_confidence_item(monkeypatch):
         ),
     ]
     assembled = assemble_extracts(rows, "RPT-1", date(2026, 10, 28))
-    text = "\n\n".join(render_card_sections(assembled))
-    assert "**甲客户** · 关键人" in text
-    assert "路径要调整" in text
-    assert "由区域负责人协助引荐" in text
-    assert "低置信" not in text
-    assert "报价还没定" not in text
-    assert "[更多（1）](https://example.com/management_events)" in text
-    assert "**王磊**" in text
-    assert "确认预算审批流程" in text
-    assert "截止 本周五" in text
-    assert "[查看](https://example.com/employee_todo_candidates)" in text
-    assert assembled["card_links"][0]["title"] == "经营事项"
-    assert assembled["card_links"][1]["title"] == "员工待办"
+    assembled["summary"] = "团队周例会：推进 POC。"
+    assert list(assembled["items"]) == ["employee_todo_candidates", "management_events"]
+    body, report, buttons = feishu_card_parts(assembled)
+    assert body == "团队周例会：推进 POC。"
+    assert report == "[完整复盘报告](https://example.com/v2/business/leader-meeting-review/RPT-1)"
+    assert buttons == [
+        ("待办候选（2）", "https://example.com/employee_todo_candidates"),
+        ("经营事项", "https://example.com/management_events"),
+    ]
+    dingtalk = render_dingtalk_markdown(assembled, title="例会复盘｜2026-10-28")
+    assert dingtalk.startswith("### 例会复盘｜2026-10-28\n\u00a0\n团队周例会：推进 POC。\n")
+    assert "[完整复盘报告](https://example.com/v2/business/leader-meeting-review/RPT-1)" in dingtalk
+    assert "[待办候选（2）](https://example.com/employee_todo_candidates)" in dingtalk
+    assert "[经营事项](https://example.com/management_events)" in dingtalk
+    assert "确认预算审批流程" not in dingtalk
+    assert "经营事项不进正文" not in dingtalk
     event = assembled["items"]["management_events"][0]
-    assert event["unique_id"] == "event-high"
     assert event["business_object"] == "甲客户"
-    assert event["leader_management"] == "由区域负责人协助引荐"
+    assert event["management_issue"] == "关键人"
     todo = assembled["items"]["employee_todo_candidates"][0]
+    assert todo["unique_id"] == "todo-1"
     assert todo["assignee_name"] == "王磊"
     assert todo["verification_criteria"] == "拿到参与人"
-    assert "员工待办候选" not in text
 
 
 def test_viewer_without_rows_gets_an_empty_payload(monkeypatch):
@@ -137,11 +143,11 @@ def test_viewer_without_rows_gets_an_empty_payload(monkeypatch):
         "app.services.leader_meeting_review_card.load_report_extract_rows",
         lambda session, report_id: [
             _row(
-                "MANAGEMENT_EVENT",
-                "事项",
+                "EMPLOYEE_TODO_CANDIDATE",
+                "确认流程",
                 confidence=0.4,
-                unique_id="event-1",
-                payload_extra={"business_object": "甲", "management_issue": "乙"},
+                unique_id="todo-1",
+                payload_extra={"assignee_name": "王磊", "action": "确认流程"},
             )
         ],
     )
@@ -150,13 +156,13 @@ def test_viewer_without_rows_gets_an_empty_payload(monkeypatch):
         lambda session, uploader_oauth_id: set(),
     )
     own = extracts_for_viewer(MagicMock(), "RPT-1", "uploader-1")
-    assert list(own["items"]) == ["management_events"]
+    assert list(own["items"]) == ["employee_todo_candidates"]
     assert own["can_manage"] is True
     other = extracts_for_viewer(MagicMock(), "RPT-1", "someone-else")
-    assert list(other["items"]) == ["management_events"]
+    assert list(other["items"]) == ["employee_todo_candidates"]
     assert other["can_manage"] is False
     missing = extracts_for_viewer(MagicMock(), "RPT-1", "")
-    assert list(missing["items"]) == ["management_events"]
+    assert list(missing["items"]) == ["employee_todo_candidates"]
     assert missing["can_manage"] is False
 
 
@@ -176,16 +182,11 @@ def test_push_skips_when_empty_or_missing_open_id(monkeypatch):
         "app.services.leader_meeting_review_card.load_extract_rows",
         lambda session, report_id, owner_id: [
             _row(
-                "MANAGEMENT_EVENT",
-                "事项",
+                "EMPLOYEE_TODO_CANDIDATE",
+                "确认流程",
                 confidence=0.5,
-                unique_id="event-1",
-                payload_extra={
-                    "business_object": "甲",
-                    "management_issue": "乙",
-                    "change_summary": "变化",
-                    "leader_management": "动作",
-                },
+                unique_id="todo-1",
+                payload_extra={"assignee_name": "王磊", "action": "确认流程", "due_text": "本周五"},
             )
         ],
     )
@@ -262,16 +263,11 @@ def test_push_sends_the_same_card_to_owner_and_creator(monkeypatch):
         "app.services.leader_meeting_review_card.load_extract_rows",
         lambda session, report_id, owner_id: [
             _row(
-                "MANAGEMENT_EVENT",
-                "事项",
+                "EMPLOYEE_TODO_CANDIDATE",
+                "确认流程",
                 confidence=0.9,
-                unique_id="event-1",
-                payload_extra={
-                    "business_object": "甲",
-                    "management_issue": "乙",
-                    "change_summary": "变化",
-                    "leader_management": "动作",
-                },
+                unique_id="todo-1",
+                payload_extra={"assignee_name": "王磊", "action": "确认流程", "due_text": "本周五"},
             )
         ],
     )

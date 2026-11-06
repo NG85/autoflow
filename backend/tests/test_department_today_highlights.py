@@ -1002,12 +1002,21 @@ def test_monday_omits_the_daily_report_and_other_days_use_yesterday(monkeypatch)
         _names(),
         department_name="华北销售",
     )
+    weekly = "[周报](https://example.com/v2/business/reports?tab=weekly-team&year=2026&week=41)"
     body = render_card_markdown(monday, owner_name="王经理")
     assert "daily-team" not in body
     assert "[日报](" not in body
+    assert weekly in body
+    assert body.index("今日需介入") < body.index(weekly) < body.index("**本周**")
+    assert "周报" not in [label for label, _url in card_footer_buttons(monday, owner_name="王经理")]
     dingtalk = render_dingtalk_markdown(monday, title="团队今日重点｜2026-10-12", owner_name="王经理")
     assert "daily-team" not in dingtalk
     assert "[日报](" not in dingtalk
+    assert weekly in dingtalk
+    monday["report_entries"] = [
+        {"key": "team_operating_trend", "label": "经营趋势", "url": "https://example.com/trend"},
+    ]
+    assert "[经营趋势](https://example.com/trend)  " + weekly in render_card_markdown(monday)
     tuesday = assemble_department_highlights(
         [_row({"claim": "拍板", "related_user_id": "oauth-zhang"})],
         TUESDAY,
@@ -1032,8 +1041,42 @@ def test_monday_omits_the_daily_report_and_other_days_use_yesterday(monkeypatch)
     )
     assert "[经营趋势](https://example.com/trend)  " + daily in dingtalk_linked
     assert "日报" not in [label for label, _url in card_footer_buttons(tuesday, owner_name="王经理")]
+    assert "weekly-team" not in linked
+    assert "weekly-team" not in dingtalk_linked
     monkeypatch.setattr("app.utils.push_page_urls.settings.REVIEW_REPORT_HOST", "")
     assert "[日报](" not in render_card_markdown(tuesday)
+    assert "[周报](" not in render_card_markdown(monday)
+
+
+def test_monday_weekly_report_uses_the_previous_iso_week(monkeypatch):
+    monkeypatch.setattr(
+        "app.utils.push_page_urls.settings.REVIEW_REPORT_HOST",
+        "https://example.com",
+    )
+    new_year = assemble_department_highlights(
+        [_row({"claim": "拍板", "related_user_id": "oauth-zhang"})],
+        date(2027, 1, 4),
+        "dept-1",
+        _names(),
+        department_name="华北销售",
+    )
+    body = render_card_markdown(new_year)
+    assert (
+        "[周报](https://example.com/v2/business/reports?tab=weekly-team&year=2026&week=53)"
+        in body
+    )
+    assert "[日报](" not in body
+    week_one = assemble_department_highlights(
+        [_row({"claim": "拍板", "related_user_id": "oauth-zhang"})],
+        date(2026, 1, 5),
+        "dept-1",
+        _names(),
+        department_name="华北销售",
+    )
+    assert (
+        "[周报](https://example.com/v2/business/reports?tab=weekly-team&year=2026&week=1)"
+        in render_card_markdown(week_one)
+    )
 
 
 def test_week_visit_button_filters_the_team(monkeypatch):

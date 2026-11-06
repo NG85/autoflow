@@ -227,6 +227,14 @@ def build_team_daily_report_url(report_date: str) -> str:
     return f"{host}/v2/business/reports?tab=daily-team&date={quote(day, safe='')}"
 
 
+def build_team_weekly_report_url(year: int, week: int) -> str:
+    """团队周报页：/v2/business/reports?tab=weekly-team&year=&week=。"""
+    host = _host()
+    if not host or year <= 0 or week <= 0:
+        return ""
+    return f"{host}/v2/business/reports?tab=weekly-team&year={year}&week={week}"
+
+
 def build_leader_meeting_review_list_url(start_date: str, end_date: str) -> str:
     """例会复盘列表。只带起止日期，两端都包含，不必按周对齐。上传人由打开页面的查询接口按权限决定。"""
     host = _host()
