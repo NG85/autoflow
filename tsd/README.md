@@ -45,3 +45,4 @@
 | `2026-11-09-visit-review-group-replaces.md` | 2026-11-09，拜访群可以不接替 leader |
 | `2026-11-09-visit-recap-performance.md` | 2026-11-09，拜访复盘增加人员表现评价 |
 | `2026-11-09-visit-collaborator-leader.md` | 2026-11-09，协同人与 leader 重复时取 leader |
+| `2026-11-09-visit-recap-card-headings.md` | 2026-11-09，复盘卡里的业务推进和销售表现是小标题 |
