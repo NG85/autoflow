@@ -53,7 +53,7 @@ send_visit_record_notification
        ├─ _get_collaborative_participants_recipients
        ├─ resolve_visit_record_cc_recipients   # notification_cc_rules（user + department + global）
        ├─ department_review 群 / visit_record 简报群
-       └─ department_review 命中时：个人列表移除 leader / global 抄送，改推群
+       └─ department_review 命中且 groups.review 开着时：按 replaces 移除个人，缺省是 leader / global 与 department 抄送
   └─ _send_visit_record_to_individual_recipients   # 按 type 选模板，open_id 去重
   └─ _send_visit_record_to_review_groups
   └─ _send_visit_record_to_brief_groups
@@ -195,12 +195,13 @@ WHERE event_type = 'visit_record_card'
 
 ### department_review 群
 
-部门配置了会收拜访卡片的群（`department_review` / `department_review_visits` / `all`）时：
+部门配置了会收拜访卡片的群（`department_review` / `department_review_visits` / `all`），且 `groups.review.enabled` 为 true 时：
 
-- 个人列表中的 `leader`、`cc_scope=global` / `department` 的 `configured_cc` 被移除；
-- leader 版卡片改推 review 群（管理层、global 与 department 级抄送受众一般在群内）；
-- 仅 `cc_scope=user` 的 `configured_cc`（按具体销售的个性化抄送）仍推送给个人；
-- 个人推送始终保留 `recorder` 与 `collaborative_participant`；
+- 按 `groups.review.replaces` 从个人列表移除角色。不写时是 `leader` 和 `configured_cc`；
+- `configured_cc` 被接替时，只移除 `cc_scope=global` / `department`。`cc_scope=user` 仍推个人；
+- `replaces: []` 时不移除任何人，群和个人各收各的卡；
+- 群关闭时不移除个人；
+- 个人推送始终保留 `recorder`，以及没有被记成 leader 的 `collaborative_participant`。同一人已是汇报上级时先记成 leader，见 `fsd/2026-11-09-visit-collaborator-leader.md`；
 - `department_review_visits` 只收拜访卡片，部门日/周报仍按原路由（个人或 `department_review_reports` 群）；
 - `department_review_reports` 只收部门日/周报，不参与拜访推送。
 
@@ -268,7 +269,7 @@ WHERE event_type = 'visit_record_card'
 5. **open_id 去重**：同一人既是 leader 又是 configured_cc，只推一张，模板取高优先级 type。
 6. **汇报链为空**：仍有配置抄送（含 global / department）。
 7. **无 profile / 无 oauth 账号**：跳过该抄送人，不影响其他人。
-8. **department_review 群**：leader / global / department 抄送走群；仅 `cc_scope=user` 的 configured_cc 仍走个人；`department_review_visits` 仅收拜访。
+8. **department_review 群**：`groups.review` 开着时按 `replaces` 接替个人。不写时 leader / global / department 抄送走群；仅 `cc_scope=user` 的 configured_cc 仍走个人。`replaces: []` 时群和个人都收。`department_review_visits` 仅收拜访。
 
 ---
 
@@ -295,3 +296,4 @@ WHERE event_type = 'visit_record_card'
 | department_review 与部门抄送 | `cc_scope=department` 视作部门级旁观，与 global 一样改由 review 群接收，不再推个人；仅 `user` 保留个人推送 | 2026-07-17 |
 | department_review_visits | 新增仅收拜访上级卡片的群类型，部门日/周报路由不变 | 2026-07-22 |
 | 权限码命名 | 业务/文档统一 `notification:follow_up_card:receive`；legacy `visit_record:card:receive` 仅 OAuth alias | 2026-07-24 |
+| review 群接替名单 | `groups.review.replaces` 决定接替哪些个人。不写时仍接替 leader 和公司级、部门级抄送；`[]` 时群和个人都收 | 2026-11-09 |

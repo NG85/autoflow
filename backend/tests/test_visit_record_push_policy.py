@@ -83,6 +83,43 @@ def test_all_recap_lite_via_strategy_only():
     assert policy.uses_recap_lite() is True
 
 
+def test_review_replaces_defaults_to_leader_and_cc():
+    policy = parse_visit_record_push_policy(
+        {"groups": {"review": {"enabled": True, "card": "legacy"}}}
+    )
+    assert policy.review_replaces() == {"leader", "configured_cc"}
+
+
+def test_empty_replaces_keeps_personal_recipients():
+    policy = parse_visit_record_push_policy(
+        {"groups": {"review": {"card": "legacy", "replaces": []}}}
+    )
+    assert policy.group_card("review") == CARD_LEGACY
+    assert policy.review_replaces() == set()
+
+
+def test_replaces_can_name_only_the_leader():
+    policy = parse_visit_record_push_policy(
+        {"groups": {"review": {"replaces": ["leader", "recorder", "leader"]}}}
+    )
+    assert policy.review_replaces() == {"leader"}
+
+
+def test_non_list_replaces_keeps_the_default():
+    policy = parse_visit_record_push_policy(
+        {"groups": {"review": {"replaces": "leader"}}}
+    )
+    assert policy.review_replaces() == {"leader", "configured_cc"}
+
+
+def test_disabled_review_group_replaces_nobody():
+    policy = parse_visit_record_push_policy(
+        {"groups": {"review": {"enabled": False, "replaces": ["leader", "configured_cc"]}}}
+    )
+    assert policy.group_enabled("review") is False
+    assert policy.review_replaces() == set()
+
+
 def test_unknown_card_falls_back_to_legacy():
     policy = parse_visit_record_push_policy(
         {"recipients": {"recorder": {"card": "unknown_card"}}}

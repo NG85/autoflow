@@ -405,22 +405,31 @@ def _preview_visit_record(
         return base
 
     visit_record = _crm_visit_record_row_to_push_dict(row)
+    policy = load_visit_record_push_policy()
     recipients_by_platform, review_groups, brief_groups = (
         service._collect_visit_record_recipients_and_groups(
             db_session,
             recorder_name=visit_record.get("recorder"),
             recorder_id=str(row.recorder_id) if row.recorder_id else None,
             visit_record=visit_record,
+            policy=policy,
         )
     )
-    policy = load_visit_record_push_policy()
     base["policy"] = {
         "recipients": {
             role: {"enabled": spec.enabled, "card": spec.card}
             for role, spec in policy.recipients.items()
         },
         "groups": {
-            role: {"enabled": spec.enabled, "card": spec.card}
+            role: {
+                "enabled": spec.enabled,
+                "card": spec.card,
+                **(
+                    {"replaces": sorted(policy.review_replaces())}
+                    if role == "review"
+                    else {}
+                ),
+            }
             for role, spec in policy.groups.items()
         },
     }

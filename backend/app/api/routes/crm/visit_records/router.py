@@ -828,11 +828,12 @@ def get_visit_record_recap(
     user: CurrentUserDep,
     record_id: str,
 ):
-    """当前用户视角的拜访复盘。
+    """当前用户视角的拜访复盘和销售表现。
 
-    权限与详情 GET 相同。没有复盘不查汇报链、不读抽取表。
-    记录人返回销售视角，汇报链上级和系统管理员返回上级视角。结构化抽取仅记录人本人可见。
-    抽取上的赞或踩只返回当前用户自己的。
+    权限与详情 GET 相同。复盘和表现评价都没有时不查汇报链、不读抽取表。
+    记录人返回销售视角，汇报链上级和系统管理员返回上级视角。
+    data.tabs 只有 key 和标题。insight 是业务推进报告，performance 是人员表现评价报告。缺的报告为 null。
+    结构化抽取仅记录人本人可见。抽取上的赞或踩只返回当前用户自己的。
     洞察或抽取读取失败时对应字段为空，仍返回 200。
     """
     from app.services.visit_record_recap import load_visit_record_recap_response

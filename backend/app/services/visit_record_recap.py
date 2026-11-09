@@ -1,9 +1,9 @@
 """拜访复盘查询：按当前用户选视角，记录人再附结构化抽取。
 
 洞察来自 crm_entity_insight，抽取来自 crm_postvisit_extract_items。
-没有复盘行时不查汇报链、不读抽取表。
+复盘和表现评价都没有时不查汇报链、不读抽取表。
 记录人看销售视角，其汇报链上级看上级视角。系统管理员看上级视角，不附带抽取。其余人没有可看的复盘。
-抽取仅记录人本人可见。任一侧读取失败时该侧为空，不把异常抛给调用方。
+能打开时 tabs 只有 key 和标题。insight 是业务推进报告，performance 是人员表现评价报告。抽取仅记录人本人可见。任一侧读取失败时该侧为空，不把异常抛给调用方。
 """
 
 from __future__ import annotations
@@ -19,12 +19,13 @@ from app.services.visit_record_extract_reader import (
     load_visit_record_extract_response,
 )
 from app.services.visit_record_insight_reader import (
+    RECAP_PAGE_TABS,
     VisitRecordInsight,
     collect_profile_open_ids,
-    has_visit_recap_insight,
+    has_visit_recap_page_insight,
     load_visit_record_insights_by_view,
     recap_view_for_viewer,
-    resolve_visit_record_detail_recap,
+    resolve_visit_record_page,
     viewer_is_leader_of_recorder,
     viewer_is_recorder,
 )
@@ -37,8 +38,15 @@ def empty_recap_response(visit_id: str) -> dict[str, Any]:
         "visit_id": visit_id,
         "view": None,
         "insight": None,
+        "performance": None,
+        "tabs": [],
         "extract": empty_extract_response(visit_id),
     }
+
+
+def build_recap_page_tabs() -> list[dict[str, str]]:
+    """能打开复盘页时的两个 tab。只给 key 和标题，报告在 insight 与 performance。"""
+    return [{"key": key, "title": title} for key, title in RECAP_PAGE_TABS]
 
 
 class RecapViewContext:
@@ -175,13 +183,13 @@ def resolve_viewer_recap(
     visit_record_id: str,
     recorder_id: Any,
     viewer_user_id: Any,
-) -> Optional[tuple[str, Optional[VisitRecordInsight]]]:
-    """有复盘才按当前用户选视角。没有复盘返回 None，且不会查汇报链。"""
+) -> Optional[tuple[str, Optional[VisitRecordInsight], Optional[VisitRecordInsight]]]:
+    """有复盘或表现评价才按当前用户选视角。都没有时返回 None，且不会查汇报链。"""
     insights = load_visit_record_insights_by_view(session, visit_record_id)
-    if not has_visit_recap_insight(insights):
+    if not has_visit_recap_page_insight(insights):
         return None
     context = RecapViewContext(session, viewer_user_id)
-    return resolve_visit_record_detail_recap(
+    return resolve_visit_record_page(
         insights,
         resolve_view=lambda: context.view_for(recorder_id),
     )
@@ -202,7 +210,7 @@ def load_visit_record_recap_response(
     recorder_id: Any,
     viewer_user_id: Any,
 ) -> dict[str, Any]:
-    """当前用户的复盘。记录人附带 items 与 card_links；其他人抽取为空。"""
+    """当前用户的复盘页。记录人附带 items 与 card_links；其他人抽取为空。"""
     rid = (visit_record_id or "").strip()
     empty = empty_recap_response(rid)
     try:
@@ -217,7 +225,7 @@ def load_visit_record_recap_response(
         return empty
     if not resolved:
         return empty
-    view, picked = resolved
+    view, recap, performance = resolved
     extract = empty_extract_response(rid)
     if viewer_can_see_extract(viewer_user_id, recorder_id):
         extract = load_visit_record_extract_response(
@@ -228,6 +236,8 @@ def load_visit_record_recap_response(
     return {
         "visit_id": rid,
         "view": view,
-        "insight": picked.to_public_dict() if picked else None,
+        "insight": recap.to_public_dict() if recap else None,
+        "performance": performance.to_public_dict() if performance else None,
+        "tabs": build_recap_page_tabs(),
         "extract": extract,
     }
