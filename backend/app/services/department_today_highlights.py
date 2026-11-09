@@ -1,7 +1,7 @@
 """销售负责人今日重点：需介入只读 USER + audience=leader 的 TODAY_INTERVENTION。
 
 subject_id 是负责人 oauth id。不进部门群，不抄送。
-一线 audience=sales 的抽取不进入需介入列表。团队卡发出时，可另成一节「立即处理」。
+一线 audience=sales 的抽取不进入需介入列表。团队卡发出时，可另成一节「我的立即处理」。
 入口标题用抽取行上的 card_links 快照。
 """
 
@@ -63,7 +63,7 @@ STATUS_REJECTED = "REJECTED"
 _DECIDED = {STATUS_ADOPTED, STATUS_REJECTED}
 ITEM_INTERVENTION = "TODAY_INTERVENTION"
 SECTION_KEY = "leader_intervene"
-INTERVENTION_TITLE = "今日需介入"
+INTERVENTION_TITLE = "团队今日需介入"
 REPORTS_ONLY_LEAD = "今天没有需介入事项，可以先看这些报告。"
 TEAM_CARD_TITLE = "团队今日重点"
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
@@ -389,11 +389,7 @@ def _intervention_markdown(assembled: Mapping[str, Any]) -> str:
     items = list(section.get("items") or [])
     if not items:
         return ""
-    lines: list[str] = []
-    title = _text(section.get("title"))
-    key = _text(section.get("key"))
-    if title and title != key:
-        lines.append(f"**{title}**")
+    lines: list[str] = [f"**{INTERVENTION_TITLE}**"]
     lines.append(_card_line(items[0]))
     others = _other_people_line(items)
     if others:
@@ -480,7 +476,7 @@ def render_card_sections(
 
 
 def _reports_only_heading(*, dingtalk: bool) -> str:
-    """没有需介入条目时仍写出标题，和上面的「立即处理」对齐。"""
+    """没有需介入条目时仍写出标题，和上面的「我的立即处理」对齐。"""
     if dingtalk:
         return f"## {INTERVENTION_TITLE}"
     return f"**{INTERVENTION_TITLE}**"
@@ -493,7 +489,12 @@ def _report_card_lines(
     dingtalk: bool = False,
 ) -> list[str]:
     """报告入口一行蓝链。只有报告时先写需介入标题和一句说明，避免和立即处理粘在一起。"""
-    links = report_entry_lines(assembled.get("report_entries"))
+    entries = [
+        {**dict(item), "label": _team_link_label(item.get("label"))}
+        for item in (assembled.get("report_entries") or [])
+        if isinstance(item, Mapping)
+    ]
+    links = report_entry_lines(entries)
     if not links:
         return []
     if has_other_blocks:
@@ -530,12 +531,20 @@ def _other_people_line(items: Sequence[Mapping[str, Any]]) -> str:
     return "还有" + "、".join(names)
 
 
-WEEK_SECTION_TITLE = "本周"
-TASK_BUTTON_LABEL = "待完成"
-VISIT_BUTTON_LABEL = "已拜访"
-MEETING_BUTTON_LABEL = "例会复盘"
-DAILY_REPORT_LINK_LABEL = "日报"
-WEEKLY_REPORT_LINK_LABEL = "周报"
+WEEK_SECTION_TITLE = "团队本周"
+TASK_BUTTON_LABEL = "团队待完成"
+VISIT_BUTTON_LABEL = "团队已拜访"
+MEETING_BUTTON_LABEL = "团队例会复盘"
+DAILY_REPORT_LINK_LABEL = "团队日报"
+WEEKLY_REPORT_LINK_LABEL = "团队周报"
+
+
+def _team_link_label(label: Any) -> str:
+    """卡片蓝链加「团队」前缀。本来就有的不加。"""
+    text = _text(label)
+    if not text or text.startswith("团队"):
+        return text
+    return f"团队{text}"
 
 
 def _report_day(assembled: Mapping[str, Any]) -> Optional[date]:
@@ -567,14 +576,10 @@ def _meeting_review_button(report_day: date) -> Optional[tuple[str, str]]:
     return (MEETING_BUTTON_LABEL, url)
 
 
-def _week_task_button(owner_name: str, report_day: date) -> Optional[tuple[str, str]]:
-    """待完成：本人、预计完成日在本周一到本周日、状态未完成。"""
-    name = _text(owner_name)
-    if not name or name == "Unknown":
-        return None
+def _week_task_button(report_day: date) -> Optional[tuple[str, str]]:
+    """待完成：预计完成日在本周一到本周日、状态未完成。不按负责人姓名收窄，可见范围由任务页权限决定。"""
     week_start, week_end = get_week_range_from_date(report_day)
     url = build_task_list_page_url(
-        owner_name=name,
         due_date__gte=week_start.isoformat(),
         due_date__lte=week_end.isoformat(),
         status__in=list(INCOMPLETE_TASK_STATUSES),
@@ -585,7 +590,7 @@ def _week_task_button(owner_name: str, report_day: date) -> Optional[tuple[str, 
 
 
 def _week_visit_button(assembled: Mapping[str, Any], report_day: date) -> Optional[tuple[str, str]]:
-    """已拜访：周一不放。周五对照里不再另放「查看本周拜访」。"""
+    """已拜访：周一不放。周五对照里不再另放「查看团队本周拜访」。"""
     if report_day.weekday() == 0:
         return None
     week_start, week_end = get_week_range_from_date(report_day)
@@ -609,7 +614,7 @@ def card_footer_buttons(
     if report_day is None:
         return []
     buttons: list[tuple[str, str]] = []
-    task = _week_task_button(owner_name, report_day)
+    task = _week_task_button(report_day)
     if task:
         buttons.append(task)
     visit = _week_visit_button(assembled, report_day)
@@ -628,7 +633,7 @@ def _week_heading(assembled: Mapping[str, Any], *, owner_name: str = "") -> str:
 
 
 def _watch_section(assembled: Mapping[str, Any], *, dingtalk: bool = False) -> str:
-    """周五对照不再写「查看本周拜访」，底部「已拜访」承担这个入口。"""
+    """周五对照不再写「查看团队本周拜访」，底部「团队已拜访」承担这个入口。"""
     report_day = _report_day(assembled)
     include_detail = not (report_day is not None and report_day.weekday() == 4)
     return "\n".join(
@@ -654,10 +659,7 @@ def render_dingtalk_markdown(
     section = sections[0] if sections else None
     items = list((section or {}).get("items") or [])
     if section and items:
-        heading = _text(section.get("title"))
-        key = _text(section.get("key"))
-        if heading and heading != key:
-            team.append(f"## {heading}")
+        team.append(f"## {INTERVENTION_TITLE}")
         team.extend(_dingtalk_item_lines(items[0]))
         others = _other_people_line(items)
         if others:

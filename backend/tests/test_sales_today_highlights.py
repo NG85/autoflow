@@ -835,7 +835,7 @@ def test_embedded_personal_block_keeps_sales_links_without_week_buttons(monkeypa
         _names(),
     )
     body = render_embedded_personal_markdown(assembled)
-    assert body.startswith("**立即处理**")
+    assert body.startswith("**我的立即处理**")
     assert "今天回访" in body
     assert "[建议关注](https://example.com/today?date=2026-10-08&tab=open_risks)" in body
     assert "本周待完成" not in body

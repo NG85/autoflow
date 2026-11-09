@@ -275,7 +275,9 @@ def test_user_rows_stay_off_the_leader_card(monkeypatch):
         "[更多（1）](https://example.com/v2/department-highlights"
         "?date=2026-10-12&department_id=dept-1&tab=leader_intervene)"
     ) in body
-    assert card_footer_buttons(assembled) == []
+    monday_task = card_footer_buttons(assembled)
+    assert [label for label, _url in monday_task] == ["团队待完成"]
+    assert "owner_name=" not in monday_task[0][1]
 
 
 def test_missing_snapshot_title_omits_button(monkeypatch):
@@ -293,8 +295,10 @@ def test_missing_snapshot_title_omits_button(monkeypatch):
         "dept-1",
         _names(),
     )
-    assert card_footer_buttons(assembled) == []
-    assert "今日需介入" not in render_card_markdown(assembled)
+    buttons = card_footer_buttons(assembled)
+    assert [label for label, _url in buttons] == ["团队待完成"]
+    assert "owner_name=" not in buttons[0][1]
+    assert "**团队今日需介入**" in render_card_markdown(assembled)
 
 
 def test_leader_query_returns_only_their_own_rows(monkeypatch):
@@ -471,7 +475,7 @@ def test_single_item_card_links_to_the_page(monkeypatch):
     body = render_card_markdown(assembled)
     assert "更多" not in body
     assert "[今日需介入]" not in body
-    assert "**今日需介入**" in body
+    assert "**团队今日需介入**" in body
     assert (
         "[查看](https://example.com/v2/department-highlights"
         "?date=2026-10-12&department_id=dept-1&tab=leader_intervene)"
@@ -592,9 +596,9 @@ def test_reports_only_sends_card_on_weekday(monkeypatch):
     assert result["success"] is True
     assert result["success_count"] == 1
     assert captured["recipient"]["user_id"] == "leader-1"
-    assert captured["body"].startswith(f"**今日需介入**\n{REPORTS_ONLY_LEAD}")
+    assert captured["body"].startswith(f"**团队今日需介入**\n{REPORTS_ONLY_LEAD}")
     assert (
-        "[重点商机](https://example.com/v2/department-highlights"
+        "[团队重点商机](https://example.com/v2/department-highlights"
         "?date=2026-10-13&tab=key_deal_review)"
     ) in captured["body"]
 
@@ -666,8 +670,8 @@ def test_reports_only_leader_still_gets_card_when_others_have_extracts(monkeypat
     assert "华北事项" in bodies["leader-north"]
     assert "重点商机" not in bodies["leader-north"]
     assert REPORTS_ONLY_LEAD not in bodies["leader-north"]
-    assert bodies["leader-east"].startswith(f"**今日需介入**\n{REPORTS_ONLY_LEAD}")
-    assert "[重点商机](https://example.com/deals)" in bodies["leader-east"]
+    assert bodies["leader-east"].startswith(f"**团队今日需介入**\n{REPORTS_ONLY_LEAD}")
+    assert "[团队重点商机](https://example.com/deals)" in bodies["leader-east"]
 
 
 def test_opt_out_skips_send(monkeypatch):
@@ -789,7 +793,8 @@ def test_leader_open_id_receives_every_item(monkeypatch):
         "?date=2026-10-12&tab=leader_intervene)"
     ) in captured["body"]
     assert "department_id" not in captured["body"]
-    assert captured["buttons"] == []
+    assert [label for label, _url in captured["buttons"]] == ["团队待完成"]
+    assert "owner_name=" not in captured["buttons"][0][1]
     assert result["success_count"] == 1
 
 
@@ -1002,21 +1007,21 @@ def test_monday_omits_the_daily_report_and_other_days_use_yesterday(monkeypatch)
         _names(),
         department_name="华北销售",
     )
-    weekly = "[周报](https://example.com/v2/business/reports?tab=weekly-team&year=2026&week=41)"
+    weekly = "[团队周报](https://example.com/v2/business/reports?tab=weekly-team&year=2026&week=41)"
     body = render_card_markdown(monday, owner_name="王经理")
     assert "daily-team" not in body
-    assert "[日报](" not in body
+    assert "[团队日报](" not in body
     assert weekly in body
-    assert body.index("今日需介入") < body.index(weekly) < body.index("**本周**")
+    assert body.index("团队今日需介入") < body.index(weekly) < body.index("**团队本周**")
     assert "周报" not in [label for label, _url in card_footer_buttons(monday, owner_name="王经理")]
     dingtalk = render_dingtalk_markdown(monday, title="团队今日重点｜2026-10-12", owner_name="王经理")
     assert "daily-team" not in dingtalk
-    assert "[日报](" not in dingtalk
+    assert "[团队日报](" not in dingtalk
     assert weekly in dingtalk
     monday["report_entries"] = [
         {"key": "team_operating_trend", "label": "经营趋势", "url": "https://example.com/trend"},
     ]
-    assert "[经营趋势](https://example.com/trend)  " + weekly in render_card_markdown(monday)
+    assert "[团队经营趋势](https://example.com/trend)  " + weekly in render_card_markdown(monday)
     tuesday = assemble_department_highlights(
         [_row({"claim": "拍板", "related_user_id": "oauth-zhang"})],
         TUESDAY,
@@ -1024,28 +1029,28 @@ def test_monday_omits_the_daily_report_and_other_days_use_yesterday(monkeypatch)
         _names(),
         department_name="华北销售",
     )
-    daily = "[日报](https://example.com/v2/business/reports?tab=daily-team&date=2026-10-12)"
+    daily = "[团队日报](https://example.com/v2/business/reports?tab=daily-team&date=2026-10-12)"
     tuesday_body = render_card_markdown(tuesday, owner_name="王经理")
     assert daily in tuesday_body
-    assert tuesday_body.index("今日需介入") < tuesday_body.index(daily)
-    assert tuesday_body.index(daily) < tuesday_body.index("**本周**")
+    assert tuesday_body.index("团队今日需介入") < tuesday_body.index(daily)
+    assert tuesday_body.index(daily) < tuesday_body.index("**团队本周**")
     tuesday["report_entries"] = [
         {"key": "team_operating_trend", "label": "经营趋势", "url": "https://example.com/trend"},
     ]
     linked = render_card_markdown(tuesday, owner_name="王经理")
-    assert "[经营趋势](https://example.com/trend)  " + daily in linked
+    assert "[团队经营趋势](https://example.com/trend)  " + daily in linked
     dingtalk_linked = render_dingtalk_markdown(
         tuesday,
         title="团队今日重点｜2026-10-13",
         owner_name="王经理",
     )
-    assert "[经营趋势](https://example.com/trend)  " + daily in dingtalk_linked
+    assert "[团队经营趋势](https://example.com/trend)  " + daily in dingtalk_linked
     assert "日报" not in [label for label, _url in card_footer_buttons(tuesday, owner_name="王经理")]
     assert "weekly-team" not in linked
     assert "weekly-team" not in dingtalk_linked
     monkeypatch.setattr("app.utils.push_page_urls.settings.REVIEW_REPORT_HOST", "")
-    assert "[日报](" not in render_card_markdown(tuesday)
-    assert "[周报](" not in render_card_markdown(monday)
+    assert "[团队日报](" not in render_card_markdown(tuesday)
+    assert "[团队周报](" not in render_card_markdown(monday)
 
 
 def test_monday_weekly_report_uses_the_previous_iso_week(monkeypatch):
@@ -1062,10 +1067,10 @@ def test_monday_weekly_report_uses_the_previous_iso_week(monkeypatch):
     )
     body = render_card_markdown(new_year)
     assert (
-        "[周报](https://example.com/v2/business/reports?tab=weekly-team&year=2026&week=53)"
+        "[团队周报](https://example.com/v2/business/reports?tab=weekly-team&year=2026&week=53)"
         in body
     )
-    assert "[日报](" not in body
+    assert "[团队日报](" not in body
     week_one = assemble_department_highlights(
         [_row({"claim": "拍板", "related_user_id": "oauth-zhang"})],
         date(2026, 1, 5),
@@ -1074,7 +1079,7 @@ def test_monday_weekly_report_uses_the_previous_iso_week(monkeypatch):
         department_name="华北销售",
     )
     assert (
-        "[周报](https://example.com/v2/business/reports?tab=weekly-team&year=2026&week=1)"
+        "[团队周报](https://example.com/v2/business/reports?tab=weekly-team&year=2026&week=1)"
         in render_card_markdown(week_one)
     )
 
@@ -1099,7 +1104,16 @@ def test_week_visit_button_filters_the_team(monkeypatch):
         _names(),
         department_name="华北销售",
     )
-    assert card_footer_buttons(monday) == []
+    task = (
+        "团队待完成",
+        "https://example.com/v2/task"
+        "?due_date__gte=2026-10-12"
+        "&due_date__lte=2026-10-18"
+        "&status__in=IN_PROGRESS"
+        "&status__in=PENDING",
+    )
+    assert card_footer_buttons(monday) == [task]
+    assert "owner_name=" not in card_footer_buttons(monday)[0][1]
     assembled = assemble_department_highlights(
         [_row({"claim": "拍板", "related_user_id": "oauth-zhang"})],
         TUESDAY,
@@ -1113,29 +1127,19 @@ def test_week_visit_button_filters_the_team(monkeypatch):
         "?start_date=2026-10-12&end_date=2026-10-18"
     )
     assert buttons == [
+        task,
         (
-            "已拜访",
+            "团队已拜访",
             "https://example.com/v2/behavior"
             "?visit_communication_date_start=2026-10-12"
             "&visit_communication_date_end=2026-10-18"
             "&department_name=%E5%8D%8E%E5%8C%97%E9%94%80%E5%94%AE",
         ),
-        ("例会复盘", meeting),
+        ("团队例会复盘", meeting),
     ]
     merged = assemble_leader_highlights([assembled], TUESDAY)
-    merged_buttons = card_footer_buttons(merged)
-    assert merged_buttons == buttons
-    named = card_footer_buttons(assembled, owner_name="王经理")
-    assert named[0] == (
-        "待完成",
-        "https://example.com/v2/task"
-        "?owner_name=%E7%8E%8B%E7%BB%8F%E7%90%86"
-        "&due_date__gte=2026-10-12"
-        "&due_date__lte=2026-10-18"
-        "&status__in=IN_PROGRESS"
-        "&status__in=PENDING",
-    )
-    assert named[1:] == buttons
+    assert card_footer_buttons(merged) == buttons
+    assert card_footer_buttons(assembled, owner_name="王经理") == buttons
     friday = assemble_department_highlights(
         [_row({"claim": "拍板", "related_user_id": "oauth-zhang"})],
         date(2026, 10, 16),
@@ -1149,11 +1153,12 @@ def test_week_visit_button_filters_the_team(monkeypatch):
         "url": "https://example.com/visits",
     }
     friday_body = render_card_markdown(friday)
-    assert "查看本周拜访" not in friday_body
-    assert "[例会复盘](" not in friday_body
+    assert "查看团队本周拜访" not in friday_body
+    assert "[团队例会复盘](" not in friday_body
     friday_buttons = card_footer_buttons(friday)
-    assert [label for label, _url in friday_buttons] == ["已拜访", "例会复盘"]
-    assert friday_buttons[1][1] == meeting
+    assert [label for label, _url in friday_buttons] == ["团队待完成", "团队已拜访", "团队例会复盘"]
+    assert friday_buttons[0] == task
+    assert friday_buttons[2][1] == meeting
     monday_body = render_card_markdown(monday)
     assert "例会复盘" not in monday_body
     assert "例会复盘" not in [label for label, _url in card_footer_buttons(monday, owner_name="王经理")]
@@ -1238,14 +1243,16 @@ def test_feishu_card_keeps_team_highlights_in_one_section(monkeypatch):
         {"platform": "feishu", "user_id": "leader-1", "open_id": "ou_leader"},
         assembled,
     )
-    assert "**今日需介入**" in captured["body"]
+    assert "**团队今日需介入**" in captured["body"]
     assert "**张三**" in captured["body"]
-    assert "**上周拜访**" in captured["body"]
+    assert "**团队上周拜访**" in captured["body"]
     assert "[团队人效](https://example.com/persona)" in captured["body"]
-    assert captured["body"].index("今日需介入") < captured["body"].index("上周拜访")
-    assert captured["body"].index("上周拜访") < captured["body"].index("[团队人效](")
-    assert captured.get("extra_sections") in (None, [])
-    assert captured["divide_extra_sections"] is False
+    assert captured["body"].index("团队今日需介入") < captured["body"].index("团队上周拜访")
+    assert captured["body"].index("团队上周拜访") < captured["body"].index("[团队人效](")
+    assert captured.get("extra_sections") == ["**团队本周**"]
+    assert captured["divide_extra_sections"] is True
+    assert [label for label, _url in (captured.get("footer_buttons") or [])] == ["团队待完成"]
+    assert "owner_name=" not in (captured.get("footer_buttons") or [("","")])[0][1]
     assert "例会复盘" not in captured["body"]
 
     assembled["report_date"] = TUESDAY.isoformat()
@@ -1270,15 +1277,15 @@ def test_feishu_card_keeps_team_highlights_in_one_section(monkeypatch):
         {"platform": "feishu", "user_id": "leader-1", "open_id": "ou_leader", "name": "王经理"},
         assembled,
     )
-    daily = "[日报](https://example.com/v2/business/reports?tab=daily-team&date=2026-10-12)"
-    assert captured["body"].startswith("**立即处理**")
+    daily = "[团队日报](https://example.com/v2/business/reports?tab=daily-team&date=2026-10-12)"
+    assert captured["body"].startswith("**我的立即处理**")
     assert "经营趋势" not in captured["body"]
     team = captured["extra_sections"][0]
-    assert "**今日需介入**" in team
-    assert "**上周拜访**" in team
-    assert "[经营趋势](https://example.com/trend)  " + daily in team
-    assert team.index("今日需介入") < team.index("上周拜访") < team.index("[经营趋势](")
-    assert captured["extra_sections"][1] == "**本周**"
+    assert "**团队今日需介入**" in team
+    assert "**团队上周拜访**" in team
+    assert "[团队经营趋势](https://example.com/trend)  " + daily in team
+    assert team.index("团队今日需介入") < team.index("团队上周拜访") < team.index("[团队经营趋势](")
+    assert captured["extra_sections"][1] == "**团队本周**"
 
 
 def test_dingtalk_card_puts_title_in_the_body(monkeypatch):
@@ -1306,7 +1313,7 @@ def test_dingtalk_card_puts_title_in_the_body(monkeypatch):
     )
     content = captured["content"]
     assert content.startswith("# 团队今日重点｜2026-10-12\n")
-    assert "## 今日需介入\n" in content
+    assert "## 团队今日需介入\n" in content
     assert "[查看](" in content
 
 
@@ -1432,12 +1439,12 @@ def test_team_card_folds_personal_immediate_without_personal_billing(monkeypatch
     result = handle_department_today_highlights(MagicMock(), report_date=DAY)
     assert result["success_count"] == 1
     assert result["sent_oauth_user_ids"] == ["oauth-leader"]
-    assert captured["body"].index("**立即处理**") < captured["body"].index("**今日需介入**")
+    assert captured["body"].index("**我的立即处理**") < captured["body"].index("**团队今日需介入**")
     assert "今天回访" in captured["body"]
     assert "本周待完成" not in captured["body"]
     assert "本周已拜访" not in captured["body"]
     dingtalk = render_dingtalk_markdown(captured["card"], title="团队今日重点｜2026-10-12")
-    assert dingtalk.index("## 立即处理") < dingtalk.index("---") < dingtalk.index("## 今日需介入")
+    assert dingtalk.index("## 我的立即处理") < dingtalk.index("---") < dingtalk.index("## 团队今日需介入")
     assert "本周待完成" not in dingtalk
     assert billed == ["department"]
 
@@ -1495,8 +1502,9 @@ def test_sales_opt_out_omits_personal_section(monkeypatch):
     )
     result = handle_department_today_highlights(MagicMock(), report_date=DAY)
     assert result["success_count"] == 1
-    assert "**今日需介入**" in captured["body"]
+    assert "**团队今日需介入**" in captured["body"]
     assert "**立即处理**" not in captured["body"]
+    assert "**我的立即处理**" not in captured["body"]
 
 
 def test_failed_team_card_is_not_marked_sent(monkeypatch):

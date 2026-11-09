@@ -221,11 +221,11 @@ def test_card_puts_report_links_after_visit_watch(monkeypatch):
         {"key": "team_operating_trend", "label": "经营趋势", "url": "https://example.com/trend"},
     ]
     body = render_card_markdown(assembled)
-    assert body.index("今日需介入") < body.index("本周拜访")
-    assert body.index("本周拜访") < body.index("[团队人效](https://example.com/persona)")
-    assert "[团队人效](https://example.com/persona)  [经营趋势](https://example.com/trend)" in body
+    assert body.index("团队今日需介入") < body.index("团队本周拜访")
+    assert body.index("团队本周拜访") < body.index("[团队人效](https://example.com/persona)")
+    assert "[团队人效](https://example.com/persona)  [团队经营趋势](https://example.com/trend)" in body
     dingtalk = render_dingtalk_markdown(assembled, title="今日重点｜2026-10-13")
-    assert dingtalk.index("## 本周拜访") < dingtalk.index("[团队人效](")
+    assert dingtalk.index("## 团队本周拜访") < dingtalk.index("[团队人效](")
     assert REPORTS_ONLY_LEAD not in body
     assert REPORTS_ONLY_LEAD not in dingtalk
 
@@ -239,12 +239,12 @@ def test_reports_only_card_adds_a_lead_in():
         ],
     }
     body = render_card_markdown(assembled)
-    assert body.startswith(f"**今日需介入**\n{REPORTS_ONLY_LEAD}")
-    assert "[重点商机](https://example.com/deals)" in body
+    assert body.startswith(f"**团队今日需介入**\n{REPORTS_ONLY_LEAD}")
+    assert "[团队重点商机](https://example.com/deals)" in body
     dingtalk = render_dingtalk_markdown(assembled, title="今日重点｜2026-10-13")
-    assert "## 今日需介入" in dingtalk
-    assert dingtalk.index("## 今日需介入") < dingtalk.index(REPORTS_ONLY_LEAD)
-    assert dingtalk.index(REPORTS_ONLY_LEAD) < dingtalk.index("[重点商机](")
+    assert "## 团队今日需介入" in dingtalk
+    assert dingtalk.index("## 团队今日需介入") < dingtalk.index(REPORTS_ONLY_LEAD)
+    assert dingtalk.index(REPORTS_ONLY_LEAD) < dingtalk.index("[团队重点商机](")
 
 
 def test_pick_report_sections_serializes_insight_body(monkeypatch):
