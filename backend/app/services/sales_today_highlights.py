@@ -52,9 +52,9 @@ INCOMPLETE_TASK_STATUSES = ("IN_PROGRESS", "PENDING")
 # 区块顺序与类型是销售卡合同。标题只从 card_links 快照读取。
 # 快照 title：immediate_today=立即处理，open_risks=建议关注，next_week_confirm=下周待确认。
 # 旧快照里的「商机风险」仍按「建议关注」展示。
-# 折进团队卡时小节标题固定为「立即处理」。
+# 折进团队卡时小节标题固定为「我的立即处理」，和团队块区分。
 SALES_CARD_TITLE = "我的今日重点"
-EMBEDDED_PERSONAL_TITLE = "立即处理"
+EMBEDDED_PERSONAL_TITLE = "我的立即处理"
 SECTION_ORDER: tuple[tuple[str, str], ...] = (
     ("immediate_today", ITEM_IMMEDIATE),
     ("open_risks", ITEM_RISK),
