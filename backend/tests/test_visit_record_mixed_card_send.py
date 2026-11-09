@@ -413,13 +413,13 @@ def test_cc_and_group_cards_omit_sales_performance_summary(monkeypatch):
     }
     svc = PlatformNotificationService()
 
-    assert "销售表现：销售本场问清了预算。" in svc._recap_card_for_role(
+    assert "#### 销售表现\n\n销售本场问清了预算。" in svc._recap_card_for_role(
         "recorder", recap_cards_by_view=cards
     ).feishu_summary
-    assert "销售表现：销售本场问清了预算。" in svc._recap_card_for_role(
+    assert "#### 销售表现\n\n销售本场问清了预算。" in svc._recap_card_for_role(
         "collaborative_participant", recap_cards_by_view=cards
     ).feishu_summary
-    assert "销售表现：没有约到决策人。" in svc._recap_card_for_role(
+    assert "#### 销售表现\n\n没有约到决策人。" in svc._recap_card_for_role(
         "leader", recap_cards_by_view=cards
     ).feishu_summary
     assert "销售表现" not in svc._recap_card_for_role(

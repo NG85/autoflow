@@ -196,13 +196,33 @@ def performance_summary_text(insight: Any) -> str:
     return _truncate_recap(_display_text(_insight_field(insight, "summary")))
 
 
-def compose_recap_card_summary(recap_text: str, performance_text: str = "") -> str:
-    """有表现评价摘要时，用 tab 标题标出业务推进和销售表现。"""
+def compose_recap_card_summary(
+    recap_text: str,
+    performance_text: str = "",
+    *,
+    dingtalk: bool = False,
+) -> str:
+    """有表现评价摘要时，业务推进和销售表现各成一行小标题，正文跟在下面。
+
+    飞书用四级标题。钉钉 sampleMarkdown 不认四级标题，且会折叠空行，
+    所以钉钉用二级标题，两段之间用不断行空格隔开。
+    """
     if not performance_text:
         return recap_text or "--"
+    business = _TAB_TITLE[RECAP_TAB_BUSINESS]
+    performance = _TAB_TITLE[RECAP_TAB_PERFORMANCE]
+    body = recap_text or "--"
+    if dingtalk:
+        return (
+            f"## {business}\n{body}\n"
+            f"{DINGTALK_PARAGRAPH_GAP}\n"
+            f"## {performance}\n{performance_text}"
+        )
     return (
-        f"{_TAB_TITLE[RECAP_TAB_BUSINESS]}：{recap_text or '--'}\n\n"
-        f"{_TAB_TITLE[RECAP_TAB_PERFORMANCE]}：{performance_text}"
+        f"#### {business}\n\n"
+        f"{body}\n\n"
+        f"#### {performance}\n\n"
+        f"{performance_text}"
     )
 
 
@@ -368,7 +388,12 @@ def build_recap_lite_card(
     entry_time = format_entry_time(record.get("last_modified_time") or record.get("visit_communication_date"))
     opportunity = _display_text(record.get("opportunity_name"))
     recap_text = resolve_recap_body_text(record, insight=insight)
-    summary_text = compose_recap_card_summary(recap_text, performance_text)
+    feishu_summary = compose_recap_card_summary(recap_text, performance_text)
+    dingtalk_summary = compose_recap_card_summary(
+        recap_text,
+        performance_text,
+        dingtalk=True,
+    )
     visit_detail_url = build_visit_record_page_url(record_id)
     detail_url = build_visit_record_recap_page_url(record_id)
     recorder = _text(recorder_name) or _text(record.get("recorder"))
@@ -395,7 +420,7 @@ def build_recap_lite_card(
         title=title,
         is_revised=is_revised,
         meta_lines=meta_lines,
-        recap_text=summary_text,
+        recap_text=dingtalk_summary,
         action_lines=action_lines,
         extract_lines=extract_lines,
     )
@@ -404,7 +429,7 @@ def build_recap_lite_card(
         header_template=header_template,
         feishu_body=feishu_body,
         dingtalk_text=dingtalk_text,
-        feishu_summary=summary_text,
+        feishu_summary=feishu_summary,
         feishu_action_links=_PRIMARY_ACTION_SEP.join(action_lines),
         feishu_extract_actions=tuple(extract_actions),
     )

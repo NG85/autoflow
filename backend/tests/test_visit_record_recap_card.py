@@ -262,7 +262,9 @@ def test_lite_card_shows_both_summaries_and_keeps_two_links(monkeypatch):
     )
     visit_detail = "[跟进详情](https://app.example/v2/behavior/rec-1)"
     report = "[完整复盘报告](https://app.example/v2/behavior/rec-1/recap)"
-    assert card.feishu_summary == "业务推进：客户确认下季度扩容。\n\n销售表现：销售本场问清了预算。"
+    assert card.feishu_summary == (
+        "#### 业务推进\n\n客户确认下季度扩容。\n\n#### 销售表现\n\n销售本场问清了预算。"
+    )
     assert "表现标题" not in card.feishu_summary
     assert "不应出现在卡片上的表现报告" not in card.feishu_summary
     assert card.feishu_action_links == f"{visit_detail}  {report}"
@@ -270,7 +272,9 @@ def test_lite_card_shows_both_summaries_and_keeps_two_links(monkeypatch):
     assert "表现评价" not in card.feishu_action_links
     assert card.title.startswith("正常 · ")
     assert card.header_template == "green"
-    assert card.feishu_summary in card.dingtalk_text
+    assert "## 业务推进\n客户确认下季度扩容。" in card.dingtalk_text
+    assert "\u00a0\n## 销售表现\n销售本场问清了预算。" in card.dingtalk_text
+    assert "#### 业务推进" not in card.dingtalk_text
     assert card.dingtalk_text.index("业务推进") < card.dingtalk_text.index("销售表现")
     assert card.dingtalk_text.index("销售表现") < card.dingtalk_text.index(visit_detail)
     assert card.dingtalk_text.index(visit_detail) < card.dingtalk_text.index(report)
