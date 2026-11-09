@@ -6,10 +6,17 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Mapping, Optional, Sequence
 
+from app.services.visit_record_insight_reader import (
+    RECAP_TAB_BUSINESS,
+    RECAP_TAB_PERFORMANCE,
+    RECAP_PAGE_TABS,
+)
 from app.utils.push_page_urls import (
     build_visit_record_page_url,
     build_visit_record_recap_page_url,
 )
+
+_TAB_TITLE = dict(RECAP_PAGE_TABS)
 
 DINGTALK_PARAGRAPH_GAP = "\u00a0"
 _RECAP_BODY_MAX_CHARS = 800
@@ -176,6 +183,29 @@ def _insight_recap_text(insight: Any) -> str:
     )
 
 
+def _insight_field(insight: Any, name: str) -> Any:
+    if insight is None:
+        return None
+    if isinstance(insight, Mapping):
+        return insight.get(name)
+    return getattr(insight, name, None)
+
+
+def performance_summary_text(insight: Any) -> str:
+    """表现评价只取 summary。空值和占位符视为没有评价。"""
+    return _truncate_recap(_display_text(_insight_field(insight, "summary")))
+
+
+def compose_recap_card_summary(recap_text: str, performance_text: str = "") -> str:
+    """有表现评价摘要时，用 tab 标题标出业务推进和销售表现。"""
+    if not performance_text:
+        return recap_text or "--"
+    return (
+        f"{_TAB_TITLE[RECAP_TAB_BUSINESS]}：{recap_text or '--'}\n\n"
+        f"{_TAB_TITLE[RECAP_TAB_PERFORMANCE]}：{performance_text}"
+    )
+
+
 def resolve_recap_body_text(
     visit_record: Optional[Mapping[str, Any]],
     insight: Any = None,
@@ -325,8 +355,10 @@ def build_recap_lite_card(
     is_revised: bool = False,
     insight: Any = None,
     extract_links: Optional[Sequence[Mapping[str, Any]]] = None,
+    performance_insight: Any = None,
 ) -> RecapLiteCard:
     record = visit_record or {}
+    performance_text = performance_summary_text(performance_insight)
     quality, header_template = resolve_recap_quality(insight)
     visit_date = format_visit_date_short(
         record.get("visit_communication_date") or record.get("last_modified_time")
@@ -336,6 +368,7 @@ def build_recap_lite_card(
     entry_time = format_entry_time(record.get("last_modified_time") or record.get("visit_communication_date"))
     opportunity = _display_text(record.get("opportunity_name"))
     recap_text = resolve_recap_body_text(record, insight=insight)
+    summary_text = compose_recap_card_summary(recap_text, performance_text)
     visit_detail_url = build_visit_record_page_url(record_id)
     detail_url = build_visit_record_recap_page_url(record_id)
     recorder = _text(recorder_name) or _text(record.get("recorder"))
@@ -362,7 +395,7 @@ def build_recap_lite_card(
         title=title,
         is_revised=is_revised,
         meta_lines=meta_lines,
-        recap_text=recap_text,
+        recap_text=summary_text,
         action_lines=action_lines,
         extract_lines=extract_lines,
     )
@@ -371,7 +404,7 @@ def build_recap_lite_card(
         header_template=header_template,
         feishu_body=feishu_body,
         dingtalk_text=dingtalk_text,
-        feishu_summary=recap_text or "--",
+        feishu_summary=summary_text,
         feishu_action_links=_PRIMARY_ACTION_SEP.join(action_lines),
         feishu_extract_actions=tuple(extract_actions),
     )

@@ -7,8 +7,14 @@ import pytest
 
 from app.services.visit_record_extract_reader import DEFAULT_PROFILE_ID, empty_extract_response
 from app.services.visit_record_insight_reader import (
+    PERFORMANCE_VIEW_LEADER,
+    PERFORMANCE_VIEW_SALES,
+    RECAP_TAB_BUSINESS,
+    RECAP_TAB_PERFORMANCE,
     RECAP_VIEW_LEADER,
     RECAP_VIEW_SALES,
+    VISIT_INSIGHT_PERFORMANCE_LEADER_TYPE,
+    VISIT_INSIGHT_PERFORMANCE_SALES_TYPE,
     VISIT_INSIGHT_SALES_TYPE,
     VisitRecordInsight,
 )
@@ -19,17 +25,22 @@ from app.services.visit_record_recap import (
 )
 
 
-def _insight(view: str, summary: str) -> VisitRecordInsight:
-    insight_type = (
-        VISIT_INSIGHT_SALES_TYPE if view == RECAP_VIEW_SALES else "POSTVISIT_REVIEW_LEAD_VIEW"
-    )
+def _insight(view: str, summary: str, *, detail_text: str = "") -> VisitRecordInsight:
+    if view == RECAP_VIEW_SALES:
+        insight_type = VISIT_INSIGHT_SALES_TYPE
+    elif view == RECAP_VIEW_LEADER:
+        insight_type = "POSTVISIT_REVIEW_LEAD_VIEW"
+    elif view == PERFORMANCE_VIEW_SALES:
+        insight_type = VISIT_INSIGHT_PERFORMANCE_SALES_TYPE
+    else:
+        insight_type = VISIT_INSIGHT_PERFORMANCE_LEADER_TYPE
     return VisitRecordInsight(
         unique_id=view,
         entity_id="rec-1",
         insight_type=insight_type,
         title="标题",
         summary=summary,
-        detail_text="",
+        detail_text=detail_text,
         category="复盘",
         severity="LOW",
         generated_at=None,
@@ -66,6 +77,8 @@ def test_no_recap_skips_extract_and_reporting_chain(monkeypatch):
     assert called == []
     assert data["view"] is None
     assert data["insight"] is None
+    assert data["performance"] is None
+    assert data["tabs"] == []
     assert data["extract"] == empty_extract_response("rec-1")
 
 
@@ -73,7 +86,7 @@ def test_recorder_includes_insight_and_extract(monkeypatch):
     sales = _insight(RECAP_VIEW_SALES, "客户确认下季度扩容。")
     monkeypatch.setattr(
         "app.services.visit_record_recap.resolve_viewer_recap",
-        lambda *args, **kwargs: (RECAP_VIEW_SALES, sales),
+        lambda *args, **kwargs: (RECAP_VIEW_SALES, sales, None),
     )
     seen = {}
 
@@ -96,6 +109,11 @@ def test_recorder_includes_insight_and_extract(monkeypatch):
     assert seen["viewer_user_id"] == "recorder"
     assert data["view"] == RECAP_VIEW_SALES
     assert data["insight"]["summary"] == "客户确认下季度扩容。"
+    assert data["performance"] is None
+    assert data["tabs"] == [
+        {"key": RECAP_TAB_BUSINESS, "title": "业务推进"},
+        {"key": RECAP_TAB_PERFORMANCE, "title": "销售表现"},
+    ]
     assert data["extract"]["card_links"][0]["key"] == "follow_ups"
 
 
@@ -104,7 +122,7 @@ def test_collaborator_sales_view_omits_extract(monkeypatch):
     sales = _insight(RECAP_VIEW_SALES, "协同人看销售视角摘要")
     monkeypatch.setattr(
         "app.services.visit_record_recap.resolve_viewer_recap",
-        lambda *args, **kwargs: (RECAP_VIEW_SALES, sales),
+        lambda *args, **kwargs: (RECAP_VIEW_SALES, sales, None),
     )
     called = []
     monkeypatch.setattr(
@@ -130,7 +148,7 @@ def test_leader_view_omits_extract_items(monkeypatch):
     leader = _insight(RECAP_VIEW_LEADER, "上级：注意回款节奏")
     monkeypatch.setattr(
         "app.services.visit_record_recap.resolve_viewer_recap",
-        lambda *args, **kwargs: (RECAP_VIEW_LEADER, leader),
+        lambda *args, **kwargs: (RECAP_VIEW_LEADER, leader, None),
     )
     called = []
     monkeypatch.setattr(
@@ -167,6 +185,8 @@ def test_resolve_failure_returns_empty_recap(monkeypatch):
 
     assert data["view"] is None
     assert data["insight"] is None
+    assert data["performance"] is None
+    assert data["tabs"] == []
     assert data["extract"]["items"] == {}
 
 
@@ -197,9 +217,10 @@ def test_recorder_with_insight_does_not_query_reporting_chain(monkeypatch):
     oauth.get_reporting_chain_leaders.assert_not_called()
     profiles.get_by_user_id.assert_not_called()
     assert resolved is not None
-    view, picked = resolved
+    view, picked, performance = resolved
     assert view == RECAP_VIEW_SALES
     assert picked.summary == "销售摘要"
+    assert performance is None
 
 
 def test_other_viewer_gets_no_recap(monkeypatch):
@@ -252,9 +273,10 @@ def test_reporting_chain_leader_uses_leader_view(monkeypatch):
 
     oauth.get_reporting_chain_leaders.assert_called_once()
     assert resolved is not None
-    view, picked = resolved
+    view, picked, performance = resolved
     assert view == RECAP_VIEW_LEADER
     assert picked.summary == "上级摘要"
+    assert performance is None
 
 
 def test_collaborator_gets_no_recap(monkeypatch):
@@ -383,3 +405,118 @@ def test_blank_visit_id_is_empty(visit_id):
     )
     assert data["visit_id"] == ""
     assert data["view"] is None
+    assert data["performance"] is None
+    assert data["tabs"] == []
+
+
+def _page_insights(**overrides):
+    insights = {
+        RECAP_VIEW_SALES: None,
+        RECAP_VIEW_LEADER: None,
+        PERFORMANCE_VIEW_SALES: None,
+        PERFORMANCE_VIEW_LEADER: None,
+    }
+    insights.update(overrides)
+    return insights
+
+
+def test_sales_tabs_keep_only_the_sales_performance(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.visit_record_recap.load_visit_record_insights_by_view",
+        lambda *args, **kwargs: _page_insights(
+            **{
+                RECAP_VIEW_SALES: _insight(RECAP_VIEW_SALES, "销售复盘", detail_text="复盘正文"),
+                RECAP_VIEW_LEADER: _insight(RECAP_VIEW_LEADER, "上级复盘"),
+                PERFORMANCE_VIEW_SALES: _insight(
+                    PERFORMANCE_VIEW_SALES,
+                    "销售本场问清了预算。",
+                    detail_text="表现报告",
+                ),
+                PERFORMANCE_VIEW_LEADER: _insight(PERFORMANCE_VIEW_LEADER, "没有约到决策人。"),
+            }
+        ),
+    )
+
+    data = load_visit_record_recap_response(
+        MagicMock(),
+        visit_record_id="rec-1",
+        recorder_id="recorder-1",
+        viewer_user_id="recorder-1",
+    )
+
+    assert data["view"] == RECAP_VIEW_SALES
+    assert data["tabs"] == [
+        {"key": RECAP_TAB_BUSINESS, "title": "业务推进"},
+        {"key": RECAP_TAB_PERFORMANCE, "title": "销售表现"},
+    ]
+    assert data["insight"]["summary"] == "销售复盘"
+    assert data["insight"]["detail_text"] == "复盘正文"
+    assert data["performance"]["summary"] == "销售本场问清了预算。"
+    assert data["performance"]["detail_text"] == "表现报告"
+    assert data["performance"]["insight_type"] == VISIT_INSIGHT_PERFORMANCE_SALES_TYPE
+    assert "上级复盘" not in str(data)
+    assert "没有约到决策人" not in str(data)
+
+
+def test_performance_only_still_resolves_view_and_loads_extract(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.visit_record_recap.load_visit_record_insights_by_view",
+        lambda *args, **kwargs: _page_insights(
+            **{PERFORMANCE_VIEW_SALES: _insight(PERFORMANCE_VIEW_SALES, "下一步没有负责人。")}
+        ),
+    )
+    oauth = MagicMock()
+    monkeypatch.setattr("app.services.oauth_service.oauth_client", oauth)
+    monkeypatch.setattr(
+        "app.services.visit_record_recap.load_visit_record_extract_response",
+        lambda *args, **kwargs: _extract(),
+    )
+
+    data = load_visit_record_recap_response(
+        MagicMock(),
+        visit_record_id="rec-1",
+        recorder_id="recorder-1",
+        viewer_user_id="recorder-1",
+    )
+
+    oauth.get_reporting_chain_leaders.assert_not_called()
+    assert data["view"] == RECAP_VIEW_SALES
+    assert data["insight"] is None
+    assert data["performance"]["summary"] == "下一步没有负责人。"
+    assert data["tabs"] == [
+        {"key": RECAP_TAB_BUSINESS, "title": "业务推进"},
+        {"key": RECAP_TAB_PERFORMANCE, "title": "销售表现"},
+    ]
+    assert data["extract"]["card_links"][0]["key"] == "follow_ups"
+
+
+def test_performance_only_for_other_viewer_queries_chain_and_stays_empty(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.visit_record_recap.load_visit_record_insights_by_view",
+        lambda *args, **kwargs: _page_insights(
+            **{PERFORMANCE_VIEW_LEADER: _insight(PERFORMANCE_VIEW_LEADER, "上级评价")}
+        ),
+    )
+    viewer = MagicMock(oauth_user_id="ask_collab", oauth_users=[MagicMock(open_id="ou_collab")])
+    recorder = MagicMock(user_id="recorder-user", direct_manager_id="ask_leader", oauth_users=[])
+    profiles = MagicMock()
+    profiles.get_by_user_id.return_value = viewer
+    profiles.get_by_recorder_id.return_value = recorder
+    monkeypatch.setattr("app.services.visit_record_recap.UserProfileRepo", lambda: profiles)
+    oauth = MagicMock()
+    oauth.check_user_has_role.return_value = False
+    oauth.get_reporting_chain_leaders.return_value = [{"open_id": "ou_leader"}]
+    monkeypatch.setattr("app.services.oauth_service.oauth_client", oauth)
+
+    data = load_visit_record_recap_response(
+        MagicMock(),
+        visit_record_id="rec-1",
+        recorder_id="recorder-1",
+        viewer_user_id="collab-1",
+    )
+
+    oauth.get_reporting_chain_leaders.assert_called_once()
+    assert data["view"] is None
+    assert data["performance"] is None
+    assert data["tabs"] == []
+    assert "上级评价" not in str(data)

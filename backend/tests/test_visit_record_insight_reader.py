@@ -4,9 +4,13 @@ from datetime import datetime
 from unittest.mock import MagicMock
 
 from app.services.visit_record_insight_reader import (
+    PERFORMANCE_VIEW_LEADER,
+    PERFORMANCE_VIEW_SALES,
     RECAP_VIEW_LEADER,
     RECAP_VIEW_SALES,
     VISIT_INSIGHT_LEADER_TYPE,
+    VISIT_INSIGHT_PERFORMANCE_LEADER_TYPE,
+    VISIT_INSIGHT_PERFORMANCE_SALES_TYPE,
     VISIT_INSIGHT_SALES_TYPE,
     VisitRecordInsight,
     has_visit_recap_insight,
@@ -176,6 +180,8 @@ def test_load_visit_record_insights_by_view_splits_sales_and_leader():
     assert insights[RECAP_VIEW_LEADER].unique_id == "leader"
     assert insights[RECAP_VIEW_SALES].summary == "客户确认下季度扩容。"
     assert insights[RECAP_VIEW_LEADER].summary == "上级：注意回款节奏"
+    assert insights[PERFORMANCE_VIEW_SALES] is None
+    assert insights[PERFORMANCE_VIEW_LEADER] is None
 
     statement = session.exec.call_args.args[0]
     sql = str(statement.compile(compile_kwargs={"literal_binds": True}))
@@ -207,6 +213,8 @@ def test_load_visit_record_insight_returns_none_on_error():
     assert load_visit_record_insights_by_view(None, "rec-1") == {
         RECAP_VIEW_SALES: None,
         RECAP_VIEW_LEADER: None,
+        PERFORMANCE_VIEW_SALES: None,
+        PERFORMANCE_VIEW_LEADER: None,
     }
 
 
@@ -300,6 +308,13 @@ def test_viewer_has_visible_recap_follows_sales_or_leader_view():
     assert viewer_has_visible_recap(leader, is_sys_admin=True) is True
     assert viewer_has_visible_recap(sales, is_sys_admin=True) is False
     assert viewer_has_visible_recap([]) is False
+    sales_performance = [VISIT_INSIGHT_PERFORMANCE_SALES_TYPE]
+    leader_performance = [VISIT_INSIGHT_PERFORMANCE_LEADER_TYPE]
+    assert viewer_has_visible_recap(sales_performance, is_recorder=True) is True
+    assert viewer_has_visible_recap(sales_performance, is_reporting_leader=True) is False
+    assert viewer_has_visible_recap(leader_performance, is_reporting_leader=True) is True
+    assert viewer_has_visible_recap(leader_performance, is_recorder=True) is False
+    assert viewer_has_visible_recap(leader_performance, is_sys_admin=True) is True
 
 
 def test_load_visit_recap_types_groups_by_record_and_fails_closed():
