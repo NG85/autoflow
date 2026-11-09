@@ -42,3 +42,7 @@
 | `2026-11-05-leader-meeting-review-two-recipients.md` | 2026-11-05，例会复盘卡片发给负责人和提交人 |
 | `2026-11-06-today-highlights-monday-weekly-report.md` | 2026-11-06，周一今日重点放上周周报 |
 | `2026-11-06-leader-meeting-review-todo-candidates.md` | 2026-11-06，例会复盘卡片正文是会议总结和完整复盘报告 |
+| `2026-11-09-visit-review-group-replaces.md` | 2026-11-09，拜访群可以不接替 leader |
+| `2026-11-09-visit-recap-performance.md` | 2026-11-09，拜访复盘增加人员表现评价 |
+| `2026-11-09-visit-collaborator-leader.md` | 2026-11-09，协同人与 leader 重复时取 leader |
+| `2026-11-09-visit-recap-card-headings.md` | 2026-11-09，复盘卡里的业务推进和销售表现是小标题 |

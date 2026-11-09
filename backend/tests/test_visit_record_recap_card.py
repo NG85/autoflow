@@ -218,3 +218,84 @@ def test_sales_lite_card_appends_extract_links(monkeypatch):
     assert leader.feishu_extract_actions == ()
     assert "待我跟进" not in leader.dingtalk_text
     assert report in leader.feishu_action_links
+
+
+def _patch_lite_card_urls(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.visit_record_recap_card.build_visit_record_page_url",
+        lambda record_id: f"https://app.example/v2/behavior/{record_id}",
+    )
+    monkeypatch.setattr(
+        "app.services.visit_record_recap_card.build_visit_record_recap_page_url",
+        lambda record_id: f"https://app.example/v2/behavior/{record_id}/recap",
+    )
+
+
+def _performance(summary: str, *, detail_text: str = "不应出现在卡片上的表现报告", severity: str = "HIGH"):
+    return VisitRecordInsight(
+        unique_id="perf-1",
+        entity_id="rec-1",
+        insight_type="VISIT_SALES_PERFORMANCE_SALES_VIEW",
+        title="表现标题",
+        summary=summary,
+        detail_text=detail_text,
+        category="表现",
+        severity=severity,
+        generated_at=None,
+    )
+
+
+def test_lite_card_shows_both_summaries_and_keeps_two_links(monkeypatch):
+    _patch_lite_card_urls(monkeypatch)
+    card = build_recap_lite_card(
+        "rec-1",
+        {
+            "assessment_flag": "green",
+            "visit_communication_date": "2026-09-20",
+            "last_modified_time": "2026-09-20 19:05:00",
+            "followup_object_name": "星辰科技",
+            "recorder": "李华",
+        },
+        recorder_name="李华",
+        insight={"severity": "LOW", "summary": "客户确认下季度扩容。"},
+        performance_insight=_performance("销售本场问清了预算。"),
+    )
+    visit_detail = "[跟进详情](https://app.example/v2/behavior/rec-1)"
+    report = "[完整复盘报告](https://app.example/v2/behavior/rec-1/recap)"
+    assert card.feishu_summary == (
+        "#### 业务推进\n\n客户确认下季度扩容。\n\n#### 销售表现\n\n销售本场问清了预算。"
+    )
+    assert "表现标题" not in card.feishu_summary
+    assert "不应出现在卡片上的表现报告" not in card.feishu_summary
+    assert card.feishu_action_links == f"{visit_detail}  {report}"
+    assert "tab=" not in card.feishu_action_links
+    assert "表现评价" not in card.feishu_action_links
+    assert card.title.startswith("正常 · ")
+    assert card.header_template == "green"
+    assert "## 业务推进\n客户确认下季度扩容。" in card.dingtalk_text
+    assert "\u00a0\n## 销售表现\n销售本场问清了预算。" in card.dingtalk_text
+    assert "#### 业务推进" not in card.dingtalk_text
+    assert card.dingtalk_text.index("业务推进") < card.dingtalk_text.index("销售表现")
+    assert card.dingtalk_text.index("销售表现") < card.dingtalk_text.index(visit_detail)
+    assert card.dingtalk_text.index(visit_detail) < card.dingtalk_text.index(report)
+
+
+def test_empty_performance_summary_leaves_the_card_unchanged(monkeypatch):
+    _patch_lite_card_urls(monkeypatch)
+    for summary in ("--", "-", "—", "－", "", "  ", None):
+        card = build_recap_lite_card(
+            "rec-1",
+            {
+                "visit_communication_date": "2026-09-20",
+                "followup_object_name": "星辰科技",
+                "recorder": "李华",
+            },
+            recorder_name="李华",
+            insight={"severity": "LOW", "summary": "客户确认下季度扩容。"},
+            performance_insight=_performance(summary, detail_text="只有报告没有摘要"),
+        )
+        assert card.feishu_summary == "客户确认下季度扩容。"
+        assert "销售表现" not in card.feishu_summary
+        assert "销售表现" not in card.dingtalk_text
+        assert "只有报告没有摘要" not in card.dingtalk_text
+        assert "tab=" not in card.feishu_action_links

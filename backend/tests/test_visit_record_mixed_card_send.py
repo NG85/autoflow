@@ -312,3 +312,120 @@ def test_send_notification_skips_extract_when_no_recap_insight():
     assert mock_extract.called is False
     assert len(captured) == 2
     assert all(not item.get("extract_links") for item in captured)
+
+
+def test_send_notification_attaches_performance_to_sales_and_leader_personal():
+    from app.services.visit_record_insight_reader import VisitRecordInsight
+
+    sales = object()
+    leader = object()
+    sales_perf = VisitRecordInsight(
+        unique_id="perf-sales",
+        entity_id="rec-1",
+        insight_type="VISIT_SALES_PERFORMANCE_SALES_VIEW",
+        title="表现标题",
+        summary="销售本场问清了预算。",
+        detail_text="报告",
+        category="",
+        severity="LOW",
+        generated_at=None,
+    )
+    leader_perf = VisitRecordInsight(
+        unique_id="perf-leader",
+        entity_id="rec-1",
+        insight_type="VISIT_SALES_PERFORMANCE_LEADER_VIEW",
+        title="表现标题",
+        summary="没有约到决策人。",
+        detail_text="报告",
+        category="",
+        severity="HIGH",
+        generated_at=None,
+    )
+    captured, _mock_extract = _capture_recap_cards(
+        {
+            "sales": sales,
+            "leader": leader,
+            "performance_sales": sales_perf,
+            "performance_leader": leader_perf,
+        }
+    )
+
+    assert len(captured) == 4
+    sales_cards = [
+        item for item in captured
+        if item.get("insight") is sales and not item.get("extract_links")
+    ]
+    recorder_cards = [item for item in captured if item.get("extract_links")]
+    plain_leader = [
+        item for item in captured
+        if item.get("insight") is leader and not item.get("performance_insight")
+    ]
+    personal = [
+        item for item in captured
+        if item.get("performance_insight") is leader_perf
+    ]
+    assert len(sales_cards) == 1
+    assert sales_cards[0]["performance_insight"] is sales_perf
+    assert len(recorder_cards) == 1
+    assert recorder_cards[0]["performance_insight"] is sales_perf
+    assert len(plain_leader) == 1
+    assert len(personal) == 1
+
+
+def test_cc_and_group_cards_omit_sales_performance_summary(monkeypatch):
+    from app.services.visit_record_recap_card import build_recap_lite_card
+
+    monkeypatch.setattr(
+        "app.services.visit_record_recap_card.build_visit_record_page_url",
+        lambda record_id: f"https://app.example/v2/behavior/{record_id}",
+    )
+    monkeypatch.setattr(
+        "app.services.visit_record_recap_card.build_visit_record_recap_page_url",
+        lambda record_id: f"https://app.example/v2/behavior/{record_id}/recap",
+    )
+    record = {
+        "visit_communication_date": "2026-09-20",
+        "followup_object_name": "星辰科技",
+        "recorder": "李华",
+    }
+    sales = build_recap_lite_card(
+        "rec-1",
+        record,
+        insight={"summary": "客户愿意听案例。", "severity": "LOW"},
+        performance_insight={"summary": "销售本场问清了预算。"},
+    )
+    leader = build_recap_lite_card(
+        "rec-1",
+        record,
+        insight={"summary": "本次仅为弱推进。", "severity": "MEDIUM"},
+    )
+    personal = build_recap_lite_card(
+        "rec-1",
+        record,
+        insight={"summary": "本次仅为弱推进。", "severity": "MEDIUM"},
+        performance_insight={"summary": "没有约到决策人。", "severity": "HIGH"},
+    )
+    cards = {
+        "sales": sales,
+        "leader": leader,
+        "leader_personal": personal,
+        "recorder": sales,
+    }
+    svc = PlatformNotificationService()
+
+    assert "#### 销售表现\n\n销售本场问清了预算。" in svc._recap_card_for_role(
+        "recorder", recap_cards_by_view=cards
+    ).feishu_summary
+    assert "#### 销售表现\n\n销售本场问清了预算。" in svc._recap_card_for_role(
+        "collaborative_participant", recap_cards_by_view=cards
+    ).feishu_summary
+    assert "#### 销售表现\n\n没有约到决策人。" in svc._recap_card_for_role(
+        "leader", recap_cards_by_view=cards
+    ).feishu_summary
+    assert "销售表现" not in svc._recap_card_for_role(
+        "configured_cc", recap_cards_by_view=cards
+    ).feishu_summary
+    group = svc._recap_card_for_role("leader", recap_cards_by_view=cards, is_group=True)
+    assert "销售表现" not in group.feishu_summary
+    assert "完整复盘报告" in group.feishu_action_links
+    assert "tab=" not in group.feishu_action_links

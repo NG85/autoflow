@@ -4,14 +4,16 @@
 - 销售轻量复盘卡、汇报链/抄送走原模板卡
 - 全员轻量卡
 - 只推销售、关掉上级/群
+- 部门群仍发旧卡，同时让 leader 个人另收轻量卡
 
 未配置或无法解析时，全部角色保持原模板卡（legacy），与历史行为一致。
+有拜访群时，缺省仍由群接替 leader 以及公司级、部门级抄送。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Mapping, Optional
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from app.site_settings import SiteSetting
 
@@ -26,6 +28,9 @@ RECIPIENT_TYPES = (
     "collaborative_participant",
 )
 GROUP_TYPES = ("review", "brief")
+# 只有这两类可以被 review 群接替。记录人、协同人、按人抄送始终单独收。
+REVIEW_REPLACEABLE_ROLES = frozenset({"leader", "configured_cc"})
+DEFAULT_REVIEW_REPLACES = ("leader", "configured_cc")
 
 _FALSE_TOKENS = frozenset({"false", "off", "disabled", "none", "0", "no"})
 _TRUE_TOKENS = frozenset({"true", "on", "enabled", "1", "yes"})
@@ -35,6 +40,8 @@ _TRUE_TOKENS = frozenset({"true", "on", "enabled", "1", "yes"})
 class RolePushSpec:
     enabled: bool
     card: str
+    # None 表示沿用缺省接替名单。空元组表示明确不接替任何人。只对 groups.review 生效。
+    replaces: Optional[tuple[str, ...]] = None
 
 
 @dataclass(frozen=True)
@@ -69,6 +76,14 @@ class VisitRecordPushPolicy:
         if not spec.enabled:
             return CARD_LEGACY
         return spec.card if spec.card in VALID_CARDS else CARD_LEGACY
+
+    def review_replaces(self) -> frozenset[str]:
+        """review 群接替的个人角色。群关闭时不接替任何人。缺省接替 leader 和 configured_cc。"""
+        spec = self.group_spec("review")
+        if not spec.enabled:
+            return frozenset()
+        raw = DEFAULT_REVIEW_REPLACES if spec.replaces is None else spec.replaces
+        return frozenset(role for role in raw if role in REVIEW_REPLACEABLE_ROLES)
 
     def uses_recap_lite(self) -> bool:
         return any(
@@ -113,8 +128,20 @@ def _coerce_card(raw: Any, default: str) -> str:
     return default
 
 
+def _coerce_replaces(raw: Any) -> Optional[tuple[str, ...]]:
+    """名单不是数组时视为没写，继续用缺省接替。数组里不认识的角色丢掉。"""
+    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+        return None
+    roles: list[str] = []
+    for item in raw:
+        role = str(item).strip().lower()
+        if role in REVIEW_REPLACEABLE_ROLES and role not in roles:
+            roles.append(role)
+    return tuple(roles)
+
+
 def _normalize_role_spec(raw: Any, default_card: str) -> RolePushSpec:
-    """把 bool / 卡片名 / {enabled, card} 统一成 RolePushSpec。"""
+    """把 bool / 卡片名 / {enabled, card, replaces} 统一成 RolePushSpec。"""
     if raw is None:
         return RolePushSpec(enabled=True, card=default_card)
     if isinstance(raw, bool):
@@ -135,7 +162,12 @@ def _normalize_role_spec(raw: Any, default_card: str) -> RolePushSpec:
         card_raw = raw.get("card")
         if card_raw is None and isinstance(raw.get("strategy"), str):
             card_raw = raw.get("strategy")
-        return RolePushSpec(enabled=enabled, card=_coerce_card(card_raw, default_card))
+        replaces = _coerce_replaces(raw.get("replaces")) if "replaces" in raw else None
+        return RolePushSpec(
+            enabled=enabled,
+            card=_coerce_card(card_raw, default_card),
+            replaces=replaces,
+        )
     return RolePushSpec(enabled=True, card=default_card)
 
 

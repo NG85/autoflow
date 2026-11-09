@@ -1,8 +1,10 @@
 """只读 Aldebaran crm_entity_insight：拜访复盘（entity_type=VISIT）。
 
-同一拜访两条结果：
-- POSTVISIT_REVIEW_SALES_VIEW 销售视角
-- POSTVISIT_REVIEW_LEAD_VIEW 上级视角
+同一拜访的结果：
+- POSTVISIT_REVIEW_SALES_VIEW 销售视角复盘
+- POSTVISIT_REVIEW_LEAD_VIEW 上级视角复盘
+- VISIT_SALES_PERFORMANCE_SALES_VIEW 销售视角表现评价
+- VISIT_SALES_PERFORMANCE_LEADER_VIEW 上级视角表现评价
 
 通过 CRMEntityInsight 查询。查询失败不影响推卡主流程。
 """
@@ -24,12 +26,28 @@ logger = logging.getLogger(__name__)
 VISIT_INSIGHT_ENTITY_TYPE = "VISIT"
 VISIT_INSIGHT_SALES_TYPE = "POSTVISIT_REVIEW_SALES_VIEW"
 VISIT_INSIGHT_LEADER_TYPE = "POSTVISIT_REVIEW_LEAD_VIEW"
+VISIT_INSIGHT_PERFORMANCE_SALES_TYPE = "VISIT_SALES_PERFORMANCE_SALES_VIEW"
+VISIT_INSIGHT_PERFORMANCE_LEADER_TYPE = "VISIT_SALES_PERFORMANCE_LEADER_VIEW"
 # 兼容旧常量名
 VISIT_INSIGHT_TYPE = VISIT_INSIGHT_SALES_TYPE
 
 RECAP_VIEW_SALES = "sales"
 RECAP_VIEW_LEADER = "leader"
+PERFORMANCE_VIEW_SALES = "performance_sales"
+PERFORMANCE_VIEW_LEADER = "performance_leader"
+RECAP_TAB_BUSINESS = "business"
+RECAP_TAB_PERFORMANCE = "performance"
+RECAP_PAGE_TABS = (
+    (RECAP_TAB_BUSINESS, "业务推进"),
+    (RECAP_TAB_PERFORMANCE, "销售表现"),
+)
 _SALES_RECIPIENT_TYPES = frozenset({"recorder", "collaborative_participant"})
+_VISIT_PAGE_INSIGHT_TYPES = (
+    VISIT_INSIGHT_SALES_TYPE,
+    VISIT_INSIGHT_LEADER_TYPE,
+    VISIT_INSIGHT_PERFORMANCE_SALES_TYPE,
+    VISIT_INSIGHT_PERFORMANCE_LEADER_TYPE,
+)
 
 
 @dataclass(frozen=True)
@@ -162,6 +180,18 @@ def insight_type_for_view(view: str) -> str:
     return VISIT_INSIGHT_LEADER_TYPE
 
 
+def performance_insight_type_for_view(view: str) -> str:
+    if view == RECAP_VIEW_SALES:
+        return VISIT_INSIGHT_PERFORMANCE_SALES_TYPE
+    return VISIT_INSIGHT_PERFORMANCE_LEADER_TYPE
+
+
+def performance_view_for_recap_view(view: str) -> str:
+    if view == RECAP_VIEW_SALES:
+        return PERFORMANCE_VIEW_SALES
+    return PERFORMANCE_VIEW_LEADER
+
+
 def _text(value: Any) -> str:
     if value is None:
         return ""
@@ -275,15 +305,21 @@ def load_visit_record_insight(
     return picked
 
 
+def _empty_visit_insights() -> dict[str, Optional[VisitRecordInsight]]:
+    return {
+        RECAP_VIEW_SALES: None,
+        RECAP_VIEW_LEADER: None,
+        PERFORMANCE_VIEW_SALES: None,
+        PERFORMANCE_VIEW_LEADER: None,
+    }
+
+
 def load_visit_record_insights_by_view(
     session: Optional[Session],
     record_id: str,
 ) -> dict[str, Optional[VisitRecordInsight]]:
-    """一次查出同一拜访的销售/上级两条复盘。"""
-    empty: dict[str, Optional[VisitRecordInsight]] = {
-        RECAP_VIEW_SALES: None,
-        RECAP_VIEW_LEADER: None,
-    }
+    """一次查出同一拜访的销售/上级复盘，以及两个视角的表现评价。"""
+    empty = _empty_visit_insights()
     rid = (record_id or "").strip()
     if session is None or not rid:
         return empty
@@ -293,6 +329,14 @@ def load_visit_record_insights_by_view(
     return {
         RECAP_VIEW_SALES: pick_visit_record_insight(rows, preferred_types=(VISIT_INSIGHT_SALES_TYPE,)),
         RECAP_VIEW_LEADER: pick_visit_record_insight(rows, preferred_types=(VISIT_INSIGHT_LEADER_TYPE,)),
+        PERFORMANCE_VIEW_SALES: pick_visit_record_insight(
+            rows,
+            preferred_types=(VISIT_INSIGHT_PERFORMANCE_SALES_TYPE,),
+        ),
+        PERFORMANCE_VIEW_LEADER: pick_visit_record_insight(
+            rows,
+            preferred_types=(VISIT_INSIGHT_PERFORMANCE_LEADER_TYPE,),
+        ),
     }
 
 
@@ -302,6 +346,17 @@ def has_visit_recap_insight(
     return bool(insights.get(RECAP_VIEW_SALES) or insights.get(RECAP_VIEW_LEADER))
 
 
+def has_visit_recap_page_insight(
+    insights: Mapping[str, Optional[VisitRecordInsight]],
+) -> bool:
+    """复盘或表现评价至少有一条时，复盘页可以按视角打开。"""
+    return bool(
+        has_visit_recap_insight(insights)
+        or insights.get(PERFORMANCE_VIEW_SALES)
+        or insights.get(PERFORMANCE_VIEW_LEADER)
+    )
+
+
 def viewer_has_visible_recap(
     insight_types: Sequence[str],
     *,
@@ -309,7 +364,7 @@ def viewer_has_visible_recap(
     is_reporting_leader: bool = False,
     is_sys_admin: bool = False,
 ) -> bool:
-    """当前用户打开复盘页时，对应视角是否已有复盘。"""
+    """当前用户打开复盘页时，对应视角的复盘或表现评价是否至少有一条。"""
     present = {
         str(item).strip().upper()
         for item in (insight_types or ())
@@ -324,14 +379,18 @@ def viewer_has_visible_recap(
     )
     if view is None:
         return False
-    return insight_type_for_view(view).upper() in present
+    wanted = {
+        insight_type_for_view(view).upper(),
+        performance_insight_type_for_view(view).upper(),
+    }
+    return bool(present & wanted)
 
 
 def load_visit_recap_types_by_record_id(
     session: Optional[Session],
     record_ids: Sequence[str],
 ) -> dict[str, set[str]]:
-    """一批拜访上未删除、未过期的销售/上级复盘类型。查询失败时全部视为没有。"""
+    """一批拜访上未删除、未过期的复盘和表现评价类型。查询失败时全部视为没有。"""
     ids = list(dict.fromkeys(_text(item) for item in record_ids if _text(item)))
     if session is None or not ids:
         return {}
@@ -340,9 +399,7 @@ def load_visit_recap_types_by_record_id(
         .where(CRMEntityInsight.entity_type == VISIT_INSIGHT_ENTITY_TYPE)
         .where(CRMEntityInsight.entity_id.in_(ids))
         .where(
-            CRMEntityInsight.insight_type.in_(
-                (VISIT_INSIGHT_SALES_TYPE, VISIT_INSIGHT_LEADER_TYPE)
-            )
+            CRMEntityInsight.insight_type.in_(_VISIT_PAGE_INSIGHT_TYPES)
         )
         .where(CRMEntityInsight.is_deleted == 0)
         .where(
@@ -365,6 +422,28 @@ def load_visit_recap_types_by_record_id(
             continue
         found.setdefault(entity_id, set()).add(insight_type)
     return found
+
+
+def resolve_visit_record_page(
+    insights: Mapping[str, Optional[VisitRecordInsight]],
+    *,
+    view: Optional[str] = None,
+    resolve_view: Optional[Callable[[], Optional[str]]] = None,
+) -> Optional[tuple[str, Optional[VisitRecordInsight], Optional[VisitRecordInsight]]]:
+    """没有复盘也没有表现评价，或当前用户没有可看的视角时，返回 None。
+
+    返回 (视角, 该视角复盘, 该视角表现评价)。缺的那条是 None，另一条仍可看。
+    """
+    if not has_visit_recap_page_insight(insights):
+        return None
+    chosen = view if view is not None else (resolve_view() if resolve_view else None)
+    if chosen not in (RECAP_VIEW_SALES, RECAP_VIEW_LEADER):
+        return None
+    return (
+        chosen,
+        insights.get(chosen),
+        insights.get(performance_view_for_recap_view(chosen)),
+    )
 
 
 def resolve_visit_record_detail_recap(

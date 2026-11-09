@@ -1,7 +1,7 @@
 import logging
 import re
 from collections import defaultdict
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Iterable, Optional, Tuple
 
 import requests
 
@@ -41,9 +41,15 @@ from app.services.visit_record_push_policy import (
     filter_recipients_by_policy,
     load_visit_record_push_policy,
 )
-from app.services.visit_record_recap_card import RecapLiteCard, build_recap_lite_card
+from app.services.visit_record_recap_card import (
+    RecapLiteCard,
+    build_recap_lite_card,
+    performance_summary_text,
+)
 from app.services.visit_record_extract_reader import load_visit_record_extract_response
 from app.services.visit_record_insight_reader import (
+    PERFORMANCE_VIEW_LEADER,
+    PERFORMANCE_VIEW_SALES,
     RECAP_VIEW_LEADER,
     RECAP_VIEW_SALES,
     has_visit_recap_insight,
@@ -1432,16 +1438,14 @@ class PlatformNotificationService:
                 recipients_by_platform[platform].append(recipient)
                 existing_open_ids.add(open_id)
 
-    def _keep_visit_record_individual_recipient_when_review_group(
-        self, recipient: Dict[str, Any]
+    def _kept_despite_review_group(
+        self, recipient: Dict[str, Any], replaces: Iterable[str]
     ) -> bool:
-        """department_review 群存在时，判断是否仍对个人推送。"""
+        """review 群接替名单之外的人仍发个人。按人抄送始终单独收。"""
         recipient_type = recipient.get("type")
-        if recipient_type in ("recorder", "collaborative_participant"):
-            return True
         if recipient_type == "configured_cc" and recipient.get("cc_scope") == "user":
             return True
-        return False
+        return recipient_type not in set(replaces)
 
     def _collect_visit_record_recipients_and_groups(
         self,
@@ -1449,14 +1453,16 @@ class PlatformNotificationService:
         recorder_name: Optional[str],
         recorder_id: Optional[str],
         visit_record: Optional[Dict[str, Any]],
+        policy: Optional[VisitRecordPushPolicy] = None,
     ) -> Tuple[Dict[str, List[Dict[str, Any]]], List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
         汇总拜访记录推送的接收者与部门群配置。
+        协同人若已是记录人或汇报上级，不再按协同人追加，因此只收对应角色的卡。
         若配置了会收拜访卡片的群（department_review / department_review_visits / all），
-        则从个人接收者中移除 leader 与 cc_scope=global / department 的 configured_cc；
-        仅 cc_scope=user 的个性化抄送仍推个人。
-        管理层与 global / department 抄送改由 review 群接收 leader 版卡片。
-        department_review_reports 群不参与拜访推送，也不影响个人接收者中的 leader。
+        且 groups.review 开着，则按 replaces 从个人接收者中移除被接替的角色。
+        缺省接替 leader 与 cc_scope=global / department 的 configured_cc。
+        cc_scope=user 的个性化抄送始终推个人。replaces 为空则不接替任何人。
+        群关闭时不拿掉个人。department_review_reports 群不参与拜访推送。
         返回 (recipients_by_platform, department_groups_review, department_groups_brief)。
         """
         recorder_profile = self._resolve_recorder_profile(
@@ -1471,10 +1477,14 @@ class PlatformNotificationService:
         collaborative = self._get_collaborative_participants_recipients(db_session, visit_record)
         if collaborative:
             for platform, recipients in collaborative.items():
-                if platform in recipients_by_platform:
-                    recipients_by_platform[platform].extend(recipients)
-                else:
-                    recipients_by_platform[platform] = recipients
+                bucket = recipients_by_platform.setdefault(platform, [])
+                existing_open_ids = {r.get("open_id") for r in bucket if r.get("open_id")}
+                for recipient in recipients:
+                    open_id = recipient.get("open_id")
+                    if not open_id or open_id in existing_open_ids:
+                        continue
+                    bucket.append(recipient)
+                    existing_open_ids.add(open_id)
 
         recorder_dept_id = (visit_record or {}).get("recorder_department_id")
         recorder_dept_name = (visit_record or {}).get("recorder_department_name")
@@ -1500,11 +1510,13 @@ class PlatformNotificationService:
             db_session=db_session,
         )
 
-        if department_groups_review:
+        policy = policy or load_visit_record_push_policy()
+        replaces = policy.review_replaces() if department_groups_review else frozenset()
+        if department_groups_review and replaces:
             for platform in list(recipients_by_platform.keys()):
                 recipients_by_platform[platform] = [
                     r for r in recipients_by_platform[platform]
-                    if self._keep_visit_record_individual_recipient_when_review_group(r)
+                    if self._kept_despite_review_group(r, replaces)
                 ]
             recipients_by_platform = {p: rs for p, rs in recipients_by_platform.items() if rs}
 
@@ -1684,9 +1696,13 @@ class PlatformNotificationService:
         is_group: bool = False,
     ) -> Optional[RecapLiteCard]:
         if recap_cards_by_view:
-            # 抽取入口只挂在记录人卡上；协同人等同销售视角但不带 extract。
+            # 抽取入口只挂在记录人卡上。纯协同人用销售复盘卡。
+            # 同一人已是汇报上级时，收集阶段保留 leader，这里不会再走到销售卡。
+            # 上级视角表现评价只进汇报上级个人卡。抄送和群仍用 leader 复盘卡。
             if role == "recorder" and "recorder" in recap_cards_by_view:
                 return recap_cards_by_view["recorder"]
+            if role == "leader" and not is_group and "leader_personal" in recap_cards_by_view:
+                return recap_cards_by_view["leader_personal"]
             return recap_cards_by_view.get(recap_view_for_role(role, is_group=is_group))
         return recap_card
 
@@ -2024,6 +2040,7 @@ class PlatformNotificationService:
         recipients_by_platform_override：仅向指定接收者推送（用于 partial_pushed 定向重推）。
         """
         is_retry = recipients_by_platform_override is not None
+        policy = load_visit_record_push_policy()
         if is_retry:
             recipients_by_platform = recipients_by_platform_override or {}
             department_groups_review: List[Dict[str, Any]] = []
@@ -2031,10 +2048,13 @@ class PlatformNotificationService:
         else:
             recipients_by_platform, department_groups_review, department_groups_brief = (
                 self._collect_visit_record_recipients_and_groups(
-                    db_session, recorder_name, recorder_id, visit_record
+                    db_session,
+                    recorder_name,
+                    recorder_id,
+                    visit_record,
+                    policy=policy,
                 )
             )
-        policy = load_visit_record_push_policy()
         recipients_by_platform = filter_recipients_by_policy(recipients_by_platform, policy)
         if not policy.group_enabled("review"):
             department_groups_review = []
@@ -2049,19 +2069,24 @@ class PlatformNotificationService:
                     load_visit_record_extract_response(db_session, record_id).get("card_links")
                     or []
                 )
+            sales_insight = insights.get(RECAP_VIEW_SALES)
+            leader_insight = insights.get(RECAP_VIEW_LEADER)
+            sales_performance = insights.get(PERFORMANCE_VIEW_SALES)
+            leader_performance = insights.get(PERFORMANCE_VIEW_LEADER)
             sales_card = build_recap_lite_card(
                 record_id,
                 visit_record,
                 recorder_name=recorder_name,
                 is_revised=is_revised,
-                insight=insights.get(RECAP_VIEW_SALES),
+                insight=sales_insight,
+                performance_insight=sales_performance,
             )
             leader_card = build_recap_lite_card(
                 record_id,
                 visit_record,
                 recorder_name=recorder_name,
                 is_revised=is_revised,
-                insight=insights.get(RECAP_VIEW_LEADER),
+                insight=leader_insight,
             )
             recorder_card = (
                 build_recap_lite_card(
@@ -2069,8 +2094,9 @@ class PlatformNotificationService:
                     visit_record,
                     recorder_name=recorder_name,
                     is_revised=is_revised,
-                    insight=insights.get(RECAP_VIEW_SALES),
+                    insight=sales_insight,
                     extract_links=extract_links,
+                    performance_insight=sales_performance,
                 )
                 if extract_links is not None
                 else sales_card
@@ -2080,6 +2106,15 @@ class PlatformNotificationService:
                 RECAP_VIEW_LEADER: leader_card,
                 "recorder": recorder_card,
             }
+            if performance_summary_text(leader_performance):
+                recap_cards_by_view["leader_personal"] = build_recap_lite_card(
+                    record_id,
+                    visit_record,
+                    recorder_name=recorder_name,
+                    is_revised=is_revised,
+                    insight=leader_insight,
+                    performance_insight=leader_performance,
+                )
         base_template_vars = self._prepare_visit_record_template_vars(
             record_id,
             recorder_name,
