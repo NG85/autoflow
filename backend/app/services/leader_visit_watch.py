@@ -87,7 +87,8 @@ def visit_watch_lines(
     if not has_stats and not low_entry and not high_severity:
         return []
     label = _text(watch.get("label")) or LABEL_THIS_WEEK
-    heading = f"## {label}拜访" if dingtalk else f"**{label}拜访**"
+    section = _team_visit_section_label(label)
+    heading = f"## {section}" if dingtalk else f"**{section}**"
     lines = [heading]
     if has_stats:
         lines.append(_stats_line(watch))
@@ -96,7 +97,7 @@ def visit_watch_lines(
     if high_severity:
         lines.append(f"{HIGH_HEAVY_LABEL}：" + "、".join(f"{item['name']} {item['high_count']} 条" for item in high_severity))
     if include_detail:
-        detail = _detail_link(watch.get("url"), label)
+        detail = _detail_link(watch.get("url"), section)
         if detail:
             lines.append(detail)
     return lines
@@ -256,11 +257,25 @@ def _high_counts(insight_rows: Sequence[Any], record_owner: Mapping[str, str]) -
     return dict(counts)
 
 
-def _detail_link(url: Any, label: str) -> str:
+def _team_visit_section_label(label: str) -> str:
+    """卡片小节名：团队上周拜访 / 团队本周拜访。"""
+    text = _text(label)
+    if not text:
+        text = LABEL_THIS_WEEK
+    if text.startswith("团队") and text.endswith("拜访"):
+        return text
+    if text.endswith("拜访"):
+        return text if text.startswith("团队") else f"团队{text}"
+    return f"团队{text}拜访"
+
+
+def _detail_link(url: Any, section_label: str) -> str:
+    """蓝链文案与小节名一致，例如「团队上周拜访」，不加「查看」前缀。"""
     target = _text(url)
-    if not target:
+    label = _text(section_label)
+    if not target or not label:
         return ""
-    return f"[查看{label}拜访]({target})"
+    return f"[{label}]({target})"
 
 
 def _team_phrase(names: Sequence[str]) -> str:

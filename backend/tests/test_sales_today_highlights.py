@@ -92,7 +92,7 @@ def test_thursday_drops_next_week_and_unchanged_risk_keeps_resolved(monkeypatch)
     rows = [
         _row(
             "IMMEDIATE_ACTION",
-            {"claim": "确认排期", "why_today": "今天不定就延期", "confidence": 0.9},
+            {"claim": "确认排期", "why_today": "今天不定就延期", "confidence": 0.9, "todo_id": "todo-imm"},
             unique_id="imm",
             account_id="acc-1",
             opportunity_id="opp-1",
@@ -133,14 +133,22 @@ def test_thursday_drops_next_week_and_unchanged_risk_keeps_resolved(monkeypatch)
     assert "甲客户" in body and "乙商机" in body
     assert "已闭环" not in body
     assert "这件下周还做吗" not in body
-    assert [label for label, _url in card_blue_links(thursday)] == ["建议关注"]
+    assert [label for label, _url in card_blue_links(thursday)] == ["关键发现"]
 
     friday = assemble_sales_highlights(rows, FRIDAY, _names())
     friday_keys = [section["key"] for section in friday["sections"]]
     assert friday_keys == ["immediate_today", "open_risks", "next_week_confirm"]
     assert friday["sections"][2]["items"][0]["confirm_prompt"] == "这件下周还做吗"
     assert "这件下周还做吗" not in render_card_markdown(friday)
-    assert [label for label, _url in card_blue_links(friday)] == ["建议关注", "下周待确认"]
+    friday_links = card_blue_links(friday)
+    assert [label for label, _url in friday_links] == ["关键发现", "下周待确认"]
+    assert render_card_links(friday) == (
+        "[关键发现](https://example.com/v2/today-highlights"
+        "?date=2026-10-09&tab=open_risks)"
+        " ｜ "
+        "[下周待确认](https://example.com/v2/today-highlights"
+        "?date=2026-10-09&tab=next_week_confirm)"
+    )
 
 
 def test_immediate_item_carries_decision_and_feedback():
@@ -159,10 +167,11 @@ def test_immediate_item_carries_decision_and_feedback():
         _names(),
     )
     item = assembled["sections"][0]["items"][0]
-    assert item["status"] == "ADOPTED"
+    assert item["status"] is None
     assert item["feedback"] == "up"
     assert item["feedback_comment"] == "判断准确"
     assert item["adopted_todo_id"] == "todo-1"
+    assert [todo["unique_id"] for todo in item["related_todos"]] == ["todo-1"]
     risk = assemble_sales_highlights(
         [
             _row(
@@ -196,7 +205,7 @@ def test_reextract_keeps_the_decided_immediate_row():
             ),
             _row(
                 "IMMEDIATE_ACTION",
-                {"claim": "新建议", "why_today": "今天"},
+                {"claim": "新建议", "why_today": "今天", "todo_id": "todo-new"},
                 unique_id="new",
                 extract_key="same",
                 status="PENDING",
@@ -211,12 +220,35 @@ def test_reextract_keeps_the_decided_immediate_row():
     assert items[0]["unique_id"] == "old"
     assert items[0]["claim"] == "新建议"
     assert items[0]["why_today"] == "今天"
-    assert items[0]["status"] == "ADOPTED"
-    assert items[0]["adopted_todo_id"] == "todo-1"
+    assert items[0]["status"] is None
+    assert items[0]["adopted_todo_id"] == "todo-new"
+    assert [todo["unique_id"] for todo in items[0]["related_todos"]] == ["todo-new"]
     assert items[0]["feedback"] == "down"
 
 
-def test_same_claim_lists_todos_under_one_immediate():
+def test_immediate_without_a_task_is_omitted():
+    assembled = assemble_sales_highlights(
+        [
+            _row(
+                "IMMEDIATE_ACTION",
+                {"claim": "还没绑任务", "why_today": "今天"},
+                unique_id="loose",
+            ),
+            _row(
+                "OPEN_RISK",
+                {"claim": "窗口关掉了", "risk_change": "new"},
+                unique_id="risk",
+                card_links=[{"key": "open_risks", "title": "关键发现"}],
+            ),
+        ],
+        THURSDAY,
+        _names(),
+    )
+    assert [section["key"] for section in assembled["sections"]] == ["open_risks"]
+    assert "还没绑任务" not in render_card_markdown(assembled)
+
+
+def test_same_claim_stays_two_tasks():
     assembled = assemble_sales_highlights(
         [
             _row(
@@ -244,14 +276,17 @@ def test_same_claim_lists_todos_under_one_immediate():
         },
     )
     items = assembled["sections"][0]["items"]
-    assert len(items) == 1
-    assert items[0]["status"] == "ADOPTED"
-    assert items[0]["adopted_todo_id"] == "todo-a"
-    assert [todo["title"] for todo in items[0]["related_todos"]] == ["案例触达", "清账"]
+    assert len(items) == 2
+    assert [item["status"] for item in items] == [None, None]
+    assert [item["adopted_todo_id"] for item in items] == ["todo-a", "todo-b"]
+    assert [[todo["unique_id"] for todo in item["related_todos"]] for item in items] == [
+        ["todo-a"],
+        ["todo-b"],
+    ]
     body = render_card_markdown(assembled)
     assert body.count("收口两条待办") == 1
     assert "案例触达" in body
-    assert "清账" in body
+    assert "清账" not in body
 
 
 def test_rejected_immediate_stays_rejected_when_a_sibling_is_adopted():
@@ -278,11 +313,14 @@ def test_rejected_immediate_stays_rejected_when_a_sibling_is_adopted():
         THURSDAY,
         {"accounts": {}, "opportunities": {}, "todos": {"todo-a": "案例触达", "todo-b": "清账"}},
     )
-    item = assembled["sections"][0]["items"][0]
-    assert item["unique_id"] == "a"
-    assert item["status"] == "REJECTED"
-    assert item["adopted_todo_id"] is None
-    assert [todo["unique_id"] for todo in item["related_todos"]] == ["todo-a", "todo-b"]
+    items = assembled["sections"][0]["items"]
+    assert [item["unique_id"] for item in items] == ["a", "b"]
+    assert [item["status"] for item in items] == [None, None]
+    assert [item["adopted_todo_id"] for item in items] == ["todo-a", "todo-b"]
+    assert [[todo["unique_id"] for todo in item["related_todos"]] for item in items] == [
+        ["todo-a"],
+        ["todo-b"],
+    ]
 
 
 def test_card_shows_top_immediate_and_blue_links_for_the_rest(monkeypatch):
@@ -302,13 +340,13 @@ def test_card_shows_top_immediate_and_blue_links_for_the_rest(monkeypatch):
     immediates = [
         _row(
             "IMMEDIATE_ACTION",
-            {"claim": "稍后处理", "why_today": "不急", "confidence": 0.2},
+            {"claim": "稍后处理", "why_today": "不急", "confidence": 0.2, "todo_id": "todo-later"},
             unique_id="later",
             card_links=[{"key": "immediate_today", "title": "立即处理"}],
         ),
         _row(
             "IMMEDIATE_ACTION",
-            {"claim": "先做这个", "why_today": "今天不定就延期", "confidence": 0.9},
+            {"claim": "先做这个", "why_today": "今天不定就延期", "confidence": 0.9, "todo_id": "todo-now"},
             unique_id="now",
             account_id="acc-1",
             opportunity_id="opp-1",
@@ -338,7 +376,7 @@ def test_card_shows_top_immediate_and_blue_links_for_the_rest(monkeypatch):
         [
             _row(
                 "IMMEDIATE_ACTION",
-                {"claim": "只有这一条", "why_today": "今天要定", "confidence": 0.8},
+                {"claim": "只有这一条", "why_today": "今天要定", "confidence": 0.8, "todo_id": "todo-solo"},
                 unique_id="solo",
                 card_links=[{"key": "immediate_today", "title": "立即处理"}],
             )
@@ -371,7 +409,7 @@ def test_dingtalk_card_puts_title_in_the_body(monkeypatch):
         [
             _row(
                 "IMMEDIATE_ACTION",
-                {"claim": "先做这个", "why_today": "今天要定", "confidence": 0.9},
+                {"claim": "先做这个", "why_today": "今天要定", "confidence": 0.9, "todo_id": "todo-now"},
                 card_links=[{"key": "immediate_today", "title": "立即处理"}],
             )
         ],
@@ -518,7 +556,7 @@ def test_viewer_query_uses_own_oauth_id(monkeypatch):
         return [
             _row(
                 "IMMEDIATE_ACTION",
-                {"claim": "只属于我", "why_today": "今天"},
+                {"claim": "只属于我", "why_today": "今天", "todo_id": "todo-mine"},
                 subject_id="oauth-me",
                 card_links=[{"key": "immediate_today", "title": "立即处理"}],
             )
@@ -622,7 +660,7 @@ def test_opt_out_skips_send(monkeypatch):
         lambda *args, **kwargs: [
             _row(
                 "IMMEDIATE_ACTION",
-                {"claim": "今天打电话", "why_today": "承诺今天"},
+                {"claim": "今天打电话", "why_today": "承诺今天", "todo_id": "todo-call"},
                 card_links=[{"key": "immediate_today", "title": "立即处理"}],
             )
         ],
@@ -670,7 +708,7 @@ def test_oauth_id_resolves_open_id_and_uses_snapshot_title(monkeypatch):
         lambda *args, **kwargs: [
             _row(
                 "IMMEDIATE_ACTION",
-                {"claim": "今天打电话", "why_today": "承诺今天"},
+                {"claim": "今天打电话", "why_today": "承诺今天", "todo_id": "todo-call"},
                 card_links=[{"key": "immediate_today", "title": "立即处理"}],
             )
         ],
@@ -722,7 +760,7 @@ def test_missing_open_id_skips(monkeypatch):
     monkeypatch.setattr(
         "app.services.sales_today_highlights.load_sales_extract_rows",
         lambda *args, **kwargs: [
-            _row("IMMEDIATE_ACTION", {"claim": "今天打电话", "why_today": "承诺今天"})
+            _row("IMMEDIATE_ACTION", {"claim": "今天打电话", "why_today": "承诺今天", "todo_id": "todo-call"})
         ],
     )
     monkeypatch.setattr(
@@ -756,9 +794,8 @@ def test_highlights_task_runs_apart_from_daily_report(monkeypatch):
     monkeypatch.setattr("app.tasks.cron_jobs.Session", lambda engine: _Session())
     seen = {}
 
-    def fake_sales(session, report_date=None, recipient_user_ids=None, exclude_oauth_user_ids=None):
+    def fake_sales(session, report_date=None, recipient_user_ids=None):
         seen["sales"] = report_date
-        seen["excluded"] = list(exclude_oauth_user_ids or [])
         seen.setdefault("order", []).append("sales")
         return {"success": True, "skipped": False, "skip_reason": None, "success_count": 1}
 
@@ -770,7 +807,6 @@ def test_highlights_task_runs_apart_from_daily_report(monkeypatch):
             "skipped": False,
             "skip_reason": None,
             "success_count": 2,
-            "sent_oauth_user_ids": ["oauth-leader"],
         }
 
     monkeypatch.setattr(
@@ -785,7 +821,6 @@ def test_highlights_task_runs_apart_from_daily_report(monkeypatch):
     assert seen["order"] == ["department", "sales"]
     assert seen["sales"] == date(2026, 10, 8)
     assert seen["department"] == date(2026, 10, 8)
-    assert seen["excluded"] == ["oauth-leader"]
     assert result["sales_today_highlights"]["success_count"] == 1
     assert result["department_today_highlights"]["success_count"] == 2
 
@@ -793,14 +828,12 @@ def test_highlights_task_runs_apart_from_daily_report(monkeypatch):
     result = push_crm_today_highlights()
     assert seen["sales"] is None
     assert seen["department"] is None
-    assert seen["excluded"] == ["oauth-leader"]
     assert result["report_date"] is None
 
     seen.clear()
     result = push_crm_today_highlights(report_date_str="2026-10-08", audience="sales")
     assert seen["sales"] == date(2026, 10, 8)
     assert "department" not in seen
-    assert seen["excluded"] == []
     assert result["department_today_highlights"] is None
 
     bad = push_crm_today_highlights(report_date_str="10/08")
@@ -818,7 +851,7 @@ def test_embedded_personal_block_keeps_sales_links_without_week_buttons(monkeypa
         [
             _row(
                 "IMMEDIATE_ACTION",
-                {"claim": "今天回访", "why_today": "答应今天", "confidence": 0.9},
+                {"claim": "今天回访", "why_today": "答应今天", "confidence": 0.9, "todo_id": "todo-visit"},
                 card_links=[
                     {"key": "immediate_today", "title": "立即处理"},
                     {"key": "open_risks", "title": "建议关注"},
@@ -835,14 +868,14 @@ def test_embedded_personal_block_keeps_sales_links_without_week_buttons(monkeypa
         _names(),
     )
     body = render_embedded_personal_markdown(assembled)
-    assert body.startswith("**立即处理**")
+    assert body.startswith("**我的立即处理**")
     assert "今天回访" in body
-    assert "[建议关注](https://example.com/today?date=2026-10-08&tab=open_risks)" in body
+    assert "[关键发现](https://example.com/today?date=2026-10-08&tab=open_risks)" in body
     assert "本周待完成" not in body
     assert "本周已拜访" not in body
 
 
-def test_delivered_team_card_skips_the_sales_card(monkeypatch):
+def test_leader_still_receives_sales_card_alongside_team(monkeypatch):
     sent = []
     monkeypatch.setattr(
         "app.services.sales_today_highlights.load_report_push_policy",
@@ -853,13 +886,13 @@ def test_delivered_team_card_skips_the_sales_card(monkeypatch):
         lambda *args, **kwargs: [
             _row(
                 "IMMEDIATE_ACTION",
-                {"claim": "负责人自己的", "why_today": "今天"},
+                {"claim": "负责人自己的", "why_today": "今天", "todo_id": "todo-leader"},
                 subject_id="oauth-leader",
                 unique_id="leader",
             ),
             _row(
                 "IMMEDIATE_ACTION",
-                {"claim": "一线的", "why_today": "今天"},
+                {"claim": "一线的", "why_today": "今天", "todo_id": "todo-sales"},
                 subject_id="oauth-sales",
                 unique_id="sales",
             ),
@@ -891,15 +924,9 @@ def test_delivered_team_card_skips_the_sales_card(monkeypatch):
         "app.services.sales_today_highlights.report_today_highlights_usage",
         lambda *args, **kwargs: None,
     )
-    result = handle_sales_today_highlights(
-        MagicMock(),
-        report_date=THURSDAY,
-        exclude_oauth_user_ids=["oauth-leader"],
-    )
-    assert sent == ["oauth-sales"]
-    assert result["success_count"] == 1
-    covered = [item for item in result["items"] if item["subject_id"] == "oauth-leader"]
-    assert covered[0]["skip_reason"] == "covered_by_team_card"
+    result = handle_sales_today_highlights(MagicMock(), report_date=THURSDAY)
+    assert set(sent) == {"oauth-leader", "oauth-sales"}
+    assert result["success_count"] == 2
 
 
 def test_team_push_failure_still_sends_sales_cards(monkeypatch):
@@ -912,10 +939,7 @@ def test_team_push_failure_still_sends_sales_cards(monkeypatch):
         def __exit__(self, *args):
             return False
 
-    seen = {}
-
-    def fake_sales(session, report_date=None, recipient_user_ids=None, exclude_oauth_user_ids=None):
-        seen["excluded"] = list(exclude_oauth_user_ids or [])
+    def fake_sales(session, report_date=None, recipient_user_ids=None):
         return {"success": True, "skipped": False, "skip_reason": None, "success_count": 1}
 
     def explode(session, *, report_date=None):
@@ -933,4 +957,3 @@ def test_team_push_failure_still_sends_sales_cards(monkeypatch):
     result = push_crm_today_highlights(report_date_str="2026-10-08")
     assert result["department_today_highlights"]["skip_reason"] == "push_failed"
     assert result["sales_today_highlights"]["success_count"] == 1
-    assert seen["excluded"] == []
