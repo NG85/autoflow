@@ -17,6 +17,7 @@ from app.services.leader_intervention_actions import (
 )
 from app.services.sales_today_highlights import (
     AUDIENCE_SALES,
+    ITEM_IMMEDIATE,
     STATUS_SUPERSEDED,
     SUBJECT_USER,
     _text,
@@ -97,16 +98,13 @@ def save_sales_highlight_decisions(
     user_id: Any,
     items: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    """批量采纳或拒绝自己的销售抽取。不是自己的条目 ok 为 false。"""
+    """批量采纳或拒绝自己的销售抽取。立即处理、以及不是自己的条目，ok 为 false。"""
     if not items or len(items) > _DECISION_BATCH_MAX:
         raise ValueError("decision batch size must be 1..100")
     normalized = [_decision_patch(item) for item in items]
     ids = [item["unique_id"] for item in normalized]
     if any(not item_id for item_id in ids) or len(ids) != len(set(ids)):
         raise ValueError("unique_id must be present and unique")
-    for item in normalized:
-        if item["status"] == STATUS_ADOPTED and item["adopted_todo_id"]:
-            require_active_todo(session, item["adopted_todo_id"])
     found_rows = session.exec(
         select(CRMSkillExtractItem).where(CRMSkillExtractItem.unique_id.in_(ids))
     ).all()
@@ -114,12 +112,22 @@ def save_sales_highlight_decisions(
         found_rows = []
     found = {_text(getattr(row, "unique_id", None)): row for row in found_rows}
     results: list[dict[str, Any]] = []
-    applied = False
+    writable: list[tuple[dict[str, Any], Any]] = []
     for item in normalized:
         current = found.get(item["unique_id"])
-        if current is None or not _is_own_extract(current, oauth_user_id):
+        if (
+            current is None
+            or not _is_own_extract(current, oauth_user_id)
+            or _text(getattr(current, "item_type", None)) == ITEM_IMMEDIATE
+        ):
             results.append({"unique_id": item["unique_id"], "ok": False})
             continue
+        writable.append((item, current))
+    for item, _current in writable:
+        if item["status"] == STATUS_ADOPTED and item["adopted_todo_id"]:
+            require_active_todo(session, item["adopted_todo_id"])
+    applied = False
+    for item, current in writable:
         before = interaction_fields(current)
         current.status = item["status"]
         adopted_todo_id = item["adopted_todo_id"]
