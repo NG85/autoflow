@@ -1021,7 +1021,7 @@ def test_monday_omits_the_daily_report_and_other_days_use_yesterday(monkeypatch)
     monday["report_entries"] = [
         {"key": "team_operating_trend", "label": "经营趋势", "url": "https://example.com/trend"},
     ]
-    assert "[团队经营趋势](https://example.com/trend)  " + weekly in render_card_markdown(monday)
+    assert "[团队经营趋势](https://example.com/trend) ｜ " + weekly in render_card_markdown(monday)
     tuesday = assemble_department_highlights(
         [_row({"claim": "拍板", "related_user_id": "oauth-zhang"})],
         TUESDAY,
@@ -1038,13 +1038,13 @@ def test_monday_omits_the_daily_report_and_other_days_use_yesterday(monkeypatch)
         {"key": "team_operating_trend", "label": "经营趋势", "url": "https://example.com/trend"},
     ]
     linked = render_card_markdown(tuesday, owner_name="王经理")
-    assert "[团队经营趋势](https://example.com/trend)  " + daily in linked
+    assert "[团队经营趋势](https://example.com/trend) ｜ " + daily in linked
     dingtalk_linked = render_dingtalk_markdown(
         tuesday,
         title="团队今日重点｜2026-10-13",
         owner_name="王经理",
     )
-    assert "[团队经营趋势](https://example.com/trend)  " + daily in dingtalk_linked
+    assert "[团队经营趋势](https://example.com/trend) ｜ " + daily in dingtalk_linked
     assert "日报" not in [label for label, _url in card_footer_buttons(tuesday, owner_name="王经理")]
     assert "weekly-team" not in linked
     assert "weekly-team" not in dingtalk_linked
@@ -1153,7 +1153,7 @@ def test_week_visit_button_filters_the_team(monkeypatch):
         "url": "https://example.com/visits",
     }
     friday_body = render_card_markdown(friday)
-    assert "查看团队本周拜访" not in friday_body
+    assert "[团队本周拜访](" not in friday_body
     assert "[团队例会复盘](" not in friday_body
     friday_buttons = card_footer_buttons(friday)
     assert [label for label, _url in friday_buttons] == ["团队待完成", "团队已拜访", "团队例会复盘"]
@@ -1245,11 +1245,12 @@ def test_feishu_card_keeps_team_highlights_in_one_section(monkeypatch):
     )
     assert "**团队今日需介入**" in captured["body"]
     assert "**张三**" in captured["body"]
-    assert "**团队上周拜访**" in captured["body"]
-    assert "[团队人效](https://example.com/persona)" in captured["body"]
-    assert captured["body"].index("团队今日需介入") < captured["body"].index("团队上周拜访")
-    assert captured["body"].index("团队上周拜访") < captured["body"].index("[团队人效](")
-    assert captured.get("extra_sections") == ["**团队本周**"]
+    assert "**团队上周拜访**" not in captured["body"]
+    watch = captured["extra_sections"][0]
+    assert "**团队上周拜访**" in watch
+    assert "[团队人效](https://example.com/persona)" in watch
+    assert watch.index("团队上周拜访") < watch.index("[团队人效](")
+    assert captured["extra_sections"][1] == "**团队本周**"
     assert captured["divide_extra_sections"] is True
     assert [label for label, _url in (captured.get("footer_buttons") or [])] == ["团队待完成"]
     assert "owner_name=" not in (captured.get("footer_buttons") or [("","")])[0][1]
@@ -1280,12 +1281,12 @@ def test_feishu_card_keeps_team_highlights_in_one_section(monkeypatch):
     daily = "[团队日报](https://example.com/v2/business/reports?tab=daily-team&date=2026-10-12)"
     assert captured["body"].startswith("**我的立即处理**")
     assert "经营趋势" not in captured["body"]
-    team = captured["extra_sections"][0]
-    assert "**团队今日需介入**" in team
-    assert "**团队上周拜访**" in team
-    assert "[团队经营趋势](https://example.com/trend)  " + daily in team
-    assert team.index("团队今日需介入") < team.index("团队上周拜访") < team.index("[团队经营趋势](")
-    assert captured["extra_sections"][1] == "**团队本周**"
+    assert "**团队今日需介入**" in captured["extra_sections"][0]
+    assert "**团队上周拜访**" not in captured["extra_sections"][0]
+    watch = captured["extra_sections"][1]
+    assert "**团队上周拜访**" in watch
+    assert "[团队经营趋势](https://example.com/trend) ｜ " + daily in watch
+    assert captured["extra_sections"][2] == "**团队本周**"
 
 
 def test_dingtalk_card_puts_title_in_the_body(monkeypatch):
@@ -1329,7 +1330,7 @@ def test_highlights_task_keeps_the_other_side_when_one_fails(monkeypatch):
 
     monkeypatch.setattr("app.tasks.cron_jobs.Session", lambda engine: _Session())
 
-    def explode(session, report_date=None, recipient_user_ids=None, exclude_oauth_user_ids=None):
+    def explode(session, report_date=None, recipient_user_ids=None):
         raise RuntimeError("send broke")
 
     def ok(session, *, report_date=None, department_id=None):
@@ -1338,7 +1339,6 @@ def test_highlights_task_keeps_the_other_side_when_one_fails(monkeypatch):
             "skipped": False,
             "skip_reason": None,
             "success_count": 1,
-            "sent_oauth_user_ids": ["oauth-leader"],
         }
 
     monkeypatch.setattr(
@@ -1379,7 +1379,7 @@ def _sales_row():
     }
 
 
-def test_team_card_folds_personal_immediate_without_personal_billing(monkeypatch):
+def test_team_card_does_not_fold_personal_highlights(monkeypatch):
     captured = {}
     billed = []
     _enable(monkeypatch)
@@ -1407,14 +1407,6 @@ def test_team_card_folds_personal_immediate_without_personal_billing(monkeypatch
         lambda *args, **kwargs: [_sales_row()],
     )
     monkeypatch.setattr(
-        "app.services.sales_today_highlights.load_display_names",
-        lambda *args, **kwargs: {"accounts": {}, "opportunities": {}, "todos": {}},
-    )
-    monkeypatch.setattr(
-        "app.services.sales_today_highlights.build_sales_today_highlights_url",
-        lambda report_date, section: f"https://example.com/today?date={report_date}&tab={section}",
-    )
-    monkeypatch.setattr(
         "app.services.department_today_highlights.filter_opted_out_recipients",
         lambda session, recipients, **kwargs: list(recipients),
     )
@@ -1439,72 +1431,11 @@ def test_team_card_folds_personal_immediate_without_personal_billing(monkeypatch
     result = handle_department_today_highlights(MagicMock(), report_date=DAY)
     assert result["success_count"] == 1
     assert result["sent_oauth_user_ids"] == ["oauth-leader"]
-    assert captured["body"].index("**我的立即处理**") < captured["body"].index("**团队今日需介入**")
-    assert "今天回访" in captured["body"]
-    assert "本周待完成" not in captured["body"]
-    assert "本周已拜访" not in captured["body"]
-    dingtalk = render_dingtalk_markdown(captured["card"], title="团队今日重点｜2026-10-12")
-    assert dingtalk.index("## 我的立即处理") < dingtalk.index("---") < dingtalk.index("## 团队今日需介入")
-    assert "本周待完成" not in dingtalk
-    assert billed == ["department"]
-
-
-def test_sales_opt_out_omits_personal_section(monkeypatch):
-    captured = {}
-    _enable(monkeypatch)
-    monkeypatch.setattr(
-        "app.services.department_today_highlights.load_report_push_policy",
-        lambda: parse_report_push_policy(
-            {
-                "department_highlights": {"today_highlights": True},
-                "sales_daily": {"today_highlights": True},
-            }
-        ),
-    )
-    monkeypatch.setattr(
-        "app.services.department_today_highlights.load_department_extract_rows",
-        lambda *args, **kwargs: [_row({"claim": "拍板", "related_user_id": "oauth-zhang"})],
-    )
-    monkeypatch.setattr(
-        "app.services.department_today_highlights.load_display_names",
-        lambda *args, **kwargs: _names(),
-    )
-    monkeypatch.setattr(
-        "app.services.sales_today_highlights.load_sales_extract_rows",
-        lambda *args, **kwargs: [_sales_row()],
-    )
-    monkeypatch.setattr(
-        "app.services.sales_today_highlights.load_display_names",
-        lambda *args, **kwargs: {"accounts": {}, "opportunities": {}, "todos": {}},
-    )
-
-    def keep_team(session, recipients, **kwargs):
-        if kwargs.get("scene") == "sales_daily":
-            return []
-        return list(recipients)
-
-    monkeypatch.setattr(
-        "app.services.department_today_highlights.filter_opted_out_recipients",
-        keep_team,
-    )
-    monkeypatch.setattr(
-        "app.services.department_today_highlights.load_leader_visit_watch",
-        lambda *args, **kwargs: None,
-    )
-
-    def fake_send(session, recipient, assembled):
-        captured["body"] = render_card_markdown(assembled)
-        return {"success": True}
-
-    monkeypatch.setattr(
-        "app.services.department_today_highlights.deliver_department_highlight_card",
-        fake_send,
-    )
-    result = handle_department_today_highlights(MagicMock(), report_date=DAY)
-    assert result["success_count"] == 1
     assert "**团队今日需介入**" in captured["body"]
-    assert "**立即处理**" not in captured["body"]
+    assert "personal_highlights" not in captured["card"]
     assert "**我的立即处理**" not in captured["body"]
+    assert "今天回访" not in captured["body"]
+    assert billed == ["department"]
 
 
 def test_failed_team_card_is_not_marked_sent(monkeypatch):

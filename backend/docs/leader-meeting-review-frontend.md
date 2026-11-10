@@ -53,7 +53,7 @@
 | `date` | 业务日，只用于展示。调抽取接口不传它，查询按路径里的 `report_id` |
 | `tab` | `card_links[].key`。待办候选是 `employee_todo_candidates`，经营事项是 `management_events` |
 
-卡片正文是 `bi_reports.report_content` 里的 `summary`，不展开单条抽取。多于一条时按钮写成「待办候选（N）」「经营事项（N）」。钉钉没有这组按钮，抽取入口各占一行蓝链。抽取页展示这一份报告的待办候选和经营事项。
+卡片正文是 `bi_reports.report_content` 里的 `summary`，不展开单条抽取。多于一条时按钮写成「待办候选（N）」「经营事项（N）」。钉钉没有这组按钮，抽取入口写成同行蓝链，多条之间用「｜」分隔（两边留空格）。飞书底部仍是独立按钮。抽取页展示这一份报告的待办候选和经营事项。
 
 ---
 

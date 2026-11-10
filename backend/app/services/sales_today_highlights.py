@@ -28,6 +28,7 @@ from app.services.today_highlights_billing import (
     check_today_highlights_quota,
     report_today_highlights_usage,
 )
+from app.services.today_highlights_format import CARD_LINK_SEPARATOR
 from app.utils.date_utils import beijing_today_date, get_week_range_from_date
 from app.utils.push_page_urls import (
     build_sales_today_highlights_url,
@@ -511,7 +512,7 @@ def card_action_buttons(
 
 
 def render_card_links(assembled: Mapping[str, Any]) -> str:
-    return "  ".join(f"[{label}]({url})" for label, url in card_blue_links(assembled))
+    return CARD_LINK_SEPARATOR.join(f"[{label}]({url})" for label, url in card_blue_links(assembled))
 
 
 def render_embedded_personal_markdown(assembled: Mapping[str, Any]) -> str:
@@ -555,7 +556,7 @@ def render_embedded_personal_dingtalk(assembled: Mapping[str, Any]) -> str:
 
 
 def render_action_buttons(buttons: Sequence[tuple[str, str]]) -> str:
-    return "  ".join(f"[{label}]({url})" for label, url in buttons)
+    return CARD_LINK_SEPARATOR.join(f"[{label}]({url})" for label, url in buttons)
 
 
 def render_dingtalk_markdown(
@@ -875,11 +876,10 @@ def handle_sales_today_highlights(
     *,
     report_date: Optional[date | str] = None,
     recipient_user_ids: Optional[Sequence[str]] = None,
-    exclude_oauth_user_ids: Optional[Sequence[str]] = None,
 ) -> dict[str, Any]:
     """推送一线销售今日重点。变体关闭、空日、无 open_id、本人关掉都不发空卡。
 
-    exclude_oauth_user_ids 是当天团队卡已经送达的负责人。他们的立即处理在团队卡上，这里不再发第二张。
+    与团队今日重点各自推送；负责人若当天也有销售抽取，仍收「我的今日重点」。
     """
     from app.repositories.user_profile import user_profile_repo
 
@@ -905,23 +905,11 @@ def handle_sales_today_highlights(
     if recipient_user_ids is not None:
         wanted = {_text(item) for item in recipient_user_ids if _text(item)}
         grouped = {key: value for key, value in grouped.items() if key in wanted}
-    excluded = {_text(item) for item in (exclude_oauth_user_ids or []) if _text(item)}
-    covered = [key for key in grouped if key in excluded]
-    if excluded:
-        grouped = {key: value for key, value in grouped.items() if key not in excluded}
-    items: List[Dict[str, Any]] = [
-        {
-            "subject_id": subject_id,
-            "sent": False,
-            "skipped": True,
-            "skip_reason": "covered_by_team_card",
-        }
-        for subject_id in covered
-    ]
-    if not grouped and not items:
+    if not grouped:
         return {**result, "skipped": True, "skip_reason": "empty_highlights"}
 
     names = load_display_names(db_session, rows)
+    items: List[Dict[str, Any]] = []
     failed: List[Dict[str, Any]] = []
     success_count = 0
     recipients_count = 0

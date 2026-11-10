@@ -260,6 +260,6 @@ lite 卡拜访区链到详情页 `/v2/behavior/{record_id}`；完整复盘报告
 1. 先部署含 lite / insight 读取的 Autoflow，再改这项配置。旧进程读到新 key 会当不认识，仍全 legacy。
 2. 改 YAML 默认值要重启进程；改 DB SiteSetting 约 6 秒生效。
 3. 推卡发生在 Aldebaran 复盘完成回调之后，lite 卡读当时已写入的 `crm_entity_insight`。
-4. 复盘报告 path 为 `/v2/behavior/{id}/recap`；抽取入口为 `/extract?tab={key}`，改 path 时改 `push_page_urls`。
+4. 复盘报告 path 为 `/v2/behavior/{id}/recap`；抽取入口为 `/extract?tab={key}`，改 path 时改 `push_page_urls`。lite 卡上「跟进详情 / 完整复盘报告」以及钉钉抽取蓝链，同一行有多条时用「｜」分隔（两边留空格）；飞书抽取仍是独立小按钮。
 5. 列表 data-scope 与推送名单不是同一套，不要靠扩列表来配合这张卡。
-6. 记录人 lite 卡在摘要后放「完整复盘报告」，有业务推进且有抽取时飞书用 default 小按钮（`open_url`）挂 `card_links`（待我跟进 / 下次沟通 / 当前最关键问题 / 潜在新商机等，有数据才出现），钉钉仍为 markdown 链接；跳转 `/extract?tab={key}`。没有业务推进时卡片不读抽取表、不加这些入口。只有表现评价时，复盘页对记录人仍返回抽取。协同人/领导/群 lite 不加这些入口。抽取表缺失或为空时卡片只有摘要和完整复盘报告。有表现评价摘要时，「销售表现」是一行小标题，摘要跟在下面。
+6. 记录人 lite 卡在摘要后放「完整复盘报告」，有业务推进且有抽取时飞书用 default 小按钮（`open_url`）挂 `card_links`（待我跟进 / 下次沟通 / 当前最关键问题 / 潜在新商机等，有数据才出现），钉钉写成同行 markdown 蓝链并用「｜」分隔；跳转 `/extract?tab={key}`。没有业务推进时卡片不读抽取表、不加这些入口。只有表现评价时，复盘页对记录人仍返回抽取。协同人/领导/群 lite 不加这些入口。抽取表缺失或为空时卡片只有摘要和完整复盘报告。有表现评价摘要时，「销售表现」是一行小标题，摘要跟在下面。
