@@ -27,10 +27,12 @@ _VISIT_DETAIL_LABEL = "跟进详情"
 _RECAP_REPORT_LABEL = "完整复盘报告"
 _EMPTY_MARKERS = frozenset({"--", "-", "—", "－"})
 
+# 飞书卡片头色板缺省是 blue，复盘卡不再按 severity 换色。
+_DEFAULT_HEADER_TEMPLATE = "blue"
 _QUALITY_BY_SEVERITY = {
-    "low": ("正常", "green"),
-    "medium": ("留意", "blue"),
-    "high": ("需关注", "orange"),
+    "low": "正常",
+    "medium": "留意",
+    "high": "需关注",
 }
 
 
@@ -81,14 +83,13 @@ def _insight_severity(insight: Any) -> str:
 
 
 def resolve_recap_quality(insight: Any = None) -> tuple[str, str]:
-    """复盘质量只看 insight.severity：LOW/MEDIUM/HIGH → 正常/留意/需关注。"""
+    """标题质量只看 insight.severity：LOW/MEDIUM/HIGH → 正常/留意/需关注。
+
+    第二个返回值是卡片头颜色，固定为默认蓝，不随 severity 变化。
+    """
     severity = _insight_severity(insight)
-    if not severity:
-        return "", "blue"
-    mapped = _QUALITY_BY_SEVERITY.get(severity.lower())
-    if mapped:
-        return mapped
-    return "", "blue"
+    quality = _QUALITY_BY_SEVERITY.get(severity.lower(), "") if severity else ""
+    return quality, _DEFAULT_HEADER_TEMPLATE
 
 
 _DATETIME_FORMATS = (

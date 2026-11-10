@@ -49,3 +49,4 @@
 | `2026-11-09-team-highlights-team-prefix.md` | 2026-11-09，团队今日重点标题和蓝链加「团队」前缀 |
 | `2026-11-09-today-highlights-separate-cards.md` | 2026-11-09，今日重点恢复销售个人与团队各自推卡 |
 | `2026-11-10-team-highlights-friday-visit-watch.md` | 2026-11-10，周五团队拜访对照不放正文查看链 |
+| `2026-11-10-visit-recap-card-default-color.md` | 2026-11-10，拜访复盘卡片头使用默认蓝色 |

@@ -14,9 +14,9 @@ from app.services.visit_record_insight_reader import VisitRecordInsight
 
 
 def test_quality_from_insight_severity_only():
-    assert resolve_recap_quality(insight={"severity": "LOW"}) == ("正常", "green")
+    assert resolve_recap_quality(insight={"severity": "LOW"}) == ("正常", "blue")
     assert resolve_recap_quality(insight={"severity": "medium"}) == ("留意", "blue")
-    assert resolve_recap_quality(insight={"severity": "HIGH"}) == ("需关注", "orange")
+    assert resolve_recap_quality(insight={"severity": "HIGH"}) == ("需关注", "blue")
     assert resolve_recap_quality(None) == ("", "blue")
     assert resolve_recap_quality(insight={"severity": "unknown"}) == ("", "blue")
 
@@ -64,7 +64,7 @@ def test_build_recap_lite_card_feishu_and_dingtalk(monkeypatch):
     visit_detail = "[跟进详情](https://app.example/v2/behavior/rec-1)"
     report = "[完整复盘报告](https://app.example/v2/behavior/rec-1/recap)"
     assert card.title == "正常 · 9月20日 · 星辰科技"
-    assert card.header_template == "green"
+    assert card.header_template == "blue"
     assert card.feishu_body == "跟进人：李华\n创建时间：9月20日 19:05\n商机：年度续约"
     assert card.feishu_summary == "客户确认下季度扩容，下周出方案。"
     assert card.feishu_action_links == f"{visit_detail} ｜ {report}"
@@ -144,7 +144,7 @@ def test_build_recap_lite_card_uses_insight_summary_not_followup_record(monkeypa
     assert "销售自己填的跟进原文" not in card.feishu_summary
     assert "更长的完整复盘" not in card.feishu_summary
     assert card.title.startswith("需关注 · ")
-    assert card.header_template == "orange"
+    assert card.header_template == "blue"
 
 
 def test_sales_lite_card_appends_extract_links(monkeypatch):
@@ -271,7 +271,7 @@ def test_lite_card_shows_both_summaries_and_keeps_two_links(monkeypatch):
     assert "tab=" not in card.feishu_action_links
     assert "表现评价" not in card.feishu_action_links
     assert card.title.startswith("正常 · ")
-    assert card.header_template == "green"
+    assert card.header_template == "blue"
     assert "## 业务推进\n客户确认下季度扩容。" in card.dingtalk_text
     assert "\u00a0\n## 销售表现\n销售本场问清了预算。" in card.dingtalk_text
     assert "#### 业务推进" not in card.dingtalk_text
