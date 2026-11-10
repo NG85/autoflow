@@ -147,7 +147,7 @@ def test_sales_send_reports_usage(monkeypatch):
                 "item_type": "IMMEDIATE_ACTION",
                 "extract_key": "u1",
                 "card_links": [{"key": "immediate_today", "title": "立即处理"}],
-                "payload": {"claim": "今天打电话", "why_today": "承诺今天"},
+                "payload": {"claim": "今天打电话", "why_today": "承诺今天", "todo_id": "todo-call"},
                 "report_date": DAY,
             }
         ],
@@ -232,7 +232,7 @@ def test_sales_failed_send_does_not_bill(monkeypatch):
                 "item_type": "IMMEDIATE_ACTION",
                 "extract_key": "u1",
                 "card_links": [{"key": "immediate_today", "title": "立即处理"}],
-                "payload": {"claim": "今天打电话", "why_today": "承诺今天"},
+                "payload": {"claim": "今天打电话", "why_today": "承诺今天", "todo_id": "todo-call"},
                 "report_date": DAY,
             }
         ],

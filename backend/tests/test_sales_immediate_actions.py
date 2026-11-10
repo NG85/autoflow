@@ -1,4 +1,4 @@
-"""一线销售只处理自己的立即处理：赞踩、采纳，以及别人的行和风险行不可写。"""
+"""一线销售：立即处理只赞踩；关键发现和下周待确认可以采纳或拒绝。"""
 
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -83,8 +83,23 @@ def test_risk_and_next_week_can_be_adopted():
         assert row.status == "ADOPTED"
 
 
+def test_immediate_decision_does_not_change_the_row():
+    row = _item(status="PENDING", adopted_todo_id=None, payload={"claim": "确认排期", "todo_id": "todo-1"})
+    session = _session_with(row)
+    result = save_sales_highlight_decisions(
+        session,
+        "oauth-1",
+        "user-9",
+        [{"unique_id": "item-1", "action": "reject", "reject_reason": "不做"}],
+    )
+    assert result["results"] == [{"unique_id": "item-1", "ok": False}]
+    assert row.status == "PENDING"
+    assert row.reject_reason is None
+    session.commit.assert_not_called()
+
+
 def test_adopt_without_todo_keeps_the_existing_link():
-    row = _item(status="ADOPTED", adopted_todo_id="todo-kept")
+    row = _item(item_type="OPEN_RISK", status="ADOPTED", adopted_todo_id="todo-kept")
     session = _session_with(row)
     result = save_sales_highlight_decisions(
         session,
@@ -98,7 +113,7 @@ def test_adopt_without_todo_keeps_the_existing_link():
 
 
 def test_adopt_and_reject_keep_feedback():
-    row = _item(feedback="up", feedback_comment="有用")
+    row = _item(item_type="OPEN_RISK", feedback="up", feedback_comment="有用")
     session = _session_with(row)
     adopted = save_sales_highlight_decisions(
         session,
@@ -121,7 +136,7 @@ def test_adopt_and_reject_keep_feedback():
 
 
 def test_batch_adopt_rejects_missing_todo():
-    row = _item()
+    row = _item(item_type="OPEN_RISK")
     session = _session_with(row)
 
     def missing_todo(session, todo_id):

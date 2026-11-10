@@ -51,8 +51,8 @@ WEEK_FOLLOWUP_LINK_LABEL = "本周已拜访"
 INCOMPLETE_TASK_STATUSES = ("IN_PROGRESS", "PENDING")
 
 # 区块顺序与类型是销售卡合同。标题只从 card_links 快照读取。
-# 快照 title：immediate_today=立即处理，open_risks=建议关注，next_week_confirm=下周待确认。
-# 旧快照里的「商机风险」仍按「建议关注」展示。
+# 快照 title：immediate_today=立即处理，open_risks=关键发现，next_week_confirm=下周待确认。
+# 旧快照里的「商机风险」「建议关注」仍按「关键发现」展示。
 # 折进团队卡时小节标题固定为「我的立即处理」，和团队块区分。
 SALES_CARD_TITLE = "我的今日重点"
 EMBEDDED_PERSONAL_TITLE = "我的立即处理"
@@ -62,7 +62,12 @@ SECTION_ORDER: tuple[tuple[str, str], ...] = (
     ("next_week_confirm", ITEM_NEXT_WEEK),
 )
 SECTION_KEYS = {key: item_type for key, item_type in SECTION_ORDER}
-_SECTION_TITLE_RENAMES = {"open_risks": {"商机风险": "建议关注"}}
+_SECTION_TITLE_RENAMES = {
+    "open_risks": {
+        "商机风险": "关键发现",
+        "建议关注": "关键发现",
+    }
+}
 
 
 def parse_report_date(value: Any) -> date:
@@ -128,6 +133,21 @@ def _deleted(row: Any) -> bool:
     return flag in (1, True, "1", "true", "True")
 
 
+def _bound_task_id(row: Any) -> str:
+    """立即处理只对应一条已有任务。优先抽取正文里的任务编号。"""
+    payload = _payload(row)
+    direct = _text(payload.get("todo_id"))
+    if direct:
+        return direct
+    raw = payload.get("todo_ids")
+    if isinstance(raw, list):
+        for value in raw:
+            todo_id = _text(value)
+            if todo_id:
+                return todo_id
+    return _text(_row_value(row, "adopted_todo_id"))
+
+
 def _include_row(row: Any, *, friday: bool) -> bool:
     if _deleted(row):
         return False
@@ -141,6 +161,8 @@ def _include_row(row: Any, *, friday: bool) -> bool:
     if item_type == ITEM_NEXT_WEEK and not friday:
         return False
     if item_type == ITEM_RISK and not _keep_risk(_payload(row)):
+        return False
+    if item_type == ITEM_IMMEDIATE and not _bound_task_id(row):
         return False
     return item_type in {ITEM_IMMEDIATE, ITEM_RISK, ITEM_NEXT_WEEK}
 
@@ -196,15 +218,19 @@ def _serialize_item(row: Any, names: Mapping[str, Mapping[str, str]]) -> dict[st
 
     data.update(interaction_fields(row))
     titles = names.get("todos") or {}
-    related = []
-    for todo_id in _todo_ids_on_row(row):
-        related.append(
+    if data["item_type"] == ITEM_IMMEDIATE:
+        # 无采纳/拒绝语义：读出时 status 为 null，并只暴露绑定的那一条任务。不改库内列。
+        task_id = _bound_task_id(row)
+        data["status"] = None
+        data["adopted_todo_id"] = task_id or None
+        data["related_todos"] = [
             {
-                "unique_id": todo_id,
-                "title": _text(titles.get(todo_id)) or None,
+                "unique_id": task_id,
+                "title": _text(titles.get(task_id)) or None,
             }
-        )
-    data["related_todos"] = related
+        ] if task_id else []
+    else:
+        data["related_todos"] = []
     return data
 
 
@@ -275,60 +301,6 @@ def _collapse_extracts(rows: Sequence[Any]) -> list[Any]:
     return [_prefer_extract(group) for group in grouped.values()]
 
 
-def _todo_ids_on_row(row: Any) -> list[str]:
-    payload = _payload(row)
-    found: list[str] = []
-    raw = payload.get("todo_ids")
-    if isinstance(raw, list):
-        for value in raw:
-            todo_id = _text(value)
-            if todo_id and todo_id not in found:
-                found.append(todo_id)
-    one = _text(_row_value(row, "adopted_todo_id") or payload.get("todo_id"))
-    if one and one not in found:
-        found.append(one)
-    return found
-
-
-def _merge_shared_immediate(rows: Sequence[Any]) -> list[Any]:
-    """同一句立即处理只留一条，下面带上它挂的全部任务。"""
-    others: list[Any] = []
-    buckets: dict[str, list[Any]] = {}
-    order: list[str] = []
-    for row in rows or []:
-        if _text(_row_value(row, "item_type")) != ITEM_IMMEDIATE:
-            others.append(row)
-            continue
-        claim = _text(_payload(row).get("claim"))
-        if not claim:
-            others.append(row)
-            continue
-        if claim not in buckets:
-            order.append(claim)
-            buckets[claim] = []
-        buckets[claim].append(row)
-    merged: list[Any] = []
-    for claim in order:
-        group = buckets[claim]
-        todo_ids: list[str] = []
-        for row in group:
-            for todo_id in _todo_ids_on_row(row):
-                if todo_id not in todo_ids:
-                    todo_ids.append(todo_id)
-        if len(group) == 1 or len(todo_ids) < 2:
-            merged.extend(group)
-            continue
-        primary = sorted(group, key=_stamp_key)[0]
-        data = _copy_immediate(primary)
-        payload = dict(_payload(primary))
-        payload["todo_ids"] = todo_ids
-        data["payload"] = payload
-        kept_todo = _text(_row_value(primary, "adopted_todo_id"))
-        data["adopted_todo_id"] = kept_todo or None
-        merged.append(data)
-    return others + merged
-
-
 def assemble_sales_highlights(
     rows: Sequence[Any],
     report_date: date,
@@ -336,9 +308,7 @@ def assemble_sales_highlights(
 ) -> dict[str, Any]:
     """按业务日组装销售今日重点。非周五丢掉下周确认；unchanged 风险不进。"""
     friday = is_friday(report_date)
-    kept = _merge_shared_immediate(
-        _collapse_extracts([row for row in rows or [] if _include_row(row, friday=friday)])
-    )
+    kept = _collapse_extracts([row for row in rows or [] if _include_row(row, friday=friday)])
     titles = _snapshot_titles(kept)
     name_map = names or {"accounts": {}, "opportunities": {}}
     day = report_date.isoformat()
@@ -478,7 +448,7 @@ def week_followup_link(owner_name: str, report_date: date) -> Optional[tuple[str
 
 
 def card_blue_links(assembled: Mapping[str, Any]) -> list[tuple[str, str]]:
-    """建议关注、下周待确认。更多立即处理写在正文后面。"""
+    """关键发现、下周待确认。更多立即处理写在正文后面。"""
     links: list[tuple[str, str]] = []
     for section in assembled.get("sections") or []:
         title = _text(section.get("title"))
@@ -715,9 +685,11 @@ def load_display_names(session: Session, rows: Sequence[Any]) -> dict[str, dict[
     opportunity_ids.discard("")
     todo_ids = []
     for row in rows:
-        for todo_id in _todo_ids_on_row(row):
-            if todo_id not in todo_ids:
-                todo_ids.append(todo_id)
+        if _text(_row_value(row, "item_type")) != ITEM_IMMEDIATE:
+            continue
+        todo_id = _bound_task_id(row)
+        if todo_id and todo_id not in todo_ids:
+            todo_ids.append(todo_id)
     accounts: dict[str, str] = {}
     opportunities: dict[str, str] = {}
     todos: dict[str, str] = {}
