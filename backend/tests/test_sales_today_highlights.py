@@ -140,7 +140,15 @@ def test_thursday_drops_next_week_and_unchanged_risk_keeps_resolved(monkeypatch)
     assert friday_keys == ["immediate_today", "open_risks", "next_week_confirm"]
     assert friday["sections"][2]["items"][0]["confirm_prompt"] == "这件下周还做吗"
     assert "这件下周还做吗" not in render_card_markdown(friday)
-    assert [label for label, _url in card_blue_links(friday)] == ["建议关注", "下周待确认"]
+    friday_links = card_blue_links(friday)
+    assert [label for label, _url in friday_links] == ["建议关注", "下周待确认"]
+    assert render_card_links(friday) == (
+        "[建议关注](https://example.com/v2/today-highlights"
+        "?date=2026-10-09&tab=open_risks)"
+        " ｜ "
+        "[下周待确认](https://example.com/v2/today-highlights"
+        "?date=2026-10-09&tab=next_week_confirm)"
+    )
 
 
 def test_immediate_item_carries_decision_and_feedback():
@@ -756,9 +764,8 @@ def test_highlights_task_runs_apart_from_daily_report(monkeypatch):
     monkeypatch.setattr("app.tasks.cron_jobs.Session", lambda engine: _Session())
     seen = {}
 
-    def fake_sales(session, report_date=None, recipient_user_ids=None, exclude_oauth_user_ids=None):
+    def fake_sales(session, report_date=None, recipient_user_ids=None):
         seen["sales"] = report_date
-        seen["excluded"] = list(exclude_oauth_user_ids or [])
         seen.setdefault("order", []).append("sales")
         return {"success": True, "skipped": False, "skip_reason": None, "success_count": 1}
 
@@ -770,7 +777,6 @@ def test_highlights_task_runs_apart_from_daily_report(monkeypatch):
             "skipped": False,
             "skip_reason": None,
             "success_count": 2,
-            "sent_oauth_user_ids": ["oauth-leader"],
         }
 
     monkeypatch.setattr(
@@ -785,7 +791,6 @@ def test_highlights_task_runs_apart_from_daily_report(monkeypatch):
     assert seen["order"] == ["department", "sales"]
     assert seen["sales"] == date(2026, 10, 8)
     assert seen["department"] == date(2026, 10, 8)
-    assert seen["excluded"] == ["oauth-leader"]
     assert result["sales_today_highlights"]["success_count"] == 1
     assert result["department_today_highlights"]["success_count"] == 2
 
@@ -793,14 +798,12 @@ def test_highlights_task_runs_apart_from_daily_report(monkeypatch):
     result = push_crm_today_highlights()
     assert seen["sales"] is None
     assert seen["department"] is None
-    assert seen["excluded"] == ["oauth-leader"]
     assert result["report_date"] is None
 
     seen.clear()
     result = push_crm_today_highlights(report_date_str="2026-10-08", audience="sales")
     assert seen["sales"] == date(2026, 10, 8)
     assert "department" not in seen
-    assert seen["excluded"] == []
     assert result["department_today_highlights"] is None
 
     bad = push_crm_today_highlights(report_date_str="10/08")
@@ -842,7 +845,7 @@ def test_embedded_personal_block_keeps_sales_links_without_week_buttons(monkeypa
     assert "本周已拜访" not in body
 
 
-def test_delivered_team_card_skips_the_sales_card(monkeypatch):
+def test_leader_still_receives_sales_card_alongside_team(monkeypatch):
     sent = []
     monkeypatch.setattr(
         "app.services.sales_today_highlights.load_report_push_policy",
@@ -891,15 +894,9 @@ def test_delivered_team_card_skips_the_sales_card(monkeypatch):
         "app.services.sales_today_highlights.report_today_highlights_usage",
         lambda *args, **kwargs: None,
     )
-    result = handle_sales_today_highlights(
-        MagicMock(),
-        report_date=THURSDAY,
-        exclude_oauth_user_ids=["oauth-leader"],
-    )
-    assert sent == ["oauth-sales"]
-    assert result["success_count"] == 1
-    covered = [item for item in result["items"] if item["subject_id"] == "oauth-leader"]
-    assert covered[0]["skip_reason"] == "covered_by_team_card"
+    result = handle_sales_today_highlights(MagicMock(), report_date=THURSDAY)
+    assert set(sent) == {"oauth-leader", "oauth-sales"}
+    assert result["success_count"] == 2
 
 
 def test_team_push_failure_still_sends_sales_cards(monkeypatch):
@@ -912,10 +909,7 @@ def test_team_push_failure_still_sends_sales_cards(monkeypatch):
         def __exit__(self, *args):
             return False
 
-    seen = {}
-
-    def fake_sales(session, report_date=None, recipient_user_ids=None, exclude_oauth_user_ids=None):
-        seen["excluded"] = list(exclude_oauth_user_ids or [])
+    def fake_sales(session, report_date=None, recipient_user_ids=None):
         return {"success": True, "skipped": False, "skip_reason": None, "success_count": 1}
 
     def explode(session, *, report_date=None):
@@ -933,4 +927,3 @@ def test_team_push_failure_still_sends_sales_cards(monkeypatch):
     result = push_crm_today_highlights(report_date_str="2026-10-08")
     assert result["department_today_highlights"]["skip_reason"] == "push_failed"
     assert result["sales_today_highlights"]["success_count"] == 1
-    assert seen["excluded"] == []

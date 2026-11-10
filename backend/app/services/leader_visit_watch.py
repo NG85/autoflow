@@ -270,10 +270,12 @@ def _team_visit_section_label(label: str) -> str:
 
 
 def _detail_link(url: Any, section_label: str) -> str:
+    """蓝链文案与小节名一致，例如「团队上周拜访」，不加「查看」前缀。"""
     target = _text(url)
-    if not target:
+    label = _text(section_label)
+    if not target or not label:
         return ""
-    return f"[查看{section_label}]({target})"
+    return f"[{label}]({target})"
 
 
 def _team_phrase(names: Sequence[str]) -> str:

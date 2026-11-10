@@ -18,6 +18,7 @@ from app.models.crm_skill_extract_items import CRMSkillExtractItem
 from app.platforms.constants import PLATFORM_DINGTALK, PLATFORM_FEISHU, PLATFORM_LARK
 from app.services.leader_intervention_actions import interaction_fields
 from app.services.sales_today_highlights import _recipient_from_profile, parse_report_date
+from app.services.today_highlights_format import CARD_LINK_SEPARATOR
 from app.utils.date_utils import beijing_today_date
 from app.utils.push_page_urls import (
     build_leader_meeting_review_report_url,
@@ -327,13 +328,16 @@ def feishu_card_parts(assembled: Mapping[str, Any]) -> tuple[str, str, list[tupl
 
 
 def render_dingtalk_markdown(assembled: Mapping[str, Any], *, title: str) -> str:
-    """钉钉没有按钮组件。结构和拜访轻量卡一样：总结、报告链接、抽取入口各占一行。"""
+    """钉钉没有按钮组件。结构和拜访轻量卡一样：总结、报告链接、抽取蓝链（同行用｜分隔）。"""
     body, report, buttons = feishu_card_parts(assembled)
     parts = [f"### {title}", DINGTALK_PARAGRAPH_GAP, body]
     if report:
         parts.extend([DINGTALK_PARAGRAPH_GAP, report])
     if buttons:
-        parts.extend([DINGTALK_PARAGRAPH_GAP, "\n".join(f"[{label}]({url})" for label, url in buttons)])
+        extract_row = CARD_LINK_SEPARATOR.join(
+            f"[{label}]({url})" for label, url in buttons
+        )
+        parts.extend([DINGTALK_PARAGRAPH_GAP, extract_row])
     return "\n".join(parts)
 
 

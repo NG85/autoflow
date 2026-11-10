@@ -128,37 +128,23 @@ def _highlights_push_failed() -> dict[str, Any]:
     }
 
 
-def _push_one_today_highlights(
-    session,
-    audience: str,
-    report_date,
-    *,
-    exclude_oauth_user_ids: Optional[list[str]] = None,
-) -> tuple[dict[str, Any], list[str]]:
-    """调用与 notification/push 相同的处理函数。一边失败不影响另一边。
-
-    返回 (摘要, 已送达的 oauth id)。销售侧用第二项跳过已经收到团队卡的负责人。
-    """
+def _push_one_today_highlights(session, audience: str, report_date) -> dict[str, Any]:
+    """调用与 notification/push 相同的处理函数。一边失败不影响另一边。"""
     try:
         if audience == "sales":
             from app.services.sales_today_highlights import handle_sales_today_highlights
 
-            result = handle_sales_today_highlights(
-                session,
-                report_date=report_date,
-                exclude_oauth_user_ids=exclude_oauth_user_ids,
-            )
+            result = handle_sales_today_highlights(session, report_date=report_date)
         else:
             from app.services.department_today_highlights import handle_department_today_highlights
 
             result = handle_department_today_highlights(session, report_date=report_date)
     except Exception:
         logger.exception("%s today highlights push failed", audience)
-        return _highlights_push_failed(), []
+        return _highlights_push_failed()
     summary = _highlights_push_summary(result)
-    sent = [str(item).strip() for item in (result.get("sent_oauth_user_ids") or []) if str(item).strip()]
     logger.info("%s today highlights push: %s", audience, summary)
-    return summary, sent
+    return summary
 
 
 @app.task
@@ -167,8 +153,8 @@ def push_crm_today_highlights(report_date_str=None, audience=None):
 
     report_date_str: YYYY-MM-DD，不传则北京时间当天。
     audience: sales / department，不传则两边都推。是否发出由各自的 today_highlights 变体决定。
-    两边都推时先发团队卡。发送成功的负责人不再另收一线卡，个人立即处理已折进团队卡，只记团队日报。
-    团队卡没发出去时，一线卡照发并记个人日报。一边失败记 push_failed，不重试，避免另一边已经发出的卡片再发一遍。
+    两边都推时先发团队卡，再发一线卡；负责人可同时收到两张，互不替代。
+    一边失败记 push_failed，不重试，避免另一边已经发出的卡片再发一遍。
     """
     if audience is not None and audience not in _HIGHLIGHT_AUDIENCES:
         return {
@@ -194,21 +180,11 @@ def push_crm_today_highlights(report_date_str=None, audience=None):
     audiences = [audience] if audience else list(_HIGHLIGHT_AUDIENCES)
     sales_result = None
     department_result = None
-    sent_leader_ids: list[str] = []
     with Session(engine) as session:
         if "department" in audiences:
-            department_result, sent_leader_ids = _push_one_today_highlights(
-                session,
-                "department",
-                report_date,
-            )
+            department_result = _push_one_today_highlights(session, "department", report_date)
         if "sales" in audiences:
-            sales_result, _ = _push_one_today_highlights(
-                session,
-                "sales",
-                report_date,
-                exclude_oauth_user_ids=sent_leader_ids,
-            )
+            sales_result = _push_one_today_highlights(session, "sales", report_date)
     ran = [item for item in (sales_result, department_result) if item is not None]
     failed = any(item.get("skip_reason") == "push_failed" for item in ran)
     return {

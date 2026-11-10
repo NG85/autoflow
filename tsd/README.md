@@ -47,3 +47,5 @@
 | `2026-11-09-visit-collaborator-leader.md` | 2026-11-09，协同人与 leader 重复时取 leader |
 | `2026-11-09-visit-recap-card-headings.md` | 2026-11-09，复盘卡里的业务推进和销售表现是小标题 |
 | `2026-11-09-team-highlights-team-prefix.md` | 2026-11-09，团队今日重点标题和蓝链加「团队」前缀 |
+| `2026-11-09-today-highlights-separate-cards.md` | 2026-11-09，今日重点恢复销售个人与团队各自推卡 |
+| `2026-11-10-team-highlights-friday-visit-watch.md` | 2026-11-10，周五团队拜访对照不放正文查看链 |

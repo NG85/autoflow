@@ -123,8 +123,11 @@ def test_card_puts_summary_then_report_link_then_extract_buttons(monkeypatch):
     dingtalk = render_dingtalk_markdown(assembled, title="例会复盘｜2026-10-28")
     assert dingtalk.startswith("### 例会复盘｜2026-10-28\n\u00a0\n团队周例会：推进 POC。\n")
     assert "[完整复盘报告](https://example.com/v2/business/leader-meeting-review/RPT-1)" in dingtalk
-    assert "[待办候选（2）](https://example.com/employee_todo_candidates)" in dingtalk
-    assert "[经营事项](https://example.com/management_events)" in dingtalk
+    assert (
+        "[待办候选（2）](https://example.com/employee_todo_candidates)"
+        " ｜ "
+        "[经营事项](https://example.com/management_events)"
+    ) in dingtalk
     assert "确认预算审批流程" not in dingtalk
     assert "经营事项不进正文" not in dingtalk
     event = assembled["items"]["management_events"][0]

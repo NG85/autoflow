@@ -172,8 +172,8 @@ def test_report_entry_lines_join_in_slot_order():
         ]
     )
     assert lines == [
-        "[重点商机](https://example.com/opp)  "
-        "[团队人效](https://example.com/persona)  "
+        "[重点商机](https://example.com/opp) ｜ "
+        "[团队人效](https://example.com/persona) ｜ "
         "[经营趋势](https://example.com/trend)"
     ]
     assert report_entry_lines([]) == []
@@ -221,10 +221,11 @@ def test_card_puts_report_links_after_visit_watch(monkeypatch):
         {"key": "team_operating_trend", "label": "经营趋势", "url": "https://example.com/trend"},
     ]
     body = render_card_markdown(assembled)
-    assert body.index("团队今日需介入") < body.index("团队本周拜访")
+    assert body.index("团队今日需介入") < body.index("\n\n---\n\n**团队本周拜访**")
     assert body.index("团队本周拜访") < body.index("[团队人效](https://example.com/persona)")
-    assert "[团队人效](https://example.com/persona)  [团队经营趋势](https://example.com/trend)" in body
+    assert "[团队人效](https://example.com/persona) ｜ [团队经营趋势](https://example.com/trend)" in body
     dingtalk = render_dingtalk_markdown(assembled, title="今日重点｜2026-10-13")
+    assert dingtalk.index("[查看]") < dingtalk.index("\n\n---\n\n## 团队本周拜访")
     assert dingtalk.index("## 团队本周拜访") < dingtalk.index("[团队人效](")
     assert REPORTS_ONLY_LEAD not in body
     assert REPORTS_ONLY_LEAD not in dingtalk

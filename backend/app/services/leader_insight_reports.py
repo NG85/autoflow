@@ -19,6 +19,7 @@ from sqlalchemy import func, or_
 from sqlmodel import Session, col, select
 
 from app.models.crm_entity_insight import CRMEntityInsight
+from app.services.today_highlights_format import CARD_LINK_SEPARATOR
 from app.utils.push_page_urls import build_department_highlights_url
 
 logger = logging.getLogger(__name__)
@@ -70,13 +71,13 @@ def report_period(report_date: date) -> str:
 
 
 def report_entry_lines(entries: Optional[Sequence[Mapping[str, Any]]]) -> list[str]:
-    """三个入口写成一行蓝链。没有匹配到的槽位不出现。"""
+    """三个入口写成一行蓝链，用「｜」分隔。没有匹配到的槽位不出现。"""
     links = [
         f"[{_text(item.get('label'))}]({_text(item.get('url'))})"
         for item in (entries or [])
         if _text(item.get("label")) and _text(item.get("url"))
     ]
-    return ["  ".join(links)] if links else []
+    return [CARD_LINK_SEPARATOR.join(links)] if links else []
 
 
 def pick_report_entries(
