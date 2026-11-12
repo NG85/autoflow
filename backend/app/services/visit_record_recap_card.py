@@ -46,6 +46,8 @@ class RecapLiteCard:
     feishu_summary: str = ""
     # 飞书操作区：跟进详情 / 完整复盘蓝链，渲染在抽取按钮之前。
     feishu_action_links: str = ""
+    # 主操作入口：(文案, url)；企微 horizontal / 飞书 footer 共用。
+    primary_action_links: tuple[tuple[str, str], ...] = ()
     # 飞书抽取入口：(文案, url)；空则不渲染。钉钉仍用 markdown 链接写在 dingtalk_text。
     feishu_extract_actions: tuple[tuple[str, str], ...] = ()
 
@@ -272,18 +274,33 @@ def _meta_lines(
     return lines
 
 
+def _primary_action_pairs(
+    *,
+    visit_detail_url: str = "",
+    report_url: str = "",
+) -> list[tuple[str, str]]:
+    """详情 / 完整复盘等主操作入口。"""
+    pairs: list[tuple[str, str]] = []
+    if visit_detail_url:
+        pairs.append((_VISIT_DETAIL_LABEL, visit_detail_url))
+    if report_url:
+        pairs.append((_RECAP_REPORT_LABEL, report_url))
+    return pairs
+
+
 def _primary_action_lines(
     *,
     visit_detail_url: str = "",
     report_url: str = "",
 ) -> list[str]:
     """详情 / 完整复盘等主操作链接，集中放在抽取按钮前。"""
-    lines: list[str] = []
-    if visit_detail_url:
-        lines.append(f"[{_VISIT_DETAIL_LABEL}]({visit_detail_url})")
-    if report_url:
-        lines.append(f"[{_RECAP_REPORT_LABEL}]({report_url})")
-    return lines
+    return [
+        f"[{label}]({url})"
+        for label, url in _primary_action_pairs(
+            visit_detail_url=visit_detail_url,
+            report_url=report_url,
+        )
+    ]
 
 
 def format_extract_card_actions(
@@ -408,10 +425,11 @@ def build_recap_lite_card(
         entry_time=entry_time,
         opportunity=opportunity,
     )
-    action_lines = _primary_action_lines(
+    primary_actions = _primary_action_pairs(
         visit_detail_url=visit_detail_url,
         report_url=detail_url,
     )
+    action_lines = [f"[{label}]({url})" for label, url in primary_actions]
 
     feishu_body = _feishu_meta_body(
         is_revised=is_revised,
@@ -432,5 +450,93 @@ def build_recap_lite_card(
         dingtalk_text=dingtalk_text,
         feishu_summary=feishu_summary,
         feishu_action_links=CARD_LINK_SEPARATOR.join(action_lines),
+        primary_action_links=tuple(primary_actions),
         feishu_extract_actions=tuple(extract_actions),
+    )
+
+
+def build_visit_basic_wecom_template_card(
+    record_id: str,
+    visit_record: Optional[Mapping[str, Any]] = None,
+    *,
+    recorder_name: Optional[str] = None,
+    is_revised: bool = False,
+) -> Optional[dict[str, Any]]:
+    """企微 legacy 精简卡：标题 + 基础信息，仅跳转跟进详情，不展示复盘/抽取。"""
+    from app.platforms.wecom.text_notice import build_text_notice_card, new_task_id
+
+    rid = _text(record_id)
+    detail_url = build_visit_record_page_url(rid)
+    if not rid or not detail_url:
+        return None
+
+    record = visit_record or {}
+    visit_date = format_visit_date_short(
+        record.get("visit_communication_date") or record.get("last_modified_time")
+    )
+    account = resolve_account_name(record)
+    title = compose_recap_title("", visit_date, account)
+    recorder = _text(recorder_name) or _text(record.get("recorder"))
+    entry_time = format_entry_time(
+        record.get("last_modified_time") or record.get("visit_communication_date")
+    )
+    opportunity = _display_text(record.get("opportunity_name"))
+    body = _feishu_meta_body(
+        is_revised=is_revised,
+        meta_lines=_meta_lines(
+            recorder_name=recorder,
+            entry_time=entry_time,
+            opportunity=opportunity,
+        ),
+    )
+    return build_text_notice_card(
+        title=title,
+        desc="拜访记录",
+        sub_title_text=body or "打开跟进详情查看完整内容。",
+        jump_links=[(_VISIT_DETAIL_LABEL, detail_url)],
+        horizontal_links=(),
+        card_action_url=detail_url,
+        task_id=new_task_id("vrb"),
+    )
+
+
+def build_visit_recap_wecom_template_card(card: RecapLiteCard) -> dict[str, Any]:
+    """拜访轻量复盘 → 企微 text_notice。
+
+    jump：完整复盘 + 跟进详情（主入口，对齐飞书双蓝链）。
+    horizontal：抽取入口（左灰右蓝）。
+    """
+    from app.platforms.wecom.text_notice import build_text_notice_card, new_task_id
+
+    body_parts: list[str] = []
+    if card.feishu_body:
+        body_parts.append(card.feishu_body)
+    if card.feishu_summary:
+        body_parts.append(card.feishu_summary)
+
+    primary = {label: url for label, url in card.primary_action_links if label and url}
+    report_url = primary.get(_RECAP_REPORT_LABEL, "")
+    detail_url = primary.get(_VISIT_DETAIL_LABEL, "")
+    extracts = list(card.feishu_extract_actions)
+
+    jump_links: list[tuple[str, str]] = []
+    if report_url:
+        jump_links.append(("完整复盘", report_url))
+    if detail_url:
+        jump_links.append((_VISIT_DETAIL_LABEL, detail_url))
+
+    action_url = ""
+    if jump_links:
+        action_url = jump_links[0][1]
+    elif extracts:
+        action_url = extracts[0][1]
+
+    return build_text_notice_card(
+        title=card.title,
+        desc="拜访复盘",
+        sub_title_text="\n".join(body_parts) or "暂无复盘摘要。",
+        jump_links=jump_links,
+        horizontal_links=extracts,
+        card_action_url=action_url,
+        task_id=new_task_id("vr"),
     )

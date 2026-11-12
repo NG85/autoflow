@@ -4,7 +4,12 @@ from unittest.mock import MagicMock, patch
 from urllib.parse import quote, unquote
 from uuid import uuid4
 
-from app.platforms.constants import PLATFORM_DINGTALK, PLATFORM_FEISHU, PLATFORM_LARK
+from app.platforms.constants import (
+    PLATFORM_DINGTALK,
+    PLATFORM_FEISHU,
+    PLATFORM_LARK,
+    PLATFORM_WECOM,
+)
 from app.services.platform_notification_service import PlatformNotificationService
 from app.utils import im_applink as applink
 
@@ -221,3 +226,84 @@ def test_visit_comment_dingtalk_quotes_and_pc_slide(monkeypatch):
     assert unquote(text.split("url=", 1)[1].split("&", 1)[0]) == jump
     assert "评论：" not in text
     assert f"]({jump})" not in text
+
+
+def test_visit_comment_wecom_uses_template_card(monkeypatch):
+    _patch_host(monkeypatch)
+    service = PlatformNotificationService()
+    jump = f"{HOST}/v2/behavior/rec-1"
+    db = MagicMock()
+
+    with (
+        patch(
+            "app.services.platform_notification_service.user_profile_repo.get_by_user_id",
+            return_value=_profile(PLATFORM_WECOM, "GaoNa"),
+        ),
+        patch(
+            "app.services.platform_notification_service.wecom_push_client.is_configured",
+            return_value=True,
+        ),
+        patch.object(service, "_get_tenant_access_token", return_value="hub-token"),
+        patch.object(service, "_send_message") as send_msg,
+    ):
+        result = service.send_visit_record_comment_notification(
+            db,
+            recipient_user_id=str(uuid4()),
+            message_text=_comment_text(jump),
+        )
+
+    assert result["success"] is True
+    args, kwargs = send_msg.call_args
+    assert kwargs["msg_type"] == "template_card"
+    card = args[2]
+    assert card["card_type"] == "text_notice"
+    assert card["main_title"]["title"] == "有人评论了你的拜访记录"
+    assert "你好" in card["sub_title_text"]
+    assert "[" not in card["sub_title_text"]
+    assert card["jump_list"][0]["title"] == "客户  商机"[:16]
+    assert card["jump_list"][0]["url"] == jump
+    assert card["card_action"]["url"] == jump
+
+
+def test_review_session_and_task_created_wecom_reuse_template_card(monkeypatch):
+    _patch_host(monkeypatch)
+    service = PlatformNotificationService()
+    jump = f"{HOST}/v2/tasks/t-1"
+    db = MagicMock()
+
+    with (
+        patch(
+            "app.services.platform_notification_service.user_profile_repo.get_by_user_id",
+            return_value=_profile(PLATFORM_WECOM, "GaoNa"),
+        ),
+        patch(
+            "app.services.platform_notification_service.wecom_push_client.is_configured",
+            return_value=True,
+        ),
+        patch.object(service, "_get_tenant_access_token", return_value="hub-token"),
+        patch.object(service, "_send_message") as send_msg,
+    ):
+        service.send_sales_task_created_notification(
+            db,
+            recipient_user_id=str(uuid4()),
+            message_text=f"你有一条新任务\n[任务详情]({jump})\n请尽快处理\n",
+        )
+        service.send_daily_no_followup_reminder_notification(
+            db,
+            recipient_user_id=str(uuid4()),
+            message_text=f"今日尚未录入跟进\n[立即录入跟进]({HOST}/v2/visit/new)\n",
+        )
+        service.send_review_session_notification(
+            db,
+            recipient_user_id=str(uuid4()),
+            message_text=f"复盘会话已就绪\n[点击查看并更新]({HOST}/v2/review/s-1)\n",
+        )
+
+    assert send_msg.call_count == 3
+    for call in send_msg.call_args_list:
+        assert call.kwargs["msg_type"] == "template_card"
+        assert call.args[2]["card_type"] == "text_notice"
+        assert call.args[2]["jump_list"]
+        assert all(
+            item.get("type") == 1 and item.get("url") for item in call.args[2]["jump_list"]
+        )

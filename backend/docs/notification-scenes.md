@@ -2,6 +2,12 @@
 
 销售个人日报、公司/部门日周报 **都不是开放订阅**。身份决定谁有资格；有资格的人默认接收，可以自己关掉。关掉不会把名单让给别人。同一槽位可以配置不同报告形态（统计卡 / 周拜访报告），各形态独立开关。公司/部门今日重点是独立 scene，不跟对应日报共用资格集。
 
+## 企微（Sia bot）
+
+OAuth `provider=wecom` 时，个人推送经 Sia `POST {WECOM_PUSH_BASE_URL}/api/v1/webhook/wecom/push` 转发智能机器人消息（**不是**应用 `message/send`）。OAuth 权限 API 直接读 `openId`（由 OAuth 服务用 userid 回填）；本地档案仍优先 `open_id`，空则回退 `user_id_in_platform` / `union_id`。有 BASE_URL 即可推；`WECOM_PUSH_TOKEN` 可选（对齐 Sia 未配则放行）。用户须先与 Sia 单聊过。**带超链的企微推送**发 `template_card`（`text_notice`）：今日重点 / 拜访 lite / 例会复盘 / 评论族 / review session / 销售任务创建 / 当日无跟进提醒，以及含链或 markdown 的通用 `platform_notification`。正文纯文本；主入口 `jump_list`（≤3），次要入口 `horizontal` 左灰短标签 + 右蓝说明（key≠value，≤6）；`card_action` 整卡进主入口。纯文本无链仍可 markdown。本服务不维护 Bot WS。
+
+
+
 相关代码：
 
 - 场景目录：`app/services/notification_scene_catalog.py`

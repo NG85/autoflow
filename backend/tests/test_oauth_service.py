@@ -93,6 +93,83 @@ def test_reporting_chain_transport_failure_returns_empty_list():
         assert client.get_reporting_chain_leaders(base_user_id="u1") == []
 
 
+def test_reporting_chain_wecom_uses_openid_filled_by_oauth():
+    """新 OAuth 已用 userid 回填 openId，本侧不再回退 userIdInPlatform。"""
+    client = _client()
+    mock_data = {
+        "code": 0,
+        "result": {
+            "leaders": [
+                {
+                    "platform": "wecom",
+                    "openId": "GaoNa",
+                    "userIdInPlatform": "GaoNa",
+                    "name": "高娜",
+                    "department": "华东",
+                }
+            ]
+        },
+    }
+    with patch("app.services.oauth_service.post_json", return_value=mock_data):
+        leaders = client.get_reporting_chain_leaders(base_user_id="u1")
+    assert leaders == [
+        {
+            "open_id": "GaoNa",
+            "name": "高娜",
+            "type": "leader",
+            "department": "华东",
+            "receive_id_type": "open_id",
+            "platform": "wecom",
+        }
+    ]
+
+
+def test_reporting_chain_skips_when_openid_empty_even_if_userid_present():
+    client = _client()
+    mock_data = {
+        "code": 0,
+        "result": {
+            "leaders": [
+                {
+                    "platform": "wecom",
+                    "openId": "",
+                    "userIdInPlatform": "GaoNa",
+                    "name": "高娜",
+                    "department": "华东",
+                }
+            ]
+        },
+    }
+    with patch("app.services.oauth_service.post_json", return_value=mock_data):
+        assert client.get_reporting_chain_leaders(base_user_id="u1") == []
+
+
+def test_departments_with_leaders_wecom_uses_openid_from_oauth():
+    client = _client()
+    mock_data = {
+        "code": 0,
+        "result": [
+            {
+                "departmentName": "华东一区",
+                "leaders": [
+                    {
+                        "platform": "wecom",
+                        "openId": "GaoNa",
+                        "userIdInPlatform": "GaoNa",
+                        "name": "高娜",
+                        "userId": "u-1",
+                        "crmUserId": "crm-1",
+                    }
+                ],
+            }
+        ],
+    }
+    with patch("app.services.oauth_service.post_json", return_value=mock_data):
+        mapping = client.get_departments_with_leaders()
+    assert mapping["华东一区"][0]["open_id"] == "GaoNa"
+    assert mapping["华东一区"][0]["platform"] == "wecom"
+
+
 def test_subordinate_chain_transport_failure_returns_empty_dict():
     client = _client()
     with patch("app.services.oauth_service.post_json", return_value=None):

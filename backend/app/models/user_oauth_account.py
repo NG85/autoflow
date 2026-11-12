@@ -109,13 +109,32 @@ def _oauth_account_sort_datetime(value: object) -> datetime:
     return value
 
 
+def oauth_push_receive_id(account: Optional["UserOAuthAccount"]) -> str:
+    """推送用的平台收件人 ID。
+
+    飞书 / 钉钉用 open_id。企微账号现网 open_id 常为空，userid 在
+    user_id_in_platform（其次 union_id），作 Sia bot 的 chatid。
+    """
+    if account is None:
+        return ""
+    open_id = (getattr(account, "open_id", None) or "").strip()
+    if open_id:
+        return open_id
+    provider = (getattr(account, "provider", None) or "").strip().lower()
+    if provider == "wecom":
+        for attr in ("user_id_in_platform", "union_id"):
+            value = (getattr(account, attr, None) or "").strip()
+            if value:
+                return value
+    return ""
+
+
 def is_deliverable_oauth_account(account: Optional["UserOAuthAccount"]) -> bool:
-    """是否可用于推送：受支持平台且有 open_id。"""
+    """是否可用于推送：受支持平台且有可送达的收件人 ID。"""
     if account is None:
         return False
     provider = getattr(account, "provider", None)
-    open_id = getattr(account, "open_id", None)
-    return bool(provider in SUPPORTED_PLATFORMS and open_id)
+    return bool(provider in SUPPORTED_PLATFORMS and oauth_push_receive_id(account))
 
 
 def select_latest_oauth_account(
