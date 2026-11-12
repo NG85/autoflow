@@ -19,7 +19,6 @@ from app.services.visit_record_insight_reader import (
     load_visit_record_insights_by_view,
     pick_visit_record_insight,
     recap_view_for_role,
-    recap_view_for_viewer,
     resolve_visit_record_detail_recap,
     viewer_has_visible_recap,
     viewer_is_leader_of_recorder,
@@ -43,14 +42,7 @@ def _row(**overrides):
     return base
 
 
-def test_recap_view_for_viewer_only_recorder_and_reporting_leader():
-    assert recap_view_for_viewer() is None
-    assert recap_view_for_viewer(is_recorder=True) == RECAP_VIEW_SALES
-    assert recap_view_for_viewer(is_leader=True) == RECAP_VIEW_LEADER
-    assert recap_view_for_viewer(is_recorder=True, is_leader=True) == RECAP_VIEW_SALES
-
-
-def test_recap_view_for_viewer_recorder_id_ignores_uuid_hyphens():
+def test_viewer_is_recorder_ignores_uuid_hyphens():
     hyphen = "11111111-1111-1111-1111-111111111111"
     compact = "11111111111111111111111111111111"
     assert viewer_is_recorder(hyphen, compact) is True
@@ -90,15 +82,6 @@ def test_direct_manager_not_used_when_reporting_chain_has_other_leader():
         recorder_direct_manager_id="ask_direct",
         reporting_chain_leader_open_ids=["ou_dept_leader"],
     ) is False
-
-
-def test_other_viewer_has_no_recap_view():
-    assert recap_view_for_viewer(is_recorder=False, is_leader=False) is None
-
-
-def test_sys_admin_sees_leader_view_unless_they_are_the_recorder():
-    assert recap_view_for_viewer(is_sys_admin=True) == RECAP_VIEW_LEADER
-    assert recap_view_for_viewer(is_recorder=True, is_sys_admin=True) == RECAP_VIEW_SALES
 
 
 def test_recap_view_for_role():
@@ -301,6 +284,7 @@ def test_viewer_has_visible_recap_follows_sales_or_leader_view():
     sales = [VISIT_INSIGHT_SALES_TYPE]
     leader = [VISIT_INSIGHT_LEADER_TYPE]
     assert viewer_has_visible_recap(sales) is False
+    assert viewer_has_visible_recap(leader) is True
     assert viewer_has_visible_recap(sales, is_recorder=True) is True
     assert viewer_has_visible_recap(leader, is_recorder=True) is False
     assert viewer_has_visible_recap(leader, is_reporting_leader=True) is True
@@ -310,6 +294,11 @@ def test_viewer_has_visible_recap_follows_sales_or_leader_view():
     assert viewer_has_visible_recap([]) is False
     sales_performance = [VISIT_INSIGHT_PERFORMANCE_SALES_TYPE]
     leader_performance = [VISIT_INSIGHT_PERFORMANCE_LEADER_TYPE]
+    assert viewer_has_visible_recap(sales_performance) is False
+    assert viewer_has_visible_recap(leader_performance) is False
+    assert viewer_has_visible_recap(sales, is_collaborative_participant=True) is True
+    assert viewer_has_visible_recap(sales_performance, is_collaborative_participant=True) is True
+    assert viewer_has_visible_recap(leader_performance, is_collaborative_participant=True) is False
     assert viewer_has_visible_recap(sales_performance, is_recorder=True) is True
     assert viewer_has_visible_recap(sales_performance, is_reporting_leader=True) is False
     assert viewer_has_visible_recap(leader_performance, is_reporting_leader=True) is True

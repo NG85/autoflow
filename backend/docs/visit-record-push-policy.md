@@ -46,9 +46,9 @@ replaces: ["leader"]                    # 只接替上级，抄送仍发个人
 
 lite 卡拜访区链到详情页 `/v2/behavior/{record_id}`；完整复盘报告链到 `/v2/behavior/{record_id}/recap`；抽取按钮链到 `/v2/behavior/{record_id}/extract?tab={card_links.key}`（如 `follow_ups` / `next_visit` / `key_issues` / `potential_opps` / `conclusion`）。链接里不要带 `view=`，视角由打开页的登录人决定。
 
-详情 GET 不读这项配置，也不返回复盘。复盘用 `GET /crm/visit_records/{record_id}/recap`。业务推进和人员表现评价都没有时不返回报告，也不查 OAuth 汇报链、不读抽取表。有任一报告才按身份选视角：记录人看销售视角（UUID 连字符忽略）；**本条**记录人的汇报链上级或系统管理员看上级视角；其余人没有可看的复盘。
+详情 GET 不读这项配置，也不返回复盘。复盘用 `GET /crm/visit_records/{record_id}/recap`。谁能打开、打开后是哪一视角，见 `fsd/2026-11-12-visit-recap-audience.md`。业务推进和人员表现评价都没有时不返回报告，也不查 OAuth 汇报链、不读抽取表。
 
-能打开时 `tabs` 为 `business`（业务推进）和 `performance`（销售表现）。`insight` 是业务推进，`performance` 是人员表现评价，缺的为 `null`。结构化抽取（含 lite 卡 extract 入口、赞踩/采纳）**仅记录人本人**；只有表现评价时记录人仍返回抽取。上级只看上级视角的两份报告，`extract` 为空。汇报链有结果时不再用档案直属上级。
+能打开时 `tabs` 为 `business`（业务推进）和 `performance`（销售表现）。`insight` 是业务推进，`performance` 是人员表现评价，缺的为 `null`。结构化抽取（含 lite 卡 extract 入口、赞踩/采纳）**仅记录人本人**。汇报链有结果时不再用档案直属上级。
 
 轻量卡只把表现评价的 `summary` 放进正文。有摘要时，「业务推进」和「销售表现」各成一行小标题，正文跟在标题下面。飞书用四级标题；钉钉用二级标题，两段之间用不断行空格隔开。记录人、纯协同人用销售视角；leader 个人用上级视角。抄送和部门群不放「销售表现」。空值和 `--` 视为没有评价。旧模板卡不放这段。
 

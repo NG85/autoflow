@@ -160,20 +160,6 @@ def viewer_is_leader_of_recorder(
     return bool(viewer_tokens & _identity_tokens(recorder_direct_manager_id))
 
 
-def recap_view_for_viewer(
-    *,
-    is_recorder: bool = False,
-    is_leader: bool = False,
-    is_sys_admin: bool = False,
-) -> Optional[str]:
-    """记录人看销售视角，其汇报链上级或系统管理员看上级视角。其余人没有可看的复盘。"""
-    if is_recorder:
-        return RECAP_VIEW_SALES
-    if is_leader or is_sys_admin:
-        return RECAP_VIEW_LEADER
-    return None
-
-
 def insight_type_for_view(view: str) -> str:
     if view == RECAP_VIEW_SALES:
         return VISIT_INSIGHT_SALES_TYPE
@@ -363,8 +349,13 @@ def viewer_has_visible_recap(
     is_recorder: bool = False,
     is_reporting_leader: bool = False,
     is_sys_admin: bool = False,
+    is_collaborative_participant: bool = False,
 ) -> bool:
-    """当前用户打开复盘页时，对应视角的复盘或表现评价是否至少有一条。"""
+    """当前用户打开复盘页时，是否有他能看的业务推进或人员表现评价。
+
+    调用方已经能打开页面。记录人和协同人看销售视角的两份。
+    其他人看上级视角的业务推进。上级视角的人员表现评价只在直接汇报上级或公司级管理人员时算进去。
+    """
     present = {
         str(item).strip().upper()
         for item in (insight_types or ())
@@ -372,18 +363,21 @@ def viewer_has_visible_recap(
     }
     if not present:
         return False
-    view = recap_view_for_viewer(
-        is_recorder=is_recorder,
-        is_leader=is_reporting_leader,
-        is_sys_admin=is_sys_admin,
-    )
-    if view is None:
-        return False
-    wanted = {
-        insight_type_for_view(view).upper(),
-        performance_insight_type_for_view(view).upper(),
+    sales_types = {
+        VISIT_INSIGHT_SALES_TYPE.upper(),
+        VISIT_INSIGHT_PERFORMANCE_SALES_TYPE.upper(),
     }
-    return bool(present & wanted)
+    if is_recorder or is_collaborative_participant:
+        if present & sales_types:
+            return True
+        if is_recorder:
+            return False
+    if VISIT_INSIGHT_LEADER_TYPE.upper() in present:
+        return True
+    return bool(
+        (is_reporting_leader or is_sys_admin)
+        and VISIT_INSIGHT_PERFORMANCE_LEADER_TYPE.upper() in present
+    )
 
 
 def load_visit_recap_types_by_record_id(

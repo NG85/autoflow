@@ -2,8 +2,14 @@
 
 洞察来自 crm_entity_insight，抽取来自 crm_postvisit_extract_items。
 复盘和表现评价都没有时不查汇报链、不读抽取表。
-记录人看销售视角，其汇报链上级看上级视角。系统管理员看上级视角，不附带抽取。其余人没有可看的复盘。
-能打开时 tabs 只有 key 和标题。insight 是业务推进报告，performance 是人员表现评价报告。抽取仅记录人本人可见。任一侧读取失败时该侧为空，不把异常抛给调用方。
+能看这条拜访的人，以及这条拜访的个人收件人，可以打开复盘页。能看页面的人不因此收到卡片。
+个人收件人是记录人、直接汇报上级、抄送和协同人。部门群没有个人名单，群里点开仍要能看这条拜访。
+记录人看销售视角，并附带本人的人员表现评价和结构化抽取。
+协同人看销售视角的业务推进和人员表现评价，抽取为空。抄送看上级视角的业务推进。
+其他能看这条拜访的人看上级视角的业务推进，抽取为空。
+上级视角的人员表现评价只给直接汇报上级和公司级管理人员（biz_admin、sys_admin、executive）。
+只有这份评价、没有业务推进时，其他人打不开页面，也不查到评价正文。
+能打开时 tabs 只有 key 和标题。insight 是业务推进报告，performance 是人员表现评价报告。任一侧读取失败时该侧为空，不把异常抛给调用方。
 """
 
 from __future__ import annotations
@@ -23,9 +29,11 @@ from app.services.visit_record_insight_reader import (
     VisitRecordInsight,
     collect_profile_open_ids,
     has_visit_recap_page_insight,
+    PERFORMANCE_VIEW_LEADER,
+    PERFORMANCE_VIEW_SALES,
+    RECAP_VIEW_LEADER,
+    RECAP_VIEW_SALES,
     load_visit_record_insights_by_view,
-    recap_view_for_viewer,
-    resolve_visit_record_page,
     viewer_is_leader_of_recorder,
     viewer_is_recorder,
 )
@@ -58,7 +66,8 @@ class RecapViewContext:
         self._leader_by_recorder: dict[str, bool] = {}
         self._viewer_profile_row: Any = None
         self._viewer_profile_loaded = False
-        self._sys_admin: Optional[bool] = None
+        self._company_manager: Optional[bool] = None
+        self._cc_by_recorder: dict[str, bool] = {}
 
     def is_recorder(self, recorder_id: Any) -> bool:
         return viewer_is_recorder(self.viewer_user_id, recorder_id)
@@ -72,18 +81,47 @@ class RecapViewContext:
             self._leader_by_recorder[key] = self._query_reporting_leader(recorder_id)
         return self._leader_by_recorder[key]
 
-    def is_sys_admin(self) -> bool:
-        """当前用户是否为系统管理员。查一次，失败视为不是。"""
-        if self._sys_admin is None:
-            self._sys_admin = _viewer_is_sys_admin(self.viewer_user_id)
-        return self._sys_admin
+    def is_company_manager(self) -> bool:
+        """当前用户是否为公司级管理人员。查一次，失败视为不是。"""
+        if self._company_manager is None:
+            self._company_manager = _viewer_is_company_manager(self.viewer_user_id)
+        return self._company_manager
 
-    def view_for(self, recorder_id: Any) -> Optional[str]:
-        if self.is_recorder(recorder_id):
-            return recap_view_for_viewer(is_recorder=True)
-        if self.is_sys_admin():
-            return recap_view_for_viewer(is_sys_admin=True)
-        return recap_view_for_viewer(is_leader=self.is_reporting_leader(recorder_id))
+    def is_collaborative_participant(self, collaborative_participants: Any) -> bool:
+        """协同人按 ask_id 对齐当前用户的 user id、oauth id 或 open_id。"""
+        from app.utils.participants_utils import parse_collaborative_participants_list
+
+        ask_ids = [
+            item.get("ask_id")
+            for item in parse_collaborative_participants_list(collaborative_participants)
+            if isinstance(item, dict) and item.get("ask_id")
+        ]
+        if not ask_ids or not self.viewer_user_id:
+            return False
+        profile = self._viewer_profile()
+        return viewer_is_recorder(
+            [
+                self.viewer_user_id,
+                getattr(profile, "oauth_user_id", None) if profile else None,
+                collect_profile_open_ids(profile),
+            ],
+            ask_ids,
+        )
+
+    def is_configured_cc(self, recorder_id: Any, recorder_department_id: Any = None) -> bool:
+        """抄送规则里的个人收件人。查一次，失败视为不是。"""
+        key = str(recorder_id or "")
+        if key not in self._cc_by_recorder:
+            self._cc_by_recorder[key] = self._query_configured_cc(recorder_id, recorder_department_id)
+        return self._cc_by_recorder[key]
+
+    def can_see_leader_performance(self, recorder_id: Any) -> bool:
+        """上级视角的人员表现评价：直接汇报上级或公司级管理人员。记录人走销售视角。"""
+        if not self.viewer_user_id or self.is_recorder(recorder_id):
+            return False
+        if self.is_company_manager():
+            return True
+        return self.is_reporting_leader(recorder_id)
 
     def _viewer_profile(self) -> Any:
         if not self._viewer_profile_loaded:
@@ -126,27 +164,57 @@ class RecapViewContext:
             reporting_chain_leader_open_ids=reporting_chain_leader_open_ids,
         )
 
+    def _query_configured_cc(self, recorder_id: Any, recorder_department_id: Any) -> bool:
+        from uuid import UUID
 
-def _viewer_is_sys_admin(user_id: Any) -> bool:
-    """系统管理员可看上级视角复盘。角色查询失败时不放开。"""
-    from uuid import UUID
+        from app.services.visit_record_cc_resolver import resolve_visit_record_cc_recipients
 
-    if isinstance(user_id, UUID):
-        uid = user_id
-    else:
-        try:
-            uid = UUID(str(user_id)) if user_id else None
-        except (TypeError, ValueError):
+        raw = str(recorder_id or "").strip()
+        recorder_user_id = None
+        if raw:
+            try:
+                recorder_user_id = UUID(raw)
+            except ValueError:
+                if len(raw) == 32:
+                    try:
+                        recorder_user_id = UUID(hex=raw)
+                    except ValueError:
+                        recorder_user_id = None
+        if recorder_user_id is None:
             return False
-    if uid is None:
-        return False
-    try:
-        from app.services.oauth_service import oauth_client
+        try:
+            grouped = resolve_visit_record_cc_recipients(
+                self.session,
+                recorder_user_id=recorder_user_id,
+                recorder_department_id=str(recorder_department_id or "") or None,
+            )
+        except Exception as exc:
+            logger.warning("拜访复盘查询抄送收件人失败 recorder=%s: %s", raw, exc)
+            return False
+        open_ids = [
+            item.get("open_id")
+            for recipients in grouped.values()
+            for item in recipients
+            if isinstance(item, dict) and item.get("open_id")
+        ]
+        if not open_ids:
+            return False
+        profile = self._viewer_profile()
+        return viewer_is_recorder(
+            [
+                self.viewer_user_id,
+                getattr(profile, "oauth_user_id", None) if profile else None,
+                collect_profile_open_ids(profile),
+            ],
+            open_ids,
+        )
 
-        return oauth_client.check_user_has_role(user_id=uid, role="SYS_ADMIN") is True
-    except Exception as exc:
-        logger.warning("拜访复盘查询系统管理员角色失败: %s", exc)
-        return False
+
+def _viewer_is_company_manager(user_id: Any) -> bool:
+    """公司级管理人员可看上级视角复盘：biz_admin、sys_admin、executive。角色查询失败时不放开。"""
+    from app.services.leader_meeting_review_actions import viewer_is_company_manager
+
+    return viewer_is_company_manager(user_id)
 
 
 def _reporting_chain_leader_open_ids(recorder_profile: Any) -> list[str]:
@@ -183,16 +251,40 @@ def resolve_viewer_recap(
     visit_record_id: str,
     recorder_id: Any,
     viewer_user_id: Any,
+    is_collaborative_participant: bool = False,
+    is_configured_cc: bool = False,
+    can_see_visit: bool = True,
 ) -> Optional[tuple[str, Optional[VisitRecordInsight], Optional[VisitRecordInsight]]]:
-    """有复盘或表现评价才按当前用户选视角。都没有时返回 None，且不会查汇报链。"""
+    """调用方已经能打开页面。没有任何报告时返回 None，且不会查汇报链。
+
+    没有上级视角人员表现评价时，也不查角色和汇报链。
+    协同人看销售视角。看不到这条拜访的协同人看不到上级视角。
+    抄送只看上级视角的业务推进，不看人员表现评价。
+    """
     insights = load_visit_record_insights_by_view(session, visit_record_id)
     if not has_visit_recap_page_insight(insights):
         return None
     context = RecapViewContext(session, viewer_user_id)
-    return resolve_visit_record_page(
-        insights,
-        resolve_view=lambda: context.view_for(recorder_id),
-    )
+    if context.is_recorder(recorder_id):
+        business = insights.get(RECAP_VIEW_SALES)
+        performance = insights.get(PERFORMANCE_VIEW_SALES)
+        if not business and not performance:
+            return None
+        return RECAP_VIEW_SALES, business, performance
+    leader_business = insights.get(RECAP_VIEW_LEADER)
+    leader_performance = insights.get(PERFORMANCE_VIEW_LEADER)
+    if leader_performance and context.can_see_leader_performance(recorder_id):
+        return RECAP_VIEW_LEADER, leader_business, leader_performance
+    if is_collaborative_participant and not is_configured_cc:
+        business = insights.get(RECAP_VIEW_SALES)
+        performance = insights.get(PERFORMANCE_VIEW_SALES)
+        if business or performance:
+            return RECAP_VIEW_SALES, business, performance
+        if not can_see_visit:
+            return None
+    if not leader_business:
+        return None
+    return RECAP_VIEW_LEADER, leader_business, None
 
 
 def viewer_can_see_extract(
@@ -209,6 +301,9 @@ def load_visit_record_recap_response(
     visit_record_id: str,
     recorder_id: Any,
     viewer_user_id: Any,
+    is_collaborative_participant: bool = False,
+    is_configured_cc: bool = False,
+    can_see_visit: bool = True,
 ) -> dict[str, Any]:
     """当前用户的复盘页。记录人附带 items 与 card_links；其他人抽取为空。"""
     rid = (visit_record_id or "").strip()
@@ -219,6 +314,9 @@ def load_visit_record_recap_response(
             visit_record_id=rid,
             recorder_id=recorder_id,
             viewer_user_id=viewer_user_id,
+            is_collaborative_participant=is_collaborative_participant,
+            is_configured_cc=is_configured_cc,
+            can_see_visit=can_see_visit,
         )
     except Exception as exc:
         logger.warning("加载拜访复盘失败: record_id=%s error=%s", rid, exc)
