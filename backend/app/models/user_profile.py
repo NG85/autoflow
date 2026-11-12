@@ -6,7 +6,11 @@ from sqlmodel import (
     SQLModel,
     Relationship as SQLRelationship,
 )
-from app.models.user_oauth_account import UserOAuthAccount, select_latest_oauth_account
+from app.models.user_oauth_account import (
+    UserOAuthAccount,
+    oauth_push_receive_id,
+    select_latest_oauth_account,
+)
 
 if TYPE_CHECKING:
     from app.models.auth import User
@@ -102,7 +106,7 @@ class UserProfile(SQLModel, table=True):
         获取用户的OAuth账号
         
         在实际业务场景中，通常是 1 对 1 关系（客户公司通常只使用一类 OAuth）。
-        若同一用户绑定多个平台，只考虑受支持且有 open_id 的账号，
+        若同一用户绑定多个平台，只考虑受支持且可推送的账号，
         再按 update_time（其次 create_time）取较新的一条。与拜访推送同一套选择逻辑。
         
         Returns:
@@ -129,18 +133,17 @@ class UserProfile(SQLModel, table=True):
     
     def get_platform_open_id(self, platform: str) -> Optional[str]:
         """
-        获取用户在指定平台的open_id
+        获取用户在指定平台的推送收件人 ID（飞书/钉钉为 open_id；企微可为 userid）。
         
         Args:
             platform: 平台名称 (feishu/lark/dingtalk/wecom etc.)
             
         Returns:
-            对应的open_id，如果不存在返回None
+            对应收件人 ID，如果不存在返回None
         """
         oauth_account = self.get_oauth_account_by_platform(platform)
-        if oauth_account:
-            return oauth_account.open_id
-        return None
+        receive_id = oauth_push_receive_id(oauth_account)
+        return receive_id or None
 
     
     def has_platform_access(self, platform: str) -> bool:
@@ -151,10 +154,9 @@ class UserProfile(SQLModel, table=True):
             platform: 平台名称
             
         Returns:
-            是否有该平台的open_id
+            是否有该平台可推送的收件人 ID
         """
-        oauth_account = self.get_oauth_account_by_platform(platform)
-        return bool(oauth_account and oauth_account.open_id is not None)
+        return bool(self.get_platform_open_id(platform))
     
     def get_available_platforms(self) -> list[str]:
         """
@@ -164,13 +166,13 @@ class UserProfile(SQLModel, table=True):
         此方法保留多账号场景的支持。
         
         Returns:
-            用户有open_id的平台列表（在 1 对 1 场景下通常只有一个元素）
+            用户有可推送收件人 ID 的平台列表（在 1 对 1 场景下通常只有一个元素）
         """
         if not self.oauth_users:
             return []
         platforms = []
         for oauth_account in self.oauth_users:
-            if oauth_account.provider and oauth_account.open_id:
+            if oauth_account.provider and oauth_push_receive_id(oauth_account):
                 platforms.append(oauth_account.provider)
         return platforms
     

@@ -11,6 +11,30 @@ from app.services.oauth_http import post_json
 logger = logging.getLogger(__name__)
 
 
+def _oauth_identity_open_id(identity: Dict[str, Any]) -> str:
+    """OAuth 身份 openId。企微由 OAuth 服务用 userid 回填，本侧不再回退。"""
+    return (identity.get("openId") or identity.get("open_id") or "").strip()
+
+
+def _department_manager_from_oauth_leader(
+    leader: Dict[str, Any],
+    *,
+    department_name: str,
+) -> Dict[str, Any]:
+    """OAuth departments/leaders 条目 → 推送用部门负责人。"""
+    platform = (leader.get("platform") or "feishu") or "feishu"
+    return {
+        "open_id": _oauth_identity_open_id(leader),
+        "name": leader.get("name", "") or "",
+        "crmUserId": leader.get("crmUserId", "") or "",
+        "userId": leader.get("userId", "") or "",
+        "platform": platform,
+        "type": "department_manager",
+        "department": department_name,
+        "receive_id_type": "open_id",
+    }
+
+
 class OAuthClient:
     def __init__(
         self,
@@ -188,22 +212,16 @@ class OAuthClient:
                 for leader in leaders:
                     if not isinstance(leader, dict):
                         continue
-                    manager = {
-                        "open_id": leader.get("openId"),
-                        "name": leader.get("name", "") or "",
-                        "crmUserId": leader.get("crmUserId", "") or "",
-                        "userId": leader.get("userId", "") or "",
-                        "platform": leader.get("platform", "feishu"),
-                        "type": "department_manager",
-                        # 保留 leader 的来源部门，避免聚合后丢上下文
-                        "department": department_name,
-                        "receive_id_type": "open_id",
-                    }
+                    # 保留 leader 的来源部门，避免聚合后丢上下文
+                    manager = _department_manager_from_oauth_leader(
+                        leader, department_name=department_name
+                    )
 
                     # Reasonable per-group dedupe (openId/userId/crmUserId/uid/askUserId)
                     platform = str(manager.get("platform") or "")
                     ident = (
-                        leader.get("openId")
+                        manager.get("open_id")
+                        or leader.get("openId")
                         or leader.get("userId")
                         or leader.get("crmUserId")
                         or leader.get("uid")
@@ -244,16 +262,9 @@ class OAuthClient:
                 if not isinstance(leader, dict):
                     continue
                 manager_list.append(
-                    {
-                        "open_id": leader.get("openId"),
-                        "name": leader.get("name", "") or "",
-                        "crmUserId": leader.get("crmUserId", "") or "",
-                        "userId": leader.get("userId", "") or "",
-                        "platform": leader.get("platform", "feishu"),
-                        "type": "department_manager",
-                        "department": department_name,
-                        "receive_id_type": "open_id",
-                    }
+                    _department_manager_from_oauth_leader(
+                        leader, department_name=department_name
+                    )
                 )
             departments_with_managers[department_name] = manager_list
 
@@ -304,7 +315,7 @@ class OAuthClient:
             if not isinstance(leader, dict):
                 continue
             platform = leader.get("platform")
-            open_id = leader.get("openId") or leader.get("open_id")
+            open_id = _oauth_identity_open_id(leader)
             if not platform or not open_id:
                 continue
             simplified.append(
@@ -357,7 +368,7 @@ class OAuthClient:
             if not isinstance(user, dict):
                 continue
             platform = user.get("platform")
-            open_id = user.get("openId") or user.get("open_id")
+            open_id = _oauth_identity_open_id(user)
             if not platform or not open_id:
                 continue
             simplified.append(

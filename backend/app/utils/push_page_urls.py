@@ -112,25 +112,26 @@ def build_visit_record_recap_page_url(record_id: str) -> str:
 
 def build_department_highlights_url(
     report_date: str,
-    department_id: str,
-    section: str,
+    department_id: str = "",
+    section: str = "",
 ) -> str:
-    """销售负责人今日重点页。不传 department_id 时打开该负责人的全部部门。"""
+    """销售负责人今日重点页。
+
+    - 不传 department_id：打开该负责人的全部部门。
+    - 不传 section：只带 date（页面用默认 tab）。
+    """
     host = _host()
     day = (report_date or "").strip()
     dept = (department_id or "").strip()
     key = (section or "").strip()
-    if not host or not day or not key:
+    if not host or not day:
         return ""
+    parts = [f"date={quote(day, safe='')}"]
     if dept:
-        query = (
-            f"date={quote(day, safe='')}"
-            f"&department_id={quote(dept, safe='')}"
-            f"&tab={quote(key, safe='')}"
-        )
-    else:
-        query = f"date={quote(day, safe='')}&tab={quote(key, safe='')}"
-    return f"{host}/v2/department-highlights?{query}"
+        parts.append(f"department_id={quote(dept, safe='')}")
+    if key:
+        parts.append(f"tab={quote(key, safe='')}")
+    return f"{host}/v2/department-highlights?{'&'.join(parts)}"
 
 
 def build_sales_today_highlights_url(report_date: str, section: str) -> str:
@@ -233,6 +234,23 @@ def build_team_weekly_report_url(year: int, week: int) -> str:
     if not host or year <= 0 or week <= 0:
         return ""
     return f"{host}/v2/business/reports?tab=weekly-team&year={year}&week={week}"
+
+
+def build_company_daily_report_url(report_date: str) -> str:
+    """公司日报页：/v2/business/reports?tab=daily-company&date=。"""
+    host = _host()
+    day = (report_date or "").strip()
+    if not host or not day:
+        return ""
+    return f"{host}/v2/business/reports?tab=daily-company&date={quote(day, safe='')}"
+
+
+def build_company_weekly_report_url(year: int, week: int) -> str:
+    """公司周报页：/v2/business/reports?tab=weekly-company&year=&week=。"""
+    host = _host()
+    if not host or year <= 0 or week <= 0:
+        return ""
+    return f"{host}/v2/business/reports?tab=weekly-company&year={year}&week={week}"
 
 
 def build_leader_meeting_review_list_url(start_date: str, end_date: str) -> str:

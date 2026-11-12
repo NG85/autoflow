@@ -19,7 +19,12 @@ from sqlmodel import Session, select
 from app.models.crm_accounts import CRMAccount
 from app.models.crm_opportunities import CRMOpportunity
 from app.models.crm_skill_extract_items import CRMSkillExtractItem
-from app.platforms.constants import PLATFORM_DINGTALK, PLATFORM_FEISHU, PLATFORM_LARK
+from app.platforms.constants import (
+    PLATFORM_DINGTALK,
+    PLATFORM_FEISHU,
+    PLATFORM_LARK,
+    PLATFORM_WECOM,
+)
 from app.services.leader_insight_reports import (
     load_leader_insight_reports,
     load_leader_insight_sections,
@@ -1081,8 +1086,42 @@ def deliver_department_highlight_card(
             "failed_recipients": failed,
         }
 
+    if platform == PLATFORM_WECOM:
+        from app.services.today_highlights_wecom import build_team_wecom_template_card
+
+        card = build_team_wecom_template_card(assembled, owner_name=owner_name)
+        tokens = platform_notification_service._get_platform_tokens([platform])
+        if platform not in tokens:
+            return {"success": False, "message": "wecom push is not configured"}
+        chatid = _text(recipient.get("open_id"))
+        if not chatid:
+            return {"success": False, "message": "recipient has no oauth open_id"}
+        try:
+            platform_notification_service._send_message(
+                chatid,
+                tokens[platform],
+                card,
+                platform,
+                receive_id_type=_text(recipient.get("receive_id_type")) or "open_id",
+                msg_type="template_card",
+            )
+            return {"success": True, "message": None, "failed_recipients": []}
+        except Exception as exc:
+            return {
+                "success": False,
+                "message": str(exc),
+                "failed_recipients": [
+                    {
+                        "open_id": chatid,
+                        "name": recipient.get("name"),
+                        "platform": platform,
+                        "error": str(exc),
+                    }
+                ],
+            }
+
     text = render_dingtalk_markdown(assembled, title=title, owner_name=owner_name)
-    if platform == PLATFORM_DINGTALK or platform:
+    if platform == PLATFORM_DINGTALK:
         return platform_notification_service.send_platform_notification(
             db_session,
             recipient_user_id=_text(recipient.get("user_id")),

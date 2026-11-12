@@ -54,19 +54,38 @@ class UserProfileRepo(BaseRepo):
         return inactive
 
     def get_active_open_ids(self, db_session: Session, open_ids: List[str]) -> set[str]:
-        """返回 open_id 在 oauth_accounts 中存在且对应 user_profiles.is_active 的集合。"""
+        """返回可送达 ID 在 oauth_accounts 中且对应 profile 仍 active 的集合。
+
+        入参可是飞书/钉钉 open_id，也可以是企微 user_id_in_platform / union_id
+        （与 oauth_push_receive_id 对齐）。
+        """
         unique_ids = list(dict.fromkeys(str(open_id) for open_id in open_ids if open_id))
         if not unique_ids:
             return set()
         rows = db_session.exec(
-            select(UserOAuthAccount.open_id)
+            select(
+                UserOAuthAccount.open_id,
+                UserOAuthAccount.user_id_in_platform,
+                UserOAuthAccount.union_id,
+            )
             .join(UserProfile, UserProfile.user_id == UserOAuthAccount.user_id)
             .where(
-                UserOAuthAccount.open_id.in_(unique_ids),
                 UserProfile.is_active == True,  # noqa: E712
+                or_(
+                    UserOAuthAccount.open_id.in_(unique_ids),
+                    UserOAuthAccount.user_id_in_platform.in_(unique_ids),
+                    UserOAuthAccount.union_id.in_(unique_ids),
+                ),
             )
         ).all()
-        return {str(open_id) for open_id in rows if open_id}
+        wanted = set(unique_ids)
+        active: set[str] = set()
+        for open_id, user_id_in_platform, union_id in rows:
+            for value in (open_id, user_id_in_platform, union_id):
+                text = str(value).strip() if value else ""
+                if text and text in wanted:
+                    active.add(text)
+        return active
 
     def get_by_user_ids(self, db_session: Session, user_ids: List[UUID]) -> List[UserProfile]:
         """批量根据 users.id 获取档案。"""

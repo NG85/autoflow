@@ -431,6 +431,13 @@ class Settings(BaseSettings):
     DINGTALK_APP_ID: str = ""
     DINGTALK_APP_SECRET: str = ""
     DINGTALK_COPR_ID: str = ""
+
+    # 企微：经 Sia 智能机器人 HTTP 转发（本服务不维护 Bot WS）
+    # POST {WECOM_PUSH_BASE_URL}/api/v1/webhook/wecom/push
+    # 有 BASE_URL 即可推；TOKEN 对应 Sia SYNAPSE_TASK_CALLBACK_TOKEN（Sia 未配则放行，本侧可空）
+    WECOM_PUSH_BASE_URL: str = ""
+    WECOM_PUSH_TOKEN: str = ""
+
     # 钉钉听记：写入预建 AI 表格后轮询读取「听记总结」（非逐字稿）
     DINGTALK_TRANSCRIBE_NOTABLE_URL: str | None = None
     DINGTALK_NOTABLE_OPERATOR_UNION_ID: str | None = None

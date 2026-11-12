@@ -52,3 +52,4 @@
 | `2026-11-10-visit-recap-card-default-color.md` | 2026-11-10，拜访复盘卡片头使用默认蓝色 |
 | `2026-11-10-sales-highlights-key-findings.md` | 2026-11-10，销售今日重点把建议关注改成关键发现 |
 | `2026-11-10-sales-immediate-status-null.md` | 2026-11-10，立即处理一对一绑定任务且不回传状态 |
+| `2026-11-11-wecom-bot-push.md` | 2026-11-11，企微经 Sia bot 推送个人消息 |

@@ -238,6 +238,20 @@ def test_build_team_weekly_report_url(monkeypatch):
     assert urls.build_team_weekly_report_url(2026, 45) == ""
 
 
+def test_build_company_report_urls(monkeypatch):
+    monkeypatch.setattr(urls.settings, "REVIEW_REPORT_HOST", "https://example.com")
+    assert (
+        urls.build_company_daily_report_url("2026-11-10")
+        == "https://example.com/v2/business/reports?tab=daily-company&date=2026-11-10"
+    )
+    assert (
+        urls.build_company_weekly_report_url(2026, 45)
+        == "https://example.com/v2/business/reports?tab=weekly-company&year=2026&week=45"
+    )
+    monkeypatch.setattr(urls.settings, "REVIEW_REPORT_HOST", "")
+    assert urls.build_company_daily_report_url("2026-11-10") == ""
+
+
 def test_build_visit_guide_page_url(monkeypatch):
     monkeypatch.setattr(urls.settings, "REVIEW_REPORT_HOST", "https://example.com")
     assert (
