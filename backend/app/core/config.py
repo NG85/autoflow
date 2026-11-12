@@ -337,9 +337,12 @@ class Settings(BaseSettings):
     CRM_DAILY_REPORT_ENABLED: bool = False
     CRM_DAILY_REPORT_CRON: str = '30 8 * * *'  # 每天早上8:30执行
     CRM_DAILY_REPORT_FEISHU_ENABLED: bool = True  # 是否启用飞书推送
-    # 今日重点定时任务，与日报任务分开。是否发出仍由 report_push_policy 的 today_highlights 决定。
+    # 今日重点定时任务（团队卡、一线卡），与日报任务分开。是否发出仍由 report_push_policy 的 today_highlights 决定。
     CRM_TODAY_HIGHLIGHTS_ENABLED: bool = False
     CRM_TODAY_HIGHLIGHTS_CRON: str = "0 8 * * *"  # 每天早上 8:00
+    # 公司卡单独调度，不跟团队卡、一线卡。接口本身不按星期拒绝。
+    CRM_COMPANY_TODAY_HIGHLIGHTS_ENABLED: bool = False
+    CRM_COMPANY_TODAY_HIGHLIGHTS_CRON: str = "0 8 * * 1,3,5"  # 周一、三、五 8:00
     # 日报拜访日期口径（个人/团队/公司共用）。Autoflow 用它筛拜访记录；
     # crm_account_opportunity_assessment / crm_department_daily_summary 由上游按同一口径写入，
     # 本服务仍按 assessment_date / report_date 读取。

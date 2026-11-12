@@ -134,6 +134,24 @@ def build_department_highlights_url(
     return f"{host}/v2/department-highlights?{'&'.join(parts)}"
 
 
+def build_company_highlights_url(report_date: str, section: str = "") -> str:
+    """CXO 今日重点页：/v2/company-highlights?date=&tab=。
+
+    date 是推送日。不传 section 时只带 date。
+    """
+    host = _host()
+    day = (report_date or "").strip()
+    key = (section or "").strip()
+    if not host or not day:
+        return ""
+    if not key:
+        return f"{host}/v2/company-highlights?date={quote(day, safe='')}"
+    return (
+        f"{host}/v2/company-highlights"
+        f"?date={quote(day, safe='')}&tab={quote(key, safe='')}"
+    )
+
+
 def build_sales_today_highlights_url(report_date: str, section: str) -> str:
     """一线销售今日重点结构化页：/v2/today-highlights?date=&tab=。"""
     host = _host()

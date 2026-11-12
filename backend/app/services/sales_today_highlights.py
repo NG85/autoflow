@@ -46,7 +46,6 @@ logger = logging.getLogger(__name__)
 SUBJECT_USER = "USER"
 AUDIENCE_SALES = "sales"
 STATUS_SUPERSEDED = "SUPERSEDED"
-_DECIDED = {"ADOPTED", "REJECTED"}
 ITEM_IMMEDIATE = "IMMEDIATE_ACTION"
 ITEM_RISK = "OPEN_RISK"
 ITEM_NEXT_WEEK = "NEXT_WEEK_ACTION_CANDIDATE"
@@ -255,49 +254,13 @@ def _stamp_key(row: Any) -> tuple[str, str]:
     return (_text(stamp), _text(_row_value(row, "unique_id")))
 
 
-def _copy_immediate(row: Any) -> dict[str, Any]:
-    if isinstance(row, Mapping):
-        return dict(row)
-    names = (
-        "unique_id",
-        "subject_type",
-        "subject_id",
-        "audience",
-        "status",
-        "is_deleted",
-        "item_type",
-        "extract_key",
-        "account_id",
-        "opportunity_id",
-        "card_links",
-        "payload",
-        "reject_reason",
-        "adopted_todo_id",
-        "feedback",
-        "feedback_comment",
-        "feedback_at",
-        "created_at",
-        "updated_at",
-    )
-    return {name: getattr(row, name, None) for name in names}
-
-
 def _prefer_extract(group: Sequence[Any]) -> Any:
-    """已决定的行留下 unique_id 和赞踩、采纳。新行只替换正文。"""
-    ordered = sorted(group, key=_stamp_key)
-    latest = ordered[-1]
-    if _text(_row_value(latest, "status")).upper() in _DECIDED:
-        return latest
-    decided = [row for row in ordered if _text(_row_value(row, "status")).upper() in _DECIDED]
-    if not decided:
-        return latest
-    data = _copy_immediate(decided[-1])
-    data["payload"] = _row_value(latest, "payload")
-    return data
+    """同一抽取键只留最新一行。赞踩和采纳留在写出它们的那一行。"""
+    return sorted(group, key=_stamp_key)[-1]
 
 
 def _collapse_extracts(rows: Sequence[Any]) -> list[Any]:
-    """同一类型、同一抽取键只留一条，避免重抽后的新行盖住已有决定。"""
+    """同一类型、同一抽取键只留最新一行。"""
     grouped: dict[str, list[Any]] = {}
     for row in rows or []:
         item_type = _text(_row_value(row, "item_type"))

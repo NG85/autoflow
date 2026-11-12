@@ -63,9 +63,6 @@ logger = logging.getLogger(__name__)
 SUBJECT_USER = "USER"
 AUDIENCE_LEADER = "leader"
 STATUS_SUPERSEDED = "SUPERSEDED"
-STATUS_ADOPTED = "ADOPTED"
-STATUS_REJECTED = "REJECTED"
-_DECIDED = {STATUS_ADOPTED, STATUS_REJECTED}
 ITEM_INTERVENTION = "TODAY_INTERVENTION"
 SECTION_KEY = "leader_intervene"
 INTERVENTION_TITLE = "团队今日需介入"
@@ -187,10 +184,6 @@ def _serialize_item(row: Any, names: Mapping[str, Mapping[str, str]]) -> dict[st
     }
 
 
-def _row_status(row: Any) -> str:
-    return _text(_row_value(row, "status")).upper()
-
-
 def _row_sort_key(row: Any) -> tuple[str, str]:
     stamp = _row_value(row, "updated_at") or _row_value(row, "created_at")
     if hasattr(stamp, "isoformat"):
@@ -198,55 +191,13 @@ def _row_sort_key(row: Any) -> tuple[str, str]:
     return (_text(stamp), _text(_row_value(row, "unique_id")))
 
 
-def _row_dict(row: Any) -> dict[str, Any]:
-    if isinstance(row, Mapping):
-        return dict(row)
-    names = (
-        "unique_id",
-        "subject_type",
-        "subject_id",
-        "audience",
-        "status",
-        "is_deleted",
-        "item_type",
-        "extract_key",
-        "account_id",
-        "opportunity_id",
-        "card_links",
-        "payload",
-        "report_date",
-        "reject_reason",
-        "adopted_todo_id",
-        "feedback",
-        "feedback_comment",
-        "feedback_at",
-        "feedback_user_id",
-        "created_at",
-        "updated_at",
-    )
-    return {name: getattr(row, name, None) for name in names}
-
-
-def _with_latest_body(decided: Any, latest: Any) -> dict[str, Any]:
-    """身份和决定留在不会被作废的旧行上，正文用新行。"""
-    data = _row_dict(decided)
-    data["payload"] = _row_value(latest, "payload")
-    return data
-
-
 def _prefer_one(group: Sequence[Any]) -> Any:
-    ordered = sorted(group, key=_row_sort_key)
-    latest = ordered[-1]
-    if _row_status(latest) in _DECIDED:
-        return latest
-    decided = [row for row in ordered if _row_status(row) in _DECIDED]
-    if not decided:
-        return latest
-    return _with_latest_body(decided[-1], latest)
+    """同一抽取键只留最新一行。这一行的采纳和赞踩不从旧行带过来。"""
+    return sorted(group, key=_row_sort_key)[-1]
 
 
 def _collapse_rows(rows: Sequence[Any]) -> list[Any]:
-    """同一天、同一负责人、同一抽取键只留一条。重抽产生的新行接上已有决定。"""
+    """同一天、同一负责人、同一抽取键只留最新一行。"""
     from app.services.subject_interaction import intervention_anchor
 
     grouped: dict[str, list[Any]] = {}
@@ -1023,7 +974,7 @@ def highlights_for_leader(
         try:
             from app.services.leader_intervention_actions import attach_item_interactions
 
-            attach_item_interactions(session, [payload], report_date)
+            attach_item_interactions(session, [payload])
         except Exception as exc:
             logger.warning("拼今日需介入评论和任务失败: %s", exc)
     return payload

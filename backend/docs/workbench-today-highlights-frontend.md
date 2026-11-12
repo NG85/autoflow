@@ -1,13 +1,14 @@
 # 今日重点：前端接入
 
-工作台顶上两块，名字用 **我的** 和 **团队**。同一个人可以两块都有，点哪张卡片就打开对应那一块，不要按 `SALES` / `SALES_MANAGER` 只留一块。某一块没有数据时不展示。
+工作台顶上两块，名字用 **我的** 和 **团队**。同一个人可以两块都有，点哪张卡片就打开对应那一块，不要按 `SALES` / `SALES_MANAGER` 只留一块。某一块没有数据时不展示。高管和公司今日重点接收人另外有一块 **CXO**，规则在文末。
 
 | 工作台 | 谁的内容 | 页面 | 列表接口 | 页面上做什么 |
 | --- | --- | --- | --- | --- |
 | 我的 | 当前用户自己的抽取 | `/v2/today-highlights` | `GET /api/v1/crm/today-highlights/sales` | 关键发现、下周待确认可以采纳/拒绝和赞踩。立即处理的 `status` 为 `null`，不展示采纳或拒绝。用 `related_todos[0].unique_id` 打开任务详情，任务是否已完成或已取消由前端按这个编号自己查。 |
 | 团队 | 当前用户作为负责人的需介入和报告 | `/v2/department-highlights` | `GET /api/v1/crm/today-highlights/departments` | 只对「今日需介入」做采纳/拒绝、评论、挂任务、赞踩。重点商机、团队人效、经营趋势只读，不要画出这些操作。 |
+| CXO | 高管角色，或公司今日重点的推送接收人 | `/v2/company-highlights` | `GET /api/v1/crm/today-highlights/company` | 公司人效、重点商机盘点只读。不要画采纳、拒绝、评论、挂任务、赞踩。 |
 
-登录态沿用现有 CRM 接口。两个列表都只认当前登录人，请求里不要传别人的用户 id。
+登录态沿用现有 CRM 接口。我的、团队、CXO 三个列表都只认当前登录人，请求里不要传别人的用户 id。
 
 销售今日重点用自己的两个 `POST`，不要调负责人的四个写入接口。赞踩三个区块都可以。采纳和拒绝只写关键发现、下周待确认。
 
@@ -172,7 +173,7 @@ GET /api/v1/crm/today-highlights/sales?report_date=2026-10-13
 | `feedback_comment` | 赞踩附言。撤销后为 `null`。 |
 | `feedback_at` | 北京时间，无时区。未赞踩时 `null`。 |
 
-同一条抽取当天被重新抽取后，列表仍只有一条。正文用新的说法，`unique_id` 和赞踩留在已经采纳或拒绝、不会被作废的那一行上。关键发现、下周待确认的采纳状态也留在这一行。立即处理读出的 `status` 仍是 `null`。
+同一条抽取当天被重新抽取后，列表仍只有一条，就是最新那一行自己。采纳、拒绝和赞踩留在写出它们的那一行上，不会接到新正文上。最新一行如果还是待判断，页面上就是待判断，没有上一行的赞踩。立即处理读出的 `status` 仍是 `null`。写入用这次返回的 `unique_id`。
 
 ## 4. 采纳 / 拒绝
 
@@ -348,7 +349,7 @@ tab 名用 `card_links[].title`（重点商机 / 团队人效 / 经营趋势）�
 | `comments` | 评论平铺列表，按时间升序。 |
 | `tasks` | 已挂上的任务摘要。 |
 
-同一条建议当天如果被重新抽取，列表仍只有一条。`claim` 等正文是新的，`unique_id`、`status`、赞踩是那条已经采纳或拒绝、不会被作废的行。写入必须用这次返回的 `unique_id`。用户改完赞踩后如果隔一会儿再进来，先重新拉列表，不要沿用进页时缓存的 id。
+同一条建议当天如果被重新抽取，列表仍只有一条，就是最新那次抽取。`unique_id`、采纳、拒绝、赞踩、评论和已挂任务都属于这一行，不会从上一行带过来。写入必须用这次返回的 `unique_id`。用户改完后再进来，先重新拉列表，不要沿用进页时缓存的 id。
 
 ### 评论
 
@@ -555,3 +556,106 @@ POST /api/v1/crm/today-highlights/departments/items/{unique_id}/feedback
 5. 评论：用响应里的整段 `comments` 替换。
 6. 任务：先走任务服务创建，再写回；写回成功后重新拉列表。
 7. 用户重新进入页面，或从后台回到前台时，再拉一次列表，丢掉本地改过的 `unique_id`。
+
+---
+
+# CXO
+
+推送接收人会收到「CXO今日重点｜日期」，哪天发由公司卡自己的调度决定。卡片上只有两枚入口，有数据才出现：公司人效、重点商机盘点。不要画需介入、拜访对照、日报按钮。
+
+页面和推送不是同一批人。`biz_admin`、`sys_admin`、`executive` 能看。推送接收人从卡片链接进来也能看。工作台要不要露出 CXO 这一块，看这次列表有没有 `card_links`：没有就不要画入口。
+
+## 1. 从卡片进页面
+
+飞书、Lark、钉钉卡片是一行蓝链，多条之间用「｜」分隔。企微两份报告都在跳转列表里，整卡打开第一份。链到：
+
+```text
+/v2/company-highlights?date=YYYY-MM-DD&tab=cxo_efficiency_insight
+/v2/company-highlights?date=YYYY-MM-DD&tab=cxo_key_deal_review
+```
+
+| URL 参数 | 含义 |
+| --- | --- |
+| `date` | 业务日，也是推送日。调接口时改名为 `report_date`。缺省按北京时间当天。 |
+| `tab` | 要打开的 tab，取值是这次列表里的 `card_links[].key`。不要写死两个 tab。 |
+
+卡片标题是「CXO今日重点｜日期」，不跳转。页面标题用同一句。卡片底部没有「本周待完成」「本周已拜访」「日报」这类离开本页的按钮，页面里也不要补。
+
+## 2. 页面长什么样
+
+和销售、团队今日重点一样，一类一个 tab。tab 不写死，按返回的 `card_links` 顺序渲染：文案用 `title`，旁边带 `count`。`items` 里没有、`card_links` 里也没有的类不出现，不要留空 tab。
+
+当前会返回的类，顺序固定：
+
+1. **公司人效** `cxo_efficiency_insight`
+2. **重点商机盘点** `cxo_key_deal_review`。当天没有这份洞察时不出现，周三经常只有公司人效。
+
+一次请求带回全部 `items`。页面只展示当前 tab 对应的 `items[key]`。`tab` 能对上某个 `card_links.key` 时打开那个 tab；对不上或没传时打开第一个 tab。切换 tab 时把 `tab` 写回地址栏，日期保持不变。
+
+一个 tab 里可以有多条，每条是一个范围。公司级排在最前，标题写「公司」。其余按部门名排。每条只读：
+
+```text
+公司
+摘要（有才写）
+
+完整正文，可折叠
+```
+
+`department_name` 做这一条的标题。`summary` 为空就不写摘要，直接放 `detail_text`。不要展示 `department_id`，也不要展示写入方带范围和日期的包装标题。
+
+整页没有采纳、拒绝、评论、建任务、赞踩。不要调负责人和销售今日重点的写入接口。`items` 为空就是空状态。
+
+## 3. 拉列表
+
+```http
+GET /api/v1/crm/today-highlights/company?report_date=2026-11-09
+```
+
+当前用户不是 `biz_admin`、`sys_admin`、`executive`，也不是这次的推送接收人时，HTTP 200，`items` 为 `{}`，`card_links` 为 `[]`。不要为此画入口。推送接收人会从卡片链接进来，他们能看。
+
+服务端用 `report_date` 对 `period_key`，和团队今日重点一样。响应里没有单独的 `period_key`。
+
+```json
+{
+  "report_date": "2026-11-09",
+  "items": {
+    "cxo_efficiency_insight": [
+      {
+        "unique_id": "insight-company",
+        "summary": null,
+        "detail_text": "公司人效正文",
+        "department_id": "__COMPANY__",
+        "department_name": "公司"
+      },
+      {
+        "unique_id": "insight-east",
+        "summary": null,
+        "detail_text": "华东人效正文",
+        "department_id": "dept-east",
+        "department_name": "华东"
+      }
+    ]
+  },
+  "card_links": [
+    {
+      "key": "cxo_efficiency_insight",
+      "title": "公司人效",
+      "count": 2,
+      "url": "https://.../v2/company-highlights?date=2026-11-09&tab=cxo_efficiency_insight",
+      "item_types": ["CXO_EFFICIENCY_INSIGHT"]
+    }
+  ]
+}
+```
+
+同一个 tab 可以有多条。公司级排在最前，名称是「公司」。其余按部门名排。周三常常只有公司人效，重点商机盘点不占空 tab。
+
+| 字段 | 展示 |
+| --- | --- |
+| `department_name` | 这一条的范围。公司级显示「公司」。 |
+| `department_id` | 不要展示。公司级是 `__COMPANY__`。 |
+| `unique_id` | 列表用，只读。不要拿去调负责人或销售的写入接口。 |
+| `summary` | 摘要。空则为 `null`，接着展示全文。 |
+| `detail_text` | 完整正文，可折叠。 |
+
+tab 名用 `card_links[].title`（公司人效 / 重点商机盘点）。不要展示写入方带范围和日期的包装标题。没有采纳、拒绝、评论、任务、赞踩。

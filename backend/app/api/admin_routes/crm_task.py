@@ -135,17 +135,17 @@ def trigger_today_highlights_task(
     report_date: Optional[str] = Body(None, description="YYYY-MM-DD，不传则北京时间当天"),
     audience: Optional[str] = Body(
         None,
-        description="sales（一线销售） / department（负责人），不传则两边都推",
+        description="company（CXO） / department（负责人） / sales（一线销售），不传则三边都推。定时任务里公司卡不走这一边",
     ),
 ):
     """手动触发今日重点。与日报任务无关，发卡逻辑与 notification/push 相同。"""
     if not user.is_superuser:
         return {"code": 403, "message": "权限不足，只有超级管理员可以触发此任务", "data": {}}
-    valid_audiences = ["sales", "department"]
+    valid_audiences = ["company", "department", "sales"]
     if audience is not None and audience not in valid_audiences:
         return {
             "code": 400,
-            "message": f"无效的 audience={audience}，支持: {valid_audiences}，不传则两边都推",
+            "message": f"无效的 audience={audience}，支持: {valid_audiences}，不传则三边都推",
             "data": {},
         }
     if report_date:

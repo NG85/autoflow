@@ -36,9 +36,11 @@ def test_quota_uses_daily_report_scenarios(monkeypatch):
     )
     assert check_today_highlights_quota("sales") == (True, "ok")
     assert check_today_highlights_quota("department") == (True, "ok")
+    assert check_today_highlights_quota("company") == (True, "ok")
     assert seen == [
         BillingScenario.CRM_SALES_TODAY_HIGHLIGHTS,
         BillingScenario.CRM_DEPARTMENT_TODAY_HIGHLIGHTS,
+        BillingScenario.CRM_COMPANY_TODAY_HIGHLIGHTS,
     ]
 
 
@@ -61,14 +63,23 @@ def test_usage_trace_does_not_collide_with_daily_reports(monkeypatch):
         "app.services.today_highlights_billing.build_department_highlights_url",
         lambda *args, **kwargs: "https://example.com/dept",
     )
+    monkeypatch.setattr(
+        "app.services.today_highlights_billing.build_company_highlights_url",
+        lambda *args, **kwargs: "https://example.com/cxo",
+    )
     report_today_highlights_usage("sales", report_date=DAY, user_id="user-1")
     report_today_highlights_usage("department", report_date=DAY, user_id="leader-1")
+    report_today_highlights_usage("company", report_date=DAY, user_id="cxo-1")
     sales_scenario, sales_kwargs = captured[0]
     dept_scenario, dept_kwargs = captured[1]
+    company_scenario, company_kwargs = captured[2]
     assert sales_scenario is BillingScenario.CRM_SALES_TODAY_HIGHLIGHTS
     assert dept_scenario is BillingScenario.CRM_DEPARTMENT_TODAY_HIGHLIGHTS
+    assert company_scenario is BillingScenario.CRM_COMPANY_TODAY_HIGHLIGHTS
     assert sales_kwargs["trace_key"] == "sales-today:2026-10-12:user-1"
     assert dept_kwargs["trace_key"] == "dept-today:2026-10-12:leader-1"
+    assert company_kwargs["trace_key"] == "cxo-today:2026-10-12:cxo-1"
+    assert company_kwargs["review_detail"] == "https://example.com/cxo"
     assert not sales_kwargs["trace_key"].startswith("sales-daily:")
     assert not dept_kwargs["trace_key"].startswith("department-daily:")
     assert sales_kwargs["review_detail"] == "https://example.com/today"

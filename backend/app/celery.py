@@ -143,6 +143,28 @@ if settings.CRM_TODAY_HIGHLIGHTS_ENABLED:
     app.conf.beat_schedule["push_crm_today_highlights"] = {
         "task": "app.tasks.cron_jobs.push_crm_today_highlights",
         "schedule": highlights_schedule,
+        "kwargs": {"audiences": ["department", "sales"]},
+    }
+
+# 公司卡单独调度，不跟上面的团队卡、一线卡
+if settings.CRM_COMPANY_TODAY_HIGHLIGHTS_ENABLED:
+    company_highlights_fields = parse_crontab_fields(settings.CRM_COMPANY_TODAY_HIGHLIGHTS_CRON)
+    if company_highlights_fields:
+        minute, hour, day_of_month, month_of_year, day_of_week = company_highlights_fields
+        company_highlights_schedule = crontab(
+            minute=minute,
+            hour=hour,
+            day_of_month=day_of_month,
+            month_of_year=month_of_year,
+            day_of_week=day_of_week,
+        )
+    else:
+        company_highlights_schedule = crontab(hour=8, minute=0, day_of_week="1,3,5")
+    app.conf.beat_schedule = getattr(app.conf, "beat_schedule", {})
+    app.conf.beat_schedule["push_crm_company_today_highlights"] = {
+        "task": "app.tasks.cron_jobs.push_crm_today_highlights",
+        "schedule": company_highlights_schedule,
+        "kwargs": {"audience": "company"},
     }
 
 # CRM周报推送任务

@@ -48,6 +48,7 @@ class BillingScenario(str, Enum):
     CRM_SALES_TEAM_COMPANY_DAILY = "crm_sales_team_company_daily"
     CRM_SALES_TODAY_HIGHLIGHTS = "crm_sales_today_highlights"
     CRM_DEPARTMENT_TODAY_HIGHLIGHTS = "crm_department_today_highlights"
+    CRM_COMPANY_TODAY_HIGHLIGHTS = "crm_company_today_highlights"
     CRM_TEAM_WEEKLY_REPORT = "crm_team_weekly_report"
     CRM_WEEKLY_FOLLOWUP_SUMMARY = "crm_weekly_followup_summary"
     ACCOUNT_VISIT_PREP_GUIDE = "account_visit_prep_guide"
@@ -62,6 +63,7 @@ _SCENARIO_MODULE_KEY: dict[BillingScenario, str] = {
     BillingScenario.CRM_SALES_TEAM_COMPANY_DAILY: SALES_TEAM_DAILY_REPORT_AI_MODULE_KEY,
     BillingScenario.CRM_SALES_TODAY_HIGHLIGHTS: SALES_PERSONAL_DAILY_REPORT_AI_MODULE_KEY,
     BillingScenario.CRM_DEPARTMENT_TODAY_HIGHLIGHTS: SALES_TEAM_DAILY_REPORT_AI_MODULE_KEY,
+    BillingScenario.CRM_COMPANY_TODAY_HIGHLIGHTS: SALES_TEAM_DAILY_REPORT_AI_MODULE_KEY,
     BillingScenario.CRM_TEAM_WEEKLY_REPORT: TEAM_WEEKLY_REPORT_AI_MODULE_KEY,
     BillingScenario.CRM_WEEKLY_FOLLOWUP_SUMMARY: WEEKLY_FOLLOWUP_SUMMARY_AI_MODULE_KEY,
     BillingScenario.ACCOUNT_VISIT_PREP_GUIDE: ACCOUNT_VISIT_PREP_GUIDE_AI_MODULE_KEY,

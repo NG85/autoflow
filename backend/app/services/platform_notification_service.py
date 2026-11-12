@@ -2886,7 +2886,7 @@ class PlatformNotificationService:
         return recipients
 
     def get_recipients_for_company_highlights(self, db_session: Session) -> List[Dict[str, Any]]:
-        """公司今日重点：仅 report_push_policy 指定的接收人，不走 OAuth、不复用公司日报名单。"""
+        """公司今日重点：优先策略名单；没配名单时走公司日报接收人。"""
         from app.services.notification_scene_catalog import (
             SCENE_COMPANY_HIGHLIGHTS,
             VARIANT_TODAY_HIGHLIGHTS,
@@ -2896,11 +2896,11 @@ class PlatformNotificationService:
         user_ids = load_report_push_policy().override_user_ids(
             SCENE_COMPANY_HIGHLIGHTS, VARIANT_TODAY_HIGHLIGHTS
         )
-        if not user_ids:
-            return []
-        return self.recipients_from_user_ids(
-            db_session, user_ids, recipient_type="named_recipient"
-        )
+        if user_ids:
+            return self.recipients_from_user_ids(
+                db_session, user_ids, recipient_type="named_recipient"
+            )
+        return self.get_recipients_for_company_daily_report(db_session)
     
     def send_company_daily_report_notification(
         self,

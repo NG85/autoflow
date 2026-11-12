@@ -271,6 +271,7 @@ def test_comments_can_be_added_replied_and_edited_by_the_author():
         comments=[{"content": "先确认范围"}],
     )
     assert saved[0]["content"] == "先确认范围"
+    assert store.rows[0].subject_id == row.unique_id
     assert saved[0]["author_id"] == "user-1"
     assert saved[0]["reply_to_id"] is None
     parent_id = saved[0]["id"]

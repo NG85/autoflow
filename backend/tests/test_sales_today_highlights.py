@@ -190,7 +190,7 @@ def test_immediate_item_carries_decision_and_feedback():
     assert risk_item["feedback"] == "down"
 
 
-def test_reextract_keeps_the_decided_immediate_row():
+def test_reextract_shows_the_latest_immediate_row():
     assembled = assemble_sales_highlights(
         [
             _row(
@@ -217,13 +217,13 @@ def test_reextract_keeps_the_decided_immediate_row():
     )
     items = assembled["sections"][0]["items"]
     assert len(items) == 1
-    assert items[0]["unique_id"] == "old"
+    assert items[0]["unique_id"] == "new"
     assert items[0]["claim"] == "新建议"
     assert items[0]["why_today"] == "今天"
     assert items[0]["status"] is None
     assert items[0]["adopted_todo_id"] == "todo-new"
     assert [todo["unique_id"] for todo in items[0]["related_todos"]] == ["todo-new"]
-    assert items[0]["feedback"] == "down"
+    assert items[0]["feedback"] is None
 
 
 def test_immediate_without_a_task_is_omitted():
@@ -809,6 +809,16 @@ def test_highlights_task_runs_apart_from_daily_report(monkeypatch):
             "success_count": 2,
         }
 
+    def fake_company(session, *, report_date=None, recipient_user_ids=None):
+        seen["company"] = report_date
+        seen.setdefault("order", []).append("company")
+        return {
+            "success": True,
+            "skipped": False,
+            "skip_reason": None,
+            "success_count": 1,
+        }
+
     monkeypatch.setattr(
         "app.services.sales_today_highlights.handle_sales_today_highlights",
         fake_sales,
@@ -817,29 +827,52 @@ def test_highlights_task_runs_apart_from_daily_report(monkeypatch):
         "app.services.department_today_highlights.handle_department_today_highlights",
         fake_department,
     )
+    monkeypatch.setattr(
+        "app.services.company_today_highlights.handle_company_today_highlights",
+        fake_company,
+    )
     result = push_crm_today_highlights(report_date_str="2026-10-08")
-    assert seen["order"] == ["department", "sales"]
+    assert seen["order"] == ["company", "department", "sales"]
     assert seen["sales"] == date(2026, 10, 8)
     assert seen["department"] == date(2026, 10, 8)
     assert result["sales_today_highlights"]["success_count"] == 1
     assert result["department_today_highlights"]["success_count"] == 2
+    assert result["company_today_highlights"]["success_count"] == 1
 
     seen.clear()
     result = push_crm_today_highlights()
     assert seen["sales"] is None
     assert seen["department"] is None
+    assert seen["company"] is None
     assert result["report_date"] is None
 
     seen.clear()
     result = push_crm_today_highlights(report_date_str="2026-10-08", audience="sales")
     assert seen["sales"] == date(2026, 10, 8)
     assert "department" not in seen
+    assert "company" not in seen
+    assert result["department_today_highlights"] is None
+    assert result["company_today_highlights"] is None
+
+    seen.clear()
+    result = push_crm_today_highlights(
+        report_date_str="2026-10-08",
+        audiences=["department", "sales"],
+    )
+    assert seen["order"] == ["department", "sales"]
+    assert result["company_today_highlights"] is None
+
+    seen.clear()
+    result = push_crm_today_highlights(report_date_str="2026-10-08", audience="company")
+    assert seen["order"] == ["company"]
+    assert result["sales_today_highlights"] is None
     assert result["department_today_highlights"] is None
 
     bad = push_crm_today_highlights(report_date_str="10/08")
     assert bad["success"] is False
     assert bad["sales_today_highlights"] is None
     assert bad["department_today_highlights"] is None
+    assert bad["company_today_highlights"] is None
 
 
 def test_embedded_personal_block_keeps_sales_links_without_week_buttons(monkeypatch):
@@ -954,6 +987,16 @@ def test_team_push_failure_still_sends_sales_cards(monkeypatch):
         "app.services.department_today_highlights.handle_department_today_highlights",
         explode,
     )
+    monkeypatch.setattr(
+        "app.services.company_today_highlights.handle_company_today_highlights",
+        lambda session, *, report_date=None, recipient_user_ids=None: {
+            "success": True,
+            "skipped": True,
+            "skip_reason": "empty_highlights",
+            "success_count": 0,
+        },
+    )
     result = push_crm_today_highlights(report_date_str="2026-10-08")
     assert result["department_today_highlights"]["skip_reason"] == "push_failed"
     assert result["sales_today_highlights"]["success_count"] == 1
+    assert result["company_today_highlights"]["skip_reason"] == "empty_highlights"

@@ -23,7 +23,6 @@ from app.services.subject_interaction import (
     SubjectInteractionError,
     append_comments,
     append_todo_id,
-    intervention_anchor,
 )
 
 DAY = date(2026, 10, 13)
@@ -125,7 +124,7 @@ def test_leader_list_returns_extract_state_and_side_records(monkeypatch):
     monkeypatch.setattr(
         "app.services.leader_intervention_actions.load_threads",
         lambda session, subject_type, subject_ids: {
-            "2026-10-13|oauth-leader|item-1": {
+            "item-1": {
                 "comments": [{"id": "c1", "content": "先问客户"}],
                 "todo_ids": ["todo-9"],
             }
@@ -328,7 +327,6 @@ def test_comments_stay_on_their_own_subject_and_support_reply_threads(monkeypatc
 def test_linked_task_is_separate_from_comments_and_can_adopt(monkeypatch):
     row = _item(feedback="down")
     original_payload = dict(row.payload)
-    anchor = intervention_anchor(row.report_date, row.subject_id, row.extract_key, row.unique_id)
     session, stored = _memory_threads(monkeypatch)
     monkeypatch.setattr(
         "app.services.leader_intervention_actions.require_active_todo",
@@ -337,7 +335,7 @@ def test_linked_task_is_separate_from_comments_and_can_adopt(monkeypatch):
     append_comments(
         session,
         subject_type=SUBJECT_DEPARTMENT_INTERVENTION,
-        subject_id=anchor,
+        subject_id=row.unique_id,
         scene="department_today_highlights",
         actor_user_id="user-9",
         author="王经理",
@@ -353,7 +351,7 @@ def test_linked_task_is_separate_from_comments_and_can_adopt(monkeypatch):
     )
 
     assert not any("INSERT INTO crm_todos" in str(call.args[0]) for call in session.exec.call_args_list)
-    rows = stored[(SUBJECT_DEPARTMENT_INTERVENTION, anchor)]
+    rows = stored[(SUBJECT_DEPARTMENT_INTERVENTION, row.unique_id)]
     assert [item.content for item in rows if item.kind == "comment"] == ["先评论"]
     assert [item.todo_id for item in rows if item.kind == "task"] == ["todo-from-crm"]
     assert next(item.author_id for item in rows if item.kind == "task") == "user-9"
@@ -495,7 +493,7 @@ def test_notify_item_comments_does_not_raise_when_send_fails(monkeypatch):
 
 def test_comment_api_does_not_change_extract_status(monkeypatch):
     row = _item(status="PENDING")
-    session, _stored = _memory_threads(monkeypatch)
+    session, stored = _memory_threads(monkeypatch)
     comments = save_item_comments(
         session,
         row,
@@ -504,6 +502,7 @@ def test_comment_api_does_not_change_extract_status(monkeypatch):
         comments=[{"content": "只是讨论"}],
     )
     assert comments[0]["content"] == "只是讨论"
+    assert stored[(SUBJECT_DEPARTMENT_INTERVENTION, row.unique_id)][0].content == "只是讨论"
     assert row.status == "PENDING"
     assert row.adopted_todo_id is None
 
