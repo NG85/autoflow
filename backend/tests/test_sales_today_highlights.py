@@ -190,7 +190,7 @@ def test_immediate_item_carries_decision_and_feedback():
     assert risk_item["feedback"] == "down"
 
 
-def test_reextract_keeps_the_decided_immediate_row():
+def test_reextract_shows_the_latest_immediate_row():
     assembled = assemble_sales_highlights(
         [
             _row(
@@ -217,13 +217,13 @@ def test_reextract_keeps_the_decided_immediate_row():
     )
     items = assembled["sections"][0]["items"]
     assert len(items) == 1
-    assert items[0]["unique_id"] == "old"
+    assert items[0]["unique_id"] == "new"
     assert items[0]["claim"] == "新建议"
     assert items[0]["why_today"] == "今天"
     assert items[0]["status"] is None
     assert items[0]["adopted_todo_id"] == "todo-new"
     assert [todo["unique_id"] for todo in items[0]["related_todos"]] == ["todo-new"]
-    assert items[0]["feedback"] == "down"
+    assert items[0]["feedback"] is None
 
 
 def test_immediate_without_a_task_is_omitted():

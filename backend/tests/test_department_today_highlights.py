@@ -425,7 +425,7 @@ def test_leader_query_returns_intervene_and_reports(monkeypatch):
     }
 
 
-def test_reextract_keeps_one_item_and_carries_the_decision():
+def test_reextract_shows_the_latest_item_without_the_previous_decision():
     rows = [
         _row(
             {"claim": "旧建议", "leader_action": "昨天的动作"},
@@ -448,13 +448,13 @@ def test_reextract_keeps_one_item_and_carries_the_decision():
     assembled = assemble_department_highlights(rows, DAY, "dept-1", _names(), department_name="华北销售")
     items = assembled["sections"][0]["items"]
     assert len(items) == 1
-    assert items[0]["unique_id"] == "old"
+    assert items[0]["unique_id"] == "new"
     assert items[0]["claim"] == "新建议"
     assert items[0]["leader_action"] == "今天的动作"
-    assert items[0]["status"] == "ADOPTED"
-    assert items[0]["adopted_todo_id"] == "todo-1"
-    assert items[0]["feedback"] == "up"
-    assert items[0]["feedback_comment"] == "判断准确"
+    assert items[0]["status"] == "PENDING"
+    assert items[0]["adopted_todo_id"] is None
+    assert items[0]["feedback"] is None
+    assert items[0]["feedback_comment"] is None
 
 
 def test_single_item_card_links_to_the_page(monkeypatch):
