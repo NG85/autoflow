@@ -16,6 +16,7 @@ from app.platforms.wecom.text_notice import (
     new_task_id,
     plain_text,
 )
+from app.services.company_today_highlights import CXO_CARD_TITLE
 from app.services.department_today_highlights import (
     INTERVENTION_TITLE,
     TEAM_CARD_TITLE,
@@ -36,6 +37,7 @@ from app.services.sales_today_highlights import (
     card_blue_links,
 )
 from app.utils.push_page_urls import (
+    build_company_highlights_url,
     build_department_highlights_url,
     build_sales_today_highlights_url,
 )
@@ -43,6 +45,7 @@ from app.utils.push_page_urls import (
 __all__ = [
     "HORIZONTAL_LINK_MAX",
     "JUMP_LIST_MAX",
+    "build_cxo_wecom_template_card",
     "build_sales_wecom_template_card",
     "build_team_wecom_template_card",
     "build_text_notice_card",
@@ -190,4 +193,25 @@ def build_team_wecom_template_card(
         horizontal_links=[*footer, *report_links],
         card_action_url=action,
         task_id=new_task_id("th_t"),
+    )
+
+
+def build_cxo_wecom_template_card(assembled: Mapping[str, Any]) -> dict[str, Any]:
+    """CXO 今日重点企微卡。两份报告都进 jump_list，整卡打开第一份。"""
+    day = assembled.get("report_date")
+    title = f"{CXO_CARD_TITLE}｜{day}"
+    jumps = [
+        (_text(item.get("label")), _text(item.get("url")))
+        for item in (assembled.get("report_entries") or [])
+        if isinstance(item, Mapping) and _text(item.get("label")) and _text(item.get("url"))
+    ]
+    action = jumps[0][1] if jumps else (build_company_highlights_url(str(day)) if day else "")
+    return build_text_notice_card(
+        title=title,
+        desc="经营阅读",
+        sub_title_text="",
+        jump_links=jumps,
+        horizontal_links=[],
+        card_action_url=action,
+        task_id=new_task_id("th_c"),
     )

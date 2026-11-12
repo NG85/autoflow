@@ -353,7 +353,7 @@ def _preview_report(
         extra_reason = None
     elif scene == SCENE_COMPANY_HIGHLIGHTS:
         recipients = service.get_recipients_for_company_highlights(db_session)
-        extra_reason = "named_recipient"
+        extra_reason = "named_recipient" if override_ids else None
     else:
         recipients = service.get_recipients_for_company_weekly_report(db_session)
         extra_reason = None

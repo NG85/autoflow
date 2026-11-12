@@ -134,6 +134,20 @@ class SalesTodayHighlightsPushRequest(BaseModel):
     )
 
 
+class CompanyTodayHighlightsPushRequest(BaseModel):
+    """CXO 今日重点：读公司人效和重点商机。优先发给策略名单，没配名单时发给公司日报接收人。哪天发由调度配置决定。"""
+
+    type: Literal["company_today_highlights"] = "company_today_highlights"
+    report_date: Optional[str] = Field(
+        default=None,
+        description="YYYY-MM-DD，推送日；不传则北京时间当天",
+    )
+    recipient_user_ids: Optional[List[str]] = Field(
+        default=None,
+        description="可选本地 user_id，从这次的推送接收人里收窄；不能扩大名单。名单没配时收窄的是公司日报接收人",
+    )
+
+
 class DepartmentTodayHighlightsPushRequest(BaseModel):
     """销售负责人今日重点：按负责人 oauth 推 TODAY_INTERVENTION，一人一天一张卡。"""
 
@@ -258,6 +272,7 @@ PushNotificationRequest = Annotated[
         DailyVisitReportPushRequest,
         SalesTodayHighlightsPushRequest,
         DepartmentTodayHighlightsPushRequest,
+        CompanyTodayHighlightsPushRequest,
     ],
     Field(discriminator="type"),
 ]

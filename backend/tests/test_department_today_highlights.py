@@ -1349,6 +1349,15 @@ def test_highlights_task_keeps_the_other_side_when_one_fails(monkeypatch):
         "app.services.department_today_highlights.handle_department_today_highlights",
         ok,
     )
+    monkeypatch.setattr(
+        "app.services.company_today_highlights.handle_company_today_highlights",
+        lambda session, *, report_date=None, recipient_user_ids=None: {
+            "success": True,
+            "skipped": False,
+            "skip_reason": None,
+            "success_count": 1,
+        },
+    )
     failed = push_crm_today_highlights(report_date_str="2026-10-12", audience="department")
     assert failed["success"] is True
     assert failed["sales_today_highlights"] is None

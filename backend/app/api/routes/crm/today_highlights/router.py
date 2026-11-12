@@ -1,4 +1,4 @@
-"""今日重点查询。销售和负责人都只看自己的 USER 条目。"""
+"""今日重点查询。销售和负责人只看自己的条目；CXO 只看公司名单内的报告。"""
 
 import logging
 from typing import List, Literal, Optional
@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, model_validator
 from app.api.deps import CurrentUserDep, SessionDep
 from app.exceptions import InternalServerError
 from app.repositories.user_profile import user_profile_repo
+from app.services.company_today_highlights import highlights_for_viewer as highlights_for_cxo
 from app.services.department_today_highlights import highlights_for_leader
 from app.services.leader_intervention_actions import (
     link_item_task,
@@ -54,6 +55,34 @@ def get_sales_today_highlights(
         profile = user_profile_repo.get_by_user_id(db_session, user.id)
         oauth_id = getattr(profile, "oauth_user_id", None) if profile else None
         data = highlights_for_viewer(db_session, oauth_id, target)
+        return {"code": 0, "message": "success", "data": data}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(exc)
+        raise InternalServerError()
+
+
+@router.get("/crm/today-highlights/company")
+def get_company_today_highlights(
+    db_session: SessionDep,
+    user: CurrentUserDep,
+    report_date: Optional[str] = Query(
+        default=None,
+        description="业务日 YYYY-MM-DD，默认北京时间当天。洞察 period_key 与这一天相同",
+    ),
+):
+    """CXO 今日重点。
+
+    biz_admin、sys_admin、executive 能看。推送接收人也能看，他们从卡片链接进来。
+    其他人得到空列表。
+    """
+    try:
+        target = parse_report_date(report_date)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        data = highlights_for_cxo(db_session, user.id, target)
         return {"code": 0, "message": "success", "data": data}
     except HTTPException:
         raise
