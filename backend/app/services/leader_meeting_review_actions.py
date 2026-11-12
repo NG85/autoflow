@@ -107,7 +107,7 @@ def viewer_is_company_manager(user_id: Any) -> bool:
     try:
         found = oauth_client.query_user_roles_and_permissions(user_id=uid)
     except Exception as exc:
-        logger.warning("例会复盘查询公司级角色失败 user_id=%s: %s", uid, exc)
+        logger.warning("查询公司级角色失败 user_id=%s: %s", uid, exc)
         return False
     roles = found.get("roles") if isinstance(found, Mapping) else None
     codes = {

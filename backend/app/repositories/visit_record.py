@@ -467,8 +467,13 @@ def _fill_has_recap(
     current_user_id: Optional[UUID],
     pairs: list[tuple[CRMSalesVisitRecord, VisitRecordResponse]],
 ) -> None:
-    """按当前用户视角标记每条拜访是否已有可看的复盘。读失败则保持 false。"""
+    """按当前用户视角标记每条拜访是否已有可看的复盘。读失败则保持 false。
+
+    列表已经按拜访可见范围过滤。没有上级视角人员表现评价要判时，不查角色和汇报链。
+    """
     from app.services.visit_record_insight_reader import (
+        VISIT_INSIGHT_LEADER_TYPE,
+        VISIT_INSIGHT_PERFORMANCE_LEADER_TYPE,
         load_visit_recap_types_by_record_id,
         viewer_has_visible_recap,
     )
@@ -482,7 +487,6 @@ def _fill_has_recap(
     if not any(types_by_id.get(record_id) for record_id in record_ids):
         return
     context = RecapViewContext(session, current_user_id)
-    admin = context.is_sys_admin()
     for record, response in pairs:
         record_id = str(getattr(record, "record_id", "") or "").strip()
         present = types_by_id.get(record_id) or ()
@@ -490,11 +494,31 @@ def _fill_has_recap(
             continue
         recorder_id = getattr(record, "recorder_id", None)
         recorder = context.is_recorder(recorder_id)
+        present_types = {str(item).strip().upper() for item in present}
+        needs_performance_grant = (
+            not recorder
+            and VISIT_INSIGHT_PERFORMANCE_LEADER_TYPE.upper() in present_types
+            and VISIT_INSIGHT_LEADER_TYPE.upper() not in present_types
+        )
+        is_admin = context.is_company_manager() if needs_performance_grant else False
+        is_leader = (
+            context.is_reporting_leader(recorder_id)
+            if needs_performance_grant and not is_admin
+            else False
+        )
+        is_collaborator = (not recorder) and context.is_collaborative_participant(
+            getattr(record, "collaborative_participants", None)
+        )
         response.has_recap = viewer_has_visible_recap(
             present,
             is_recorder=recorder,
-            is_reporting_leader=False if admin and not recorder else context.is_reporting_leader(recorder_id),
-            is_sys_admin=admin and not recorder,
+            is_reporting_leader=is_leader,
+            is_sys_admin=is_admin,
+            is_collaborative_participant=is_collaborator
+            and not context.is_configured_cc(
+                recorder_id,
+                getattr(record, "recorder_department_id", None),
+            ),
         )
 
 

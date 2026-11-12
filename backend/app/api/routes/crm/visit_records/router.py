@@ -830,28 +830,54 @@ def get_visit_record_recap(
 ):
     """当前用户视角的拜访复盘和销售表现。
 
-    权限与详情 GET 相同。复盘和表现评价都没有时不查汇报链、不读抽取表。
-    记录人返回销售视角，汇报链上级和系统管理员返回上级视角。
+    能看这条拜访的人可以打开。这条拜访的个人收件人也可以打开，即使看不到拜访详情。
+    个人收件人是记录人、直接汇报上级、抄送和协同人。部门群没有个人名单，群里点开仍要能看这条拜访。
+    能看页面的人不因此收到卡片。复盘和表现评价都没有时不查汇报链、不读抽取表。
+    记录人和协同人返回销售视角。抄送和其他能看这条拜访的人返回上级视角的业务推进。
+    上级视角的人员表现评价只给直接汇报上级和公司级管理人员（biz_admin、sys_admin、executive）。
+    只有这份评价、没有业务推进时，其他人得到空页面。
     data.tabs 只有 key 和标题。insight 是业务推进报告，performance 是人员表现评价报告。缺的报告为 null。
     结构化抽取仅记录人本人可见。抽取上的赞或踩只返回当前用户自己的。
     洞察或抽取读取失败时对应字段为空，仍返回 200。
     """
-    from app.services.visit_record_recap import load_visit_record_recap_response
+    from sqlmodel import select
+
+    from app.models.crm_sales_visit_records import CRMSalesVisitRecord
+    from app.services.visit_record_recap import RecapViewContext, load_visit_record_recap_response
 
     try:
-        record = visit_record_repo.get_visit_record_by_id(
-            session=db_session,
-            record_id=record_id,
-            current_user_id=user.id,
-        )
+        record = db_session.exec(
+            select(CRMSalesVisitRecord).where(CRMSalesVisitRecord.record_id == record_id)
+        ).first()
         if not record:
             raise HTTPException(status_code=404, detail="跟进记录不存在或无权限访问")
+        can_see_visit = visit_record_repo._can_view_visit_record(
+            session=db_session,
+            current_user_id=user.id,
+            record=record,
+        )
+        context = RecapViewContext(db_session, user.id)
+        recorder_id = getattr(record, "recorder_id", None)
+        is_recorder = context.is_recorder(recorder_id)
+        is_collaborator = (not is_recorder) and context.is_collaborative_participant(
+            getattr(record, "collaborative_participants", None)
+        )
+        is_cc = (not is_recorder) and (is_collaborator or not can_see_visit) and context.is_configured_cc(
+            recorder_id,
+            getattr(record, "recorder_department_id", None),
+        )
+        if not (can_see_visit or is_recorder or is_collaborator or is_cc):
+            if not context.is_reporting_leader(recorder_id):
+                raise HTTPException(status_code=404, detail="跟进记录不存在或无权限访问")
 
         data = load_visit_record_recap_response(
             db_session,
             visit_record_id=getattr(record, "record_id", None) or record_id,
-            recorder_id=getattr(record, "recorder_id", None),
+            recorder_id=recorder_id,
             viewer_user_id=user.id,
+            is_collaborative_participant=is_collaborator,
+            is_configured_cc=is_cc,
+            can_see_visit=can_see_visit,
         )
         return {
             "code": 0,
