@@ -688,7 +688,7 @@ class VisitRecordResponse(BaseModel):
     has_comments: bool = Field(default=False, description="是否有评论/任务（comments 数组非空）")
     has_recap: bool = Field(
         default=False,
-        description="当前用户能否打开复盘页。记录人看销售视角，其汇报链上级或系统管理员看上级视角；其余人不能打开。对应视角的复盘或表现评价至少有一条未删除、未过期才为 true",
+        description="当前用户能否打开复盘页。列表里的人已经能看这条拜访。记录人或协同人在销售视角的业务推进或人员表现评价至少有一条时为 true。其他人在上级视角业务推进存在时为 true；只有上级视角人员表现评价时，仅直接汇报上级或公司级管理人员（biz_admin、sys_admin、executive）为 true",
     )
     last_modified_time: Optional[str] = Field(default=None, description="最后修改时间")
     record_id: Optional[str] = Field(default=None, description="记录id")
