@@ -16,6 +16,7 @@ from app.services.sales_today_highlights import (
     deliver_highlight_card,
     handle_sales_today_highlights,
     highlights_for_viewer,
+    highlights_payload,
     load_sales_extract_rows,
     render_card_links,
     render_card_markdown,
@@ -149,6 +150,90 @@ def test_thursday_drops_next_week_and_unchanged_risk_keeps_resolved(monkeypatch)
         "[下周待确认](https://example.com/v2/today-highlights"
         "?date=2026-10-09&tab=next_week_confirm)"
     )
+
+
+def test_key_finding_and_legacy_open_risk_share_one_section(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.sales_today_highlights.build_sales_today_highlights_url",
+        lambda report_date, section: f"https://example.com/v2/today-highlights?date={report_date}&tab={section}",
+    )
+    assembled = assemble_sales_highlights(
+        [
+            _row(
+                "OPEN_RISK",
+                {"claim": "旧风险", "risk_change": "worsened", "confidence": 0.5},
+                unique_id="old",
+                card_links=[{"key": "open_risks", "title": "商机风险"}],
+            ),
+            _row(
+                "KEY_FINDING",
+                {"claim": "新发现", "risk_change": "new", "confidence": 0.9},
+                unique_id="new",
+                card_links=[{"key": "open_risks", "title": "关键发现"}],
+            ),
+            _row(
+                "KEY_FINDING",
+                {"claim": "没变化", "risk_change": "unchanged"},
+                unique_id="flat",
+            ),
+            _row(
+                "KEY_FINDING",
+                {"claim": "只是缺口", "gap_only": True, "risk_change": "new"},
+                unique_id="gap",
+            ),
+        ],
+        THURSDAY,
+        _names(),
+    )
+    assert [section["key"] for section in assembled["sections"]] == ["open_risks"]
+    section = assembled["sections"][0]
+    assert section["title"] == "关键发现"
+    assert [item["claim"] for item in section["items"]] == ["新发现", "旧风险"]
+    assert [item["item_type"] for item in section["items"]] == ["KEY_FINDING", "OPEN_RISK"]
+    payload = highlights_payload(assembled, subject_id="oauth-1")
+    assert payload["card_links"][0]["item_types"] == ["KEY_FINDING", "OPEN_RISK"]
+    assert [label for label, _url in card_blue_links(assembled)] == ["关键发现（2）"]
+
+
+def test_key_findings_card_stays_with_legacy_risk_titles(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.sales_today_highlights.build_sales_today_highlights_url",
+        lambda report_date, section: f"https://example.com/v2/today-highlights?date={report_date}&tab={section}",
+    )
+    assembled = assemble_sales_highlights(
+        [
+            _row(
+                "KEY_FINDING",
+                {"claim": "预算窗口", "risk_change": "new", "confidence": 0.8},
+                unique_id="new",
+                card_links=[{"key": "key_findings", "title": "关键发现"}],
+            ),
+            _row(
+                "OPEN_RISK",
+                {"claim": "旧商机风险", "risk_change": "stronger", "confidence": 0.5},
+                unique_id="old-risk",
+                card_links=[{"key": "open_risks", "title": "商机风险"}],
+            ),
+            _row(
+                "OPEN_RISK",
+                {"claim": "旧建议关注", "risk_change": "weaker", "confidence": 0.4},
+                unique_id="old-watch",
+                card_links=[{"key": "open_risks", "title": "建议关注"}],
+            ),
+        ],
+        THURSDAY,
+        _names(),
+    )
+    assert [section["key"] for section in assembled["sections"]] == ["open_risks"]
+    section = assembled["sections"][0]
+    assert section["title"] == "关键发现"
+    assert [item["claim"] for item in section["items"]] == [
+        "预算窗口",
+        "旧商机风险",
+        "旧建议关注",
+    ]
+    assert [label for label, _url in card_blue_links(assembled)] == ["关键发现（3）"]
+    assert card_blue_links(assembled)[0][1].endswith("tab=open_risks")
 
 
 def test_immediate_item_carries_decision_and_feedback():

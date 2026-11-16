@@ -58,7 +58,7 @@
 当前会返回的类：
 
 1. **立即处理** `immediate_today`
-2. **关键发现** `open_risks`。没变化的风险服务端已经去掉。
+2. **关键发现** `open_risks`。新抽取快照的 card key 是 `key_findings`，服务端并进这个 tab。旧快照标题「商机风险」「建议关注」也留在这一块，展示成「关键发现」。没变化的条目服务端已经去掉。
 3. **下周待确认** `next_week_confirm`。只在周五出现。
 
 一次请求带回全部 `items`。页面只展示当前 tab 对应的 `items[key]`。`tab` 能对上某个 `card_links.key` 时打开那个 tab；对不上或没传时打开第一个 tab。切换 tab 时把 `tab` 写回地址栏，日期保持不变。
@@ -144,7 +144,7 @@ GET /api/v1/crm/today-highlights/sales?report_date=2026-10-13
 | 字段 | 用在哪 |
 | --- | --- |
 | `unique_id` | 后续写入都用它。重新进页要再拉列表。不要拿去调负责人接口。 |
-| `item_type` | `IMMEDIATE_ACTION`、`OPEN_RISK`、`NEXT_WEEK_ACTION_CANDIDATE`。 |
+| `item_type` | `IMMEDIATE_ACTION`、`KEY_FINDING`、`NEXT_WEEK_ACTION_CANDIDATE`。旧的关键发现仍可能是 `OPEN_RISK`。`KEY_FINDING` 与 `OPEN_RISK` 都在 `open_risks`；抽取快照 key `key_findings` 也并进这一块。 |
 | `claim` | 主文案。下周区块在没有 `confirm_prompt` 时用它。 |
 | `why` | 原因，可折叠。 |
 | `confidence` | 数字或空。服务端已排好序。 |
