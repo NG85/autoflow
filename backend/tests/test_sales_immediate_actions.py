@@ -69,7 +69,7 @@ def test_other_person_and_superseded_are_not_writable():
 
 
 def test_risk_and_next_week_can_be_adopted():
-    for item_type in ("OPEN_RISK", "NEXT_WEEK_ACTION_CANDIDATE"):
+    for item_type in ("KEY_FINDING", "OPEN_RISK", "NEXT_WEEK_ACTION_CANDIDATE"):
         row = _item(item_type=item_type)
         session = _session_with(row)
         assert load_own_highlight_item(session, "oauth-1", "item-1") is row

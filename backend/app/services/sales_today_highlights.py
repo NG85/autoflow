@@ -47,6 +47,7 @@ SUBJECT_USER = "USER"
 AUDIENCE_SALES = "sales"
 STATUS_SUPERSEDED = "SUPERSEDED"
 ITEM_IMMEDIATE = "IMMEDIATE_ACTION"
+ITEM_KEY_FINDING = "KEY_FINDING"
 ITEM_RISK = "OPEN_RISK"
 ITEM_NEXT_WEEK = "NEXT_WEEK_ACTION_CANDIDATE"
 FRIDAY = 4
@@ -55,17 +56,31 @@ WEEK_FOLLOWUP_LINK_LABEL = "本周已拜访"
 INCOMPLETE_TASK_STATUSES = ("IN_PROGRESS", "PENDING")
 
 # 区块顺序与类型是销售卡合同。标题只从 card_links 快照读取。
-# 快照 title：immediate_today=立即处理，open_risks=关键发现，next_week_confirm=下周待确认。
-# 旧快照里的「商机风险」「建议关注」仍按「关键发现」展示。
+# 快照 title：immediate_today=立即处理，open_risks / key_findings=关键发现，next_week_confirm=下周待确认。
+# 关键发现的当前类型是 KEY_FINDING。旧行 OPEN_RISK 仍进同一区块。
+# 新快照 key 是 key_findings。旧快照 key 仍是 open_risks，标题「商机风险」「建议关注」
+# 和 key_findings 合成同一个 open_risks 区块，并按「关键发现」展示。
 # 折进团队卡时小节标题固定为「我的立即处理」，和团队块区分。
 SALES_CARD_TITLE = "我的今日重点"
 EMBEDDED_PERSONAL_TITLE = "我的立即处理"
-SECTION_ORDER: tuple[tuple[str, str], ...] = (
-    ("immediate_today", ITEM_IMMEDIATE),
-    ("open_risks", ITEM_RISK),
-    ("next_week_confirm", ITEM_NEXT_WEEK),
+# 每个区块接受的 item_type。第一项是当前类型，后面是仍要读的旧类型。
+SECTION_ORDER: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("immediate_today", (ITEM_IMMEDIATE,)),
+    ("open_risks", (ITEM_KEY_FINDING, ITEM_RISK)),
+    ("next_week_confirm", (ITEM_NEXT_WEEK,)),
 )
-SECTION_KEYS = {key: item_type for key, item_type in SECTION_ORDER}
+SECTION_KEYS = {key: types[0] for key, types in SECTION_ORDER}
+_ITEM_TYPE_SECTION = {
+    item_type: key for key, types in SECTION_ORDER for item_type in types
+}
+_OPEN_RISKS_TYPES = frozenset(dict(SECTION_ORDER)["open_risks"])
+# 抽取快照上的 card key → 今日重点区块。key_findings 与 open_risks 是同一块。
+_CARD_KEY_SECTION = {
+    "immediate_today": "immediate_today",
+    "open_risks": "open_risks",
+    "key_findings": "open_risks",
+    "next_week_confirm": "next_week_confirm",
+}
 _SECTION_TITLE_RENAMES = {
     "open_risks": {
         "商机风险": "关键发现",
@@ -164,11 +179,11 @@ def _include_row(row: Any, *, friday: bool) -> bool:
     item_type = _text(_row_value(row, "item_type"))
     if item_type == ITEM_NEXT_WEEK and not friday:
         return False
-    if item_type == ITEM_RISK and not _keep_risk(_payload(row)):
+    if item_type in _OPEN_RISKS_TYPES and not _keep_risk(_payload(row)):
         return False
     if item_type == ITEM_IMMEDIATE and not _bound_task_id(row):
         return False
-    return item_type in {ITEM_IMMEDIATE, ITEM_RISK, ITEM_NEXT_WEEK}
+    return item_type in _ITEM_TYPE_SECTION
 
 
 def _keep_risk(payload: Mapping[str, Any]) -> bool:
@@ -179,13 +194,24 @@ def _keep_risk(payload: Mapping[str, Any]) -> bool:
 
 
 def _snapshot_titles(rows: Sequence[Any]) -> dict[str, str]:
-    titles: dict[str, str] = {}
+    """按区块取标题。同一块里 key_findings 优先于旧的 open_risks。"""
+    found: dict[str, str] = {}
     for row in rows:
         for spec in _card_link_specs(row):
-            key = _text(spec.get("key"))
+            raw_key = _text(spec.get("key"))
             title = _text(spec.get("title"))
-            if key in SECTION_KEYS and title and key not in titles:
-                titles[key] = _SECTION_TITLE_RENAMES.get(key, {}).get(title, title)
+            if raw_key in _CARD_KEY_SECTION and title and raw_key not in found:
+                found[raw_key] = title
+    titles: dict[str, str] = {}
+    for section in SECTION_KEYS:
+        renames = _SECTION_TITLE_RENAMES.get(section, {})
+        raw = ""
+        if section == "open_risks":
+            raw = found.get("key_findings") or found.get("open_risks") or ""
+        else:
+            raw = found.get(section) or ""
+        if raw:
+            titles[section] = renames.get(raw, raw)
     return titles
 
 
@@ -280,22 +306,30 @@ def assemble_sales_highlights(
     titles = _snapshot_titles(kept)
     name_map = names or {"accounts": {}, "opportunities": {}}
     day = report_date.isoformat()
-    by_type: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    by_section: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in kept:
-        by_type[_text(_row_value(row, "item_type"))].append(_serialize_item(row, name_map))
+        section_key = _ITEM_TYPE_SECTION.get(_text(_row_value(row, "item_type")))
+        if section_key:
+            by_section[section_key].append(_serialize_item(row, name_map))
 
     sections: list[dict[str, Any]] = []
-    for key, item_type in SECTION_ORDER:
-        items = by_type.get(item_type) or []
+    for key, accepted in SECTION_ORDER:
+        items = by_section.get(key) or []
         if not items:
             continue
         items.sort(key=_sort_key)
         title = titles.get(key) or key
+        present = [
+            item_type
+            for item_type in accepted
+            if any(item.get("item_type") == item_type for item in items)
+        ]
         sections.append(
             {
                 "key": key,
                 "title": title,
-                "item_type": item_type,
+                "item_type": present[0] if len(present) == 1 else accepted[0],
+                "item_types": present,
                 "items": items,
                 "url": build_sales_today_highlights_url(day, key),
             }
@@ -322,7 +356,7 @@ def highlights_payload(assembled: Mapping[str, Any], *, subject_id: str) -> dict
                 "title": section.get("title") or key,
                 "count": len(full_items),
                 "url": url or None,
-                "item_types": [section.get("item_type")],
+                "item_types": list(section.get("item_types") or [section.get("item_type")]),
             }
         )
     return {
