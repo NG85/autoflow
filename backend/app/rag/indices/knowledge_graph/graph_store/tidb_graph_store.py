@@ -1,7 +1,6 @@
 import dspy
 import logging
 import numpy as np
-import tidb_vector
 from deepdiff import DeepDiff
 from typing import List, Optional, Tuple, Dict, Set, Type, Any
 from collections import defaultdict
@@ -12,10 +11,12 @@ from llama_index.embeddings.openai import OpenAIEmbedding, OpenAIEmbeddingModelT
 import sqlalchemy
 from sqlmodel import Session, asc, func, select, text, SQLModel
 from sqlalchemy.orm import defer, joinedload, noload
-from tidb_vector.sqlalchemy import VectorAdaptor
 from sqlalchemy import and_, or_, desc
 
+from app.core.config import DatabaseDialect, settings
 from app.core.db import engine
+from app.models.knowledge_base_scoped.table_naming import scoped_index_name
+from app.rag.vector_index import create_cosine_hnsw_index
 from app.rag.indices.knowledge_graph.graph_store.helpers import (
     get_entity_description_embedding,
     get_relationship_description_embedding,
@@ -123,12 +124,38 @@ class TiDBGraphStore(KnowledgeGraphStore):
     def _ensure_relationship_indexes(self, table_name: str) -> None:
         """Ensure hot filter indexes exist for dynamic relationship tables."""
         required_indexes = {
-            "idx_relationship_chunk_id": ["chunk_id"],
-            "idx_relationship_graph_type": ["graph_type"],
-            "idx_relationship_document_id": ["document_id"],
-            "idx_relationship_graph_doc": ["graph_type", "document_id"],
-            "idx_relationship_graph_chunk": ["graph_type", "chunk_id"],
+            scoped_index_name(table_name, "idx_relationship_chunk_id"): ["chunk_id"],
+            scoped_index_name(table_name, "idx_relationship_graph_type"): ["graph_type"],
+            scoped_index_name(table_name, "idx_relationship_document_id"): ["document_id"],
+            scoped_index_name(table_name, "idx_relationship_graph_doc"): [
+                "graph_type",
+                "document_id",
+            ],
+            scoped_index_name(table_name, "idx_relationship_graph_chunk"): [
+                "graph_type",
+                "chunk_id",
+            ],
         }
+        self._ensure_secondary_indexes(table_name, required_indexes)
+
+    def _ensure_entity_lookup_index(self, table_name: str) -> None:
+        self._ensure_secondary_indexes(
+            table_name,
+            {
+                scoped_index_name(table_name, "idx_entity_name_type_graph"): [
+                    "name",
+                    "entity_type",
+                    "graph_type",
+                ],
+            },
+        )
+
+    def _ensure_secondary_indexes(
+        self, table_name: str, required_indexes: dict[str, list[str]]
+    ) -> None:
+        if settings.DATABASE_DIALECT == DatabaseDialect.POSTGRESQL:
+            self._ensure_postgresql_relationship_indexes(table_name, required_indexes)
+            return
         with engine.begin() as conn:
             existed_indexes = {
                 row[0]
@@ -173,6 +200,45 @@ class TiDBGraphStore(KnowledgeGraphStore):
                         continue
                     raise
 
+    def _ensure_postgresql_relationship_indexes(
+        self, table_name: str, required_indexes: dict[str, list[str]]
+    ) -> None:
+        preparer = engine.dialect.identifier_preparer
+        with engine.begin() as conn:
+            existed_indexes = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        """
+                        SELECT indexname
+                        FROM pg_indexes
+                        WHERE schemaname = current_schema()
+                          AND tablename = :table_name
+                        """
+                    ),
+                    {"table_name": table_name},
+                )
+                if row[0]
+            }
+            columns_by_index = {
+                name: ", ".join(preparer.quote(column) for column in columns)
+                for name, columns in required_indexes.items()
+            }
+            for index_name, columns_sql in columns_by_index.items():
+                if index_name in existed_indexes:
+                    continue
+                conn.execute(
+                    text(
+                        f"CREATE INDEX IF NOT EXISTS {preparer.quote(index_name)} "
+                        f"ON {preparer.quote(table_name)} ({columns_sql})"
+                    )
+                )
+                logger.info(
+                    "Created index <%s> on <%s>",
+                    index_name,
+                    table_name,
+                )
+
     def ensure_table_schema(self) -> None:
         inspector = sqlalchemy.inspect(engine)
         existed_table_names = inspector.get_table_names()
@@ -185,12 +251,8 @@ class TiDBGraphStore(KnowledgeGraphStore):
             )
 
             # Add HNSW index to accelerate ann queries.
-            VectorAdaptor(engine).create_vector_index(
-                self._entity_model.description_vec, tidb_vector.DistanceMetric.COSINE
-            )
-            VectorAdaptor(engine).create_vector_index(
-                self._entity_model.meta_vec, tidb_vector.DistanceMetric.COSINE
-            )
+            create_cosine_hnsw_index(self._entity_model.description_vec)
+            create_cosine_hnsw_index(self._entity_model.meta_vec)
 
             logger.info(
                 f"Entities table <{entities_table_name}> has been created successfully."
@@ -200,16 +262,15 @@ class TiDBGraphStore(KnowledgeGraphStore):
                 f"Entities table <{entities_table_name}> is already exists, not action to do."
             )
 
+        self._ensure_entity_lookup_index(entities_table_name)
+
         if relationships_table_name not in existed_table_names:
             self._relationship_model.metadata.create_all(
                 engine, tables=[self._relationship_model.__table__]
             )
 
             # Add HNSW index to accelerate ann queries.
-            VectorAdaptor(engine).create_vector_index(
-                self._relationship_model.description_vec,
-                tidb_vector.DistanceMetric.COSINE,
-            )
+            create_cosine_hnsw_index(self._relationship_model.description_vec)
 
             logger.info(
                 f"Relationships table <{relationships_table_name}> has been created successfully."
@@ -442,9 +503,6 @@ class TiDBGraphStore(KnowledgeGraphStore):
             entity.description,
             self._embed_model,
         )
-        hint = text(
-            f"/*+ read_from_storage(tikv[{self._entity_model.__tablename__}]) */"
-        )
         result = (
             self._session.query(
                 self._entity_model,
@@ -453,11 +511,12 @@ class TiDBGraphStore(KnowledgeGraphStore):
                 ).label("distance"),
             )
             .filter(
-                self._entity_model.name == entity.name
-                and self._entity_model.entity_type == entity_type
-                and self._entity_model.graph_type == self._graph_type
+                and_(
+                    self._entity_model.name == entity.name,
+                    self._entity_model.entity_type == entity_type,
+                    self._entity_model.graph_type == self._graph_type,
+                )
             )
-            .prefix_with(hint)
             .order_by(asc("distance"))
             .first()
         )
@@ -902,8 +961,6 @@ class TiDBGraphStore(KnowledgeGraphStore):
 
         if entity_type == EntityType.synopsis:
             query = query.where(self._entity_model.entity_type == entity_type)
-            hint = text("/*+ read_from_storage(tikv[entities]) */")
-            query = query.prefix_with(hint)
 
         query = query.order_by(
             self._entity_model.description_vec.cosine_distance(embedding)

@@ -10,9 +10,8 @@ from sqlmodel import (
     func,
     DateTime,
 )
-from tidb_vector.sqlalchemy import VectorType
-
-from app.core.config import settings
+from app.core.config import DatabaseDialect, settings
+from app.models.vector_type import vector_column_type
 
 
 class SemanticCache(SQLModel, table=True):
@@ -20,13 +19,23 @@ class SemanticCache(SQLModel, table=True):
     query: str = Field(sa_column=Column(Text))
     query_vec: Any = Field(
         sa_column=Column(
-            VectorType(settings.EMBEDDING_DIMS), comment="hnsw(distance=cosine)"
+            vector_column_type(settings.EMBEDDING_DIMS),
+            comment=(
+                None
+                if settings.DATABASE_DIALECT == DatabaseDialect.POSTGRESQL
+                else "hnsw(distance=cosine)"
+            ),
         )
     )
     value: str = Field(sa_column=Column(Text))
     value_vec: Any = Field(
         sa_column=Column(
-            VectorType(settings.EMBEDDING_DIMS), comment="hnsw(distance=cosine)"
+            vector_column_type(settings.EMBEDDING_DIMS),
+            comment=(
+                None
+                if settings.DATABASE_DIALECT == DatabaseDialect.POSTGRESQL
+                else "hnsw(distance=cosine)"
+            ),
         )
     )
     meta: dict = Field(default_factory=dict, sa_column=Column(JSON))
@@ -41,7 +50,7 @@ class SemanticCache(SQLModel, table=True):
 
     __tablename__ = "semantic_cache"
     __table_args__ = {
-        # Ref: https://docs.pingcap.com/tidb/stable/time-to-live
+        # TiDB drops rows after one month. PostgreSQL ignores this option.
         "mysql_TTL": "created_at + INTERVAL 1 MONTH;",
     }
 

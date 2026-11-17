@@ -2,7 +2,8 @@ from datetime import date, datetime
 from typing import Optional
 from uuid import UUID
 from sqlmodel import SQLModel, Field, Column, DateTime, Text, Index
-from sqlalchemy import DECIMAL, JSON
+from sqlalchemy import DECIMAL, JSON, ForeignKey, desc
+from sqlmodel.sql.sqltypes import GUID
 
 class CRMSalesVisitRecord(SQLModel, table=True):
     __tablename__ = "crm_sales_visit_records"
@@ -33,7 +34,15 @@ class CRMSalesVisitRecord(SQLModel, table=True):
     # 多个联系人：JSON 数组，元素结构为 {"name": str, "position": str, "contact_id": str}
     contacts: Optional[list[dict]] = Field(default=None, sa_column=Column(JSON, nullable=True), description="联系人列表（支持多个联系人，JSON数组）")
     recorder: Optional[str] = Field(nullable=True, max_length=255, description="记录人")
-    recorder_id: Optional[UUID] = Field(nullable=True, description="记录人ID")
+    recorder_id: Optional[UUID] = Field(
+        default=None,
+        sa_column=Column(
+            GUID(),
+            ForeignKey("users.id", name="fk_recorder_id"),
+            nullable=True,
+        ),
+        description="记录人ID",
+    )
 
     # recorder 部门快照：写入时固化，避免人员换部门导致历史指标漂移
     recorder_department_id: Optional[str] = Field(nullable=True, max_length=100, description="记录人部门ID（快照）")
@@ -135,4 +144,15 @@ class CRMSalesVisitRecord(SQLModel, table=True):
         Index("idx_contact_id", "contact_id"),
         Index("idx_recorder_department_id", "recorder_department_id"),
         Index("idx_card_push_status", "card_push_status"),
+        Index("idx_visit_record_recorder_id", "recorder_id"),
+        Index("idx_visit_record_account_id", "account_id"),
+        Index("idx_visit_record_partner_name", "partner_name"),
+        Index("idx_visit_record_last_modified_time", "last_modified_time"),
+        Index(
+            "idx_visit_record_recorder_date",
+            "recorder_id",
+            desc("visit_communication_date"),
+        ),
+        Index("idx_visit_type", "visit_type"),
+        Index("idx_followup_object_type_id", "followup_object_type", "followup_object_id"),
     )

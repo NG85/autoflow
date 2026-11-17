@@ -10,11 +10,14 @@ from sqlmodel import (
     Field,
     Relationship as SQLRelationship,
 )
-from tidb_vector.sqlalchemy import VectorType
+from app.models.vector_type import vector_column_type
 from app.models.entity import get_kb_entity_model
 from app.models.knowledge_base import KnowledgeBase
 from app.models.enums import GraphType
-from app.models.knowledge_base_scoped.table_naming import get_kb_vector_dims
+from app.models.knowledge_base_scoped.table_naming import (
+    get_kb_vector_dims,
+    scoped_index_name,
+)
 from app.utils.namespace import format_namespace
 from app.logger import logger
 
@@ -66,10 +69,21 @@ def get_dynamic_relationship_model(
         last_modified_at: Optional[datetime] = Field(sa_column=Column(DateTime))
         document_id: Optional[int] = Field(default=None, nullable=True)
         chunk_id: Optional[UUID] = Field(default=None, nullable=True)
-        description_vec: list[float] = Field(sa_type=VectorType(vector_dimension))
+        description_vec: list[float] = Field(
+            sa_type=vector_column_type(vector_dimension)
+        )
         graph_type: GraphType = Field(
             default=GraphType.general,
-            sa_column=Column(Enum(GraphType), nullable=False, server_default=GraphType.general.value)
+            sa_column=Column(
+                Enum(
+                    GraphType,
+                    native_enum=False,
+                    length=32,
+                    values_callable=lambda enum_cls: [member.value for member in enum_cls],
+                ),
+                nullable=False,
+                server_default=GraphType.general.value,
+            ),
         )
         
         def __hash__(self):
@@ -92,11 +106,32 @@ def get_dynamic_relationship_model(
         {
             "__tablename__": relationship_table_name,
             "__table_args__": (
-                Index("idx_relationship_chunk_id", "chunk_id"),
-                Index("idx_relationship_graph_type", "graph_type"),
-                Index("idx_relationship_document_id", "document_id"),
-                Index("idx_relationship_graph_doc", "graph_type", "document_id"),
-                Index("idx_relationship_graph_chunk", "graph_type", "chunk_id"),
+                Index(
+                    scoped_index_name(relationship_table_name, "idx_relationship_chunk_id"),
+                    "chunk_id",
+                ),
+                Index(
+                    scoped_index_name(relationship_table_name, "idx_relationship_graph_type"),
+                    "graph_type",
+                ),
+                Index(
+                    scoped_index_name(
+                        relationship_table_name, "idx_relationship_document_id"
+                    ),
+                    "document_id",
+                ),
+                Index(
+                    scoped_index_name(relationship_table_name, "idx_relationship_graph_doc"),
+                    "graph_type",
+                    "document_id",
+                ),
+                Index(
+                    scoped_index_name(
+                        relationship_table_name, "idx_relationship_graph_chunk"
+                    ),
+                    "graph_type",
+                    "chunk_id",
+                ),
                 {"extend_existing": True},
             ),
             "__annotations__": {

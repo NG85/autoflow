@@ -1,6 +1,7 @@
 import logging
 import re
 
+from app.core.config import DatabaseDialect, settings
 from app.models.knowledge_base import KnowledgeBase
 from app.models.embed_model import DEFAULT_VECTOR_DIMENSION
 
@@ -41,6 +42,13 @@ def get_kb_entities_table_name(knowledge_base: KnowledgeBase) -> str:
         if knowledge_base
         else DEFAULT_ENTITIES_TABLE_NAME
     )
+
+
+def scoped_index_name(table_name: str, index_name: str) -> str:
+    """PostgreSQL index names are unique per schema, so dynamic tables cannot share one."""
+    if settings.DATABASE_DIALECT == DatabaseDialect.POSTGRESQL:
+        return f"{table_name}_{index_name}"[:63]
+    return index_name
 
 
 def get_kb_vector_dims(kb: KnowledgeBase):

@@ -1,5 +1,5 @@
-import ssl
 import contextlib
+import ssl
 from typing import AsyncGenerator, Generator
 
 from sqlmodel import create_engine, Session
@@ -8,7 +8,7 @@ from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.core.config import settings
+from app.core.config import DatabaseDialect, settings
 
 
 # TiDB Serverless clusters have a limitation: if there are no active connections for 5 minutes,
@@ -44,31 +44,30 @@ engine_transactional = create_engine(
 Scoped_Session = scoped_session(sessionmaker(bind=engine, class_=Session))
 
 
-def get_ssl_context():
+def _async_connect_args() -> dict:
+    if settings.DATABASE_DIALECT != DatabaseDialect.TIDB or not settings.TIDB_SSL:
+        return {}
     ssl_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
     ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
     ssl_context.check_hostname = True
-    return ssl_context
+    return {"ssl": ssl_context}
 
 
 async_engine = create_async_engine(
     str(settings.SQLALCHEMY_ASYNC_DATABASE_URI),
     pool_recycle=300,
-    connect_args={
-        # seems config ssl in url is not working
-        # we can only config ssl in connect_args
-        "ssl": get_ssl_context(),
-    }
-    if settings.TIDB_SSL
-    else {},
+    pool_pre_ping=True,
+    connect_args=_async_connect_args(),
 )
 
 
 def prepare_db_connection(dbapi_connection, connection_record):
     cursor = dbapi_connection.cursor()
-    # In APTSELL.AI, we store datetime in the database using UTC timezone.
-    # Therefore, we need to set the timezone to '+00:00'.
-    cursor.execute("SET time_zone = '+00:00'")
+    # Datetimes are stored as UTC. The session variable differs by engine.
+    if settings.DATABASE_DIALECT == DatabaseDialect.POSTGRESQL:
+        cursor.execute("SET TIME ZONE 'UTC'")
+    else:
+        cursor.execute("SET time_zone = '+00:00'")
     cursor.close()
 
 

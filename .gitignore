@@ -2,6 +2,7 @@
 .idea
 .vscode
 .env
+backend/app/alembic/versions/active
 .ruff_cache
 
 redis-data

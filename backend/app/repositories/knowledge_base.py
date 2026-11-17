@@ -33,6 +33,20 @@ from app.models.entity import get_kb_entity_model
 from app.models.relationship import get_kb_relationship_model
 from app.models.document import DocumentCategory
 
+
+def _document_category_is(*categories: DocumentCategory):
+    """Compare ``meta.category`` with the JSON text operator of the bound dialect.
+
+    SQLAlchemy renders ``JSON_UNQUOTE(JSON_EXTRACT(...))`` on TiDB and ``->>``
+    on PostgreSQL when the statement is compiled.
+    """
+    values = [category.value for category in categories]
+    clause = Document.meta["category"].as_string()
+    if len(values) == 1:
+        return clause == values[0]
+    return clause.in_(values)
+
+
 class KnowledgeBaseRepo(BaseRepo):
     model_cls = KnowledgeBase
 
@@ -309,10 +323,9 @@ class KnowledgeBaseRepo(BaseRepo):
         stmt = select(chunk_model.id).where(
             chunk_model.document.has(Document.knowledge_base_id == kb.id),
             chunk_model.playbook_index_status == PlaybookKgIndexStatus.FAILED,
-            or_(
-                chunk_model.document.has(func.json_extract(Document.meta, "$.category") == DocumentCategory.PLAYBOOK),
-                chunk_model.document.has(func.json_extract(Document.meta, "$.category") == DocumentCategory.CRM)
-            )
+            chunk_model.document.has(
+                _document_category_is(DocumentCategory.PLAYBOOK, DocumentCategory.CRM)
+            ),
         )
         chunk_ids = session.exec(stmt).all()
 
@@ -332,10 +345,7 @@ class KnowledgeBaseRepo(BaseRepo):
             chunk_model.document.has(
                 and_(
                     Document.knowledge_base_id == kb.id,
-                    or_(
-                        func.json_unquote(func.json_extract(Document.meta, "$.category")) == DocumentCategory.PLAYBOOK,
-                        func.json_unquote(func.json_extract(Document.meta, "$.category")) == DocumentCategory.CRM
-                    )
+                    _document_category_is(DocumentCategory.PLAYBOOK, DocumentCategory.CRM)
                 )
             ),
             or_(
@@ -360,7 +370,7 @@ class KnowledgeBaseRepo(BaseRepo):
         stmt = select(chunk_model.id).where(
             chunk_model.document.has(Document.knowledge_base_id == kb.id),
             chunk_model.crm_index_status == CrmKgIndexStatus.FAILED,
-            chunk_model.document.has(func.json_extract(Document.meta, "$.category") == DocumentCategory.CRM),
+            chunk_model.document.has(_document_category_is(DocumentCategory.CRM)),
         )
 
         chunk_ids = session.exec(stmt).all()
@@ -382,7 +392,7 @@ class KnowledgeBaseRepo(BaseRepo):
             chunk_model.document.has(
                 and_(
                     Document.knowledge_base_id == kb.id,
-                    func.json_unquote(func.json_extract(Document.meta, "$.category")) == DocumentCategory.CRM
+                    _document_category_is(DocumentCategory.CRM)
                 )
             ),
             or_(
@@ -582,13 +592,10 @@ class KnowledgeBaseRepo(BaseRepo):
         return session.exec(
             select(ChatEngine).where(
                 ChatEngine.deleted_at == None,
-                func.JSON_UNQUOTE(
-                    func.JSON_EXTRACT(
-                        ChatEngine.engine_options,
-                        "$.knowledge_base.linked_knowledge_base.id",
-                    )
-                )
-                == kb_id,
+                ChatEngine.engine_options["knowledge_base"]["linked_knowledge_base"][
+                    "id"
+                ].as_string()
+                == str(kb_id),
             )
         ).all()
 

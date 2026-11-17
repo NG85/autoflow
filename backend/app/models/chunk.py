@@ -2,6 +2,7 @@ import enum
 from app.utils.singleflight_cache import singleflight_cache
 
 from typing import Optional, Type
+from sqlalchemy import Enum
 from sqlmodel import (
     Field,
     Column,
@@ -10,7 +11,8 @@ from sqlmodel import (
     Relationship as SQLRelationship,
     SQLModel,
 )
-from tidb_vector.sqlalchemy import VectorType
+from app.core.config import DatabaseDialect, settings
+from app.models.vector_type import vector_column_type
 from llama_index.core.schema import TextNode
 
 from app.models.document import Document
@@ -43,6 +45,23 @@ class CrmKgIndexStatus(str, enum.Enum):
     FAILED = "failed"
 
 
+def _kg_status_column(enum_cls, default):
+    # TiDB keeps a native ENUM of the member names. PostgreSQL stores the same
+    # labels in varchar so a dynamic table does not create a new enum type.
+    return Field(
+        default=default,
+        sa_column=Column(
+            Enum(
+                enum_cls,
+                native_enum=settings.DATABASE_DIALECT != DatabaseDialect.POSTGRESQL,
+                length=32,
+            ),
+            nullable=False,
+            default=default,
+        ),
+    )
+
+
 
 def get_kb_chunk_model(kb: KnowledgeBase) -> Type[SQLModel]:
     vector_dimension = get_kb_vector_dims(kb)
@@ -69,7 +88,7 @@ def get_dynamic_chunk_model(
         hash: str = Field(max_length=64)
         text: str = Field(sa_column=Column(Text))
         meta: dict = Field(default={}, sa_column=Column(JSON))
-        embedding: list[float] = Field(sa_type=VectorType(vector_dimension))
+        embedding: list[float] = Field(sa_type=vector_column_type(vector_dimension))
         document_id: int = Field(foreign_key="documents.id", nullable=True)
         relations: dict | list = Field(default={}, sa_column=Column(JSON))
         source_uri: str = Field(max_length=512, nullable=True)
@@ -77,13 +96,19 @@ def get_dynamic_chunk_model(
         # TODO: Add vector_index_status, vector_index_result column, vector index should be optional in the future.
 
         # TODO: Rename to kg_index_status, kg_index_result column.
-        index_status: KgIndexStatus = KgIndexStatus.NOT_STARTED
+        index_status: KgIndexStatus = _kg_status_column(
+            KgIndexStatus, KgIndexStatus.NOT_STARTED
+        )
         index_result: str = Field(sa_column=Column(Text, nullable=True))
 
-        playbook_index_status: PlaybookKgIndexStatus = PlaybookKgIndexStatus.NOT_STARTED
+        playbook_index_status: PlaybookKgIndexStatus = _kg_status_column(
+            PlaybookKgIndexStatus, PlaybookKgIndexStatus.NOT_STARTED
+        )
         playbook_index_result: str = Field(sa_column=Column(Text, nullable=True))
-        
-        crm_index_status: CrmKgIndexStatus = CrmKgIndexStatus.NOT_STARTED
+
+        crm_index_status: CrmKgIndexStatus = _kg_status_column(
+            CrmKgIndexStatus, CrmKgIndexStatus.NOT_STARTED
+        )
         crm_index_result: str = Field(sa_column=Column(Text, nullable=True))
 
         def to_llama_text_node(self) -> TextNode:

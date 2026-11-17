@@ -4,7 +4,9 @@ from typing import Optional
 from pydantic import BaseModel
 from datetime import datetime
 
+from sqlalchemy import Enum
 from sqlmodel import (
+    Column,
     Field,
     Relationship as SQLRelationship,
 )
@@ -33,6 +35,15 @@ class BaseFeedback(UpdatableBaseModel):
 
 class Feedback(BaseFeedback, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
+    # VARCHAR, same labels as the TiDB ENUM (member names, not .value).
+    feedback_type: FeedbackType = Field(
+        default=FeedbackType.LIKE,
+        sa_column=Column(
+            Enum(FeedbackType, native_enum=False, length=32),
+            nullable=False,
+            default=FeedbackType.LIKE,
+        ),
+    )
     chat_id: UUID = Field(foreign_key="chats.id")
     chat: "Chat" = SQLRelationship(  # noqa:F821
         sa_relationship_kwargs={

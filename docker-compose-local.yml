@@ -23,6 +23,7 @@ services:
       - .env
     volumes:
       - /Users/gaona/data:/Users/gaona/data
+      - /Users/gaona/data:/shared/data
     command: /usr/bin/supervisord
     logging:
       driver: json-file

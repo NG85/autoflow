@@ -235,20 +235,26 @@ def save_visit_record_to_crm_table(record_schema: SimpleVisitRecordCreate | Comp
     mapped['record_id'] = record_id
     mapped['last_modified_time'] = batch_time
     
-    # 使用事务保存
+    # 使用事务保存。TiDB 走 ON DUPLICATE KEY UPDATE。
+    # 这张表除自增主键外没有唯一约束，插入不带 id，因此冲突更新不会命中；
+    # PostgreSQL 写成普通 INSERT，效果与当前 TiDB 语句一致。
     from app.tasks.bitable_import import CRM_TABLE
-    from sqlalchemy import MetaData, Table, text
+    from sqlalchemy import MetaData, Table, insert, text
     from sqlalchemy.dialects.mysql import insert as mysql_insert
-    
+
+    from app.core.config import DatabaseDialect, settings
+
     metadata = MetaData()
     crm_table = Table(CRM_TABLE, metadata, autoload_with=db_session.bind)
-    
-    insert_stmt = mysql_insert(crm_table).values(**mapped)
-    update_stmt = {k: mapped[k] for k in mapped if k != 'record_id'}
-    if mapped.get('account_id') in (None, '', 'null'):
-        update_stmt['account_id'] = text('account_id')
-    ondup_stmt = insert_stmt.on_duplicate_key_update(**update_stmt)
-    db_session.execute(ondup_stmt)
+
+    if settings.DATABASE_DIALECT == DatabaseDialect.POSTGRESQL:
+        db_session.execute(insert(crm_table).values(**mapped))
+    else:
+        insert_stmt = mysql_insert(crm_table).values(**mapped)
+        update_stmt = {k: mapped[k] for k in mapped if k != "record_id"}
+        if mapped.get("account_id") in (None, "", "null"):
+            update_stmt["account_id"] = text("account_id")
+        db_session.execute(insert_stmt.on_duplicate_key_update(**update_stmt))
     # 不在这里commit，由调用方控制事务
     
     # 返回record_id和实际保存的时间

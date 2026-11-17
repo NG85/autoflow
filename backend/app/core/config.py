@@ -1,4 +1,5 @@
 import enum
+from pathlib import Path
 from typing import Annotated, Any, Optional
 from urllib.parse import quote
 
@@ -6,7 +7,6 @@ from pydantic import (
     AnyUrl,
     BeforeValidator,
     HttpUrl,
-    MySQLDsn,
     SecretStr,
     computed_field,
     model_validator,
@@ -119,9 +119,42 @@ class CRMDailyReportVisitDateField(str, enum.Enum):
     LAST_MODIFIED_TIME = "last_modified_time"  # 最后修改时间（UTC，按北京自然日）
 
 
+class DatabaseDialect(str, enum.Enum):
+    """One process uses one database. Migration trees stay separate."""
+
+    TIDB = "tidb"
+    POSTGRESQL = "postgresql"
+
+
+_MIGRATION_VERSIONS = (
+    Path(__file__).resolve().parents[1] / "alembic" / "versions"
+)
+
+
+def _activate_migration_tree(dialect: "DatabaseDialect") -> None:
+    """Point Alembic's active directory at this process's migration tree.
+
+    ``script_location = app.alembic:`` imports this package, which loads
+    settings, before revision files are scanned. ``versions/active`` is not
+    committed.
+    """
+    active = _MIGRATION_VERSIONS / "active"
+    target_name = dialect.value
+    target = _MIGRATION_VERSIONS / target_name
+    if not target.is_dir():
+        raise ValueError(f"Migration directory does not exist: {target}")
+    if active.is_symlink() and Path(active.readlink()).as_posix() == target_name:
+        return
+    if active.is_symlink() or active.exists():
+        active.unlink()
+    active.symlink_to(target_name, target_is_directory=True)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env", env_ignore_empty=True, extra="ignore"
+        env_file=".env",
+        env_ignore_empty=True,
+        extra="ignore",
     )
     API_V1_STR: str = "/api/v1"
     # Path prefix where the app is mounted behind a reverse proxy (e.g. Ingress /backend).
@@ -171,12 +204,23 @@ class Settings(BaseSettings):
 
     LOCAL_FILE_STORAGE_PATH: str = "/shared/data"
 
+    # Default stays tidb so existing deployments keep their current database
+    # until they set DATABASE_DIALECT=postgresql.
+    DATABASE_DIALECT: DatabaseDialect = DatabaseDialect.TIDB
+
     TIDB_HOST: str = "127.0.0.1"
     TIDB_PORT: int = 4000
     TIDB_USER: str = "root"
     TIDB_PASSWORD: str = ""
-    TIDB_DATABASE: str
+    TIDB_DATABASE: str = ""
     TIDB_SSL: bool = True
+
+    PG_HOST: str = "127.0.0.1"
+    PG_PORT: int = 5432
+    PG_USER: str = ""
+    PG_PASSWORD: str = ""
+    PG_DATABASE: str = ""
+    PG_SSLMODE: str = "prefer"
 
     ENABLE_QUESTION_CACHE: bool = False
 
@@ -491,12 +535,23 @@ class Settings(BaseSettings):
 
     @computed_field  # type: ignore[misc]
     @property
-    def SQLALCHEMY_DATABASE_URI(self) -> MySQLDsn:
+    def SQLALCHEMY_DATABASE_URI(self) -> MultiHostUrl:
+        if self.DATABASE_DIALECT == DatabaseDialect.POSTGRESQL:
+            # psycopg3 serves both create_engine and create_async_engine.
+            return MultiHostUrl.build(
+                scheme="postgresql+psycopg",
+                username=self.PG_USER,
+                # TODO: remove quote after following issue is fixed:
+                # https://github.com/pydantic/pydantic/issues/8061
+                password=quote(self.PG_PASSWORD),
+                host=self.PG_HOST,
+                port=self.PG_PORT,
+                path=self.PG_DATABASE,
+                query=f"sslmode={self.PG_SSLMODE}",
+            )
         return MultiHostUrl.build(
             scheme="mysql+pymysql",
             username=self.TIDB_USER,
-            # TODO: remove quote after following issue is fixed:
-            # https://github.com/pydantic/pydantic/issues/8061
             password=quote(self.TIDB_PASSWORD),
             host=self.TIDB_HOST,
             port=self.TIDB_PORT,
@@ -508,7 +563,9 @@ class Settings(BaseSettings):
 
     @computed_field  # type: ignore[misc]
     @property
-    def SQLALCHEMY_ASYNC_DATABASE_URI(self) -> MySQLDsn:
+    def SQLALCHEMY_ASYNC_DATABASE_URI(self) -> MultiHostUrl:
+        if self.DATABASE_DIALECT == DatabaseDialect.POSTGRESQL:
+            return self.SQLALCHEMY_DATABASE_URI
         return MultiHostUrl.build(
             scheme="mysql+asyncmy",
             username=self.TIDB_USER,
@@ -517,6 +574,26 @@ class Settings(BaseSettings):
             port=self.TIDB_PORT,
             path=self.TIDB_DATABASE,
         )
+
+    @model_validator(mode="after")
+    def _validate_database_dialect(self) -> Self:
+        if self.DATABASE_DIALECT == DatabaseDialect.POSTGRESQL:
+            missing = [
+                name
+                for name, value in (
+                    ("PG_USER", self.PG_USER),
+                    ("PG_DATABASE", self.PG_DATABASE),
+                )
+                if not value
+            ]
+            if missing:
+                raise ValueError(
+                    "DATABASE_DIALECT=postgresql requires " + ", ".join(missing)
+                )
+        elif not self.TIDB_DATABASE:
+            raise ValueError("DATABASE_DIALECT=tidb requires TIDB_DATABASE")
+        _activate_migration_tree(self.DATABASE_DIALECT)
+        return self
 
     @model_validator(mode="after")
     def _validate_weekly_followup_week_boundary(self) -> Self:

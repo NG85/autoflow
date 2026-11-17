@@ -1,7 +1,7 @@
 from typing import Optional
 from datetime import datetime
 from uuid import UUID
-from sqlmodel import Field, Column, DateTime, Relationship
+from sqlmodel import Field, Column, DateTime, Index, Relationship
 
 from app.models.crm_accounts import CRMAccount
 from app.models.base import UpdatableBaseModel
@@ -58,6 +58,13 @@ class LocalContact(UpdatableBaseModel, table=True):
     )
     
     __tablename__ = "local_contacts"
+    __table_args__ = (
+        Index("idx_local_contacts_customer_id", "customer_id"),
+        Index("idx_local_contacts_customer_name", "customer_name"),
+        Index("idx_local_contacts_delete_flag", "delete_flag"),
+        Index("idx_local_contacts_name", "name"),
+        Index("idx_local_contacts_unique_id", "unique_id", unique=True),
+    )
     
     # 关联到客户表
     account: Optional["CRMAccount"] = Relationship(
