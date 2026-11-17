@@ -3,7 +3,18 @@
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
+from app.repositories.user_profile import UserProfileRepo
 from app.services.platform_notification_service import PlatformNotificationService
+
+
+def test_get_active_open_ids_matches_wecom_userid():
+    repo = UserProfileRepo()
+    db_session = MagicMock()
+    db_session.exec.return_value.all.return_value = [
+        (None, "GaoNa", "GaoNa"),
+    ]
+    active = repo.get_active_open_ids(db_session, ["GaoNa", "ou_other"])
+    assert active == {"GaoNa"}
 
 
 def test_filter_recipients_by_active_profiles_keeps_only_active():

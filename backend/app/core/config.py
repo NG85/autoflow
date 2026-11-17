@@ -337,9 +337,12 @@ class Settings(BaseSettings):
     CRM_DAILY_REPORT_ENABLED: bool = False
     CRM_DAILY_REPORT_CRON: str = '30 8 * * *'  # 每天早上8:30执行
     CRM_DAILY_REPORT_FEISHU_ENABLED: bool = True  # 是否启用飞书推送
-    # 今日重点定时任务，与日报任务分开。是否发出仍由 report_push_policy 的 today_highlights 决定。
+    # 今日重点定时任务（团队卡、一线卡），与日报任务分开。是否发出仍由 report_push_policy 的 today_highlights 决定。
     CRM_TODAY_HIGHLIGHTS_ENABLED: bool = False
     CRM_TODAY_HIGHLIGHTS_CRON: str = "0 8 * * *"  # 每天早上 8:00
+    # 公司卡单独调度，不跟团队卡、一线卡。接口本身不按星期拒绝。
+    CRM_COMPANY_TODAY_HIGHLIGHTS_ENABLED: bool = False
+    CRM_COMPANY_TODAY_HIGHLIGHTS_CRON: str = "0 8 * * 1,3,5"  # 周一、三、五 8:00
     # 日报拜访日期口径（个人/团队/公司共用）。Autoflow 用它筛拜访记录；
     # crm_account_opportunity_assessment / crm_department_daily_summary 由上游按同一口径写入，
     # 本服务仍按 assessment_date / report_date 读取。
@@ -431,6 +434,13 @@ class Settings(BaseSettings):
     DINGTALK_APP_ID: str = ""
     DINGTALK_APP_SECRET: str = ""
     DINGTALK_COPR_ID: str = ""
+
+    # 企微：经 Sia 智能机器人 HTTP 转发（本服务不维护 Bot WS）
+    # POST {WECOM_PUSH_BASE_URL}/api/v1/webhook/wecom/push
+    # 有 BASE_URL 即可推；TOKEN 对应 Sia SYNAPSE_TASK_CALLBACK_TOKEN（Sia 未配则放行，本侧可空）
+    WECOM_PUSH_BASE_URL: str = ""
+    WECOM_PUSH_TOKEN: str = ""
+
     # 钉钉听记：写入预建 AI 表格后轮询读取「听记总结」（非逐字稿）
     DINGTALK_TRANSCRIBE_NOTABLE_URL: str | None = None
     DINGTALK_NOTABLE_OPERATOR_UNION_ID: str | None = None
@@ -445,17 +455,37 @@ class Settings(BaseSettings):
     REVIEW_SESSION_PAGE_URL: str = "/v2/business/weekly-insight"
     CRM_REVIEW_SESSION_NOTIFICATION_ENABLED: bool = False
 
-    # Ops backdoor: CC cards (Feishu or DingTalk per OPS_CC_PROVIDER)
-    # "off" | "feishu" | "dingtalk"
+    # Ops backdoor: CC cards (Feishu / DingTalk / WeCom per OPS_CC_PROVIDER)
+    # 产品通用运维抄送。与 DEMO_CC_* 独立，互不影响。同一时间只开一个平台，凭证/目标语义随 PROVIDER 解释。
+    # "off" | "feishu" | "dingtalk" | "wecom"
     OPS_CC_PROVIDER: str = "off"
-    OPS_CC_FEISHU_APP_ID: str | None = None
-    OPS_CC_FEISHU_APP_SECRET: str | None = None
-    OPS_CC_FEISHU_OPEN_IDS: Annotated[list[str] | str | None, BeforeValidator(parse_str_list)] = None
-    OPS_CC_FEISHU_CHAT_IDS: Annotated[list[str] | str | None, BeforeValidator(parse_str_list)] = None
-    OPS_CC_DINGTALK_APP_ID: str | None = None
-    OPS_CC_DINGTALK_APP_SECRET: str | None = None
-    OPS_CC_DINGTALK_USER_IDS: Annotated[list[str] | str | None, BeforeValidator(parse_str_list)] = None
-    OPS_CC_DINGTALK_CHAT_IDS: Annotated[list[str] | str | None, BeforeValidator(parse_str_list)] = None
+    # 可配置 scene / scene.variant；空则默认 company_daily,company_weekly,company_highlights.today_highlights
+    # 例：company_daily,company_weekly.visit_report,company_highlights.today_highlights
+    OPS_CC_SCENES: Annotated[list[str] | str | None, BeforeValidator(parse_str_list)] = None
+    # 飞书/钉钉：应用凭证；企微不用
+    OPS_CC_APP_ID: str | None = None
+    OPS_CC_APP_SECRET: str | None = None
+    # 飞书=open_id；钉钉=userid；企微=userid（均可与 CHAT_IDS 并列）
+    OPS_CC_USER_IDS: Annotated[list[str] | str | None, BeforeValidator(parse_str_list)] = None
+    # 飞书/钉钉=群 chat_id；企微=群 chatid（Sia chatid）
+    OPS_CC_CHAT_IDS: Annotated[list[str] | str | None, BeforeValidator(parse_str_list)] = None
+    # 仅企微：专用 Sia 根地址与可选 token（不回落 WECOM_PUSH_*）
+    OPS_CC_BASE_URL: str | None = None
+    OPS_CC_TOKEN: str | None = None
+
+    # Demo-only: mirror pushes to a designated group/chat（接近全量，不含拜访卡）。
+    # 仅演示环境开启 DEMO_CC_PROVIDER；拜访卡请用 department_group_chats。
+    # 覆盖：报告 KPI/Markdown、今日重点、例会复盘、评论族、短文本通知、销售任务等。
+    # "off" | "feishu" | "dingtalk" | "wecom"；字段语义同 OPS_CC_*（随 PROVIDER）
+    DEMO_CC_PROVIDER: str = "off"
+    DEMO_CC_APP_ID: str | None = None
+    DEMO_CC_APP_SECRET: str | None = None
+    DEMO_CC_USER_IDS: Annotated[list[str] | str | None, BeforeValidator(parse_str_list)] = None
+    DEMO_CC_CHAT_IDS: Annotated[list[str] | str | None, BeforeValidator(parse_str_list)] = None
+    DEMO_CC_BASE_URL: str | None = None
+    DEMO_CC_TOKEN: str | None = None
+    # 空 / 含 "all" → 命中旁路的事件全抄；否则按 source 名精确匹配（大小写不敏感）
+    DEMO_CC_EVENTS: Annotated[list[str] | str | None, BeforeValidator(parse_str_list)] = None
     
     # Visit detail page URL configuration
     VISIT_DETAIL_PAGE_URL: str = "/v2/behavior"

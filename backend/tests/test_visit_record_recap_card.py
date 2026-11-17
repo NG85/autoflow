@@ -5,6 +5,7 @@ from datetime import date, datetime
 from app.services.visit_record_recap_card import (
     DINGTALK_PARAGRAPH_GAP,
     build_recap_lite_card,
+    build_visit_recap_wecom_template_card,
     compose_recap_title,
     format_entry_time,
     format_visit_date_short,
@@ -201,8 +202,27 @@ def test_sales_lite_card_appends_extract_links(monkeypatch):
         ("待我跟进（2）", follow_ups_url),
         ("当前最关键问题", key_issues_url),
     )
+    assert card.primary_action_links == (
+        ("跟进详情", "https://app.example/v2/behavior/rec-1"),
+        ("完整复盘报告", "https://app.example/v2/behavior/rec-1/recap"),
+    )
     assert extract_row in card.dingtalk_text
     assert card.dingtalk_text.index(report) < card.dingtalk_text.index(follow_ups)
+    wecom = build_visit_recap_wecom_template_card(card)
+    assert wecom["card_type"] == "text_notice"
+    assert wecom["jump_list"] == [
+        {"type": 1, "title": "完整复盘", "url": "https://app.example/v2/behavior/rec-1/recap"},
+        {"type": 1, "title": "跟进详情", "url": "https://app.example/v2/behavior/rec-1"},
+    ]
+    assert wecom["card_action"]["url"].endswith("/recap")
+    assert "[" not in (wecom.get("sub_title_text") or "")
+    horizontal = wecom.get("horizontal_content_list") or []
+    assert all(row["keyname"] != row["value"] for row in horizontal)
+    horizontal_urls = {row["url"] for row in horizontal}
+    assert "https://app.example/v2/behavior/rec-1" not in horizontal_urls
+    assert "https://app.example/v2/behavior/rec-1/recap" not in horizontal_urls
+    assert follow_ups_url in horizontal_urls
+    assert key_issues_url in horizontal_urls
     leader = build_recap_lite_card(
         "rec-1",
         {

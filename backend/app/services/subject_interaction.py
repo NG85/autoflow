@@ -49,7 +49,7 @@ def intervention_anchor(
     extract_key: Any,
     fallback_id: Any = "",
 ) -> str:
-    """当天不变的挂载键：业务日、部门、抽取键。重抽换 unique_id 时评论和任务还在。"""
+    """同一天、同一负责人、同一抽取键的归并键。列表用它只留最新一行。"""
     day = report_date.isoformat() if hasattr(report_date, "isoformat") else _text(report_date)
     key = _text(extract_key) or _text(fallback_id)
     raw = f"{day}|{_text(department_id)}|{key}"

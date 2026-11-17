@@ -14,6 +14,7 @@ from app.api.routes.notification_schemas import (
 )
 from app.services.leader_meeting_review_card import (
     assemble_extracts,
+    build_leader_meeting_wecom_template_card,
     extracts_for_viewer,
     feishu_card_parts,
     render_dingtalk_markdown,
@@ -130,6 +131,21 @@ def test_card_puts_summary_then_report_link_then_extract_buttons(monkeypatch):
     ) in dingtalk
     assert "确认预算审批流程" not in dingtalk
     assert "经营事项不进正文" not in dingtalk
+    wecom = build_leader_meeting_wecom_template_card(
+        assembled, title="例会复盘｜2026-10-28"
+    )
+    assert wecom["card_type"] == "text_notice"
+    assert wecom["main_title"]["title"] == "例会复盘｜2026-10-28"
+    assert wecom["jump_list"][0]["title"] == "完整复盘"
+    assert wecom["card_action"]["url"].endswith("/RPT-1")
+    assert wecom["sub_title_text"] == "团队周例会：推进 POC。"
+    assert "[" not in wecom["sub_title_text"]
+    horizontal = wecom.get("horizontal_content_list") or []
+    assert all(row.get("type") == 1 and row["keyname"] != row["value"] for row in horizontal)
+    assert {row["url"] for row in horizontal} == {
+        "https://example.com/employee_todo_candidates",
+        "https://example.com/management_events",
+    }
     event = assembled["items"]["management_events"][0]
     assert event["business_object"] == "甲客户"
     assert event["management_issue"] == "关键人"

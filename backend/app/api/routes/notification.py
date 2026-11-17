@@ -9,6 +9,7 @@ from sqlmodel import select
 
 from app.api.deps import CurrentUserDep, SessionDep
 from app.api.routes.notification_schemas import (
+    CompanyTodayHighlightsPushRequest,
     DailyNoFollowupReminderPushRequest,
     DailyVisitReportPushRequest,
     DepartmentTodayHighlightsPushRequest,
@@ -711,6 +712,22 @@ def _handle_platform_notification_push(
     }
 
 
+def _handle_company_today_highlights_push(
+    db_session: SessionDep,
+    payload: CompanyTodayHighlightsPushRequest,
+) -> Dict[str, Any]:
+    from app.services.company_today_highlights import handle_company_today_highlights
+
+    try:
+        return handle_company_today_highlights(
+            db_session,
+            report_date=payload.report_date,
+            recipient_user_ids=payload.recipient_user_ids,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 def _handle_department_today_highlights_push(
     db_session: SessionDep,
     payload: DepartmentTodayHighlightsPushRequest,
@@ -940,7 +957,7 @@ async def push_notification_api(
     review_session / visit_record_card / leader_meeting_review_card /
     daily_no_followup_reminder / platform_notification /
     weekly_visit_report / daily_visit_report /
-    sales_today_highlights / department_today_highlights
+    sales_today_highlights / department_today_highlights / company_today_highlights
     """
     try:
         if isinstance(payload, LeaderMeetingReviewCardPushRequest):
@@ -967,6 +984,8 @@ async def push_notification_api(
             result = _handle_sales_today_highlights_push(db_session, payload)
         elif isinstance(payload, DepartmentTodayHighlightsPushRequest):
             result = _handle_department_today_highlights_push(db_session, payload)
+        elif isinstance(payload, CompanyTodayHighlightsPushRequest):
+            result = _handle_company_today_highlights_push(db_session, payload)
         else:
             raise HTTPException(status_code=422, detail="unsupported notification type")
 

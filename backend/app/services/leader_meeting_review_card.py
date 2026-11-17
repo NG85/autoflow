@@ -15,7 +15,12 @@ from sqlalchemy import text
 from sqlmodel import Session, select
 
 from app.models.crm_skill_extract_items import CRMSkillExtractItem
-from app.platforms.constants import PLATFORM_DINGTALK, PLATFORM_FEISHU, PLATFORM_LARK
+from app.platforms.constants import (
+    PLATFORM_DINGTALK,
+    PLATFORM_FEISHU,
+    PLATFORM_LARK,
+    PLATFORM_WECOM,
+)
 from app.services.leader_intervention_actions import interaction_fields
 from app.services.sales_today_highlights import _recipient_from_profile, parse_report_date
 from app.services.today_highlights_format import CARD_LINK_SEPARATOR
@@ -341,6 +346,62 @@ def render_dingtalk_markdown(assembled: Mapping[str, Any], *, title: str) -> str
     return "\n".join(parts)
 
 
+def _full_report_url(assembled: Mapping[str, Any]) -> str:
+    return build_leader_meeting_review_report_url(_text(assembled.get("report_id"))) or ""
+
+
+def build_leader_meeting_wecom_template_card(
+    assembled: Mapping[str, Any],
+    *,
+    title: str,
+) -> dict[str, Any]:
+    """例会复盘 → 企微 text_notice。
+
+    jump：完整复盘。
+    horizontal：待办候选 / 经营事项（左灰右蓝）。
+    """
+    from app.platforms.wecom.text_notice import build_text_notice_card, new_task_id
+
+    body = _text(assembled.get("summary")) or "--"
+    report_url = _full_report_url(assembled)
+    extracts = extract_action_buttons(assembled)
+    action = report_url or (extracts[0][1] if extracts else "")
+    jump_links: list[tuple[str, str]] = [("完整复盘", action)] if action else []
+
+    return build_text_notice_card(
+        title=title,
+        desc="例会复盘",
+        sub_title_text=body,
+        jump_links=jump_links,
+        horizontal_links=extracts,
+        card_action_url=action,
+        task_id=new_task_id("lmr"),
+    )
+
+
+
+def _demo_cc_leader_meeting_review(assembled: Mapping[str, Any]) -> None:
+    """演示旁路：例会复盘卡整次推送只抄一次。"""
+    from app.services.platform_notification_service import platform_notification_service
+
+    title = f"例会复盘｜{assembled.get('report_date')}"
+    body, report_link, buttons = feishu_card_parts(assembled)
+    feishu_card = platform_notification_service.build_feishu_markdown_card(
+        body,
+        title=title,
+        footer=report_link or None,
+        footer_text_size="normal",
+        footer_buttons=buttons or None,
+    )
+    platform_notification_service.mirror_demo_cc(
+        source="leader meeting review card",
+        feishu_card=feishu_card,
+        wecom_card=build_leader_meeting_wecom_template_card(assembled, title=title),
+        markdown_text=render_dingtalk_markdown(assembled, title=title),
+        title=title,
+    )
+
+
 def deliver_card(db_session: Session, recipient: Mapping[str, Any], assembled: Mapping[str, Any]) -> dict[str, Any]:
     """发给上传人本人。不进群，不计费。"""
     from app.services.platform_notification_service import platform_notification_service
@@ -370,8 +431,39 @@ def deliver_card(db_session: Session, recipient: Mapping[str, Any], assembled: M
             "message": None if success_count else "send failed",
             "failed_recipients": failed,
         }
-    text = render_dingtalk_markdown(assembled, title=title)
-    if platform == PLATFORM_DINGTALK or platform:
+    if platform == PLATFORM_WECOM:
+        card = build_leader_meeting_wecom_template_card(assembled, title=title)
+        tokens = platform_notification_service._get_platform_tokens([platform])
+        if platform not in tokens:
+            return {"success": False, "message": "wecom push is not configured"}
+        chatid = _text(recipient.get("open_id"))
+        if not chatid:
+            return {"success": False, "message": "recipient has no oauth open_id"}
+        try:
+            platform_notification_service._send_message(
+                chatid,
+                tokens[platform],
+                card,
+                platform,
+                receive_id_type=_text(recipient.get("receive_id_type")) or "open_id",
+                msg_type="template_card",
+            )
+            return {"success": True, "message": None, "failed_recipients": []}
+        except Exception as exc:
+            return {
+                "success": False,
+                "message": str(exc),
+                "failed_recipients": [
+                    {
+                        "open_id": chatid,
+                        "name": recipient.get("name"),
+                        "platform": platform,
+                        "error": str(exc),
+                    }
+                ],
+            }
+    if platform == PLATFORM_DINGTALK:
+        text = render_dingtalk_markdown(assembled, title=title)
         return platform_notification_service.send_platform_notification(
             db_session,
             recipient_user_id=_text(recipient.get("user_id")),
@@ -469,6 +561,7 @@ def handle_leader_meeting_review_card(
 
     pushed_any = False
     saw_send_failed = False
+    _demo_cc_leader_meeting_review(assembled)
     for target in _push_targets(owner, creator):
         profile = user_profile_repo.get_by_oauth_user_id(db_session, target)
         recipient = _recipient_from_profile(profile)

@@ -86,6 +86,7 @@ def test_weekly_visit_report_sends_no_record_when_row_missing():
     content = service.send_platform_notification.call_args.kwargs["content"]
     assert "未查询到周报数据" in content
     service._ops_cc_platform_card.assert_not_called()
+    service._demo_cc_platform_card.assert_not_called()
 
 
 def test_weekly_visit_report_sends_markdown_to_eligible_minus_opt_out():
@@ -150,8 +151,12 @@ def test_weekly_visit_report_sends_markdown_to_eligible_minus_opt_out():
     assert kwargs["title"] == "APTSell 销售经营周报｜2026-09-13至2026-09-19"
     assert "agent_markdown" not in kwargs
     service._ops_cc_platform_card.assert_called_once()
-    assert service._ops_cc_platform_card.call_args.kwargs["source"] == "company weekly report"
+    assert service._ops_cc_platform_card.call_args.kwargs["scene"] == "company_weekly"
+    assert service._ops_cc_platform_card.call_args.kwargs["variant"] == "visit_report"
     assert service._ops_cc_platform_card.call_args.kwargs["dingtalk_text"] == "**md**"
+    service._demo_cc_platform_card.assert_called_once()
+    assert service._demo_cc_platform_card.call_args.kwargs["source"] == "company weekly report"
+    assert service._demo_cc_platform_card.call_args.kwargs["dingtalk_text"] == "**md**"
 
 
 def test_department_weekly_only_pushes_departments_in_mirror():
@@ -216,3 +221,6 @@ def test_department_weekly_only_pushes_departments_in_mirror():
     assert departments[0]["department_id"] == "dept-1"
     service.send_platform_notification.assert_called_once()
     service._ops_cc_platform_card.assert_not_called()
+    service._demo_cc_platform_card.assert_called_once()
+    assert service._demo_cc_platform_card.call_args.kwargs["source"] == "department weekly report"
+    assert service._demo_cc_platform_card.call_args.kwargs["dingtalk_text"] == "## 销售部周报"

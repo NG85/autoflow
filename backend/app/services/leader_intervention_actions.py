@@ -25,7 +25,6 @@ from app.services.subject_interaction import (
     SUBJECT_DEPARTMENT_INTERVENTION,
     append_comments,
     append_todo_id,
-    intervention_anchor,
     load_task_summaries,
     load_threads,
 )
@@ -95,38 +94,27 @@ def interaction_fields(row: Any) -> dict[str, Any]:
     }
 
 
-def _item_anchor(report_date: Any, department_id: Any, item: Mapping[str, Any]) -> str:
-    return intervention_anchor(
-        report_date,
-        department_id,
-        item.get("extract_key"),
-        item.get("unique_id"),
-    )
-
-
 def attach_item_interactions(
     session: Session,
     departments: Sequence[Mapping[str, Any]],
-    report_date: Any,
 ) -> None:
-    """把评论线程和任务摘要拼进今日需介入条目。按当天稳定键查找。"""
+    """把评论线程和任务摘要拼进今日需介入条目。按抽取行 unique_id 查找。"""
     items: list[tuple[str, dict[str, Any]]] = []
     for department in departments or []:
         grouped = department.get("items") if isinstance(department, Mapping) else None
         if not isinstance(grouped, Mapping):
             continue
-        department_id = department.get("subject_id") or department.get("department_id")
         for item in grouped.get("leader_intervene") or []:
             if isinstance(item, dict):
-                items.append((_item_anchor(report_date, department_id, item), item))
-    ids = [anchor for anchor, _item in items if anchor]
+                items.append((_text(item.get("unique_id")), item))
+    ids = [subject_id for subject_id, _item in items if subject_id]
     threads = load_threads(session, SUBJECT_DEPARTMENT_INTERVENTION, ids)
     todo_ids: list[str] = []
     for thread in threads.values():
         todo_ids.extend(thread.get("todo_ids") or [])
     summaries = load_task_summaries(session, todo_ids)
-    for anchor, item in items:
-        thread = threads.get(anchor) or {}
+    for subject_id, item in items:
+        thread = threads.get(subject_id) or {}
         item["comments"] = list(thread.get("comments") or [])
         item["tasks"] = [
             summaries.get(task_id)
@@ -301,7 +289,7 @@ def save_item_comments(
     return append_comments(
         session,
         subject_type=SUBJECT_DEPARTMENT_INTERVENTION,
-        subject_id=_row_anchor(row),
+        subject_id=_text(getattr(row, "unique_id", None)),
         scene=SCENE_DEPARTMENT_TODAY_HIGHLIGHTS,
         actor_user_id=user_id,
         author=author,
@@ -412,15 +400,6 @@ def notify_item_comments(
         logger.warning("发送今日需介入评论提醒失败（不影响保存评论）：%s", exc)
 
 
-def _row_anchor(row: CRMSkillExtractItem) -> str:
-    return intervention_anchor(
-        getattr(row, "report_date", None),
-        getattr(row, "subject_id", None),
-        getattr(row, "extract_key", None),
-        getattr(row, "unique_id", None),
-    )
-
-
 def require_active_todo(session: Session, todo_id: str) -> str:
     """确认任务未删除。不存在时抛出 ValueError，调用方不要改采纳状态。"""
     task_id = _text(todo_id)
@@ -459,7 +438,7 @@ def link_item_task(
     append_todo_id(
         session,
         subject_type=SUBJECT_DEPARTMENT_INTERVENTION,
-        subject_id=_row_anchor(row),
+        subject_id=_text(getattr(row, "unique_id", None)),
         scene=SCENE_DEPARTMENT_TODAY_HIGHLIGHTS,
         actor_user_id=_text(user_id),
         todo_id=task_id,

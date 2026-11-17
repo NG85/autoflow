@@ -120,6 +120,7 @@ def test_daily_summary_sends_no_record_when_row_missing():
     content = service.send_platform_notification.call_args.kwargs["content"]
     assert "未查询到当日统计数据" in content
     service._ops_cc_platform_card.assert_not_called()
+    service._demo_cc_platform_card.assert_not_called()
 
 
 def test_daily_summary_sends_no_record_when_content_empty():
@@ -152,6 +153,7 @@ def test_daily_summary_sends_no_record_when_content_empty():
     content = service.send_platform_notification.call_args.kwargs["content"]
     assert "当日无跟进记录" in content
     service._ops_cc_platform_card.assert_not_called()
+    service._demo_cc_platform_card.assert_not_called()
 
 
 def test_daily_summary_sends_markdown_to_named_minus_opt_out():
@@ -206,8 +208,12 @@ def test_daily_summary_sends_markdown_to_named_minus_opt_out():
     assert kwargs["title"] == "APTSell 销售经营日报｜2026-09-20"
     assert "agent_markdown" not in kwargs
     service._ops_cc_platform_card.assert_called_once()
-    assert service._ops_cc_platform_card.call_args.kwargs["source"] == "company daily report"
+    assert service._ops_cc_platform_card.call_args.kwargs["scene"] == "company_daily"
+    assert service._ops_cc_platform_card.call_args.kwargs["variant"] == "summary_md"
     assert service._ops_cc_platform_card.call_args.kwargs["dingtalk_text"] == "## 公司日报正文"
+    service._demo_cc_platform_card.assert_called_once()
+    assert service._demo_cc_platform_card.call_args.kwargs["source"] == "company daily report"
+    assert service._demo_cc_platform_card.call_args.kwargs["dingtalk_text"] == "## 公司日报正文"
 
 
 def test_department_daily_summary_sends_to_leaders_when_no_named_override():
@@ -271,6 +277,9 @@ def test_department_daily_summary_sends_to_leaders_when_no_named_override():
     assert kwargs["content"] == "## 部门日报"
     assert kwargs["title"] == "APTSell 销售经营日报｜2026-09-20"
     service._ops_cc_platform_card.assert_not_called()
+    service._demo_cc_platform_card.assert_called_once()
+    assert service._demo_cc_platform_card.call_args.kwargs["source"] == "department daily report"
+    assert service._demo_cc_platform_card.call_args.kwargs["dingtalk_text"] == "## 部门日报"
 
 
 def test_department_daily_skips_when_requested_department_not_in_mirror():
@@ -366,6 +375,7 @@ def test_department_daily_sends_no_record_when_stored_name_differs():
     assert "销售部" in kwargs["content"]
     assert "错名正文" not in kwargs["content"]
     service._ops_cc_platform_card.assert_not_called()
+    service._demo_cc_platform_card.assert_not_called()
 
 
 def test_department_daily_only_pushes_departments_in_mirror():

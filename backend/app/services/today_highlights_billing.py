@@ -1,4 +1,4 @@
-"""今日重点计费：销售对应个人日报 SKU，负责人对应团队日报 SKU。"""
+"""今日重点计费：销售对应个人日报 SKU，负责人和 CXO 对应团队日报 SKU。"""
 
 from __future__ import annotations
 
@@ -14,20 +14,23 @@ from app.services.feishu_billing_facade import (
 )
 from app.services.feishu_billing_service import FEISHU_TRACE_ID_MAX_LEN
 from app.utils.push_page_urls import (
+    build_company_highlights_url,
     build_department_highlights_url,
     build_sales_today_highlights_url,
 )
 
-Audience = Literal["sales", "department"]
+Audience = Literal["sales", "department", "company"]
 
 _SCENARIOS: dict[Audience, BillingScenario] = {
     "sales": BillingScenario.CRM_SALES_TODAY_HIGHLIGHTS,
     "department": BillingScenario.CRM_DEPARTMENT_TODAY_HIGHLIGHTS,
+    "company": BillingScenario.CRM_COMPANY_TODAY_HIGHLIGHTS,
 }
 # 与日报 sales-daily / department-daily 错开，且带 UUID 时仍不超过飞书 trace_id 上限。
 _TRACE_PREFIX: dict[Audience, str] = {
     "sales": "sales-today",
     "department": "dept-today",
+    "company": "cxo-today",
 }
 # 超长 user_id 压成 h + sha256[:32]，与原文 user_id 分区，避免和短 id 撞键。
 _COMPACT_UID_MARK = "h"
@@ -75,4 +78,6 @@ def _usage_trace_key(audience: Audience, day: str, uid: str) -> str:
 def _page_url(audience: Audience, day: str) -> str:
     if audience == "sales":
         return build_sales_today_highlights_url(day, "immediate_today")
+    if audience == "company":
+        return build_company_highlights_url(day)
     return build_department_highlights_url(day, "", "leader_intervene")

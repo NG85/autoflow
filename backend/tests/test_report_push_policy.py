@@ -109,14 +109,16 @@ def test_get_recipients_for_company_highlights_uses_policy_ids(monkeypatch):
     )
     svc = PlatformNotificationService()
     svc.recipients_from_user_ids = MagicMock(return_value=[{"user_id": "u1"}])
+    svc.get_recipients_for_company_daily_report = MagicMock()
     result = svc.get_recipients_for_company_highlights(MagicMock())
     svc.recipients_from_user_ids.assert_called_once()
+    svc.get_recipients_for_company_daily_report.assert_not_called()
     assert svc.recipients_from_user_ids.call_args.args[1] == ["u1"]
     assert svc.recipients_from_user_ids.call_args.kwargs["recipient_type"] == "named_recipient"
     assert result == [{"user_id": "u1"}]
 
 
-def test_get_recipients_for_company_highlights_empty_without_ids(monkeypatch):
+def test_get_recipients_for_company_highlights_falls_back_to_company_daily(monkeypatch):
     from app.services.platform_notification_service import PlatformNotificationService
 
     monkeypatch.setattr(
@@ -124,9 +126,12 @@ def test_get_recipients_for_company_highlights_empty_without_ids(monkeypatch):
         lambda: parse_report_push_policy({"company_highlights": True}),
     )
     svc = PlatformNotificationService()
+    daily = [{"user_id": "daily-1", "open_id": "ou_daily", "platform": "feishu", "type": "company_executive"}]
     svc.recipients_from_user_ids = MagicMock()
-    assert svc.get_recipients_for_company_highlights(MagicMock()) == []
+    svc.get_recipients_for_company_daily_report = MagicMock(return_value=daily)
+    assert svc.get_recipients_for_company_highlights(MagicMock()) == daily
     svc.recipients_from_user_ids.assert_not_called()
+    svc.get_recipients_for_company_daily_report.assert_called_once()
 
 
 def test_summary_md_on_daily_slots_only():

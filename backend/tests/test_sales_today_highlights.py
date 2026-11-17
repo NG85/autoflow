@@ -16,6 +16,7 @@ from app.services.sales_today_highlights import (
     deliver_highlight_card,
     handle_sales_today_highlights,
     highlights_for_viewer,
+    highlights_payload,
     load_sales_extract_rows,
     render_card_links,
     render_card_markdown,
@@ -151,6 +152,90 @@ def test_thursday_drops_next_week_and_unchanged_risk_keeps_resolved(monkeypatch)
     )
 
 
+def test_key_finding_and_legacy_open_risk_share_one_section(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.sales_today_highlights.build_sales_today_highlights_url",
+        lambda report_date, section: f"https://example.com/v2/today-highlights?date={report_date}&tab={section}",
+    )
+    assembled = assemble_sales_highlights(
+        [
+            _row(
+                "OPEN_RISK",
+                {"claim": "旧风险", "risk_change": "worsened", "confidence": 0.5},
+                unique_id="old",
+                card_links=[{"key": "open_risks", "title": "商机风险"}],
+            ),
+            _row(
+                "KEY_FINDING",
+                {"claim": "新发现", "risk_change": "new", "confidence": 0.9},
+                unique_id="new",
+                card_links=[{"key": "open_risks", "title": "关键发现"}],
+            ),
+            _row(
+                "KEY_FINDING",
+                {"claim": "没变化", "risk_change": "unchanged"},
+                unique_id="flat",
+            ),
+            _row(
+                "KEY_FINDING",
+                {"claim": "只是缺口", "gap_only": True, "risk_change": "new"},
+                unique_id="gap",
+            ),
+        ],
+        THURSDAY,
+        _names(),
+    )
+    assert [section["key"] for section in assembled["sections"]] == ["open_risks"]
+    section = assembled["sections"][0]
+    assert section["title"] == "关键发现"
+    assert [item["claim"] for item in section["items"]] == ["新发现", "旧风险"]
+    assert [item["item_type"] for item in section["items"]] == ["KEY_FINDING", "OPEN_RISK"]
+    payload = highlights_payload(assembled, subject_id="oauth-1")
+    assert payload["card_links"][0]["item_types"] == ["KEY_FINDING", "OPEN_RISK"]
+    assert [label for label, _url in card_blue_links(assembled)] == ["关键发现（2）"]
+
+
+def test_key_findings_card_stays_with_legacy_risk_titles(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.sales_today_highlights.build_sales_today_highlights_url",
+        lambda report_date, section: f"https://example.com/v2/today-highlights?date={report_date}&tab={section}",
+    )
+    assembled = assemble_sales_highlights(
+        [
+            _row(
+                "KEY_FINDING",
+                {"claim": "预算窗口", "risk_change": "new", "confidence": 0.8},
+                unique_id="new",
+                card_links=[{"key": "key_findings", "title": "关键发现"}],
+            ),
+            _row(
+                "OPEN_RISK",
+                {"claim": "旧商机风险", "risk_change": "stronger", "confidence": 0.5},
+                unique_id="old-risk",
+                card_links=[{"key": "open_risks", "title": "商机风险"}],
+            ),
+            _row(
+                "OPEN_RISK",
+                {"claim": "旧建议关注", "risk_change": "weaker", "confidence": 0.4},
+                unique_id="old-watch",
+                card_links=[{"key": "open_risks", "title": "建议关注"}],
+            ),
+        ],
+        THURSDAY,
+        _names(),
+    )
+    assert [section["key"] for section in assembled["sections"]] == ["open_risks"]
+    section = assembled["sections"][0]
+    assert section["title"] == "关键发现"
+    assert [item["claim"] for item in section["items"]] == [
+        "预算窗口",
+        "旧商机风险",
+        "旧建议关注",
+    ]
+    assert [label for label, _url in card_blue_links(assembled)] == ["关键发现（3）"]
+    assert card_blue_links(assembled)[0][1].endswith("tab=open_risks")
+
+
 def test_immediate_item_carries_decision_and_feedback():
     assembled = assemble_sales_highlights(
         [
@@ -190,7 +275,7 @@ def test_immediate_item_carries_decision_and_feedback():
     assert risk_item["feedback"] == "down"
 
 
-def test_reextract_keeps_the_decided_immediate_row():
+def test_reextract_shows_the_latest_immediate_row():
     assembled = assemble_sales_highlights(
         [
             _row(
@@ -217,13 +302,13 @@ def test_reextract_keeps_the_decided_immediate_row():
     )
     items = assembled["sections"][0]["items"]
     assert len(items) == 1
-    assert items[0]["unique_id"] == "old"
+    assert items[0]["unique_id"] == "new"
     assert items[0]["claim"] == "新建议"
     assert items[0]["why_today"] == "今天"
     assert items[0]["status"] is None
     assert items[0]["adopted_todo_id"] == "todo-new"
     assert [todo["unique_id"] for todo in items[0]["related_todos"]] == ["todo-new"]
-    assert items[0]["feedback"] == "down"
+    assert items[0]["feedback"] is None
 
 
 def test_immediate_without_a_task_is_omitted():
@@ -809,6 +894,16 @@ def test_highlights_task_runs_apart_from_daily_report(monkeypatch):
             "success_count": 2,
         }
 
+    def fake_company(session, *, report_date=None, recipient_user_ids=None):
+        seen["company"] = report_date
+        seen.setdefault("order", []).append("company")
+        return {
+            "success": True,
+            "skipped": False,
+            "skip_reason": None,
+            "success_count": 1,
+        }
+
     monkeypatch.setattr(
         "app.services.sales_today_highlights.handle_sales_today_highlights",
         fake_sales,
@@ -817,29 +912,52 @@ def test_highlights_task_runs_apart_from_daily_report(monkeypatch):
         "app.services.department_today_highlights.handle_department_today_highlights",
         fake_department,
     )
+    monkeypatch.setattr(
+        "app.services.company_today_highlights.handle_company_today_highlights",
+        fake_company,
+    )
     result = push_crm_today_highlights(report_date_str="2026-10-08")
-    assert seen["order"] == ["department", "sales"]
+    assert seen["order"] == ["company", "department", "sales"]
     assert seen["sales"] == date(2026, 10, 8)
     assert seen["department"] == date(2026, 10, 8)
     assert result["sales_today_highlights"]["success_count"] == 1
     assert result["department_today_highlights"]["success_count"] == 2
+    assert result["company_today_highlights"]["success_count"] == 1
 
     seen.clear()
     result = push_crm_today_highlights()
     assert seen["sales"] is None
     assert seen["department"] is None
+    assert seen["company"] is None
     assert result["report_date"] is None
 
     seen.clear()
     result = push_crm_today_highlights(report_date_str="2026-10-08", audience="sales")
     assert seen["sales"] == date(2026, 10, 8)
     assert "department" not in seen
+    assert "company" not in seen
+    assert result["department_today_highlights"] is None
+    assert result["company_today_highlights"] is None
+
+    seen.clear()
+    result = push_crm_today_highlights(
+        report_date_str="2026-10-08",
+        audiences=["department", "sales"],
+    )
+    assert seen["order"] == ["department", "sales"]
+    assert result["company_today_highlights"] is None
+
+    seen.clear()
+    result = push_crm_today_highlights(report_date_str="2026-10-08", audience="company")
+    assert seen["order"] == ["company"]
+    assert result["sales_today_highlights"] is None
     assert result["department_today_highlights"] is None
 
     bad = push_crm_today_highlights(report_date_str="10/08")
     assert bad["success"] is False
     assert bad["sales_today_highlights"] is None
     assert bad["department_today_highlights"] is None
+    assert bad["company_today_highlights"] is None
 
 
 def test_embedded_personal_block_keeps_sales_links_without_week_buttons(monkeypatch):
@@ -954,6 +1072,16 @@ def test_team_push_failure_still_sends_sales_cards(monkeypatch):
         "app.services.department_today_highlights.handle_department_today_highlights",
         explode,
     )
+    monkeypatch.setattr(
+        "app.services.company_today_highlights.handle_company_today_highlights",
+        lambda session, *, report_date=None, recipient_user_ids=None: {
+            "success": True,
+            "skipped": True,
+            "skip_reason": "empty_highlights",
+            "success_count": 0,
+        },
+    )
     result = push_crm_today_highlights(report_date_str="2026-10-08")
     assert result["department_today_highlights"]["skip_reason"] == "push_failed"
     assert result["sales_today_highlights"]["success_count"] == 1
+    assert result["company_today_highlights"]["skip_reason"] == "empty_highlights"

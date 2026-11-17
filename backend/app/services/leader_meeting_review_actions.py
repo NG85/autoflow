@@ -22,7 +22,6 @@ from app.services.subject_interaction import (
     SCENE_LEADER_MEETING_REVIEW,
     SUBJECT_LEADER_MEETING_REVIEW,
     append_todo_id,
-    intervention_anchor,
     load_task_summaries,
     load_threads,
     save_subject_comments,
@@ -45,16 +44,6 @@ def _text(value: Any) -> str:
     if value is None:
         return ""
     return str(value).strip()
-
-
-def meeting_review_anchor(row: Any) -> str:
-    """重抽换 unique_id 时，同一抽取键上的任务还在。"""
-    return intervention_anchor(
-        getattr(row, "report_date", None),
-        getattr(row, "subject_id", None),
-        getattr(row, "extract_key", None),
-        getattr(row, "unique_id", None),
-    )
 
 
 # 例会一般是本部门的，最多再上一级。再往上不插手这类管理细节。
@@ -368,7 +357,7 @@ def link_meeting_review_task(
     append_todo_id(
         session,
         subject_type=SUBJECT_LEADER_MEETING_REVIEW,
-        subject_id=meeting_review_anchor(row),
+        subject_id=_text(getattr(row, "unique_id", None)),
         scene=SCENE_LEADER_MEETING_REVIEW,
         actor_user_id=_text(user_id),
         todo_id=task_id,
@@ -563,7 +552,7 @@ def save_meeting_review_comments(
     return save_subject_comments(
         session,
         subject_type=SUBJECT_LEADER_MEETING_REVIEW,
-        subject_id=meeting_review_anchor(row),
+        subject_id=_text(getattr(row, "unique_id", None)),
         scene=SCENE_LEADER_MEETING_REVIEW,
         actor_user_id=_text(user_id),
         author=author,
@@ -577,22 +566,23 @@ def attach_todo_tasks(session: Session, rows: Sequence[Any], assembled: dict[str
     items = [item for section in grouped.values() if isinstance(section, list) for item in section]
     if not items:
         return
-    by_id = {_text(getattr(row, "unique_id", None)): row for row in rows}
+    known = {_text(getattr(row, "unique_id", None)) for row in rows}
     paired: list[tuple[dict[str, Any], str]] = []
-    anchors: list[str] = []
+    subject_ids: list[str] = []
     for item in items:
-        row = by_id.get(_text(item.get("unique_id")))
-        anchor = meeting_review_anchor(row) if row is not None else ""
-        paired.append((item, anchor))
-        if anchor:
-            anchors.append(anchor)
-    threads = load_threads(session, SUBJECT_LEADER_MEETING_REVIEW, anchors)
+        subject_id = _text(item.get("unique_id"))
+        if subject_id not in known:
+            subject_id = ""
+        paired.append((item, subject_id))
+        if subject_id:
+            subject_ids.append(subject_id)
+    threads = load_threads(session, SUBJECT_LEADER_MEETING_REVIEW, subject_ids)
     todo_ids: list[str] = []
     for thread in threads.values():
         todo_ids.extend(thread.get("todo_ids") or [])
     summaries = load_task_summaries(session, todo_ids)
-    for item, anchor in paired:
-        thread = threads.get(anchor) or {}
+    for item, subject_id in paired:
+        thread = threads.get(subject_id) or {}
         item["comments"] = list(thread.get("comments") or [])
         if "tasks" not in item:
             continue

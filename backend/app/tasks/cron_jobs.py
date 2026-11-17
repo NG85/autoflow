@@ -100,7 +100,7 @@ def _daily_report_types_to_run(report_type: Optional[str]) -> list[str]:
     return [t for t in types if is_scenario_enabled(_DAILY_REPORT_SCENARIOS[t])]
 
 
-_HIGHLIGHT_AUDIENCES = ("sales", "department")
+_HIGHLIGHT_AUDIENCES = ("company", "department", "sales")
 
 
 def _parse_highlights_report_date(report_date_str: Optional[str]):
@@ -135,6 +135,10 @@ def _push_one_today_highlights(session, audience: str, report_date) -> dict[str,
             from app.services.sales_today_highlights import handle_sales_today_highlights
 
             result = handle_sales_today_highlights(session, report_date=report_date)
+        elif audience == "company":
+            from app.services.company_today_highlights import handle_company_today_highlights
+
+            result = handle_company_today_highlights(session, report_date=report_date)
         else:
             from app.services.department_today_highlights import handle_department_today_highlights
 
@@ -147,21 +151,38 @@ def _push_one_today_highlights(session, audience: str, report_date) -> dict[str,
     return summary
 
 
+def _selected_highlight_audiences(audience, audiences) -> Optional[list[str]]:
+    """None 表示参数不合法。都不传时三边都推，给手动触发用。"""
+    if audience is not None:
+        selected = [audience]
+    elif audiences:
+        selected = [str(item) for item in audiences]
+    else:
+        selected = list(_HIGHLIGHT_AUDIENCES)
+    if not selected or any(item not in _HIGHLIGHT_AUDIENCES for item in selected):
+        return None
+    return selected
+
+
 @app.task
-def push_crm_today_highlights(report_date_str=None, audience=None):
+def push_crm_today_highlights(report_date_str=None, audience=None, audiences=None):
     """独立推送今日重点。不跟日报任务，也不看 CRM_DAILY_REPORT_FEISHU_ENABLED。
 
     report_date_str: YYYY-MM-DD，不传则北京时间当天。
-    audience: sales / department，不传则两边都推。是否发出由各自的 today_highlights 变体决定。
-    两边都推时先发团队卡，再发一线卡；负责人可同时收到两张，互不替代。
+    audience: company / department / sales。audiences 可一次指定多边。都不传则三边都推。
+    定时任务里团队卡和一线卡走 CRM_TODAY_HIGHLIGHTS_CRON，公司卡走 CRM_COMPANY_TODAY_HIGHLIGHTS_CRON。
+    手动三边都推时先发公司卡，再发团队卡，再发一线卡。
+    负责人可同时收到团队卡和一线卡，互不替代。
     一边失败记 push_failed，不重试，避免另一边已经发出的卡片再发一遍。
     """
-    if audience is not None and audience not in _HIGHLIGHT_AUDIENCES:
+    selected = _selected_highlight_audiences(audience, audiences)
+    if selected is None:
         return {
             "success": False,
-            "message": f"invalid audience={audience}, valid={list(_HIGHLIGHT_AUDIENCES)}",
+            "message": f"invalid audience={audience} audiences={audiences}, valid={list(_HIGHLIGHT_AUDIENCES)}",
             "report_date": None,
             "audience": audience,
+            "company_today_highlights": None,
             "sales_today_highlights": None,
             "department_today_highlights": None,
         }
@@ -173,24 +194,28 @@ def push_crm_today_highlights(report_date_str=None, audience=None):
             "message": "invalid report_date, expected YYYY-MM-DD",
             "report_date": None,
             "audience": audience,
+            "company_today_highlights": None,
             "sales_today_highlights": None,
             "department_today_highlights": None,
         }
 
-    audiences = [audience] if audience else list(_HIGHLIGHT_AUDIENCES)
+    company_result = None
     sales_result = None
     department_result = None
     with Session(engine) as session:
-        if "department" in audiences:
+        if "company" in selected:
+            company_result = _push_one_today_highlights(session, "company", report_date)
+        if "department" in selected:
             department_result = _push_one_today_highlights(session, "department", report_date)
-        if "sales" in audiences:
+        if "sales" in selected:
             sales_result = _push_one_today_highlights(session, "sales", report_date)
-    ran = [item for item in (sales_result, department_result) if item is not None]
+    ran = [item for item in (company_result, department_result, sales_result) if item is not None]
     failed = any(item.get("skip_reason") == "push_failed" for item in ran)
     return {
         "success": not failed,
         "report_date": report_date.isoformat() if report_date else None,
         "audience": audience,
+        "company_today_highlights": company_result,
         "sales_today_highlights": sales_result,
         "department_today_highlights": department_result,
     }

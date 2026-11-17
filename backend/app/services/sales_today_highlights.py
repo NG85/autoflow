@@ -17,7 +17,12 @@ from sqlmodel import Session, select
 from app.models.crm_accounts import CRMAccount
 from app.models.crm_opportunities import CRMOpportunity
 from app.models.crm_skill_extract_items import CRMSkillExtractItem
-from app.platforms.constants import PLATFORM_DINGTALK, PLATFORM_FEISHU, PLATFORM_LARK
+from app.platforms.constants import (
+    PLATFORM_DINGTALK,
+    PLATFORM_FEISHU,
+    PLATFORM_LARK,
+    PLATFORM_WECOM,
+)
 from app.services.notification_delivery_preference import filter_opted_out_recipients
 from app.services.notification_scene_catalog import (
     SCENE_SALES_DAILY,
@@ -41,8 +46,8 @@ logger = logging.getLogger(__name__)
 SUBJECT_USER = "USER"
 AUDIENCE_SALES = "sales"
 STATUS_SUPERSEDED = "SUPERSEDED"
-_DECIDED = {"ADOPTED", "REJECTED"}
 ITEM_IMMEDIATE = "IMMEDIATE_ACTION"
+ITEM_KEY_FINDING = "KEY_FINDING"
 ITEM_RISK = "OPEN_RISK"
 ITEM_NEXT_WEEK = "NEXT_WEEK_ACTION_CANDIDATE"
 FRIDAY = 4
@@ -51,17 +56,31 @@ WEEK_FOLLOWUP_LINK_LABEL = "本周已拜访"
 INCOMPLETE_TASK_STATUSES = ("IN_PROGRESS", "PENDING")
 
 # 区块顺序与类型是销售卡合同。标题只从 card_links 快照读取。
-# 快照 title：immediate_today=立即处理，open_risks=关键发现，next_week_confirm=下周待确认。
-# 旧快照里的「商机风险」「建议关注」仍按「关键发现」展示。
+# 快照 title：immediate_today=立即处理，open_risks / key_findings=关键发现，next_week_confirm=下周待确认。
+# 关键发现的当前类型是 KEY_FINDING。旧行 OPEN_RISK 仍进同一区块。
+# 新快照 key 是 key_findings。旧快照 key 仍是 open_risks，标题「商机风险」「建议关注」
+# 和 key_findings 合成同一个 open_risks 区块，并按「关键发现」展示。
 # 折进团队卡时小节标题固定为「我的立即处理」，和团队块区分。
 SALES_CARD_TITLE = "我的今日重点"
 EMBEDDED_PERSONAL_TITLE = "我的立即处理"
-SECTION_ORDER: tuple[tuple[str, str], ...] = (
-    ("immediate_today", ITEM_IMMEDIATE),
-    ("open_risks", ITEM_RISK),
-    ("next_week_confirm", ITEM_NEXT_WEEK),
+# 每个区块接受的 item_type。第一项是当前类型，后面是仍要读的旧类型。
+SECTION_ORDER: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("immediate_today", (ITEM_IMMEDIATE,)),
+    ("open_risks", (ITEM_KEY_FINDING, ITEM_RISK)),
+    ("next_week_confirm", (ITEM_NEXT_WEEK,)),
 )
-SECTION_KEYS = {key: item_type for key, item_type in SECTION_ORDER}
+SECTION_KEYS = {key: types[0] for key, types in SECTION_ORDER}
+_ITEM_TYPE_SECTION = {
+    item_type: key for key, types in SECTION_ORDER for item_type in types
+}
+_OPEN_RISKS_TYPES = frozenset(dict(SECTION_ORDER)["open_risks"])
+# 抽取快照上的 card key → 今日重点区块。key_findings 与 open_risks 是同一块。
+_CARD_KEY_SECTION = {
+    "immediate_today": "immediate_today",
+    "open_risks": "open_risks",
+    "key_findings": "open_risks",
+    "next_week_confirm": "next_week_confirm",
+}
 _SECTION_TITLE_RENAMES = {
     "open_risks": {
         "商机风险": "关键发现",
@@ -160,11 +179,11 @@ def _include_row(row: Any, *, friday: bool) -> bool:
     item_type = _text(_row_value(row, "item_type"))
     if item_type == ITEM_NEXT_WEEK and not friday:
         return False
-    if item_type == ITEM_RISK and not _keep_risk(_payload(row)):
+    if item_type in _OPEN_RISKS_TYPES and not _keep_risk(_payload(row)):
         return False
     if item_type == ITEM_IMMEDIATE and not _bound_task_id(row):
         return False
-    return item_type in {ITEM_IMMEDIATE, ITEM_RISK, ITEM_NEXT_WEEK}
+    return item_type in _ITEM_TYPE_SECTION
 
 
 def _keep_risk(payload: Mapping[str, Any]) -> bool:
@@ -175,13 +194,24 @@ def _keep_risk(payload: Mapping[str, Any]) -> bool:
 
 
 def _snapshot_titles(rows: Sequence[Any]) -> dict[str, str]:
-    titles: dict[str, str] = {}
+    """按区块取标题。同一块里 key_findings 优先于旧的 open_risks。"""
+    found: dict[str, str] = {}
     for row in rows:
         for spec in _card_link_specs(row):
-            key = _text(spec.get("key"))
+            raw_key = _text(spec.get("key"))
             title = _text(spec.get("title"))
-            if key in SECTION_KEYS and title and key not in titles:
-                titles[key] = _SECTION_TITLE_RENAMES.get(key, {}).get(title, title)
+            if raw_key in _CARD_KEY_SECTION and title and raw_key not in found:
+                found[raw_key] = title
+    titles: dict[str, str] = {}
+    for section in SECTION_KEYS:
+        renames = _SECTION_TITLE_RENAMES.get(section, {})
+        raw = ""
+        if section == "open_risks":
+            raw = found.get("key_findings") or found.get("open_risks") or ""
+        else:
+            raw = found.get(section) or ""
+        if raw:
+            titles[section] = renames.get(raw, raw)
     return titles
 
 
@@ -250,49 +280,13 @@ def _stamp_key(row: Any) -> tuple[str, str]:
     return (_text(stamp), _text(_row_value(row, "unique_id")))
 
 
-def _copy_immediate(row: Any) -> dict[str, Any]:
-    if isinstance(row, Mapping):
-        return dict(row)
-    names = (
-        "unique_id",
-        "subject_type",
-        "subject_id",
-        "audience",
-        "status",
-        "is_deleted",
-        "item_type",
-        "extract_key",
-        "account_id",
-        "opportunity_id",
-        "card_links",
-        "payload",
-        "reject_reason",
-        "adopted_todo_id",
-        "feedback",
-        "feedback_comment",
-        "feedback_at",
-        "created_at",
-        "updated_at",
-    )
-    return {name: getattr(row, name, None) for name in names}
-
-
 def _prefer_extract(group: Sequence[Any]) -> Any:
-    """已决定的行留下 unique_id 和赞踩、采纳。新行只替换正文。"""
-    ordered = sorted(group, key=_stamp_key)
-    latest = ordered[-1]
-    if _text(_row_value(latest, "status")).upper() in _DECIDED:
-        return latest
-    decided = [row for row in ordered if _text(_row_value(row, "status")).upper() in _DECIDED]
-    if not decided:
-        return latest
-    data = _copy_immediate(decided[-1])
-    data["payload"] = _row_value(latest, "payload")
-    return data
+    """同一抽取键只留最新一行。赞踩和采纳留在写出它们的那一行。"""
+    return sorted(group, key=_stamp_key)[-1]
 
 
 def _collapse_extracts(rows: Sequence[Any]) -> list[Any]:
-    """同一类型、同一抽取键只留一条，避免重抽后的新行盖住已有决定。"""
+    """同一类型、同一抽取键只留最新一行。"""
     grouped: dict[str, list[Any]] = {}
     for row in rows or []:
         item_type = _text(_row_value(row, "item_type"))
@@ -312,22 +306,30 @@ def assemble_sales_highlights(
     titles = _snapshot_titles(kept)
     name_map = names or {"accounts": {}, "opportunities": {}}
     day = report_date.isoformat()
-    by_type: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    by_section: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in kept:
-        by_type[_text(_row_value(row, "item_type"))].append(_serialize_item(row, name_map))
+        section_key = _ITEM_TYPE_SECTION.get(_text(_row_value(row, "item_type")))
+        if section_key:
+            by_section[section_key].append(_serialize_item(row, name_map))
 
     sections: list[dict[str, Any]] = []
-    for key, item_type in SECTION_ORDER:
-        items = by_type.get(item_type) or []
+    for key, accepted in SECTION_ORDER:
+        items = by_section.get(key) or []
         if not items:
             continue
         items.sort(key=_sort_key)
         title = titles.get(key) or key
+        present = [
+            item_type
+            for item_type in accepted
+            if any(item.get("item_type") == item_type for item in items)
+        ]
         sections.append(
             {
                 "key": key,
                 "title": title,
-                "item_type": item_type,
+                "item_type": present[0] if len(present) == 1 else accepted[0],
+                "item_types": present,
                 "items": items,
                 "url": build_sales_today_highlights_url(day, key),
             }
@@ -354,7 +356,7 @@ def highlights_payload(assembled: Mapping[str, Any], *, subject_id: str) -> dict
                 "title": section.get("title") or key,
                 "count": len(full_items),
                 "url": url or None,
-                "item_types": [section.get("item_type")],
+                "item_types": list(section.get("item_types") or [section.get("item_type")]),
             }
         )
     return {
@@ -753,13 +755,15 @@ def _group_by_subject(rows: Sequence[Any]) -> dict[str, list[Any]]:
 
 
 def _recipient_from_profile(profile: Any) -> Optional[dict[str, Any]]:
+    from app.models.user_oauth_account import oauth_push_receive_id
+
     if profile is None or not getattr(profile, "is_active", True):
         return None
     user_id = getattr(profile, "user_id", None)
     if not user_id:
         return None
     account = getattr(profile, "oauth_user", None)
-    open_id = _text(getattr(account, "open_id", None))
+    open_id = oauth_push_receive_id(account)
     platform = _text(getattr(account, "provider", None))
     if not open_id or not platform:
         return None
@@ -773,6 +777,37 @@ def _recipient_from_profile(profile: Any) -> Optional[dict[str, Any]]:
         "user_id": str(user_id),
         "userId": str(user_id),
     }
+
+
+def _demo_cc_sales_highlight(
+    assembled: Mapping[str, Any],
+    *,
+    owner_name: str = "",
+) -> None:
+    """演示旁路：每张销售今日重点卡抄一次。"""
+    from app.services.platform_notification_service import platform_notification_service
+    from app.services.today_highlights_wecom import build_sales_wecom_template_card
+
+    title = f"{SALES_CARD_TITLE}｜{assembled.get('report_date')}"
+    body = render_card_markdown(assembled)
+    links = render_card_links(assembled)
+    buttons = card_action_buttons(assembled, owner_name=owner_name)
+    feishu_card = platform_notification_service.build_feishu_markdown_card(
+        body or links,
+        title=title,
+        footer=links if body and links else None,
+        footer_text_size="normal",
+        footer_buttons=buttons or None,
+    )
+    platform_notification_service.mirror_demo_cc(
+        source="sales today highlights",
+        feishu_card=feishu_card,
+        wecom_card=build_sales_wecom_template_card(assembled, owner_name=owner_name),
+        markdown_text=render_dingtalk_markdown(
+            assembled, title=title, owner_name=owner_name
+        ),
+        title=title,
+    )
 
 
 def deliver_highlight_card(
@@ -811,12 +846,49 @@ def deliver_highlight_card(
             "failed_recipients": failed,
         }
 
+    if platform == PLATFORM_WECOM:
+        from app.services.today_highlights_wecom import build_sales_wecom_template_card
+
+        card = build_sales_wecom_template_card(
+            assembled,
+            owner_name=_text(recipient.get("name")),
+        )
+        tokens = platform_notification_service._get_platform_tokens([platform])
+        if platform not in tokens:
+            return {"success": False, "message": "wecom push is not configured"}
+        chatid = _text(recipient.get("open_id"))
+        if not chatid:
+            return {"success": False, "message": "recipient has no oauth open_id"}
+        try:
+            platform_notification_service._send_message(
+                chatid,
+                tokens[platform],
+                card,
+                platform,
+                receive_id_type=_text(recipient.get("receive_id_type")) or "open_id",
+                msg_type="template_card",
+            )
+            return {"success": True, "message": None, "failed_recipients": []}
+        except Exception as exc:
+            return {
+                "success": False,
+                "message": str(exc),
+                "failed_recipients": [
+                    {
+                        "open_id": chatid,
+                        "name": recipient.get("name"),
+                        "platform": platform,
+                        "error": str(exc),
+                    }
+                ],
+            }
+
     text = render_dingtalk_markdown(
         assembled,
         title=title,
         owner_name=_text(recipient.get("name")),
     )
-    if platform == PLATFORM_DINGTALK or platform:
+    if platform == PLATFORM_DINGTALK:
         return platform_notification_service.send_platform_notification(
             db_session,
             recipient_user_id=_text(recipient.get("user_id")),
@@ -914,6 +986,7 @@ def handle_sales_today_highlights(
             items.append(item)
             continue
         recipients_count += 1
+        _demo_cc_sales_highlight(assembled, owner_name=_text(kept[0].get("name")))
         sent = deliver_highlight_card(db_session, kept[0], assembled)
         if sent.get("success"):
             success_count += 1

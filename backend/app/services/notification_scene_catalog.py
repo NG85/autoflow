@@ -143,7 +143,7 @@ SCENES: Dict[str, SceneSpec] = {
         routing=ROUTING_ELIGIBLE_SET,
         preference=PREF_ELIGIBLE_OPT_OUT,
         variants=(VARIANT_TODAY_HIGHLIGHTS,),
-        description="report_push_policy.recipient_user_ids 指定接收人；与公司日报名单独立，无 OAuth receive",
+        description="优先 report_push_policy.recipient_user_ids；未配置时走公司日报 notification:daily_report_company:receive",
     ),
     SCENE_COMPANY_WEEKLY: SceneSpec(
         scene=SCENE_COMPANY_WEEKLY,

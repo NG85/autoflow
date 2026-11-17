@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 from app.api.routes.notification_schemas import PlatformNotificationPushRequest
-from app.platforms.constants import PLATFORM_DINGTALK, PLATFORM_FEISHU
+from app.platforms.constants import PLATFORM_DINGTALK, PLATFORM_FEISHU, PLATFORM_WECOM
 from app.services.platform_notification_service import PlatformNotificationService
 
 
@@ -211,6 +211,45 @@ def test_send_platform_notification_markdown_uses_text_on_dingtalk():
     args, kwargs = send_msg.call_args
     assert args[2] == "**md**"
     assert kwargs["msg_type"] == "text"
+
+
+def test_send_platform_notification_markdown_with_links_uses_template_card_on_wecom():
+    service = PlatformNotificationService()
+    user_id = str(uuid4())
+    profile = MagicMock()
+    profile.oauth_user.open_id = "GaoNa"
+    profile.oauth_user.provider = PLATFORM_WECOM
+    db = MagicMock()
+
+    with (
+        patch(
+            "app.services.platform_notification_service.user_profile_repo.get_by_user_id",
+            return_value=profile,
+        ),
+        patch(
+            "app.services.platform_notification_service.wecom_push_client.is_configured",
+            return_value=True,
+        ),
+        patch.object(service, "_get_tenant_access_token", return_value="hub-token"),
+        patch.object(service, "_send_message") as send_msg,
+    ):
+        result = service.send_platform_notification(
+            db,
+            recipient_user_id=user_id,
+            content="日报摘要\n[打开报告](https://app.example/report/1)\n正文说明",
+            content_type="markdown",
+            title="公司日报",
+        )
+
+    assert result["success"] is True
+    assert result["delivery"] == "template_card"
+    args, kwargs = send_msg.call_args
+    assert kwargs["msg_type"] == "template_card"
+    card = args[2]
+    assert card["card_type"] == "text_notice"
+    assert card["main_title"]["title"] == "公司日报"
+    assert card["jump_list"][0]["url"] == "https://app.example/report/1"
+    assert "[" not in (card.get("sub_title_text") or "")
 
 
 def test_send_platform_notification_text_post_delivery_on_feishu():

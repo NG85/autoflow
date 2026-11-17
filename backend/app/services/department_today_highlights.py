@@ -19,7 +19,12 @@ from sqlmodel import Session, select
 from app.models.crm_accounts import CRMAccount
 from app.models.crm_opportunities import CRMOpportunity
 from app.models.crm_skill_extract_items import CRMSkillExtractItem
-from app.platforms.constants import PLATFORM_DINGTALK, PLATFORM_FEISHU, PLATFORM_LARK
+from app.platforms.constants import (
+    PLATFORM_DINGTALK,
+    PLATFORM_FEISHU,
+    PLATFORM_LARK,
+    PLATFORM_WECOM,
+)
 from app.services.leader_insight_reports import (
     load_leader_insight_reports,
     load_leader_insight_sections,
@@ -58,9 +63,6 @@ logger = logging.getLogger(__name__)
 SUBJECT_USER = "USER"
 AUDIENCE_LEADER = "leader"
 STATUS_SUPERSEDED = "SUPERSEDED"
-STATUS_ADOPTED = "ADOPTED"
-STATUS_REJECTED = "REJECTED"
-_DECIDED = {STATUS_ADOPTED, STATUS_REJECTED}
 ITEM_INTERVENTION = "TODAY_INTERVENTION"
 SECTION_KEY = "leader_intervene"
 INTERVENTION_TITLE = "团队今日需介入"
@@ -182,10 +184,6 @@ def _serialize_item(row: Any, names: Mapping[str, Mapping[str, str]]) -> dict[st
     }
 
 
-def _row_status(row: Any) -> str:
-    return _text(_row_value(row, "status")).upper()
-
-
 def _row_sort_key(row: Any) -> tuple[str, str]:
     stamp = _row_value(row, "updated_at") or _row_value(row, "created_at")
     if hasattr(stamp, "isoformat"):
@@ -193,55 +191,13 @@ def _row_sort_key(row: Any) -> tuple[str, str]:
     return (_text(stamp), _text(_row_value(row, "unique_id")))
 
 
-def _row_dict(row: Any) -> dict[str, Any]:
-    if isinstance(row, Mapping):
-        return dict(row)
-    names = (
-        "unique_id",
-        "subject_type",
-        "subject_id",
-        "audience",
-        "status",
-        "is_deleted",
-        "item_type",
-        "extract_key",
-        "account_id",
-        "opportunity_id",
-        "card_links",
-        "payload",
-        "report_date",
-        "reject_reason",
-        "adopted_todo_id",
-        "feedback",
-        "feedback_comment",
-        "feedback_at",
-        "feedback_user_id",
-        "created_at",
-        "updated_at",
-    )
-    return {name: getattr(row, name, None) for name in names}
-
-
-def _with_latest_body(decided: Any, latest: Any) -> dict[str, Any]:
-    """身份和决定留在不会被作废的旧行上，正文用新行。"""
-    data = _row_dict(decided)
-    data["payload"] = _row_value(latest, "payload")
-    return data
-
-
 def _prefer_one(group: Sequence[Any]) -> Any:
-    ordered = sorted(group, key=_row_sort_key)
-    latest = ordered[-1]
-    if _row_status(latest) in _DECIDED:
-        return latest
-    decided = [row for row in ordered if _row_status(row) in _DECIDED]
-    if not decided:
-        return latest
-    return _with_latest_body(decided[-1], latest)
+    """同一抽取键只留最新一行。这一行的采纳和赞踩不从旧行带过来。"""
+    return sorted(group, key=_row_sort_key)[-1]
 
 
 def _collapse_rows(rows: Sequence[Any]) -> list[Any]:
-    """同一天、同一负责人、同一抽取键只留一条。重抽产生的新行接上已有决定。"""
+    """同一天、同一负责人、同一抽取键只留最新一行。"""
     from app.services.subject_interaction import intervention_anchor
 
     grouped: dict[str, list[Any]] = {}
@@ -1018,7 +974,7 @@ def highlights_for_leader(
         try:
             from app.services.leader_intervention_actions import attach_item_interactions
 
-            attach_item_interactions(session, [payload], report_date)
+            attach_item_interactions(session, [payload])
         except Exception as exc:
             logger.warning("拼今日需介入评论和任务失败: %s", exc)
     return payload
@@ -1040,6 +996,40 @@ def _push_recipient(raw: Mapping[str, Any]) -> Optional[dict[str, Any]]:
         "user_id": user_id,
         "userId": user_id,
     }
+
+
+
+def _demo_cc_department_highlight(
+    assembled: Mapping[str, Any],
+    *,
+    owner_name: str = "",
+) -> None:
+    """演示旁路：每张团队今日重点卡抄一次。"""
+    from app.services.platform_notification_service import platform_notification_service
+    from app.services.today_highlights_wecom import build_team_wecom_template_card
+
+    day = assembled.get("report_date")
+    title = f"{TEAM_CARD_TITLE}｜{day}"
+    sections = render_card_sections(assembled, owner_name=owner_name)
+    body = sections[0] if sections else ""
+    extra = sections[1:]
+    buttons = card_footer_buttons(assembled, owner_name=owner_name)
+    feishu_card = platform_notification_service.build_feishu_markdown_card(
+        body,
+        title=title,
+        extra_sections=extra or None,
+        divide_extra_sections=bool(extra),
+        footer_buttons=buttons or None,
+    )
+    platform_notification_service.mirror_demo_cc(
+        source="department today highlights",
+        feishu_card=feishu_card,
+        wecom_card=build_team_wecom_template_card(assembled, owner_name=owner_name),
+        markdown_text=render_dingtalk_markdown(
+            assembled, title=title, owner_name=owner_name
+        ),
+        title=title,
+    )
 
 
 def deliver_department_highlight_card(
@@ -1081,8 +1071,42 @@ def deliver_department_highlight_card(
             "failed_recipients": failed,
         }
 
+    if platform == PLATFORM_WECOM:
+        from app.services.today_highlights_wecom import build_team_wecom_template_card
+
+        card = build_team_wecom_template_card(assembled, owner_name=owner_name)
+        tokens = platform_notification_service._get_platform_tokens([platform])
+        if platform not in tokens:
+            return {"success": False, "message": "wecom push is not configured"}
+        chatid = _text(recipient.get("open_id"))
+        if not chatid:
+            return {"success": False, "message": "recipient has no oauth open_id"}
+        try:
+            platform_notification_service._send_message(
+                chatid,
+                tokens[platform],
+                card,
+                platform,
+                receive_id_type=_text(recipient.get("receive_id_type")) or "open_id",
+                msg_type="template_card",
+            )
+            return {"success": True, "message": None, "failed_recipients": []}
+        except Exception as exc:
+            return {
+                "success": False,
+                "message": str(exc),
+                "failed_recipients": [
+                    {
+                        "open_id": chatid,
+                        "name": recipient.get("name"),
+                        "platform": platform,
+                        "error": str(exc),
+                    }
+                ],
+            }
+
     text = render_dingtalk_markdown(assembled, title=title, owner_name=owner_name)
-    if platform == PLATFORM_DINGTALK or platform:
+    if platform == PLATFORM_DINGTALK:
         return platform_notification_service.send_platform_notification(
             db_session,
             recipient_user_id=_text(recipient.get("user_id")),
@@ -1336,6 +1360,10 @@ def handle_department_today_highlights(
         if reports:
             card["report_entries"] = reports
         recipients_count += 1
+        _demo_cc_department_highlight(
+            card,
+            owner_name=_text(bucket["recipient"].get("name")),
+        )
         sent = deliver_department_highlight_card(db_session, bucket["recipient"], card)
         department_ids = list(card.get("department_ids") or [])
         item = {

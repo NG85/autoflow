@@ -9,7 +9,13 @@ from uuid import UUID
 from sqlmodel import Session
 
 from app.models.notification_cc_rule import EVENT_TYPE_VISIT_RECORD_CARD
-from app.platforms.constants import PLATFORM_DINGTALK, PLATFORM_FEISHU, PLATFORM_LARK
+from app.platforms.constants import (
+    PLATFORM_DINGTALK,
+    PLATFORM_FEISHU,
+    PLATFORM_LARK,
+    PLATFORM_WECOM,
+)
+from app.models.user_oauth_account import oauth_push_receive_id
 from app.repositories.notification_cc_rule import notification_cc_rule_repo
 from app.repositories.user_department_relation import user_department_relation_repo
 from app.repositories.user_profile import user_profile_repo
@@ -18,7 +24,9 @@ logger = logging.getLogger(__name__)
 
 CC_SCOPE_GLOBAL = "global"
 
-SUPPORTED_PLATFORMS = frozenset({PLATFORM_FEISHU, PLATFORM_LARK, PLATFORM_DINGTALK})
+SUPPORTED_PLATFORMS = frozenset(
+    {PLATFORM_FEISHU, PLATFORM_LARK, PLATFORM_DINGTALK, PLATFORM_WECOM}
+)
 
 
 def _profile_to_recipient(
@@ -33,7 +41,7 @@ def _profile_to_recipient(
     if not oauth_account:
         return None
     platform = oauth_account.provider
-    open_id = oauth_account.open_id
+    open_id = oauth_push_receive_id(oauth_account)
     if platform not in SUPPORTED_PLATFORMS or not open_id:
         return None
     recipient = {

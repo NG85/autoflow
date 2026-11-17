@@ -52,4 +52,7 @@
 | `2026-11-10-visit-recap-card-default-color.md` | 2026-11-10，拜访复盘卡片头使用默认蓝色 |
 | `2026-11-10-sales-highlights-key-findings.md` | 2026-11-10，销售今日重点把建议关注改成关键发现 |
 | `2026-11-10-sales-immediate-status-null.md` | 2026-11-10，立即处理一对一绑定任务且不回传状态 |
+| `2026-11-11-wecom-bot-push.md` | 2026-11-11，企微经 Sia bot 推送个人消息 |
 | `2026-11-12-visit-recap-audience.md` | 2026-11-12，拜访复盘谁能打开页面 |
+| `2026-11-16-sales-highlights-key-finding-type.md` | 2026-11-16，销售今日重点读取关键发现类型，tab 仍是 open_risks |
+| `2026-11-17-ops-demo-cc.md` | 2026-11-17，运维抄送扩展与演示旁路抄送 |
