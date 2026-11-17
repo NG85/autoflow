@@ -998,6 +998,40 @@ def _push_recipient(raw: Mapping[str, Any]) -> Optional[dict[str, Any]]:
     }
 
 
+
+def _demo_cc_department_highlight(
+    assembled: Mapping[str, Any],
+    *,
+    owner_name: str = "",
+) -> None:
+    """演示旁路：每张团队今日重点卡抄一次。"""
+    from app.services.platform_notification_service import platform_notification_service
+    from app.services.today_highlights_wecom import build_team_wecom_template_card
+
+    day = assembled.get("report_date")
+    title = f"{TEAM_CARD_TITLE}｜{day}"
+    sections = render_card_sections(assembled, owner_name=owner_name)
+    body = sections[0] if sections else ""
+    extra = sections[1:]
+    buttons = card_footer_buttons(assembled, owner_name=owner_name)
+    feishu_card = platform_notification_service.build_feishu_markdown_card(
+        body,
+        title=title,
+        extra_sections=extra or None,
+        divide_extra_sections=bool(extra),
+        footer_buttons=buttons or None,
+    )
+    platform_notification_service.mirror_demo_cc(
+        source="department today highlights",
+        feishu_card=feishu_card,
+        wecom_card=build_team_wecom_template_card(assembled, owner_name=owner_name),
+        markdown_text=render_dingtalk_markdown(
+            assembled, title=title, owner_name=owner_name
+        ),
+        title=title,
+    )
+
+
 def deliver_department_highlight_card(
     db_session: Session,
     recipient: Mapping[str, Any],
@@ -1326,6 +1360,10 @@ def handle_department_today_highlights(
         if reports:
             card["report_entries"] = reports
         recipients_count += 1
+        _demo_cc_department_highlight(
+            card,
+            owner_name=_text(bucket["recipient"].get("name")),
+        )
         sent = deliver_department_highlight_card(db_session, bucket["recipient"], card)
         department_ids = list(card.get("department_ids") or [])
         item = {

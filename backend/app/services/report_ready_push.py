@@ -15,6 +15,7 @@ from app.models.crm_weekly_followup_summary import (
 )
 from app.services.notification_scene_catalog import (
     SCENE_COMPANY_WEEKLY,
+    SCENE_DEPARTMENT_WEEKLY,
     VARIANT_VISIT_REPORT,
     normalize_scene,
 )
@@ -226,7 +227,17 @@ def handle_report_ready(
             delivery=delivery,
             recipients=recipients,
             groups=groups,
-            ops_cc_source=None if placeholder else ("company weekly report" if company else None),
+            ops_cc_scene=(
+                None
+                if placeholder
+                else (SCENE_COMPANY_WEEKLY if company else SCENE_DEPARTMENT_WEEKLY)
+            ),
+            ops_cc_variant=None if placeholder else VARIANT_VISIT_REPORT,
+            demo_cc_source=(
+                None
+                if placeholder
+                else ("company weekly report" if company else "department weekly report")
+            ),
         )
         success_count += int(sent["success_count"] or 0)
         recipients_count += int(sent["recipients_count"] or 0)

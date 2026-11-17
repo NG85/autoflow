@@ -84,6 +84,34 @@ def test_wecom_send_markdown_omits_authorization_when_token_empty(monkeypatch):
     assert "Authorization" not in post.call_args.kwargs["headers"]
 
 
+def test_wecom_explicit_base_url_does_not_fall_back_to_settings(monkeypatch):
+    monkeypatch.setattr(
+        "app.platforms.wecom.push_client.settings.WECOM_PUSH_BASE_URL",
+        "https://tenant-sia.example",
+    )
+    monkeypatch.setattr(
+        "app.platforms.wecom.push_client.settings.WECOM_PUSH_TOKEN",
+        "tenant-token",
+    )
+    client = WeComPushClient()
+    assert client.is_configured(base_url="") is False
+    assert client.is_configured(base_url="https://ops-sia.example") is True
+
+    fake_resp = MagicMock()
+    fake_resp.status_code = 200
+    fake_resp.content = b'{"ok":true}'
+    fake_resp.json.return_value = {"ok": True}
+    with patch("app.platforms.wecom.push_client.requests.post", return_value=fake_resp) as post:
+        client.send_markdown(
+            "ZhangSan",
+            "ops",
+            token="ops-token",
+            base_url="https://ops-sia.example",
+        )
+    assert post.call_args.args[0] == "https://ops-sia.example/api/v1/webhook/wecom/push"
+    assert post.call_args.kwargs["headers"]["Authorization"] == "Bearer ops-token"
+
+
 def test_wecom_send_message_rejects_interactive_cards():
     client = WeComPushClient()
     with pytest.raises(WeComPushError, match="interactive"):
