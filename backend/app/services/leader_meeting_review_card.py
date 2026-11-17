@@ -379,6 +379,29 @@ def build_leader_meeting_wecom_template_card(
     )
 
 
+
+def _demo_cc_leader_meeting_review(assembled: Mapping[str, Any]) -> None:
+    """演示旁路：例会复盘卡整次推送只抄一次。"""
+    from app.services.platform_notification_service import platform_notification_service
+
+    title = f"例会复盘｜{assembled.get('report_date')}"
+    body, report_link, buttons = feishu_card_parts(assembled)
+    feishu_card = platform_notification_service.build_feishu_markdown_card(
+        body,
+        title=title,
+        footer=report_link or None,
+        footer_text_size="normal",
+        footer_buttons=buttons or None,
+    )
+    platform_notification_service.mirror_demo_cc(
+        source="leader meeting review card",
+        feishu_card=feishu_card,
+        wecom_card=build_leader_meeting_wecom_template_card(assembled, title=title),
+        markdown_text=render_dingtalk_markdown(assembled, title=title),
+        title=title,
+    )
+
+
 def deliver_card(db_session: Session, recipient: Mapping[str, Any], assembled: Mapping[str, Any]) -> dict[str, Any]:
     """发给上传人本人。不进群，不计费。"""
     from app.services.platform_notification_service import platform_notification_service
@@ -538,6 +561,7 @@ def handle_leader_meeting_review_card(
 
     pushed_any = False
     saw_send_failed = False
+    _demo_cc_leader_meeting_review(assembled)
     for target in _push_targets(owner, creator):
         profile = user_profile_repo.get_by_oauth_user_id(db_session, target)
         recipient = _recipient_from_profile(profile)

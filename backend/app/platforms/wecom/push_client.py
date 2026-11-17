@@ -27,12 +27,18 @@ class WeComPushError(RuntimeError):
 class WeComPushClient:
     """调 Sia 已封装的企微 bot 推送接口。"""
 
-    def is_configured(self) -> bool:
-        # Sia：SYNAPSE_TASK_CALLBACK_TOKEN 未配置时放行；本侧只要求 BASE_URL。
-        return bool((getattr(settings, "WECOM_PUSH_BASE_URL", "") or "").strip())
+    def _resolve_base_url(self, base_url: Optional[str] = None) -> str:
+        """base_url 显式传入时不回落 settings（运维/演示旁路用固定 Sia）。"""
+        if base_url is not None:
+            return (base_url or "").strip()
+        return (getattr(settings, "WECOM_PUSH_BASE_URL", "") or "").strip()
 
-    def push_url(self) -> str:
-        base = (getattr(settings, "WECOM_PUSH_BASE_URL", "") or "").strip().rstrip("/") + "/"
+    def is_configured(self, *, base_url: Optional[str] = None) -> bool:
+        # Sia：SYNAPSE_TASK_CALLBACK_TOKEN 未配置时放行；本侧只要求 BASE_URL。
+        return bool(self._resolve_base_url(base_url))
+
+    def push_url(self, *, base_url: Optional[str] = None) -> str:
+        base = self._resolve_base_url(base_url).rstrip("/") + "/"
         return urljoin(base, _PUSH_PATH.lstrip("/"))
 
     def _auth_headers(self, token: Optional[str] = None) -> Dict[str, str]:
@@ -43,11 +49,17 @@ class WeComPushClient:
             headers["Authorization"] = f"Bearer {auth}"
         return headers
 
-    def _post_push(self, payload: Dict[str, Any], *, token: Optional[str] = None) -> Dict[str, Any]:
-        if not self.is_configured():
+    def _post_push(
+        self,
+        payload: Dict[str, Any],
+        *,
+        token: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        if not self.is_configured(base_url=base_url):
             raise WeComPushError("wecom push is not configured")
         chatid = str(payload.get("chatid") or "").strip()
-        url = self.push_url()
+        url = self.push_url(base_url=base_url)
         try:
             resp = requests.post(
                 url,
@@ -73,13 +85,21 @@ class WeComPushClient:
                 f"wecom push rejected: {data.get('message') or data.get('error') or data}"
             )
         logger.info(
-            "wecom push ok chatid=%s msgtype=%s",
+            "wecom push ok chatid=%s msgtype=%s base=%s",
             chatid,
             payload.get("msgtype"),
+            self._resolve_base_url(base_url) or "-",
         )
         return data if isinstance(data, dict) else {"result": data}
 
-    def send_markdown(self, chatid: str, content: str, *, token: Optional[str] = None) -> Dict[str, Any]:
+    def send_markdown(
+        self,
+        chatid: str,
+        content: str,
+        *,
+        token: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """主动推 markdown。chatid = 企微 userid 或群 id。"""
         target = (chatid or "").strip()
         text = (content or "").strip()
@@ -94,6 +114,7 @@ class WeComPushClient:
                 "markdown": {"content": text},
             },
             token=token,
+            base_url=base_url,
         )
 
     def send_template_card(
@@ -102,6 +123,7 @@ class WeComPushClient:
         template_card: Dict[str, Any],
         *,
         token: Optional[str] = None,
+        base_url: Optional[str] = None,
     ) -> Dict[str, Any]:
         """主动推 template_card。chatid = 企微 userid 或群 id。"""
         target = (chatid or "").strip()
@@ -116,6 +138,7 @@ class WeComPushClient:
                 "template_card": template_card,
             },
             token=token,
+            base_url=base_url,
         )
 
     def send_message(
@@ -126,6 +149,7 @@ class WeComPushClient:
         receive_id_type: str = "open_id",
         *,
         msg_type: str = "text",
+        base_url: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """对接 platform_notification_service._dispatch 签名。"""
@@ -133,13 +157,15 @@ class WeComPushClient:
         if msg_type == "template_card":
             if not isinstance(content, dict):
                 raise WeComPushError("template_card content must be a dict")
-            return self.send_template_card(open_id, content, token=token)
+            return self.send_template_card(
+                open_id, content, token=token, base_url=base_url
+            )
         if msg_type not in ("text", "markdown"):
             raise WeComPushError(
                 f"wecom bot push does not support msg_type={msg_type}"
             )
         text = _coerce_markdown_content(content)
-        return self.send_markdown(open_id, text, token=token)
+        return self.send_markdown(open_id, text, token=token, base_url=base_url)
 
 
 def _coerce_markdown_content(content: Any) -> str:

@@ -220,12 +220,98 @@ def load_department_names(session: Session, rows: Sequence[Any]) -> dict[str, st
     return {_text(key): _text(value) for key, value in found.items() if _text(key) and _text(value)}
 
 
+
+def _ops_cc_company_today_highlights(assembled: Mapping[str, Any]) -> None:
+    """运维旁路：CXO 今日重点整次推送只抄一次（与个人发卡解耦）。"""
+    from app.platforms.constants import PLATFORM_DINGTALK, PLATFORM_FEISHU, PLATFORM_WECOM
+    from app.services.notification_scene_catalog import (
+        SCENE_COMPANY_HIGHLIGHTS,
+        VARIANT_TODAY_HIGHLIGHTS,
+    )
+    from app.services.platform_notification_service import (
+        _parse_ops_cc_provider,
+        ops_cc_scene_allowed,
+        platform_notification_service,
+    )
+
+    if not ops_cc_scene_allowed(SCENE_COMPANY_HIGHLIGHTS, VARIANT_TODAY_HIGHLIGHTS):
+        return
+
+    target_platform, cc_state = _parse_ops_cc_provider()
+    if cc_state != "ok" or not target_platform:
+        return
+
+    day = assembled.get("report_date")
+    title = f"{CXO_CARD_TITLE}｜{day}"
+    try:
+        if target_platform == PLATFORM_FEISHU:
+            body = render_card_markdown(assembled)
+            card = platform_notification_service.build_feishu_markdown_card(body, title=title)
+            platform_notification_service._ops_cc_platform_card(
+                card,
+                scene=SCENE_COMPANY_HIGHLIGHTS,
+                variant=VARIANT_TODAY_HIGHLIGHTS,
+            )
+            return
+        if target_platform == PLATFORM_DINGTALK:
+            body = render_card_markdown(assembled)
+            card = platform_notification_service.build_feishu_markdown_card(body, title=title)
+            text_md = render_dingtalk_markdown(assembled, title=title)
+            platform_notification_service._ops_cc_platform_card(
+                card,
+                scene=SCENE_COMPANY_HIGHLIGHTS,
+                variant=VARIANT_TODAY_HIGHLIGHTS,
+                dingtalk_text=text_md,
+            )
+            return
+        if target_platform == PLATFORM_WECOM:
+            from app.services.today_highlights_wecom import build_cxo_wecom_template_card
+
+            card = build_cxo_wecom_template_card(assembled)
+            platform_notification_service._ops_cc_platform_card(
+                card,
+                scene=SCENE_COMPANY_HIGHLIGHTS,
+                variant=VARIANT_TODAY_HIGHLIGHTS,
+            )
+            return
+        logger.warning(
+            "Ops CC CXO highlights unsupported platform=%s, skip",
+            target_platform,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Ops CC CXO highlights failed scene=%s: %s",
+            SCENE_COMPANY_HIGHLIGHTS,
+            exc,
+            exc_info=True,
+        )
+
+
+def _demo_cc_company_today_highlights(assembled: Mapping[str, Any]) -> None:
+    """演示旁路：CXO 今日重点整次推送只抄一次。"""
+    from app.services.platform_notification_service import platform_notification_service
+    from app.services.today_highlights_wecom import build_cxo_wecom_template_card
+
+    day = assembled.get("report_date")
+    title = f"{CXO_CARD_TITLE}｜{day}"
+    body = render_card_markdown(assembled)
+    platform_notification_service.mirror_demo_cc(
+        source="company today highlights",
+        feishu_card=platform_notification_service.build_feishu_markdown_card(
+            body, title=title
+        ),
+        wecom_card=build_cxo_wecom_template_card(assembled),
+        markdown_text=render_dingtalk_markdown(assembled, title=title),
+        title=title,
+    )
+
+
 def deliver_company_highlight_card(
     db_session: Session,
     recipient: Mapping[str, Any],
     assembled: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """飞书 / Lark 发无模板卡。不抄送，不进群。"""
+    """飞书 / Lark 发自由模板卡。不进部门群；运维/演示抄送在 handle 层一次。"""
     from app.services.platform_notification_service import platform_notification_service
 
     day = assembled.get("report_date")
@@ -349,6 +435,8 @@ def handle_company_today_highlights(
         "sections": sections,
         "report_entries": entries,
     }
+    _ops_cc_company_today_highlights(assembled)
+    _demo_cc_company_today_highlights(assembled)
     success_count = 0
     failed: list[dict[str, Any]] = []
     sent_user_ids: list[str] = []

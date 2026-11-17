@@ -55,3 +55,4 @@
 | `2026-11-11-wecom-bot-push.md` | 2026-11-11，企微经 Sia bot 推送个人消息 |
 | `2026-11-12-visit-recap-audience.md` | 2026-11-12，拜访复盘谁能打开页面 |
 | `2026-11-16-sales-highlights-key-finding-type.md` | 2026-11-16，销售今日重点读取关键发现类型，tab 仍是 open_risks |
+| `2026-11-17-ops-demo-cc.md` | 2026-11-17，运维抄送扩展与演示旁路抄送 |

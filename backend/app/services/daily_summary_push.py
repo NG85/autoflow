@@ -12,6 +12,7 @@ from sqlmodel import Session, select
 from app.models.crm_department_daily_summary import CRMDepartmentDailySummary
 from app.services.notification_scene_catalog import (
     SCENE_COMPANY_DAILY,
+    SCENE_DEPARTMENT_DAILY,
     VARIANT_SUMMARY_MD,
     normalize_scene,
 )
@@ -200,7 +201,17 @@ def handle_daily_summary(
             delivery=delivery,
             recipients=recipients,
             groups=groups,
-            ops_cc_source=None if placeholder else ("company daily report" if company else None),
+            ops_cc_scene=(
+                None
+                if placeholder
+                else (SCENE_COMPANY_DAILY if company else SCENE_DEPARTMENT_DAILY)
+            ),
+            ops_cc_variant=None if placeholder else VARIANT_SUMMARY_MD,
+            demo_cc_source=(
+                None
+                if placeholder
+                else ("company daily report" if company else "department daily report")
+            ),
         )
         success_count += int(sent["success_count"] or 0)
         recipients_count += int(sent["recipients_count"] or 0)

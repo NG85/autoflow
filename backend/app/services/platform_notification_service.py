@@ -137,19 +137,105 @@ def _department_group_entry_matches_notification_type(
     return entry_type == "all" or entry_type == requested
 
 
-def _parse_ops_cc_provider() -> tuple[Optional[str], str]:
+def _parse_cc_provider(provider_raw: Optional[str]) -> tuple[Optional[str], str]:
     """
-    将 OPS_CC_PROVIDER 解析为用于 Ops 抄送的平台常量。
+    将 CC provider 配置解析为平台常量。
     返回 (platform, state)，state 为 disabled | ok | invalid。
     """
-    provider = (getattr(settings, "OPS_CC_PROVIDER", "") or "").strip().lower()
+    provider = (provider_raw or "").strip().lower()
     if provider in ("", "off", "none", "disabled", "false"):
         return None, "disabled"
     if provider in ("feishu", PLATFORM_FEISHU):
         return PLATFORM_FEISHU, "ok"
     if provider in ("dingtalk", PLATFORM_DINGTALK):
         return PLATFORM_DINGTALK, "ok"
+    if provider in ("wecom", "wechat", "weixin", PLATFORM_WECOM):
+        return PLATFORM_WECOM, "ok"
     return None, "invalid"
+
+
+# OPS_CC_SCENES 未配置时的默认白名单（与历史硬编码行为一致）
+OPS_CC_DEFAULT_SCENES: tuple[str, ...] = (
+    "company_daily",
+    "company_weekly",
+    "company_highlights.today_highlights",
+)
+
+
+def _parse_ops_cc_provider() -> tuple[Optional[str], str]:
+    """将 OPS_CC_PROVIDER 解析为用于 Ops 抄送的平台常量。"""
+    return _parse_cc_provider(getattr(settings, "OPS_CC_PROVIDER", None))
+
+
+def _parse_demo_cc_provider() -> tuple[Optional[str], str]:
+    """将 DEMO_CC_PROVIDER 解析为用于演示抄送的平台常量。"""
+    return _parse_cc_provider(getattr(settings, "DEMO_CC_PROVIDER", None))
+
+
+def _parse_ops_cc_scene_entry(raw: str) -> tuple[Optional[str], Optional[str]]:
+    """解析 `scene` 或 `scene.variant`；非法则 (None, None)。"""
+    from app.services.notification_scene_catalog import normalize_scene
+
+    text = (raw or "").strip().lower()
+    if not text:
+        return None, None
+    if "." in text:
+        scene_raw, variant_raw = text.split(".", 1)
+        scene = normalize_scene(scene_raw.strip())
+        variant = variant_raw.strip()
+        if not scene or not variant:
+            return None, None
+        return scene, variant
+    scene = normalize_scene(text)
+    return (scene, None) if scene else (None, None)
+
+
+def _configured_ops_cc_scenes() -> list[tuple[str, Optional[str]]]:
+    raw_items = getattr(settings, "OPS_CC_SCENES", None)
+    if not raw_items:
+        raw_items = list(OPS_CC_DEFAULT_SCENES)
+    out: list[tuple[str, Optional[str]]] = []
+    for item in raw_items:
+        scene, variant = _parse_ops_cc_scene_entry(str(item))
+        if scene:
+            out.append((scene, variant))
+    return out
+
+
+def ops_cc_scene_allowed(scene: Optional[str], variant: Optional[str] = None) -> bool:
+    """OPS_CC_SCENES：配 scene 则该 scene 下所有 variant 放行；配 scene.variant 则精确匹配。"""
+    from app.services.notification_scene_catalog import normalize_scene
+
+    scene_key = normalize_scene(scene)
+    if not scene_key:
+        return False
+    variant_key = (variant or "").strip().lower() or None
+    for cfg_scene, cfg_variant in _configured_ops_cc_scenes():
+        if cfg_scene != scene_key:
+            continue
+        if cfg_variant is None:
+            return True
+        if variant_key and cfg_variant == variant_key:
+            return True
+    return False
+
+
+def _ops_cc_log_source(scene: str, variant: Optional[str] = None) -> str:
+    variant_key = (variant or "").strip()
+    return f"{scene}.{variant_key}" if variant_key else scene
+
+
+def _demo_cc_event_allowed(source: str) -> bool:
+    """DEMO_CC_EVENTS 为空或含 all 时放行；否则按 source 精确匹配（大小写不敏感）。"""
+    events = getattr(settings, "DEMO_CC_EVENTS", None) or []
+    normalized = {
+        str(item).strip().lower()
+        for item in events
+        if item is not None and str(item).strip()
+    }
+    if not normalized or "all" in normalized:
+        return True
+    return (source or "").strip().lower() in normalized
 
 
 # 站点未配置或缺失键时的默认卡片模板 ID（与 default_settings.yml 中 notification.card_templates 一致）
@@ -213,27 +299,243 @@ _DEFAULT_VISIT_RECORD_TEMPLATES: Dict[str, Dict[str, str]] = {
 class PlatformNotificationService:
     """多平台推送服务 - 基于用户档案进行消息推送，支持飞书和Lark"""
 
-    # Ops backdoor allowlist: only CC company-level daily/weekly reports.
-    _OPS_CC_ALLOWED_SOURCES = {"company daily report", "company weekly report"}
-
     # tenant_access_token 有效期约 2 小时（飞书/钉钉文档），Redis 缓存 110 分钟，多进程/多实例共享
     _TOKEN_CACHE_TTL_SECONDS = 110 * 60
+
+    def _cc_platform_card(
+        self,
+        card_content: Dict[str, Any],
+        *,
+        source: str,
+        label: str,
+        target_platform: str,
+        feishu_app_id: Optional[str],
+        feishu_app_secret: Optional[str],
+        feishu_open_ids: Optional[List[str]],
+        feishu_chat_ids: Optional[List[str]],
+        dingtalk_app_id: Optional[str],
+        dingtalk_app_secret: Optional[str],
+        dingtalk_user_ids: Optional[List[str]],
+        dingtalk_chat_ids: Optional[List[str]],
+        dingtalk_text: Optional[str] = None,
+        wecom_user_ids: Optional[List[str]] = None,
+        wecom_chat_ids: Optional[List[str]] = None,
+        wecom_base_url: Optional[str] = None,
+        wecom_token: Optional[str] = None,
+    ) -> None:
+        """
+        共享旁路发送：把同一张卡/文案再发到配置的人或群。
+        失败不影响主流程（仅记录日志）。
+        dingtalk_text 非空时，钉钉改发 Markdown 文本；飞书仍发 card_content。
+        企微：必须显式传 wecom_base_url（固定 Sia，不回落当前环境 WECOM_PUSH_*）；
+        card_content 带 card_type 时发 template_card，否则 dingtalk_text 作 markdown。
+        """
+        success = 0
+        total = 0
+        if target_platform == PLATFORM_FEISHU:
+            open_ids = feishu_open_ids or []
+            chat_ids = feishu_chat_ids or []
+            total = len(open_ids) + len(chat_ids)
+            if total <= 0:
+                return
+
+            if not feishu_app_id or not feishu_app_secret:
+                logger.warning(
+                    "%s enabled but missing Feishu app credentials, skip. source=%s",
+                    label,
+                    source,
+                )
+                return
+            token = feishu_client.get_tenant_access_token(
+                app_id=feishu_app_id, app_secret=feishu_app_secret
+            )
+            adapted = rewrite_im_content_urls(card_content, target_platform)
+
+            for oid in open_ids:
+                try:
+                    feishu_client.send_message(
+                        oid,
+                        token,
+                        adapted,
+                        receive_id_type="open_id",
+                        msg_type="interactive",
+                    )
+                    success += 1
+                except Exception as e:
+                    logger.error(
+                        "%s Feishu send failed. source=%s, open_id=%s, error=%s",
+                        label,
+                        source,
+                        oid,
+                        e,
+                    )
+
+            for cid in chat_ids:
+                try:
+                    feishu_client.send_message(
+                        cid,
+                        token,
+                        adapted,
+                        receive_id_type="chat_id",
+                        msg_type="interactive",
+                    )
+                    success += 1
+                except Exception as e:
+                    logger.error(
+                        "%s Feishu send failed. source=%s, chat_id=%s, error=%s",
+                        label,
+                        source,
+                        cid,
+                        e,
+                    )
+        elif target_platform == PLATFORM_DINGTALK:
+            user_ids = dingtalk_user_ids or []
+            chat_ids = dingtalk_chat_ids or []
+            total = len(user_ids) + len(chat_ids)
+            if total <= 0:
+                return
+
+            if not dingtalk_app_id or not dingtalk_app_secret:
+                logger.warning(
+                    "%s enabled but missing DingTalk app credentials, skip. source=%s",
+                    label,
+                    source,
+                )
+                return
+            token = dingtalk_client.get_tenant_access_token(
+                app_id=dingtalk_app_id, app_secret=dingtalk_app_secret
+            )
+            if dingtalk_text is not None:
+                adapted = rewrite_im_content_urls(dingtalk_text, target_platform)
+                cc_msg_type = "text"
+            else:
+                adapted = rewrite_im_content_urls(card_content, target_platform)
+                cc_msg_type = "interactive"
+            for uid in user_ids:
+                try:
+                    dingtalk_client.send_message(
+                        uid,
+                        token,
+                        adapted,
+                        receive_id_type="user_id",
+                        msg_type=cc_msg_type,
+                        robot_code=dingtalk_app_id,
+                    )
+                    success += 1
+                except Exception as e:
+                    logger.error(
+                        "%s DingTalk send failed. source=%s, user_id=%s, error=%s",
+                        label,
+                        source,
+                        uid,
+                        e,
+                    )
+
+            for cid in chat_ids:
+                try:
+                    dingtalk_client.send_message(
+                        cid,
+                        token,
+                        adapted,
+                        receive_id_type="chat_id",
+                        msg_type=cc_msg_type,
+                        robot_code=dingtalk_app_id,
+                    )
+                    success += 1
+                except Exception as e:
+                    logger.error(
+                        "%s DingTalk send failed. source=%s, chat_id=%s, error=%s",
+                        label,
+                        source,
+                        cid,
+                        e,
+                    )
+        elif target_platform == PLATFORM_WECOM:
+            targets = list(wecom_user_ids or []) + list(wecom_chat_ids or [])
+            total = len(targets)
+            if total <= 0:
+                return
+            sia_base = (wecom_base_url or "").strip()
+            if not wecom_push_client.is_configured(base_url=sia_base):
+                logger.warning(
+                    "%s enabled but WeCom Sia BASE_URL missing, skip. source=%s",
+                    label,
+                    source,
+                )
+                return
+            token = (wecom_token or "").strip()
+            use_template_card = isinstance(card_content, dict) and bool(
+                card_content.get("card_type")
+            )
+            if use_template_card:
+                adapted = rewrite_im_content_urls(card_content, target_platform)
+                cc_msg_type = "template_card"
+            elif dingtalk_text is not None:
+                adapted = rewrite_im_content_urls(dingtalk_text, target_platform)
+                cc_msg_type = "markdown"
+            else:
+                logger.warning(
+                    "%s WeCom needs template_card or markdown text, skip. source=%s",
+                    label,
+                    source,
+                )
+                return
+            for chatid in targets:
+                try:
+                    wecom_push_client.send_message(
+                        chatid,
+                        token,
+                        adapted,
+                        receive_id_type="open_id",
+                        msg_type=cc_msg_type,
+                        base_url=sia_base,
+                    )
+                    success += 1
+                except Exception as e:
+                    logger.error(
+                        "%s WeCom send failed. source=%s, chatid=%s, error=%s",
+                        label,
+                        source,
+                        chatid,
+                        e,
+                    )
+        else:
+            logger.warning(
+                "%s unsupported platform=%s, skip. source=%s",
+                label,
+                target_platform,
+                source,
+            )
+            return
+
+        logger.info(
+            "%s done. source=%s, platform=%s, success=%s/%s",
+            label,
+            source,
+            target_platform,
+            success,
+            total,
+        )
 
     def _ops_cc_platform_card(
         self,
         card_content: Dict[str, Any],
         *,
-        source: str,
+        scene: str,
+        variant: Optional[str] = None,
         dingtalk_text: Optional[str] = None,
+        source: Optional[str] = None,
     ) -> None:
         """
-        运维后门：按 OPS_CC_PROVIDER 选择飞书/钉钉卡片形态，抄送到指定接收者。
+        运维抄送：按 OPS_CC_PROVIDER 选择飞书/钉钉/企微形态，抄送到指定接收者。
+        - 白名单由 OPS_CC_SCENES（scene / scene.variant）配置，默认见 OPS_CC_DEFAULT_SCENES
         - 每次事件抄送一次（调用方控制）
         - 失败不影响主流程（仅记录日志）
-        - dingtalk_text 非空时，钉钉改发 Markdown 文本（与公司 Markdown 正推一致）；飞书仍发 card_content
+        - dingtalk_text 非空时，钉钉/企微可发 Markdown；飞书仍发 card_content
         """
+        log_source = source or _ops_cc_log_source(scene, variant)
         try:
-            if source not in self._OPS_CC_ALLOWED_SOURCES:
+            if not ops_cc_scene_allowed(scene, variant):
                 return
 
             target_platform, cc_state = _parse_ops_cc_provider()
@@ -241,107 +543,191 @@ class PlatformNotificationService:
                 return
             if cc_state == "invalid":
                 raw = (getattr(settings, "OPS_CC_PROVIDER", "") or "").strip()
-                logger.warning("Invalid OPS_CC_PROVIDER=%s, skip. source=%s", raw, source)
+                logger.warning(
+                    "Invalid OPS_CC_PROVIDER=%s, skip. scene=%s variant=%s",
+                    raw,
+                    scene,
+                    variant,
+                )
                 return
 
-            success = 0
-            total = 0
-            if target_platform == PLATFORM_FEISHU:
-                open_ids = settings.OPS_CC_FEISHU_OPEN_IDS or []
-                chat_ids = settings.OPS_CC_FEISHU_CHAT_IDS or []
-                total = len(open_ids) + len(chat_ids)
-                if total <= 0:
-                    return
-
-                app_id = settings.OPS_CC_FEISHU_APP_ID
-                app_secret = settings.OPS_CC_FEISHU_APP_SECRET
-                if not app_id or not app_secret:
-                    logger.warning(
-                        "Ops CC enabled but missing Feishu app credentials, skip. source=%s",
-                        source,
-                    )
-                    return
-                token = feishu_client.get_tenant_access_token(app_id=app_id, app_secret=app_secret)
-                adapted = rewrite_im_content_urls(card_content, target_platform)
-
-                for oid in open_ids:
-                    try:
-                        feishu_client.send_message(
-                            oid,
-                            token,
-                            adapted,
-                            receive_id_type="open_id",
-                            msg_type="interactive",
-                        )
-                        success += 1
-                    except Exception as e:
-                        logger.error("Ops CC Feishu send failed. source=%s, open_id=%s, error=%s", source, oid, e)
-
-                for cid in chat_ids:
-                    try:
-                        feishu_client.send_message(
-                            cid,
-                            token,
-                            adapted,
-                            receive_id_type="chat_id",
-                            msg_type="interactive",
-                        )
-                        success += 1
-                    except Exception as e:
-                        logger.error("Ops CC Feishu send failed. source=%s, chat_id=%s, error=%s", source, cid, e)
-            else:
-                user_ids = settings.OPS_CC_DINGTALK_USER_IDS or []
-                chat_ids = settings.OPS_CC_DINGTALK_CHAT_IDS or []
-                total = len(user_ids) + len(chat_ids)
-                if total <= 0:
-                    return
-
-                app_id = settings.OPS_CC_DINGTALK_APP_ID
-                app_secret = settings.OPS_CC_DINGTALK_APP_SECRET
-                if not app_id or not app_secret:
-                    logger.warning(
-                        "Ops CC enabled but missing DingTalk app credentials, skip. source=%s",
-                        source,
-                    )
-                    return
-                token = dingtalk_client.get_tenant_access_token(app_id=app_id, app_secret=app_secret)
-                if dingtalk_text is not None:
-                    adapted = rewrite_im_content_urls(dingtalk_text, target_platform)
-                    cc_msg_type = "text"
-                else:
-                    adapted = rewrite_im_content_urls(card_content, target_platform)
-                    cc_msg_type = "interactive"
-                for uid in user_ids:
-                    try:
-                        dingtalk_client.send_message(
-                            uid,
-                            token,
-                            adapted,
-                            receive_id_type="user_id",
-                            msg_type=cc_msg_type,
-                            robot_code=app_id,
-                        )
-                        success += 1
-                    except Exception as e:
-                        logger.error("Ops CC DingTalk send failed. source=%s, user_id=%s, error=%s", source, uid, e)
-
-                for cid in chat_ids:
-                    try:
-                        dingtalk_client.send_message(
-                            cid,
-                            token,
-                            adapted,
-                            receive_id_type="chat_id",
-                            msg_type=cc_msg_type,
-                            robot_code=app_id,
-                        )
-                        success += 1
-                    except Exception as e:
-                        logger.error("Ops CC DingTalk send failed. source=%s, chat_id=%s, error=%s", source, cid, e)
-
-            logger.info("Ops CC done. source=%s, platform=%s, success=%s/%s", source, target_platform, success, total)
+            self._cc_platform_card(
+                card_content,
+                source=log_source,
+                label="Ops CC",
+                target_platform=target_platform,
+                feishu_app_id=settings.OPS_CC_APP_ID,
+                feishu_app_secret=settings.OPS_CC_APP_SECRET,
+                feishu_open_ids=settings.OPS_CC_USER_IDS,
+                feishu_chat_ids=settings.OPS_CC_CHAT_IDS,
+                dingtalk_app_id=settings.OPS_CC_APP_ID,
+                dingtalk_app_secret=settings.OPS_CC_APP_SECRET,
+                dingtalk_user_ids=settings.OPS_CC_USER_IDS,
+                dingtalk_chat_ids=settings.OPS_CC_CHAT_IDS,
+                dingtalk_text=dingtalk_text,
+                wecom_user_ids=settings.OPS_CC_USER_IDS,
+                wecom_chat_ids=settings.OPS_CC_CHAT_IDS,
+                wecom_base_url=settings.OPS_CC_BASE_URL,
+                wecom_token=settings.OPS_CC_TOKEN,
+            )
         except Exception as e:
-            logger.error("Ops CC unexpected error. source=%s, error=%s", source, e)
+            logger.error(
+                "Ops CC unexpected error. scene=%s variant=%s error=%s",
+                scene,
+                variant,
+                e,
+            )
+
+    def _demo_cc_platform_card(
+        self,
+        card_content: Dict[str, Any],
+        *,
+        source: str,
+        dingtalk_text: Optional[str] = None,
+    ) -> None:
+        """
+        演示抄送：按 DEMO_CC_* 把推送镜像到指定群/人。
+        - 与 OPS_CC_* 配置、白名单完全独立
+        - 不覆盖拜访卡（拜访演示走 department_group_chats）
+        - 失败不影响主流程、不计费
+        """
+        try:
+            if not _demo_cc_event_allowed(source):
+                return
+
+            target_platform, cc_state = _parse_demo_cc_provider()
+            if cc_state == "disabled":
+                return
+            if cc_state == "invalid":
+                raw = (getattr(settings, "DEMO_CC_PROVIDER", "") or "").strip()
+                logger.warning("Invalid DEMO_CC_PROVIDER=%s, skip. source=%s", raw, source)
+                return
+
+            self._cc_platform_card(
+                card_content,
+                source=source,
+                label="Demo CC",
+                target_platform=target_platform,
+                feishu_app_id=settings.DEMO_CC_APP_ID,
+                feishu_app_secret=settings.DEMO_CC_APP_SECRET,
+                feishu_open_ids=settings.DEMO_CC_USER_IDS,
+                feishu_chat_ids=settings.DEMO_CC_CHAT_IDS,
+                dingtalk_app_id=settings.DEMO_CC_APP_ID,
+                dingtalk_app_secret=settings.DEMO_CC_APP_SECRET,
+                dingtalk_user_ids=settings.DEMO_CC_USER_IDS,
+                dingtalk_chat_ids=settings.DEMO_CC_CHAT_IDS,
+                dingtalk_text=dingtalk_text,
+                wecom_user_ids=settings.DEMO_CC_USER_IDS,
+                wecom_chat_ids=settings.DEMO_CC_CHAT_IDS,
+                wecom_base_url=settings.DEMO_CC_BASE_URL,
+                wecom_token=settings.DEMO_CC_TOKEN,
+            )
+        except Exception as e:
+            logger.error("Demo CC unexpected error. source=%s, error=%s", source, e)
+
+    def mirror_demo_cc(
+        self,
+        *,
+        source: str,
+        feishu_card: Optional[Dict[str, Any]] = None,
+        wecom_card: Optional[Dict[str, Any]] = None,
+        markdown_text: Optional[str] = None,
+        title: Optional[str] = None,
+    ) -> None:
+        """
+        演示旁路统一入口：按 DEMO_CC_PROVIDER 选飞书卡 / 企微卡 / Markdown。
+        DEMO_CC_PROVIDER=off 时立即返回。拜访卡请勿调用（走 department_group_chats）。
+        """
+        target_platform, cc_state = _parse_demo_cc_provider()
+        if cc_state != "ok" or not target_platform:
+            return
+        if not _demo_cc_event_allowed(source):
+            return
+        try:
+            text = markdown_text
+            if target_platform == PLATFORM_FEISHU:
+                card = feishu_card
+                if card is None and text is not None:
+                    card = self.build_feishu_markdown_card(text, title=title)
+                if not card:
+                    logger.debug("Demo CC skip empty feishu payload source=%s", source)
+                    return
+                self._demo_cc_platform_card(card, source=source)
+                return
+            if target_platform == PLATFORM_DINGTALK:
+                if text is None and isinstance(feishu_card, dict):
+                    # 无 markdown 时仍尝试发飞书形态内容（钉钉 interactive 适配）
+                    self._demo_cc_platform_card(feishu_card, source=source)
+                    return
+                if text is None:
+                    logger.debug("Demo CC skip empty dingtalk payload source=%s", source)
+                    return
+                card = feishu_card or self.build_feishu_markdown_card(text, title=title)
+                self._demo_cc_platform_card(card, source=source, dingtalk_text=text)
+                return
+            if target_platform == PLATFORM_WECOM:
+                if wecom_card:
+                    self._demo_cc_platform_card(wecom_card, source=source)
+                    return
+                if text is not None:
+                    card = feishu_card or self.build_feishu_markdown_card(text, title=title)
+                    self._demo_cc_platform_card(
+                        card or {"type": "template"},
+                        source=source,
+                        dingtalk_text=text,
+                    )
+                    return
+                logger.debug("Demo CC skip empty wecom payload source=%s", source)
+                return
+            logger.warning("Demo CC unsupported platform=%s source=%s", target_platform, source)
+        except Exception as exc:
+            logger.error("Demo CC mirror failed source=%s error=%s", source, exc)
+
+    def _build_cc_card_content_for_platform(
+        self,
+        *,
+        target_platform: Optional[str],
+        card_content: Optional[Dict[str, Any]] = None,
+        card_content_by_platform: Optional[Dict[str, Dict[str, Any]]] = None,
+        template_id: Optional[str] = None,
+        template_id_by_platform: Optional[Dict[str, str]] = None,
+        template_vars: Optional[Dict[str, Any]] = None,
+        notification_type: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        """按目标平台挑选旁路要用的卡片内容（Ops / Demo 共用）。"""
+        if not target_platform:
+            return None
+        if card_content_by_platform:
+            selected = card_content_by_platform.get(target_platform)
+            if selected:
+                return selected
+        if target_platform == PLATFORM_WECOM:
+            if isinstance(card_content, dict) and card_content.get("card_type"):
+                return card_content
+            from app.platforms.wecom.kpi_notice import build_kpi_report_wecom_basic_card
+
+            kpi = build_kpi_report_wecom_basic_card(notification_type, template_vars)
+            if kpi:
+                return kpi
+            return None
+        if card_content:
+            return card_content
+        if not template_vars:
+            return None
+        selected_template_id = None
+        if template_id_by_platform:
+            selected_template_id = template_id_by_platform.get(target_platform)
+        if not selected_template_id:
+            selected_template_id = template_id
+        if not selected_template_id:
+            return None
+        return {
+            "type": "template",
+            "data": {
+                "template_id": selected_template_id,
+                "template_variable": template_vars,
+            },
+        }
 
     def _get_current_app_id(self, platform: Optional[str]) -> Optional[str]:
         """按平台返回当前应用使用的 client_id（用于部门群配置 client_id 过滤）。"""
@@ -956,7 +1342,10 @@ class PlatformNotificationService:
         template_id: str = None,
         template_id_by_platform: Dict[str, str] | None = None,
         template_vars: Dict[str, Any] = None,
-        notification_type: str = "notification"
+        notification_type: str = "notification",
+        *,
+        ops_cc_scene: Optional[str] = None,
+        ops_cc_variant: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         按平台分组发送通知的核心方法
@@ -966,7 +1355,8 @@ class PlatformNotificationService:
             card_content: 卡片内容（如果提供，直接使用）
             template_id: 模板ID（如果提供，会构建card_content）
             template_vars: 模板变量（如果提供，会构建card_content）
-            notification_type: 通知类型，用于日志
+            notification_type: 通知类型，用于日志 / Demo CC source
+            ops_cc_scene / ops_cc_variant: 传入则尝试运维抄送（由 OPS_CC_SCENES 过滤）
             
         Returns:
             推送结果
@@ -984,29 +1374,50 @@ class PlatformNotificationService:
         total_success_count = 0
         total_failed_recipients = []
 
-        # Ops backdoor: CC card once per event (best-effort, no impact on main flow)
-        try:
-            cc_platform, cc_state = _parse_ops_cc_provider()
-            if cc_state != "ok":
-                cc_platform = None
-
-            cc_card_content = (card_content_by_platform or {}).get(cc_platform) if (card_content_by_platform and cc_platform) else card_content
-            if not cc_card_content and template_vars:
-                cc_template_id = (
-                    (template_id_by_platform or {}).get(cc_platform) if (template_id_by_platform and cc_platform) else template_id
+        # Ops / Demo 旁路：各抄一次（best-effort，不影响主流程）。不含拜访卡。
+        if ops_cc_scene:
+            try:
+                ops_platform, ops_state = _parse_ops_cc_provider()
+                if ops_state == "ok":
+                    ops_card = self._build_cc_card_content_for_platform(
+                        target_platform=ops_platform,
+                        card_content=card_content,
+                        card_content_by_platform=card_content_by_platform,
+                        template_id=template_id,
+                        template_id_by_platform=template_id_by_platform,
+                        template_vars=template_vars,
+                        notification_type=notification_type,
+                    )
+                    if ops_card:
+                        self._ops_cc_platform_card(
+                            ops_card,
+                            scene=ops_cc_scene,
+                            variant=ops_cc_variant,
+                        )
+            except Exception as e:
+                logger.error(
+                    "Ops CC prepare/send failed. scene=%s variant=%s error=%s",
+                    ops_cc_scene,
+                    ops_cc_variant,
+                    e,
                 )
-                if cc_template_id:
-                    cc_card_content = {
-                        "type": "template",
-                        "data": {
-                            "template_id": cc_template_id,
-                            "template_variable": template_vars,
-                        },
-                    }
-            if cc_card_content:
-                self._ops_cc_platform_card(cc_card_content, source=notification_type)
+
+        try:
+            demo_platform, demo_state = _parse_demo_cc_provider()
+            if demo_state == "ok":
+                demo_card = self._build_cc_card_content_for_platform(
+                    target_platform=demo_platform,
+                    card_content=card_content,
+                    card_content_by_platform=card_content_by_platform,
+                    template_id=template_id,
+                    template_id_by_platform=template_id_by_platform,
+                    template_vars=template_vars,
+                    notification_type=notification_type,
+                )
+                if demo_card:
+                    self._demo_cc_platform_card(demo_card, source=notification_type)
         except Exception as e:
-            logger.error("Ops CC prepare/send failed. source=%s, error=%s", notification_type, e)
+            logger.error("Demo CC prepare/send failed. source=%s, error=%s", notification_type, e)
         
         # 获取所有需要的平台token
         platforms = [p for p in recipients_by_platform.keys() if p]
@@ -1106,6 +1517,11 @@ class PlatformNotificationService:
                 "platforms_used": [],
                 "failed_recipients": [],
             }
+
+        self.mirror_demo_cc(
+            source=notification_type,
+            markdown_text=message_text,
+        )
 
         total_success_count = 0
         total_failed_recipients: List[Dict[str, Any]] = []
@@ -2972,7 +3388,9 @@ class PlatformNotificationService:
             recipients_by_platform=recipients_by_platform,
             template_id_by_platform=template_id_by_platform,
             template_vars=template_vars,
-            notification_type="company daily report"
+            notification_type="company daily report",
+            ops_cc_scene=SCENE_COMPANY_DAILY,
+            ops_cc_variant=VARIANT_KPI_CARD,
         )
         result["operator_user_id"] = operator_user_id
         return result
@@ -3162,7 +3580,9 @@ class PlatformNotificationService:
             recipients_by_platform=recipients_by_platform,
             template_id_by_platform=template_id_by_platform,
             template_vars=template_vars,
-            notification_type="company weekly report"
+            notification_type="company weekly report",
+            ops_cc_scene=SCENE_COMPANY_WEEKLY,
+            ops_cc_variant=VARIANT_KPI_CARD,
         )
 
     def send_weekly_followup_comment_notification(
@@ -3205,8 +3625,11 @@ class PlatformNotificationService:
             (label, rewrite_im_content_urls(url, platform))
             for label, url in buttons
         ]
+        feishu_card = None
+        wecom_card = None
+        dingtalk_text = None
         if platform in (PLATFORM_FEISHU, PLATFORM_LARK):
-            card = self.build_feishu_markdown_card(
+            feishu_card = self.build_feishu_markdown_card(
                 body,
                 title=title,
                 header_template="orange" if "编辑过" in title else "blue",
@@ -3215,7 +3638,7 @@ class PlatformNotificationService:
             self._send_message(
                 open_id,
                 token,
-                card,
+                feishu_card,
                 platform,
                 receive_id_type="open_id",
                 msg_type="interactive",
@@ -3223,7 +3646,7 @@ class PlatformNotificationService:
         elif platform == PLATFORM_WECOM:
             from app.platforms.wecom.text_notice import build_link_notice_card
 
-            card = build_link_notice_card(
+            wecom_card = build_link_notice_card(
                 title=title,
                 body=body,
                 links=buttons,
@@ -3233,7 +3656,7 @@ class PlatformNotificationService:
             self._send_message(
                 open_id,
                 token,
-                card,
+                wecom_card,
                 platform,
                 receive_id_type="open_id",
                 msg_type="template_card",
@@ -3244,15 +3667,47 @@ class PlatformNotificationService:
                 lines.append(body.replace("\n\n", "\n"))
             for label, url in buttons:
                 lines.append(f"[{label}]({url})")
-            adapted = rewrite_im_content_urls("\n".join(lines), platform)
+            dingtalk_text = rewrite_im_content_urls("\n".join(lines), platform)
             self._send_message(
                 open_id,
                 token,
-                adapted,
+                dingtalk_text,
                 platform,
                 receive_id_type="open_id",
                 msg_type="text",
             )
+        # 评论族（周跟进/拜访/今日重点/例会/任务创建/无跟进提醒）共用此入口
+        from app.platforms.wecom.text_notice import build_link_notice_card
+
+        if feishu_card is None:
+            feishu_card = self.build_feishu_markdown_card(
+                body,
+                title=title,
+                header_template="orange" if "编辑过" in title else "blue",
+                footer_buttons=buttons or None,
+            )
+        if wecom_card is None:
+            wecom_card = build_link_notice_card(
+                title=title,
+                body=body,
+                links=buttons,
+                desc="通知",
+                task_prefix="cmt",
+            )
+        if dingtalk_text is None:
+            lines = [title]
+            if body:
+                lines.append(body.replace("\n\n", "\n"))
+            for label, url in buttons:
+                lines.append(f"[{label}]({url})")
+            dingtalk_text = "\n".join(lines)
+        self.mirror_demo_cc(
+            source="comment notification",
+            feishu_card=feishu_card,
+            wecom_card=wecom_card,
+            markdown_text=dingtalk_text,
+            title=title,
+        )
         return {"success": True, "message": "ok", "recipients_count": 1, "success_count": 1}
 
     @staticmethod

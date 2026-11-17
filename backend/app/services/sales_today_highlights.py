@@ -779,6 +779,37 @@ def _recipient_from_profile(profile: Any) -> Optional[dict[str, Any]]:
     }
 
 
+def _demo_cc_sales_highlight(
+    assembled: Mapping[str, Any],
+    *,
+    owner_name: str = "",
+) -> None:
+    """演示旁路：每张销售今日重点卡抄一次。"""
+    from app.services.platform_notification_service import platform_notification_service
+    from app.services.today_highlights_wecom import build_sales_wecom_template_card
+
+    title = f"{SALES_CARD_TITLE}｜{assembled.get('report_date')}"
+    body = render_card_markdown(assembled)
+    links = render_card_links(assembled)
+    buttons = card_action_buttons(assembled, owner_name=owner_name)
+    feishu_card = platform_notification_service.build_feishu_markdown_card(
+        body or links,
+        title=title,
+        footer=links if body and links else None,
+        footer_text_size="normal",
+        footer_buttons=buttons or None,
+    )
+    platform_notification_service.mirror_demo_cc(
+        source="sales today highlights",
+        feishu_card=feishu_card,
+        wecom_card=build_sales_wecom_template_card(assembled, owner_name=owner_name),
+        markdown_text=render_dingtalk_markdown(
+            assembled, title=title, owner_name=owner_name
+        ),
+        title=title,
+    )
+
+
 def deliver_highlight_card(
     db_session: Session,
     recipient: Mapping[str, Any],
@@ -955,6 +986,7 @@ def handle_sales_today_highlights(
             items.append(item)
             continue
         recipients_count += 1
+        _demo_cc_sales_highlight(assembled, owner_name=_text(kept[0].get("name")))
         sent = deliver_highlight_card(db_session, kept[0], assembled)
         if sent.get("success"):
             success_count += 1

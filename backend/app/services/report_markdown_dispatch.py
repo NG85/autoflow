@@ -220,22 +220,61 @@ def send_markdown_messages(
     delivery: str,
     recipients: List[Dict[str, Any]],
     groups: List[Dict[str, Any]],
-    ops_cc_source: Optional[str] = None,
+    ops_cc_scene: Optional[str] = None,
+    ops_cc_variant: Optional[str] = None,
+    demo_cc_source: Optional[str] = None,
 ) -> Dict[str, Any]:
-    from app.services.platform_notification_service import platform_notification_service
+    from app.services.platform_notification_service import (
+        ops_cc_scene_allowed,
+        platform_notification_service,
+    )
 
     delivery_mode = (delivery or "card").strip().lower() or "card"
     failed: List[Dict[str, Any]] = []
-    if ops_cc_source:
+    ops_cc_wanted = bool(ops_cc_scene) and ops_cc_scene_allowed(ops_cc_scene, ops_cc_variant)
+    if ops_cc_wanted or demo_cc_source:
         try:
             card = platform_notification_service.build_feishu_markdown_card(content, title=title)
-            platform_notification_service._ops_cc_platform_card(
-                card,
-                source=ops_cc_source,
-                dingtalk_text=content,
-            )
         except Exception as exc:
-            logger.warning("Ops CC markdown failed source=%s: %s", ops_cc_source, exc, exc_info=True)
+            logger.warning(
+                "CC markdown card build failed ops_scene=%s demo=%s: %s",
+                ops_cc_scene,
+                demo_cc_source,
+                exc,
+                exc_info=True,
+            )
+            card = None
+        else:
+            if ops_cc_wanted:
+                try:
+                    platform_notification_service._ops_cc_platform_card(
+                        card,
+                        scene=ops_cc_scene,
+                        variant=ops_cc_variant,
+                        dingtalk_text=content,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Ops CC markdown failed scene=%s variant=%s: %s",
+                        ops_cc_scene,
+                        ops_cc_variant,
+                        exc,
+                        exc_info=True,
+                    )
+            if demo_cc_source:
+                try:
+                    platform_notification_service._demo_cc_platform_card(
+                        card,
+                        source=demo_cc_source,
+                        dingtalk_text=content,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Demo CC markdown failed source=%s: %s",
+                        demo_cc_source,
+                        exc,
+                        exc_info=True,
+                    )
     if groups:
         success_count = _send_markdown_to_groups(
             platform_notification_service,
