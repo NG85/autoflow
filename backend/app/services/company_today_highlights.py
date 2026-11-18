@@ -75,9 +75,69 @@ def insight_period_key(report_date: date) -> str:
     return report_date.isoformat()
 
 
+def _summary_line(item: Mapping[str, Any]) -> str:
+    """卡片只放 summary。有部门名时写在前面，方便多条并排。"""
+    summary = _text(item.get("summary"))
+    if not summary:
+        return ""
+    name = _text(item.get("department_name"))
+    if name:
+        return f"{name}：{summary}"
+    return summary
+
+
+def _section_summary_lines(section: Mapping[str, Any]) -> list[str]:
+    lines: list[str] = []
+    for item in section.get("items") or []:
+        if not isinstance(item, Mapping):
+            continue
+        line = _summary_line(item)
+        if line:
+            lines.append(line)
+    return lines
+
+
+def _card_sections(assembled: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    return [
+        section
+        for section in (assembled.get("sections") or [])
+        if isinstance(section, Mapping)
+    ]
+
+
 def render_card_markdown(assembled: Mapping[str, Any]) -> str:
-    lines = report_entry_lines(assembled.get("report_entries"))
-    return lines[0] if lines else ""
+    """每个报告一块：标题、各条 summary、原蓝链。没有 sections 时仍只出蓝链。"""
+    sections = _card_sections(assembled)
+    if not sections:
+        lines = report_entry_lines(assembled.get("report_entries"))
+        return lines[0] if lines else ""
+    blocks: list[str] = []
+    for section in sections:
+        title = _text(section.get("title"))
+        url = _text(section.get("url"))
+        lines: list[str] = []
+        if title:
+            lines.append(f"**{title}**")
+        lines.extend(_section_summary_lines(section))
+        if title and url:
+            lines.append(f"[{title}]({url})")
+        block = "\n".join(line for line in lines if line)
+        if block:
+            blocks.append(block)
+    return "\n\n".join(blocks)
+
+
+def render_card_plain_text(assembled: Mapping[str, Any]) -> str:
+    """企微正文。标题下接 summary，链接留在 jump_list。"""
+    blocks: list[str] = []
+    for section in _card_sections(assembled):
+        summaries = _section_summary_lines(section)
+        if not summaries:
+            continue
+        title = _text(section.get("title"))
+        lines = [title, *summaries] if title else list(summaries)
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
 
 
 def render_dingtalk_markdown(assembled: Mapping[str, Any], *, title: str) -> str:

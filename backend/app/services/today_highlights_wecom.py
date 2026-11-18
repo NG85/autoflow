@@ -16,7 +16,7 @@ from app.platforms.wecom.text_notice import (
     new_task_id,
     plain_text,
 )
-from app.services.company_today_highlights import CXO_CARD_TITLE
+from app.services.company_today_highlights import CXO_CARD_TITLE, render_card_plain_text
 from app.services.department_today_highlights import (
     INTERVENTION_TITLE,
     TEAM_CARD_TITLE,
@@ -197,7 +197,7 @@ def build_team_wecom_template_card(
 
 
 def build_cxo_wecom_template_card(assembled: Mapping[str, Any]) -> dict[str, Any]:
-    """CXO 今日重点企微卡。两份报告都进 jump_list，整卡打开第一份。"""
+    """CXO 今日重点企微卡。正文是各报告 summary，两份报告都进 jump_list，整卡打开第一份。"""
     day = assembled.get("report_date")
     title = f"{CXO_CARD_TITLE}｜{day}"
     jumps = [
@@ -209,7 +209,7 @@ def build_cxo_wecom_template_card(assembled: Mapping[str, Any]) -> dict[str, Any
     return build_text_notice_card(
         title=title,
         desc="经营阅读",
-        sub_title_text="",
+        sub_title_text=render_card_plain_text(assembled),
         jump_links=jumps,
         horizontal_links=[],
         card_action_url=action,
