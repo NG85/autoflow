@@ -10,6 +10,7 @@ from app.services.company_today_highlights import (
     insight_period_key,
     pick_report_sections,
     render_card_markdown,
+    render_card_plain_text,
     render_dingtalk_markdown,
 )
 from app.services.report_push_policy import parse_report_push_policy
@@ -121,21 +122,110 @@ def test_wednesday_card_omits_key_deals_when_that_insight_is_absent(monkeypatch)
     assert [section["title"] for section in sections] == ["公司人效"]
     assembled = {
         "report_date": WEDNESDAY.isoformat(),
+        "sections": sections,
         "report_entries": [
-            {"key": "cxo_efficiency_insight", "label": "公司人效", "url": "https://example.com/eff"}
+            {"key": "cxo_efficiency_insight", "label": "公司人效", "url": sections[0]["url"]}
         ],
     }
     body = render_card_markdown(assembled)
-    assert body == "[公司人效](https://example.com/eff)"
+    assert "**公司人效**" in body
+    assert "公司：周三人效" not in body
+    assert "周三人效" not in body
+    assert body.endswith(f"[公司人效]({sections[0]['url']})")
     assert "重点商机盘点" not in body
     dingtalk = render_dingtalk_markdown(assembled, title="CXO今日重点｜2026-11-11")
     assert dingtalk.startswith("# CXO今日重点｜2026-11-11")
+    assert "周三人效" not in dingtalk
+
+
+def test_card_body_shows_summaries_and_keeps_report_links(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.company_today_highlights.build_company_highlights_url",
+        lambda day, section="": f"https://example.com/cxo?date={day}&tab={section}",
+    )
+    rows = [
+        _row(
+            "CXO_EFFICIENCY_INSIGHT",
+            "__COMPANY__",
+            summary="人效整体平稳",
+            detail="不进卡片的人效全文",
+        ),
+        _row(
+            "CXO_EFFICIENCY_INSIGHT",
+            "dept-east",
+            summary="华东人均产出下降",
+            detail="不进卡片的华东全文",
+        ),
+        _row(
+            "CXO_KEY_DEAL_REVIEW",
+            "dept-north",
+            summary="",
+            detail="只有全文的商机不进正文",
+        ),
+        _row(
+            "CXO_KEY_DEAL_REVIEW",
+            "__COMPANY__",
+            summary="三个大单待推进",
+            detail="不进卡片的商机全文",
+        ),
+    ]
+    sections = pick_report_sections(rows, push_day=MONDAY, names=_names())
+    assembled = {
+        "report_date": MONDAY.isoformat(),
+        "sections": sections,
+        "report_entries": [
+            {"key": section["key"], "label": section["title"], "url": section["url"]}
+            for section in sections
+        ],
+    }
+    body = render_card_markdown(assembled)
+    assert body == "\n".join(
+        [
+            "**公司人效**",
+            "公司：人效整体平稳",
+            "华东：华东人均产出下降",
+            "[公司人效](https://example.com/cxo?date=2026-11-09&tab=cxo_efficiency_insight)",
+            "",
+            "**重点商机盘点**",
+            "公司：三个大单待推进",
+            "[重点商机盘点](https://example.com/cxo?date=2026-11-09&tab=cxo_key_deal_review)",
+        ]
+    )
+    assert "不进卡片" not in body
+    assert "只有全文的商机不进正文" not in body
+    plain = render_card_plain_text(assembled)
+    assert plain == "\n".join(
+        [
+            "公司人效",
+            "公司：人效整体平稳",
+            "华东：华东人均产出下降",
+            "",
+            "重点商机盘点",
+            "公司：三个大单待推进",
+        ]
+    )
+    assert "[" not in plain
 
 
 def test_wecom_card_puts_both_reports_in_jump_list():
     card = build_cxo_wecom_template_card(
         {
             "report_date": MONDAY.isoformat(),
+            "sections": [
+                {
+                    "title": "公司人效",
+                    "url": "https://example.com/eff",
+                    "items": [
+                        {"department_name": "公司", "summary": "人效整体平稳"},
+                        {"department_name": "华东", "summary": "华东人均产出下降", "detail_text": "全文"},
+                    ],
+                },
+                {
+                    "title": "重点商机盘点",
+                    "url": "https://example.com/deal",
+                    "items": [{"department_name": "公司", "summary": "三个大单待推进"}],
+                },
+            ],
             "report_entries": [
                 {"label": "公司人效", "url": "https://example.com/eff"},
                 {"label": "重点商机盘点", "url": "https://example.com/deal"},
@@ -146,6 +236,18 @@ def test_wecom_card_puts_both_reports_in_jump_list():
     assert [item["title"] for item in card["jump_list"]] == ["公司人效", "重点商机盘点"]
     assert card["card_action"]["url"] == "https://example.com/eff"
     assert "horizontal_content_list" not in card
+    assert card["sub_title_text"] == "\n".join(
+        [
+            "公司人效",
+            "公司：人效整体平稳",
+            "华东：华东人均产出下降",
+            "",
+            "重点商机盘点",
+            "公司：三个大单待推进",
+        ]
+    )
+    assert "全文" not in card["sub_title_text"]
+    assert "[" not in card["sub_title_text"]
 
 
 def test_tuesday_is_not_rejected_for_weekday(monkeypatch):
@@ -183,8 +285,8 @@ def test_monday_sends_one_card_to_named_recipients(monkeypatch):
     monkeypatch.setattr(
         "app.services.company_today_highlights.load_cxo_insight_rows",
         lambda *args, **kwargs: [
-            _row("CXO_EFFICIENCY_INSIGHT", "__COMPANY__", detail="公司人效"),
-            _row("CXO_KEY_DEAL_REVIEW", "dept-east", detail="华东商机"),
+            _row("CXO_EFFICIENCY_INSIGHT", "__COMPANY__", summary="人效整体平稳", detail="公司人效全文"),
+            _row("CXO_KEY_DEAL_REVIEW", "dept-east", summary="华东三个大单", detail="华东商机全文"),
         ],
     )
     monkeypatch.setattr(
@@ -225,6 +327,10 @@ def test_monday_sends_one_card_to_named_recipients(monkeypatch):
     assert result["success_count"] == 2
     assert result["sent_user_ids"] == ["user-1", "user-2"]
     assert sent[0][1] == sent[1][1]
+    assert "公司：人效整体平稳" in sent[0][1]
+    assert "华东：华东三个大单" in sent[0][1]
+    assert "公司人效全文" not in sent[0][1]
+    assert "华东商机全文" not in sent[0][1]
     assert "[公司人效](" in sent[0][1]
     assert "[重点商机盘点](" in sent[0][1]
     assert sent[0][1].index("公司人效") < sent[0][1].index("重点商机盘点")
