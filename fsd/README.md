@@ -58,3 +58,5 @@
 | `2026-11-16-sales-highlights-key-finding-type.md` | 2026-11-16，销售今日重点读取关键发现类型，tab 仍是 open_risks |
 | `2026-11-17-ops-demo-cc.md` | 2026-11-17，运维抄送扩展与演示旁路抄送 |
 | `2026-11-18-cxo-highlights-card-summary.md` | 2026-11-18，CXO 今日重点卡片展示摘要 |
+| `2026-11-20-visit-opportunity-review-push.md` | 2026-11-20，本次拜访商机评估推送，默认关闭 |
+| `2026-11-20-leader-meeting-review-summary-b64.md` | 2026-11-20，例会复盘卡片解码带前缀的会议总结 |

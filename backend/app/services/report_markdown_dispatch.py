@@ -9,7 +9,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from sqlmodel import Session
 
-from app.platforms.constants import PLATFORM_DINGTALK, PLATFORM_FEISHU, PLATFORM_LARK
+from app.platforms.constants import (
+    PLATFORM_DINGTALK,
+    PLATFORM_FEISHU,
+    PLATFORM_LARK,
+    PLATFORM_WECOM,
+)
 from app.platforms.notification_types import (
     PERM_DAILY_REPORT_TEAM_RECEIVE,
     PERM_WEEKLY_REPORT_TEAM_RECEIVE,
@@ -346,6 +351,16 @@ def _send_markdown_to_groups(
         elif platform == PLATFORM_DINGTALK:
             payload = content
             msg_type = "text"
+        elif platform == PLATFORM_WECOM:
+            from app.platforms.wecom.text_notice import build_link_notice_from_markdown
+
+            payload = build_link_notice_from_markdown(
+                content,
+                title=title or "",
+                desc=(title or "通知")[:16],
+                task_prefix="md",
+            )
+            msg_type = "template_card"
         else:
             continue
         success += service._send_content_to_group_chats(

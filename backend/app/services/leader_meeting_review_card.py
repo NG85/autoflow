@@ -1,11 +1,14 @@
 """例会复盘卡片：正文是会议总结，下面是抽取按钮，推给业务负责人和提交人。
 
 列表和报告页仍由 base-api 提供。卡片读 bi_reports.report_content.summary，
+明文直接展示，``__b64__:`` 开头的先按 base64 解码。
 抽取按钮读 crm_skill_extract_items。页面查询同时返回经营事项，待办候选在前。
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import logging
 from datetime import date
@@ -42,6 +45,7 @@ TITLE_EVENT = "经营事项"
 TITLE_TODO = "待办候选"
 FULL_REPORT_LABEL = "完整复盘报告"
 DINGTALK_PARAGRAPH_GAP = "\u00a0"
+SUMMARY_B64_PREFIX = "__b64__:"
 
 SECTIONS: tuple[tuple[str, str, str], ...] = (
     (SECTION_TODO, ITEM_TODO, TITLE_TODO),
@@ -268,6 +272,23 @@ def extracts_for_viewer(
     return assembled
 
 
+def decode_stored_summary(summary: str) -> str:
+    """明文直接用。``__b64__:`` 开头的是 UTF-8 文本的 base64，解码后再展示。"""
+    text = summary.strip()
+    if not text.startswith(SUMMARY_B64_PREFIX):
+        return text
+    payload = "".join(text[len(SUMMARY_B64_PREFIX) :].split())
+    if not payload:
+        return ""
+    padded = payload + "=" * (-len(payload) % 4)
+    try:
+        decoded = base64.b64decode(padded, validate=True)
+        return decoded.decode("utf-8").strip()
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        logger.warning("例会复盘会议总结 base64 解码失败")
+        return ""
+
+
 def summary_from_report_content(raw: Any) -> str:
     """bi_reports.report_content 是 JSON。会议总结在 summary。"""
     if isinstance(raw, (bytes, bytearray)):
@@ -276,7 +297,9 @@ def summary_from_report_content(raw: Any) -> str:
     if not isinstance(parsed, dict):
         return ""
     summary = parsed.get("summary")
-    return summary.strip() if isinstance(summary, str) else ""
+    if not isinstance(summary, str):
+        return ""
+    return decode_stored_summary(summary)
 
 
 def load_report_summary(session: Session, report_id: str) -> str:

@@ -98,6 +98,25 @@ class LeaderMeetingReviewCardPushRequest(BaseModel):
     )
 
 
+class VisitOpportunityReviewPushRequest(BaseModel):
+    """Aldebaran 本次拜访商机评估：Markdown 推给拜访卡片的同一批接收人。"""
+
+    type: Literal["visit_opportunity_review"] = "visit_opportunity_review"
+    record_id: str = Field(..., min_length=1, description="拜访记录 record_id，用于解析接收人")
+    content: str = Field(..., min_length=1, description="商机评估 Markdown")
+    title: Optional[str] = Field(
+        default=None,
+        description="卡片标题；缺省时飞书取正文首行",
+    )
+    opportunity_id: Optional[str] = Field(default=None, description="本次拜访关联的商机")
+    report_id: Optional[str] = Field(default=None, description="商机评估报告 ID")
+    content_type: Literal["markdown"] = "markdown"
+    delivery: Literal["card", "post"] = Field(
+        default="card",
+        description="飞书/Lark：card=无模板卡片，post=富文本；钉钉与企微忽略",
+    )
+
+
 class VisitRecordCardPushRequest(BaseModel):
     """Aldebaran 拜访后处理完成：推送拜访卡片。"""
 
@@ -265,6 +284,7 @@ PushNotificationRequest = Annotated[
         SalesTaskCreatedPushRequest,
         ReviewSessionPushRequest,
         LeaderMeetingReviewCardPushRequest,
+        VisitOpportunityReviewPushRequest,
         VisitRecordCardPushRequest,
         DailyNoFollowupReminderPushRequest,
         PlatformNotificationPushRequest,

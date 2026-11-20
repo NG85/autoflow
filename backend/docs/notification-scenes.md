@@ -33,6 +33,7 @@ OPS/DEMO 各用一套通用项：`APP_ID` / `APP_SECRET` / `USER_IDS` / `CHAT_ID
 - 一线销售今日重点：`POST /notification/push` `type=sales_today_highlights`（读 `crm_skill_extract_items`；仅本人）
 - 销售负责人今日重点：`POST /notification/push` `type=department_today_highlights`（读负责人 USER 粒度 `TODAY_INTERVENTION` 与 `crm_entity_insight` 报告；仅部门负责人，不进群）
 - 周拜访报告 Markdown：`POST /notification/push` `type=weekly_visit_report`（读 `crm_weekly_followup_summary.report_kind=visit_report`；公司/部门）
+- 本次拜访商机评估：`POST /notification/push` `type=visit_opportunity_review`（Aldebaran 传入 `record_id` 与 Markdown。开关 `VISIT_OPPORTUNITY_REVIEW_PUSH_ENABLED`，默认关闭；关闭时返回 `skipped`，不解析接收人、不发送。打开后接收人与 `visit_record_card` 相同：记录人、汇报上级、协同人、抄送，以及会收拜访卡片的部门群。不改拜访卡片推送状态。说明书：`fsd/2026-11-20-visit-opportunity-review-push.md`、`tsd/2026-11-20-visit-opportunity-review-push.md`）
 - 例会复盘抽取卡片：`POST /notification/push` `type=leader_meeting_review_card`（Aldebaran 抽取成功后调用。正文是 `bi_reports.report_content.summary`，后面蓝链「完整复盘报告」打开 `/v2/business/leader-meeting-review/{report_id}`。飞书按钮是待办候选、经营事项，待办候选在前。抽取页查询仍返回这两类。给 `owner_id` 发卡；带了不同的 `creator_id` 时再给提交人发一张。字段与返回见 `fsd/2026-11-06-leader-meeting-review-todo-candidates.md`）
 - 偏好表：`notification_delivery_preferences`
 

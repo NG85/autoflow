@@ -454,6 +454,8 @@ class Settings(BaseSettings):
     REVIEW_REPORT_HOST: str = "https://test.zhizhenzhihe.com"
     REVIEW_SESSION_PAGE_URL: str = "/v2/business/weekly-insight"
     CRM_REVIEW_SESSION_NOTIFICATION_ENABLED: bool = False
+    # 拜访关联商机评估 Markdown。默认关闭；需要推给拜访卡片同一批接收人时再开。
+    VISIT_OPPORTUNITY_REVIEW_PUSH_ENABLED: bool = False
 
     # Ops backdoor: CC cards (Feishu / DingTalk / WeCom per OPS_CC_PROVIDER)
     # 产品通用运维抄送。与 DEMO_CC_* 独立，互不影响。同一时间只开一个平台，凭证/目标语义随 PROVIDER 解释。
