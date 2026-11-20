@@ -1,5 +1,6 @@
 """leader_meeting_review_card reads extracts and sends one card to each recipient."""
 
+import base64
 from datetime import date
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -72,6 +73,11 @@ def test_summary_reads_the_json_field():
     assert summary_from_report_content({"summary": "一句"}) == "一句"
     assert summary_from_report_content({"content": "没有总结"}) == ""
     assert summary_from_report_content("not-json") == ""
+    encoded = base64.b64encode("团队周例会：推进 POC。".encode()).decode()
+    assert summary_from_report_content({"summary": f"__b64__:{encoded}"}) == "团队周例会：推进 POC。"
+    assert summary_from_report_content({"summary": f"  __b64__:{encoded}  "}) == "团队周例会：推进 POC。"
+    assert summary_from_report_content({"summary": "__b64__:@@@@"}) == ""
+    assert summary_from_report_content({"summary": "__b64__:"}) == ""
 
 
 def test_card_puts_summary_then_report_link_then_extract_buttons(monkeypatch):
