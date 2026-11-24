@@ -279,6 +279,7 @@ class BaseLarkClient(BaseClient):
             "file_format": "txt"         # 文件格式，可选：txt, srt
         }
         
+        resp = None
         try:
             resp = requests.get(url, headers=headers, params=params)
             resp.raise_for_status()
@@ -293,7 +294,12 @@ class BaseLarkClient(BaseClient):
                 logger.warning("获取会议纪要内容为空")
                 return None
         except Exception as e:
-            logger.error(f"获取{self.platform_name}会议纪要内容失败: {e}")
+            body = resp.text if resp is not None else ""
+            status = resp.status_code if resp is not None else None
+            logger.error(
+                f"获取{self.platform_name}会议纪要内容失败: {e}, status={status}, "
+                f"{log_content_preview(body, max_length=2000, prefix='响应体')}"
+            )
             return None
     
     def _get_sheet_content(self, token: str, access_token: str) -> Optional[str]:
