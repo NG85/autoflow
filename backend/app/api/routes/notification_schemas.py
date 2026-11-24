@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ReviewSessionContext(BaseModel):
@@ -96,6 +96,47 @@ class LeaderMeetingReviewCardPushRequest(BaseModel):
         default=None,
         description="YYYY-MM-DD",
     )
+
+
+def _dedupe_ids(values: List[str]) -> List[str]:
+    found: List[str] = []
+    for raw in values:
+        text = str(raw or "").strip()
+        if text and text not in found:
+            found.append(text)
+    return found
+
+
+class LeaderMeetingReviewCxoCardPushRequest(BaseModel):
+    """Aldebaran 例会管理评价落库后：把摘要和抽取按钮推给 CXO。"""
+
+    type: Literal["leader_meeting_review_cxo_card"] = "leader_meeting_review_cxo_card"
+    insight_ids: List[str] = Field(
+        ...,
+        min_length=1,
+        description="crm_entity_insight.unique_id。多条时只取最新的管理评价",
+    )
+    recipient_user_ids: Optional[List[str]] = Field(
+        default=None,
+        description="可选本地 user_id，从 CXO 今日重点的接收人里收窄；不能扩大名单。不传则与 CXO 今日重点相同",
+    )
+    report_date: Optional[str] = Field(
+        default=None,
+        description="YYYY-MM-DD",
+    )
+    source_report_id: Optional[str] = Field(
+        default=None,
+        description="原例会复盘 bi_reports.report_id。完整评价报告和原复盘报告都用它打开这场会，不按日期",
+    )
+
+    @model_validator(mode="after")
+    def require_ids(self) -> "LeaderMeetingReviewCxoCardPushRequest":
+        self.insight_ids = _dedupe_ids(self.insight_ids)
+        if self.recipient_user_ids is not None:
+            self.recipient_user_ids = _dedupe_ids(self.recipient_user_ids)
+        if not self.insight_ids:
+            raise ValueError("insight_ids are required")
+        return self
 
 
 class VisitOpportunityReviewPushRequest(BaseModel):
@@ -284,6 +325,7 @@ PushNotificationRequest = Annotated[
         SalesTaskCreatedPushRequest,
         ReviewSessionPushRequest,
         LeaderMeetingReviewCardPushRequest,
+        LeaderMeetingReviewCxoCardPushRequest,
         VisitOpportunityReviewPushRequest,
         VisitRecordCardPushRequest,
         DailyNoFollowupReminderPushRequest,

@@ -110,6 +110,7 @@ def _report_extract_statement(report_id: str, item_types: Sequence[str]):
         CRMSkillExtractItem.subject_type == SUBJECT_USER,
         CRMSkillExtractItem.is_deleted == 0,
         CRMSkillExtractItem.status != STATUS_SUPERSEDED,
+        CRMSkillExtractItem.audience != "cxo",
         CRMSkillExtractItem.item_type.in_(tuple(item_types)),
     )
 
@@ -350,9 +351,13 @@ def extract_action_buttons(assembled: Mapping[str, Any]) -> list[tuple[str, str]
 
 
 def feishu_card_parts(assembled: Mapping[str, Any]) -> tuple[str, str, list[tuple[str, str]]]:
-    """飞书：正文是总结，接着是完整复盘报告，下面是抽取按钮。"""
+    """飞书：正文是总结，接着是报告链接，下面是抽取按钮。"""
     body = _text(assembled.get("summary")) or "--"
-    return body, _full_report_link(assembled), extract_action_buttons(assembled)
+    if "report_link" in assembled:
+        report = _text(assembled.get("report_link"))
+    else:
+        report = _full_report_link(assembled)
+    return body, report, extract_action_buttons(assembled)
 
 
 def render_dingtalk_markdown(assembled: Mapping[str, Any], *, title: str) -> str:
@@ -380,20 +385,34 @@ def build_leader_meeting_wecom_template_card(
 ) -> dict[str, Any]:
     """例会复盘 → 企微 text_notice。
 
-    jump：完整复盘。
-    horizontal：待办候选 / 经营事项（左灰右蓝）。
+    jump：有报告地址时用卡片自带的跳转文案，否则用第一条抽取的文案。
+    horizontal：待办候选 / 经营事项 / 管理方法建议（左灰右蓝）。
     """
     from app.platforms.wecom.text_notice import build_text_notice_card, new_task_id
 
     body = _text(assembled.get("summary")) or "--"
-    report_url = _full_report_url(assembled)
+    if "report_url" in assembled:
+        report_url = _text(assembled.get("report_url"))
+    else:
+        report_url = _full_report_url(assembled)
     extracts = extract_action_buttons(assembled)
-    action = report_url or (extracts[0][1] if extracts else "")
-    jump_links: list[tuple[str, str]] = [("完整复盘", action)] if action else []
+    jump_label = _text(assembled.get("wecom_jump_label")) or "完整复盘"
+    if report_url:
+        action = report_url
+        jump_links: list[tuple[str, str]] = [(jump_label, action)]
+    elif extracts:
+        action = extracts[0][1]
+        jump_links = [(extracts[0][0], action)]
+    else:
+        action = ""
+        jump_links = []
+    source_url = _text(assembled.get("source_report_url"))
+    if source_url and source_url != action:
+        jump_links.append(("原复盘报告", source_url))
 
     return build_text_notice_card(
         title=title,
-        desc="例会复盘",
+        desc=_text(assembled.get("wecom_desc")) or "例会复盘",
         sub_title_text=body,
         jump_links=jump_links,
         horizontal_links=extracts,
@@ -429,7 +448,7 @@ def deliver_card(db_session: Session, recipient: Mapping[str, Any], assembled: M
     """发给上传人本人。不进群，不计费。"""
     from app.services.platform_notification_service import platform_notification_service
 
-    title = f"例会复盘｜{assembled.get('report_date')}"
+    title = _text(assembled.get("card_title")) or f"例会复盘｜{assembled.get('report_date')}"
     body, report_link, buttons = feishu_card_parts(assembled)
     platform = _text(recipient.get("platform"))
     if platform in (PLATFORM_FEISHU, PLATFORM_LARK):

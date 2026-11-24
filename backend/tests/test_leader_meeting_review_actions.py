@@ -153,6 +153,62 @@ def test_report_submitter_id_reads_created_by():
     assert report_submitter_id(session, "RPT-2") == ""
 
 
+def test_behavior_coaching_reuses_todo_actions(monkeypatch):
+    row = _row(
+        "LEADER_BEHAVIOR_COACHING",
+        subject_id="leader-1",
+        audience="cxo",
+        source_report_unique_id="insight-1",
+    )
+    monkeypatch.setattr(
+        "app.services.company_today_highlights.viewer_is_company_highlight_recipient",
+        lambda session, user_id, oauth_id=None, open_ids=(): user_id == "cxo-1",
+    )
+    assert (
+        load_meeting_review_item(
+            _session(row),
+            "leader-1",
+            "item-1",
+            todo_only=True,
+            viewer_user_id="cxo-1",
+        )
+        is row
+    )
+    assert (
+        load_meeting_review_item(
+            _session(row),
+            "cxo-oauth",
+            "item-1",
+            todo_only=True,
+            viewer_user_id="someone-else",
+        )
+        is None
+    )
+    assert (
+        load_meeting_review_item(
+            _session(row),
+            "cxo-oauth",
+            "item-1",
+            todo_only=True,
+            viewer_user_id="cxo-1",
+        )
+        is row
+    )
+    monkeypatch.setattr(
+        "app.services.leader_meeting_review_actions.require_active_todo",
+        lambda session, todo_id: todo_id,
+    )
+    result = save_meeting_review_decisions(
+        _session(row),
+        "cxo-oauth",
+        [{"unique_id": "item-1", "action": "adopt", "adopted_todo_id": "todo-1"}],
+        viewer_user_id="cxo-1",
+    )
+    assert result["results"][0]["ok"] is True
+    assert row.status == "ADOPTED"
+    assert row.adopted_todo_id == "todo-1"
+
+
 def test_task_link_is_only_for_employee_todos(monkeypatch):
     event = _row("MANAGEMENT_EVENT")
     assert load_meeting_review_item(_session(event), "uploader-1", "item-1", todo_only=True) is None

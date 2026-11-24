@@ -1,12 +1,14 @@
 # 例会复盘：前端接入
 
-需要三个链接，页面怎么拆参照拜访复盘（列表、`/v2/behavior/{id}/recap`、`/v2/behavior/{id}/extract`），不要求合成一个页面。
+例会复盘要三个链接，页面怎么拆参照拜访复盘（列表、`/v2/behavior/{id}/recap`、`/v2/behavior/{id}/extract`）。单报告页里放两个 tab，默认是经营复盘，再加管理评价。每个 tab 是一份报告，各自有查看抽取的入口。见第 8 节。
 
 | 链接 | 地址 | 对照 |
 | --- | --- | --- |
 | 列表 | `/v2/business/leader-meeting-review?start_date=&end_date=` | 拜访列表 |
-| 单报告 | `/v2/business/leader-meeting-review/{report_id}?date=` | `/v2/behavior/{id}/recap` |
-| 抽取 | `/v2/business/leader-meeting-review/{report_id}/extract?tab=&date=` | `/v2/behavior/{id}/extract?tab=` |
+| 单报告 | `/v2/business/leader-meeting-review/{report_id}?date=` | 经营复盘，默认 tab |
+| 管理评价 | 同一地址加 `tab=management` | 这份管理评价报告 |
+| 经营复盘抽取 | `/v2/business/leader-meeting-review/{report_id}/extract?tab=&date=` | `/v2/behavior/{id}/extract?tab=` |
+| 管理评价抽取 | `/v2/business/leader-meeting-review/cxo/{insight_id}/extract?tab=` | 管理方法建议 |
 
 登录态沿用现有 CRM 接口。列表和报告正文向 base-api 要。抽取项向本服务要。不要传别人的用户 id。
 
@@ -22,6 +24,9 @@
 | 列表里点一条 | 单报告 |
 | 例会复盘抽取卡的「查看」或「更多（N）」 | 抽取页，并带上对应 `tab` |
 | 单报告上的抽取入口 | 抽取页。没指定 `tab` 时打开第一个 |
+| 例会管理评价卡「完整评价报告」 | 单报告页，并选中「管理评价」 |
+| 例会管理评价卡「原复盘报告」 | 单报告页，默认「经营复盘」 |
+| 例会管理评价卡底部按钮 | 管理评价抽取页，并带上对应 `tab` |
 
 ---
 
@@ -352,3 +357,127 @@ POST /api/v1/crm/leader-meeting-reviews/items/{unique_id}/comments
 | --- | --- |
 | 400 | 正文为空、`author_id` 不是当前用户、`reply_to_id` 对不上，或在改别人的评论。`detail` 为具体原因 |
 | 404 | 条目不存在、已作废，或当前登录人不是负责人、提交人，也不是负责人汇报链上的上级。`detail` 为「例会复盘条目不存在或无权限」 |
+
+---
+
+## 8. 例会管理评价
+
+这是发给 CXO 的另一张卡，标题「例会管理评价｜负责人｜日期」。查到原例会负责人时，正文第一行是「负责人：姓名」。列表不新增一种行。一场会仍是一行，点进去还是现在的报告页。页内两个 tab：
+
+| tab | 默认 | 这一页放什么 | 查看抽取 |
+| --- | --- | --- | --- |
+| 经营复盘 | 是 | 现有复盘报告 | 原来的抽取页 |
+| 管理评价 | 否 | 这份管理评价报告 | 管理评价抽取页 |
+
+没有管理评价时不画第二个 tab。经营复盘和管理评价的正文都向 base-api 要，不向本服务要。有了这场例会复盘报告，才有对这个例会负责人的管理评价报告。管理评价不按日期筛，用这场会的 `report_id` 到 `crm_entity_insight` 里取：
+
+| 条件 | 值 |
+| --- | --- |
+| `period_key` | 这场会的 `bi_reports.report_id`。这是报告 id，不是日期 |
+| `entity_type` | `USER` |
+| `entity_id` | 原例会负责人的 oauth id |
+| `insight_type` | `LEADER_MEETING_BEHAVIOR_EVAL` |
+| `is_deleted` | `0` |
+| `expires_at` | 为空，或晚于当前 UTC |
+
+多于一条时按 `generated_at`、`id` 取最新一条。没有这样的行就不画「管理评价」。正文用 `detail_text`。响应里带这条洞察的 `unique_id`，前端拿它打开管理评价抽取。本服务只提供管理评价抽取查询。
+
+`insight_id` 是 `crm_entity_insight.unique_id`，不是 `bi_reports.report_id`。不要用复盘的 `report_id` 调管理评价抽取，也不要把「管理方法建议」并进待办候选、经营事项。交互复用第 4 到第 7 节，写入地址不变，`unique_id` 用管理评价抽取里的那条。只有会收到 CXO 今日重点的人能打开。被评价的人自己也是 CXO 时，可以打开对自己的评价。不是 CXO 时接口是 404。`can_manage` 为 `false` 时不要画操作。
+
+卡片正文是摘要。有原文、并且带了原复盘报告 id 时，摘要下面放「完整评价报告」，打开同一报告页并选中「管理评价」。再加「原复盘报告」，打开同一页的「经营复盘」。两条链之间用「｜」分隔（两边留空格）。底部按钮是「管理方法建议」，多于一条写成「管理方法建议（N）」。钉钉没有按钮，抽取入口写成同一行蓝链。企微与飞书同一套文案：有全文时主跳转是「完整评价报告」，并另有「原复盘报告」，横栏是「管理方法建议」；没有全文时主跳转改为「管理方法建议」。总评、关键数据、已解决、未解决留在管理评价全文里，不出现在抽取页。
+
+```text
+/v2/business/leader-meeting-review/<report_id>?date=
+/v2/business/leader-meeting-review/<report_id>?tab=management
+/v2/business/leader-meeting-review/<report_id>/extract?tab=&date=
+/v2/business/leader-meeting-review/cxo/<insight_id>/extract?tab=leader_behavior_coaching
+```
+
+| 参数 | 含义 |
+| --- | --- |
+| `tab` | 报告页上不传或不是 `management` 时打开「经营复盘」。`management` 打开「管理评价」。抽取页上的 `tab` 仍是抽取分类 |
+| `report_id` | 这场会的复盘报告。两个 tab 用同一个值。管理评价跟着它查，地址上不带 `date` |
+| 抽取路径里的 `insight_id` | 管理评价的 `unique_id`。只用于管理评价抽取 |
+| `tab` | 抽取页里的一类。管理方法建议是 `leader_behavior_coaching` |
+
+| 从哪进来 | 打开 |
+| --- | --- |
+| 列表里点一条 | 报告页，「经营复盘」 |
+| 「经营复盘」上的查看抽取 | 原来的抽取页 |
+| 「管理评价」上的查看抽取 | 管理评价抽取页，路径参数用 base-api 返回的 `insight_id` |
+| 例会管理评价卡「完整评价报告」 | 报告页，「管理评价」 |
+| 例会管理评价卡「原复盘报告」 | 报告页，「经营复盘」 |
+| 例会管理评价卡底部按钮 | 管理评价抽取页，并带上对应 `tab` |
+
+管理评价抽取向本服务要。不传用户 id，也不传日期。这个接口不返回管理评价全文：
+
+```http
+GET /api/v1/crm/leader-meeting-reviews/cxo/{insight_id}/extracts
+```
+
+还没有抽取时，HTTP 200，`items` 为 `{}`，`card_links` 为 `[]`，`can_manage` 为 `false`。抽取页显示空状态。不是 CXO 今日重点的接收人时，HTTP 404，`detail` 为「管理评价抽取不存在或无权限」。不要展示条目。被评价的人若在这份接收人里，按 CXO 打开。
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "insight_id": "insight-1",
+    "report_date": "2026-11-23",
+    "items": {
+      "leader_behavior_coaching": [
+        {
+          "unique_id": "item-1",
+          "claim": "下一场先确认沟通人。",
+          "why": "管理方法建议写了这个做法",
+          "confidence": 0.84,
+          "status": "PENDING",
+          "reject_reason": null,
+          "adopted_todo_id": null,
+          "feedback": null,
+          "feedback_comment": null,
+          "tasks": [],
+          "comments": []
+        }
+      ]
+    },
+    "card_links": [
+      {
+        "key": "leader_behavior_coaching",
+        "title": "管理方法建议",
+        "url": "https://.../v2/business/leader-meeting-review/cxo/insight-1/extract?tab=leader_behavior_coaching"
+      }
+    ],
+    "can_manage": true,
+    "uploader_user_id": null
+  }
+}
+```
+
+`can_manage` 在能打开时为 `true`。管理方法建议画赞踩、采纳、拒绝、建任务、评论，调用第 4 到第 7 节。`uploader_user_id` 固定 `null`。不要把被评价负责人放进评论接收人。
+
+tab 按 `card_links` 的顺序渲染，文案用 `title`，条数用 `items[key].length`。没有的类不留空 tab。`tab` 能对上某个 `key` 时打开它；对不上或没传时打开第一个，并把 `tab` 写回地址栏。服务端已按 `confidence` 从高到低排好。
+
+一条建议：
+
+```text
+下一场先确认沟通人。
+管理方法建议写了这个做法
+```
+
+| 字段 | 展示 |
+| --- | --- |
+| `claim` | 这一条的正文 |
+| `why` | `claim` 下面一行。空则不写 |
+| `unique_id` | 不展示。`can_manage` 为 `true` 时拿去调第 4 到第 7 节 |
+| `status` | `PENDING` 待判断，`ADOPTED` 已采纳，`REJECTED` 已拒绝 |
+| `feedback` / `feedback_comment` | 与待办候选相同 |
+| `tasks` / `comments` | 与待办候选相同 |
+| `adopted_todo_id` / `reject_reason` | 与待办候选相同 |
+| `confidence` | 不必做成控件 |
+
+抽取页只有一个 tab：
+
+| `key` | 标题 |
+| --- | --- |
+| `leader_behavior_coaching` | 管理方法建议 |
