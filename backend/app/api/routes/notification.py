@@ -18,7 +18,9 @@ from app.api.routes.notification_schemas import (
     PushNotificationRequest,
     ReviewSessionPushRequest,
     LeaderMeetingReviewCardPushRequest,
+    LeaderMeetingReviewCxoCardPushRequest,
     SalesTaskCreatedPushRequest,
+    VisitOpportunityReviewPushRequest,
     SalesTodayHighlightsPushRequest,
     VisitRecordCardPushRequest,
     VisitRecordCommentPushRequest,
@@ -930,6 +932,44 @@ def update_my_notification_preference(
     }
 
 
+def _handle_visit_opportunity_review_push(
+    db_session: SessionDep,
+    payload: VisitOpportunityReviewPushRequest,
+) -> Dict[str, Any]:
+    """商机评估 Markdown。接收人与 visit_record_card 相同，由拜访记录解析。"""
+    from app.services.visit_opportunity_review_push import (
+        handle_visit_opportunity_review_push,
+    )
+
+    return handle_visit_opportunity_review_push(
+        db_session,
+        record_id=payload.record_id,
+        content=payload.content,
+        title=payload.title,
+        opportunity_id=payload.opportunity_id,
+        report_id=payload.report_id,
+        delivery=payload.delivery,
+    )
+
+
+def _handle_leader_meeting_review_cxo_card_push(
+    db_session: SessionDep,
+    payload: LeaderMeetingReviewCxoCardPushRequest,
+) -> Dict[str, Any]:
+    """按洞察摘要和 CXO 抽取给名单里的人发例会管理评价卡片。"""
+    from app.services.leader_meeting_review_cxo_card import (
+        handle_leader_meeting_review_cxo_card,
+    )
+
+    return handle_leader_meeting_review_cxo_card(
+        db_session,
+        insight_ids=payload.insight_ids,
+        recipient_user_ids=payload.recipient_user_ids,
+        report_date=payload.report_date,
+        source_report_id=payload.source_report_id,
+    )
+
+
 def _handle_leader_meeting_review_card_push(
     db_session: SessionDep,
     payload: LeaderMeetingReviewCardPushRequest,
@@ -954,14 +994,19 @@ async def push_notification_api(
     """
     统一消息推送入口（请求体按 type 判别，字段见 notification_schemas）：
     weekly_followup_comment / visit_record_comment / sales_task_created /
-    review_session / visit_record_card / leader_meeting_review_card /
+    review_session / visit_record_card / visit_opportunity_review /
+    leader_meeting_review_card / leader_meeting_review_cxo_card /
     daily_no_followup_reminder / platform_notification /
     weekly_visit_report / daily_visit_report /
     sales_today_highlights / department_today_highlights / company_today_highlights
     """
     try:
-        if isinstance(payload, LeaderMeetingReviewCardPushRequest):
+        if isinstance(payload, LeaderMeetingReviewCxoCardPushRequest):
+            result = _handle_leader_meeting_review_cxo_card_push(db_session, payload)
+        elif isinstance(payload, LeaderMeetingReviewCardPushRequest):
             result = _handle_leader_meeting_review_card_push(db_session, payload)
+        elif isinstance(payload, VisitOpportunityReviewPushRequest):
+            result = _handle_visit_opportunity_review_push(db_session, payload)
         elif isinstance(payload, VisitRecordCardPushRequest):
             result = _handle_visit_record_card_push(db_session, payload)
         elif isinstance(payload, DailyNoFollowupReminderPushRequest):

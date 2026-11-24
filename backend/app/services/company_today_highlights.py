@@ -558,17 +558,45 @@ def _policy_recipient_ids() -> list[str]:
     )
 
 
-def _viewer_can_read(session: Session, user_id: Any) -> bool:
+def company_highlight_viewer_can_read(session: Session, user_id: Any) -> bool:
     """biz_admin、sys_admin、executive 能看。推送接收人从卡片进来也能看。"""
     if _viewer_has_executive_role(user_id):
         return True
     return _viewer_is_recipient(session, user_id)
 
 
+def _viewer_can_read(session: Session, user_id: Any) -> bool:
+    return company_highlight_viewer_can_read(session, user_id)
+
+
 def _viewer_has_executive_role(user_id: Any) -> bool:
     from app.services.leader_meeting_review_actions import viewer_is_company_manager
 
     return viewer_is_company_manager(user_id)
+
+
+def viewer_is_company_highlight_recipient(
+    session: Session,
+    user_id: Any,
+    oauth_id: Any = None,
+    open_ids: Sequence[str] = (),
+) -> bool:
+    """当前用户是否在 CXO 今日重点的接收人里。不含公司级角色放行。"""
+    from app.services.leader_meeting_review_actions import _identity_tokens
+
+    viewer = _identity_tokens(user_id, oauth_id, open_ids)
+    if not viewer:
+        return False
+    allowed = _policy_recipient_ids()
+    if allowed:
+        return bool(viewer & _identity_tokens(*allowed))
+    from app.services.platform_notification_service import platform_notification_service
+
+    recipients = platform_notification_service.get_recipients_for_company_daily_report(session)
+    pool: set[str] = set()
+    for item in recipients:
+        pool |= _identity_tokens(item.get("user_id"), item.get("userId"), item.get("open_id"))
+    return bool(viewer & pool)
 
 
 def _viewer_is_recipient(session: Session, user_id: Any) -> bool:
@@ -584,14 +612,14 @@ def _viewer_is_recipient(session: Session, user_id: Any) -> bool:
     return any(_recipient_user_id(item) == uid for item in recipients)
 
 
-def _resolve_recipients(
+def resolve_company_highlight_recipients(
     db_session: Session,
-    recipient_user_ids: Optional[Sequence[str]],
+    recipient_user_ids: Optional[Sequence[str]] = None,
 ) -> Optional[list[dict[str, Any]]]:
-    """None 表示没有可发的人。空列表表示名单里的人都没有 open_id。
+    """CXO 今日重点的接收人。None 表示没有可发的人。空列表表示名单里的人都没有 open_id。
 
     策略写了 recipient_user_ids 就只用这份名单。没写时走公司日报接收人。
-    请求里的 recipient_user_ids 只能在这一批人里收窄。
+    请求里的 recipient_user_ids 是本地 user_id，只能在这一批人里收窄。
     """
     from app.services.platform_notification_service import platform_notification_service
 
@@ -615,6 +643,13 @@ def _resolve_recipients(
     if not recipients:
         return None
     return list(recipients)
+
+
+def _resolve_recipients(
+    db_session: Session,
+    recipient_user_ids: Optional[Sequence[str]],
+) -> Optional[list[dict[str, Any]]]:
+    return resolve_company_highlight_recipients(db_session, recipient_user_ids)
 
 
 def _recipient_user_id(recipient: Mapping[str, Any]) -> str:

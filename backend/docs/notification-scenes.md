@@ -33,7 +33,9 @@ OPS/DEMO 各用一套通用项：`APP_ID` / `APP_SECRET` / `USER_IDS` / `CHAT_ID
 - 一线销售今日重点：`POST /notification/push` `type=sales_today_highlights`（读 `crm_skill_extract_items`；仅本人）
 - 销售负责人今日重点：`POST /notification/push` `type=department_today_highlights`（读负责人 USER 粒度 `TODAY_INTERVENTION` 与 `crm_entity_insight` 报告；仅部门负责人，不进群）
 - 周拜访报告 Markdown：`POST /notification/push` `type=weekly_visit_report`（读 `crm_weekly_followup_summary.report_kind=visit_report`；公司/部门）
+- 本次拜访商机评估：`POST /notification/push` `type=visit_opportunity_review`（Aldebaran 传入 `record_id` 与 Markdown。开关 `VISIT_OPPORTUNITY_REVIEW_PUSH_ENABLED`，默认关闭；关闭时返回 `skipped`，不解析接收人、不发送。打开后接收人与 `visit_record_card` 相同：记录人、汇报上级、协同人、抄送，以及会收拜访卡片的部门群。不改拜访卡片推送状态。说明书：`fsd/2026-11-20-visit-opportunity-review-push.md`、`tsd/2026-11-20-visit-opportunity-review-push.md`）
 - 例会复盘抽取卡片：`POST /notification/push` `type=leader_meeting_review_card`（Aldebaran 抽取成功后调用。正文是 `bi_reports.report_content.summary`，后面蓝链「完整复盘报告」打开 `/v2/business/leader-meeting-review/{report_id}`。飞书按钮是待办候选、经营事项，待办候选在前。抽取页查询仍返回这两类。给 `owner_id` 发卡；带了不同的 `creator_id` 时再给提交人发一张。字段与返回见 `fsd/2026-11-06-leader-meeting-review-todo-candidates.md`）
+- 例会管理评价卡片：`POST /notification/push` `type=leader_meeting_review_cxo_card`（Aldebaran 管理评价落库后调用。开关 `LEADER_MEETING_CXO_CARD_PUSH_ENABLED`，默认关闭；关闭时返回 `feature_disabled`，不解析接收人、不发送。抽取查询不受开关影响。正文先写原例会负责人，再写 `crm_entity_insight.summary`，链接「完整评价报告」打开原例会报告页并选中「管理评价」（`/v2/business/leader-meeting-review/{report_id}?tab=management`）。底部按钮是管理方法建议。收件人与 CXO 今日重点相同：策略名单优先，没配名单时走公司日报接收人。请求里的 `recipient_user_ids` 是本地 user_id，只能收窄。全文由 base-api 提供。抽取查询是 `GET /crm/leader-meeting-reviews/cxo/{insight_id}/extracts`，只有 CXO 今日重点的接收人能查看，不返回管理评价全文。页面对接见 `backend/docs/leader-meeting-review-frontend.md` 第 8 节。字段见 `fsd/2026-11-24-leader-meeting-cxo-card.md`）
 - 偏好表：`notification_delivery_preferences`
 
 拜访卡、未参加的 review 仍是实例路由，不加这种偏好层。旁观继续走 `notification_cc_rules`。群聊不走个人 opt-out。
@@ -154,4 +156,5 @@ report_push_policy:
 {"type": "weekly_visit_report", "scene": "company_weekly"}
 {"type": "weekly_visit_report", "scene": "department_weekly"}
 {"type": "leader_meeting_review_card", "report_id": "<report_id>", "owner_id": "<业务负责人 oauth id>", "creator_id": "<提交人 oauth id>", "report_date": "YYYY-MM-DD"}
+{"type": "leader_meeting_review_cxo_card", "insight_ids": ["<crm_entity_insight.unique_id>"], "report_date": "YYYY-MM-DD", "source_report_id": "<原例会复盘 report_id>"}
 ```

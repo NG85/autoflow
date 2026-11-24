@@ -1,4 +1,4 @@
-"""例会复盘卡片上的抽取项。报告列表和正文不在这里。"""
+"""例会复盘和管理评价的抽取项。两份报告正文不在这里。"""
 
 import logging
 from typing import List, Literal, Optional
@@ -91,6 +91,34 @@ class MeetingReviewTaskLink(BaseModel):
     adopt: bool = False
 
 
+@router.get("/crm/leader-meeting-reviews/cxo/{insight_id}/extracts")
+def get_leader_meeting_cxo_extracts(
+    insight_id: str,
+    db_session: SessionDep,
+    user: CurrentUserDep,
+):
+    """CXO 查看管理评价的抽取。被评价的人若也是 CXO，同样能看。写入与例会复盘同一套接口。全文不在这里。"""
+    from app.services.leader_meeting_review_cxo_card import cxo_extracts_for_viewer
+
+    try:
+        oauth_id, open_ids = _viewer_identity(db_session, user)
+        data = cxo_extracts_for_viewer(
+            db_session,
+            insight_id,
+            oauth_id,
+            open_ids,
+            viewer_user_id=str(user.id),
+        )
+        if data is None:
+            raise HTTPException(status_code=404, detail="管理评价抽取不存在或无权限")
+        return {"code": 0, "message": "success", "data": data}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(exc)
+        raise InternalServerError()
+
+
 @router.get("/crm/leader-meeting-reviews/{report_id}/extracts")
 def get_leader_meeting_review_extracts(
     report_id: str,
@@ -122,7 +150,13 @@ def save_leader_meeting_review_feedback(
     """更新一条经营事项或员工待办的赞踩。"""
     try:
         oauth_id, open_ids = _viewer_identity(db_session, user)
-        row = load_meeting_review_item(db_session, oauth_id, unique_id, open_ids=open_ids)
+        row = load_meeting_review_item(
+            db_session,
+            oauth_id,
+            unique_id,
+            open_ids=open_ids,
+            viewer_user_id=str(user.id),
+        )
         if row is None:
             raise HTTPException(status_code=404, detail=_MISSING)
         data = save_meeting_review_feedback(
@@ -156,6 +190,7 @@ def save_leader_meeting_review_decisions(
             oauth_id,
             [item.model_dump() for item in payload.items],
             open_ids,
+            viewer_user_id=str(user.id),
         )
         return {"code": 0, "message": "success", "data": data}
     except ValueError as exc:
@@ -181,7 +216,13 @@ def save_leader_meeting_review_comments(
             if item.author_id and item.author_id.strip() != actor:
                 raise HTTPException(status_code=400, detail="author_id 必须是当前用户")
         oauth_id, open_ids = _viewer_identity(db_session, user)
-        row = load_meeting_review_item(db_session, oauth_id, unique_id, open_ids=open_ids)
+        row = load_meeting_review_item(
+            db_session,
+            oauth_id,
+            unique_id,
+            open_ids=open_ids,
+            viewer_user_id=actor,
+        )
         if row is None:
             raise HTTPException(status_code=404, detail=_MISSING)
         author = _author_name(db_session, user)
@@ -228,6 +269,7 @@ def link_leader_meeting_review_task(
             unique_id,
             todo_only=True,
             open_ids=open_ids,
+            viewer_user_id=str(user.id),
         )
         if row is None:
             raise HTTPException(status_code=404, detail=_MISSING)

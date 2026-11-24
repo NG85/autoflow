@@ -312,6 +312,27 @@ def build_leader_meeting_review_section_url(report_id: str, report_date: str, se
     return f"{path}&date={quote(day, safe='')}"
 
 
+def build_leader_meeting_cxo_report_url(report_id: str) -> str:
+    """打开这场例会的报告页，并选中「管理评价」。跟着 report_id，不按日期筛。"""
+    url = build_leader_meeting_review_report_url(report_id)
+    if not url:
+        return ""
+    return f"{url}?tab=management"
+
+
+def build_leader_meeting_cxo_section_url(insight_id: str, section: str) -> str:
+    """CXO 管理评价抽取页的一类。"""
+    host = _host()
+    iid = (insight_id or "").strip()
+    key = (section or "").strip()
+    if not host or not iid or not key:
+        return ""
+    return (
+        f"{host}/v2/business/leader-meeting-review/cxo/{quote(iid, safe='')}"
+        f"/extract?tab={quote(key, safe='')}"
+    )
+
+
 def build_weekly_review_1_page_url(execution_id: str) -> str:
     """周报表1（review1 / review1s）。"""
     host = _host()
