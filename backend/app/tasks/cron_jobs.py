@@ -916,18 +916,30 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                                     f"成功发送 {department_report.get('department_name', '未知部门')} 周报通知，"
                                     f"推送成功 {result['success_count']}/{result['recipients_count']} 次"
                                 )
-                                if crm_statistics_service.weekly_report_has_data(department_report):
+                                if crm_statistics_service.weekly_report_should_bill(
+                                    result, department_report
+                                ):
                                     _report_task_usage_once(
                                         BillingScenario.CRM_TEAM_WEEKLY_REPORT,
                                         f"weekly-department:{end_date.isoformat()}:{dept_name}",
                                         department_report.get("weekly_review_1_page")
                                         or settings.REVIEW_REPORT_HOST,
                                     )
-                                else:
+                                elif not crm_statistics_service.weekly_report_has_data(
+                                    department_report
+                                ):
                                     logger.info(
                                         "Skip weekly department billing because has_data is false: department=%s end_date=%s",
                                         dept_name,
                                         end_date.isoformat(),
+                                    )
+                                else:
+                                    logger.info(
+                                        "Skip weekly department billing because card was not delivered: "
+                                        "department=%s end_date=%s reason=%s",
+                                        dept_name,
+                                        end_date.isoformat(),
+                                        result.get("skip_reason"),
                                     )
                             else:
                                 msg = str(result.get("message", ""))
@@ -965,17 +977,28 @@ def generate_crm_weekly_report(self, start_date_str=None, end_date_str=None, rep
                                     f"成功发送公司周报通知，"
                                     f"推送成功 {company_result['success_count']}/{company_result['recipients_count']} 次"
                                 )
-                                if crm_statistics_service.weekly_report_has_data(company_weekly_report):
+                                if crm_statistics_service.weekly_report_should_bill(
+                                    company_result, company_weekly_report
+                                ):
                                     _report_task_usage_once(
                                         BillingScenario.CRM_TEAM_WEEKLY_REPORT,
                                         f"weekly-company:{end_date.isoformat()}",
                                         company_weekly_report.get("weekly_review_1_page")
                                         or settings.REVIEW_REPORT_HOST,
                                     )
-                                else:
+                                elif not crm_statistics_service.weekly_report_has_data(
+                                    company_weekly_report
+                                ):
                                     logger.info(
                                         "Skip weekly company billing because has_data is false: end_date=%s",
                                         end_date.isoformat(),
+                                    )
+                                else:
+                                    logger.info(
+                                        "Skip weekly company billing because card was not delivered: "
+                                        "end_date=%s reason=%s",
+                                        end_date.isoformat(),
+                                        company_result.get("skip_reason"),
                                     )
                             else:
                                 msg = str(company_result.get("message", ""))
