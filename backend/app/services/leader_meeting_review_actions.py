@@ -1,4 +1,7 @@
-"""例会复盘抽取的赞踩、采纳和任务。经营事项只赞踩，员工待办还可以采纳和挂任务。"""
+"""例会复盘抽取的赞踩、采纳和任务。经营事项只赞踩，员工待办还可以采纳和挂任务。
+
+管理评价抽取走同一套写入，但只有 CXO 今日重点的接收人能看、能改。被评价的人只要也是 CXO，一样能看。
+"""
 
 from __future__ import annotations
 
@@ -37,6 +40,8 @@ logger = logging.getLogger(__name__)
 
 ITEM_EVENT = "MANAGEMENT_EVENT"
 ITEM_TODO = "EMPLOYEE_TODO_CANDIDATE"
+_CXO_ITEM_TYPES = frozenset({"LEADER_BEHAVIOR_COACHING"})
+_CXO_SECTIONS = {"LEADER_BEHAVIOR_COACHING": "leader_behavior_coaching"}
 _DECISION_BATCH_MAX = 100
 
 
@@ -180,8 +185,38 @@ def _is_live_review_row(row: Any, *, todo_only: bool) -> bool:
     if _text(getattr(row, "subject_type", None)).upper() != "USER":
         return False
     item_type = _text(getattr(row, "item_type", None))
+    if item_type in _CXO_ITEM_TYPES:
+        return True
     allowed = (ITEM_TODO,) if todo_only else (ITEM_EVENT, ITEM_TODO)
     return item_type in allowed
+
+
+def _source_report_id(session: Session, row: Any) -> str:
+    """提交人挂在原例会复盘上。管理评价行的来源是洞察，先换成 period_key。"""
+    source = _text(getattr(row, "source_report_unique_id", None))
+    if _text(getattr(row, "item_type", None)) not in _CXO_ITEM_TYPES or not source:
+        return source
+    from app.models.crm_entity_insight import CRMEntityInsight
+
+    found = session.exec(
+        select(CRMEntityInsight).where(CRMEntityInsight.unique_id == source)
+    ).first()
+    return _text(getattr(found, "period_key", None))
+
+
+def viewer_can_read_cxo_extracts(
+    session: Session,
+    rows: Sequence[Any],
+    *,
+    user_id: Any,
+    oauth_id: str,
+    open_ids: Sequence[str] = (),
+) -> bool:
+    """管理评价抽取只给 CXO 今日重点的接收人。被评价的人若也在这份名单里，同样能看。"""
+    del rows
+    from app.services.company_today_highlights import viewer_is_company_highlight_recipient
+
+    return viewer_is_company_highlight_recipient(session, user_id, oauth_id, open_ids)
 
 
 def _matches(
@@ -193,8 +228,19 @@ def _matches(
     todo_only: bool,
     cache: dict[str, set[str]],
     submitter_cache: Optional[dict[str, str]] = None,
+    viewer_user_id: str = "",
 ) -> bool:
-    if not _text(viewer_oauth_id) or not _is_live_review_row(row, todo_only=todo_only):
+    if not _is_live_review_row(row, todo_only=todo_only):
+        return False
+    if _text(getattr(row, "item_type", None)) in _CXO_ITEM_TYPES:
+        return viewer_can_read_cxo_extracts(
+            session,
+            [row],
+            user_id=viewer_user_id,
+            oauth_id=viewer_oauth_id,
+            open_ids=viewer_open_ids,
+        )
+    if not _text(viewer_oauth_id):
         return False
     if can_manage_uploader(
         session,
@@ -206,7 +252,7 @@ def _matches(
         return True
     submitter = report_submitter_id(
         session,
-        _text(getattr(row, "source_report_unique_id", None)),
+        _source_report_id(session, row),
         submitter_cache,
     )
     if not submitter:
@@ -254,10 +300,13 @@ def load_meeting_review_item(
     *,
     todo_only: bool = False,
     open_ids: Sequence[str] = (),
+    viewer_user_id: str = "",
 ) -> Optional[CRMSkillExtractItem]:
-    """负责人、提交人或汇报链上级的经营事项、员工待办。todo_only 时经营事项不算。"""
+    """负责人、提交人或汇报链上级的经营事项、员工待办。管理评价抽取只给 CXO。todo_only 时经营事项不算。"""
     item_id = _text(unique_id)
-    if not item_id or not _text(oauth_id):
+    if not item_id:
+        return None
+    if not _text(oauth_id) and not _text(viewer_user_id):
         return None
     row = session.exec(
         select(CRMSkillExtractItem).where(CRMSkillExtractItem.unique_id == item_id)
@@ -270,6 +319,7 @@ def load_meeting_review_item(
         todo_only=todo_only,
         cache={},
         submitter_cache={},
+        viewer_user_id=viewer_user_id,
     ):
         return None
     return row
@@ -298,6 +348,7 @@ def save_meeting_review_decisions(
     oauth_id: str,
     items: Sequence[Mapping[str, Any]],
     open_ids: Sequence[str] = (),
+    viewer_user_id: str = "",
 ) -> dict[str, Any]:
     """只采纳或拒绝员工待办。经营事项、无权限的条目 ok 为 false。"""
     if not items or len(items) > _DECISION_BATCH_MAX:
@@ -329,6 +380,7 @@ def save_meeting_review_decisions(
             todo_only=True,
             cache=cache,
             submitter_cache=submitter_cache,
+            viewer_user_id=viewer_user_id,
         ):
             results.append({"unique_id": item["unique_id"], "ok": False})
             continue
@@ -457,18 +509,22 @@ def notify_meeting_review_comments(
         author_name = _text(author) or "有人"
         actor = _text(current_user_id)
         uploader_user_id = local_user_id_for_oauth(session, getattr(row, "subject_id", None))
-        section = (
-            "management_events"
-            if _text(getattr(row, "item_type", None)) == ITEM_EVENT
-            else "employee_todo_candidates"
-        )
+        item_type = _text(getattr(row, "item_type", None))
+        section = _CXO_SECTIONS.get(item_type)
+        if section is None:
+            section = "management_events" if item_type == ITEM_EVENT else "employee_todo_candidates"
         report_day = getattr(row, "report_date", None)
         day = report_day.isoformat() if hasattr(report_day, "isoformat") else _text(report_day)[:10]
-        url = build_leader_meeting_review_section_url(
-            _text(getattr(row, "source_report_unique_id", None)),
-            day,
-            section,
-        )
+        source_id = _text(getattr(row, "source_report_unique_id", None))
+        if item_type in _CXO_ITEM_TYPES:
+            from app.utils.push_page_urls import build_leader_meeting_cxo_section_url
+
+            url = build_leader_meeting_cxo_section_url(source_id, section)
+            scene_name = "例会管理评价"
+            uploader_user_id = ""
+        else:
+            url = build_leader_meeting_review_section_url(source_id, day, section)
+            scene_name = "例会复盘"
         link_text = _comment_link_text(row)
 
         for item in comments or []:
@@ -512,7 +568,7 @@ def notify_meeting_review_comments(
             for recipient_user_id in recipients:
                 header, sentence = comment_notify_lines(
                     author_name=author_name,
-                    scene="例会复盘",
+                    scene=scene_name,
                     entity_name=link_text,
                     recipient_user_id=recipient_user_id,
                     addressed_user_id=default_recipient,

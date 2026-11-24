@@ -325,3 +325,11 @@ def test_chat_review_detail_helpers_use_v2_paths(monkeypatch):
         == "https://example.com/v2/business/visit-guide/history"
     )
 
+
+def test_cxo_report_url_follows_meeting_report(monkeypatch):
+    monkeypatch.setattr(urls.settings, "REVIEW_REPORT_HOST", "https://example.com")
+    assert (
+        urls.build_leader_meeting_cxo_report_url("RPT-1")
+        == "https://example.com/v2/business/leader-meeting-review/RPT-1?tab=management"
+    )
+
