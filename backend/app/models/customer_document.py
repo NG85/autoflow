@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Optional, TYPE_CHECKING
 from uuid import UUID
+from sqlalchemy import Column, Text
 from sqlmodel import Field, SQLModel, Relationship
 from sqlmodel.sql.sqltypes import GUID
 
@@ -13,14 +14,14 @@ class CustomerDocument(SQLModel, table=True):
     __tablename__ = "customer_documents"
     
     id: int = Field(primary_key=True, description="自增主键ID")
-    file_category: str = Field(description="文件类别，如ABP、CallHigh等")
-    account_name: str = Field(description="客户名称")
-    account_id: str = Field(description="客户ID")
-    document_url: str = Field(description="文档链接")
-    document_type: Optional[str] = Field(default=None, description="文档类型")
-    document_title: Optional[str] = Field(default=None, description="文档标题")
+    file_category: str = Field(max_length=255, description="文件类别，如ABP、CallHigh等")
+    account_name: str = Field(max_length=255, description="客户名称")
+    account_id: str = Field(max_length=255, description="客户ID")
+    document_url: str = Field(sa_column=Column(Text, nullable=False), description="文档链接")
+    document_type: Optional[str] = Field(default=None, max_length=255, description="文档类型")
+    document_title: Optional[str] = Field(default=None, max_length=500, description="文档标题")
     uploader_id: UUID = Field(sa_type=GUID, foreign_key="users.id", description="上传者ID")
-    uploader_name: str = Field(description="上传者姓名")
+    uploader_name: str = Field(max_length=255, description="上传者姓名")
     created_at: datetime = Field(default_factory=datetime.now, description="创建时间")
     updated_at: datetime = Field(default_factory=datetime.now, description="更新时间")
     

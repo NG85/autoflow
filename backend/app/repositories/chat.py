@@ -322,12 +322,7 @@ class ChatRepo(BaseRepo):
 
         # Dynamically add filters for each key-value pair in metadata
         for key, value in metadata.items():
-            json_path = f"$.{key}"
-            filter_condition = (
-                func.JSON_UNQUOTE(func.JSON_EXTRACT(ChatMessage.meta, json_path))
-                == value
-            )
-            query = query.where(filter_condition)
+            query = query.where(ChatMessage.meta[key].as_string() == value)
 
         # Order by created_at in descending order
         query = query.order_by(desc(ChatMessage.created_at))

@@ -1,5 +1,4 @@
 import logging
-import tidb_vector
 import sqlalchemy
 
 from typing import Any, List, Optional, Type
@@ -27,8 +26,8 @@ from sqlmodel import (
     and_,
     or_,
 )
-from tidb_vector.sqlalchemy import VectorAdaptor
 from app.core.db import engine
+from app.rag.vector_index import create_cosine_hnsw_index
 from sqlalchemy.sql import func
 
 
@@ -86,9 +85,7 @@ class TiDBVectorStore(BasePydanticVectorStore):
             )
 
             # Add HNSW index to accelerate ann queries.
-            VectorAdaptor(engine).create_vector_index(
-                self._chunk_db_model.embedding, tidb_vector.DistanceMetric.COSINE
-            )
+            create_cosine_hnsw_index(self._chunk_db_model.embedding)
 
             logger.info(f"Chunk table <{table_name}> has been created successfully.")
         else:

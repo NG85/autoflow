@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlmodel import Session
 
 from app.core.config import settings
+from app.core.dialect_sql import upsert_statement
 from app.utils.date_utils import beijing_today_date, convert_beijing_date_to_utc_range
 from app.utils.uuid6 import uuid7
 
@@ -19,17 +20,34 @@ _SUBJECT_ID_ALL = "__ALL__"
 _DEPARTMENT_ID_ALL = "__ALL__"
 _BATCH_UPSERT_SIZE = 500
 
-_FACT_UPSERT_SQL = text(
-    """
-    INSERT INTO crm_visit_metrics_facts
-      (id, anchor, grain, period_start, period_end, subject_type, subject_id, department_id, department_name, metric, weekday_iso, value_int)
-    VALUES
-      (:id, :anchor, :grain, :period_start, :period_end, :subject_type, :subject_id, :department_id, :department_name, :metric, :weekday_iso, :value_int)
-    ON DUPLICATE KEY UPDATE
-      department_name = VALUES(department_name),
-      value_int = VALUES(value_int),
-      updated_at = CURRENT_TIMESTAMP
-    """
+_FACT_UPSERT_SQL = upsert_statement(
+    "crm_visit_metrics_facts",
+    [
+        "id",
+        "anchor",
+        "grain",
+        "period_start",
+        "period_end",
+        "subject_type",
+        "subject_id",
+        "department_id",
+        "department_name",
+        "metric",
+        "weekday_iso",
+        "value_int",
+    ],
+    [
+        "anchor",
+        "grain",
+        "period_start",
+        "period_end",
+        "subject_type",
+        "subject_id",
+        "department_id",
+        "metric",
+        "weekday_iso",
+    ],
+    ["department_name", "value_int"],
 )
 
 

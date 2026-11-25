@@ -6,7 +6,7 @@ from uuid import UUID
 
 from fastapi import HTTPException
 from pydantic import BaseModel
-from sqlalchemy import text, delete
+from sqlalchemy import delete
 from sqlmodel import Session, select, func
 
 from app.api.routes.models import (
@@ -273,10 +273,12 @@ def check_rag_config_need_migration(session: Session) -> NeedMigrationStatus:
         select(ChatEngine.id)
         .where(ChatEngine.deleted_at == None)
         .where(
-            text(
-                "JSON_EXTRACT(engine_options, '$.knowledge_base.linked_knowledge_bases') IS NULL AND "
-                "JSON_EXTRACT(engine_options, '$.knowledge_base.linked_knowledge_base') IS NULL"
-            )
+            ChatEngine.engine_options["knowledge_base"]["linked_knowledge_bases"]
+            .as_string()
+            .is_(None),
+            ChatEngine.engine_options["knowledge_base"]["linked_knowledge_base"]
+            .as_string()
+            .is_(None),
         )
     )
 

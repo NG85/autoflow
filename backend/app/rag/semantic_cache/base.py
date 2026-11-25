@@ -1,9 +1,10 @@
 import time
 import dspy
 import logging
+from datetime import datetime, timedelta, UTC
 from typing import List, Literal, Optional
 from pydantic import BaseModel, Field
-from sqlmodel import Session, select, func
+from sqlmodel import Session, select
 
 from llama_index.core.embeddings.utils import EmbedType, resolve_embed_model
 from llama_index.embeddings.openai import OpenAIEmbedding, OpenAIEmbeddingModelType
@@ -140,19 +141,22 @@ class SemanticCacheManager:
         )
         start_time = time.time()
 
+        # Same one-month window on both dialects. TiDB also has a table TTL;
+        # PostgreSQL only has this predicate. Distance uses the column type
+        # for the active dialect (``VEC_COSINE_DISTANCE`` or ``<=>``).
+        cutoff = datetime.now(UTC) - timedelta(days=31)
         sql = (
             select(
                 SemanticCache,
                 SemanticCache.query_vec.cosine_distance(embedding).label("distance"),
             )
-            .having(SemanticCache.query_vec.cosine_distance(embedding) < 0.5)
+            .where(SemanticCache.query_vec.cosine_distance(embedding) < 0.5)
+            .where(SemanticCache.created_at >= cutoff)
             .order_by("distance")
             .limit(20)
         )
         if namespace:
-            sql = sql.where(
-                func.json_extract(SemanticCache.meta, "$.namespace") == namespace
-            )
+            sql = sql.where(SemanticCache.meta["namespace"].as_string() == namespace)
 
         results = session.execute(sql).all()
         candidates = SemanticGroup(

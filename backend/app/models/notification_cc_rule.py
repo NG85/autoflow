@@ -3,7 +3,7 @@
 from typing import Optional, List
 from uuid import UUID
 
-from sqlalchemy import UniqueConstraint
+from sqlalchemy import BigInteger, Column, ForeignKey, Index, UniqueConstraint
 from sqlmodel import Field, Relationship as SQLRelationship, SQLModel
 
 from app.models.base import UpdatableBaseModel
@@ -17,8 +17,33 @@ SCOPE_TYPE_GLOBAL = "global"
 
 class NotificationCcRule(UpdatableBaseModel, SQLModel, table=True):
     __tablename__ = "notification_cc_rules"
+    __table_args__ = (
+        Index(
+            "ix_notification_cc_rules_event_scope_user_enabled",
+            "event_type",
+            "scope_type",
+            "scope_user_id",
+            "enabled",
+        ),
+        Index(
+            "ix_notification_cc_rules_event_scope_enabled",
+            "event_type",
+            "scope_type",
+            "enabled",
+        ),
+        Index(
+            "ix_notification_cc_rules_event_scope_dept_enabled",
+            "event_type",
+            "scope_type",
+            "scope_department_id",
+            "enabled",
+        ),
+    )
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(BigInteger, primary_key=True, autoincrement=True),
+    )
     event_type: str = Field(max_length=64, index=True, description="事件类型，如 visit_record_card")
     scope_type: str = Field(
         max_length=32,
@@ -59,6 +84,16 @@ class NotificationCcRuleRecipient(UpdatableBaseModel, SQLModel, table=True):
         UniqueConstraint("rule_id", "user_id", name="uq_notification_cc_rule_recipient"),
     )
 
-    id: Optional[int] = Field(default=None, primary_key=True)
-    rule_id: int = Field(foreign_key="notification_cc_rules.id", index=True)
+    id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(BigInteger, primary_key=True, autoincrement=True),
+    )
+    rule_id: int = Field(
+        sa_column=Column(
+            BigInteger,
+            ForeignKey("notification_cc_rules.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
     user_id: UUID = Field(foreign_key="users.id", index=True)

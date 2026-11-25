@@ -27,6 +27,8 @@ Edit `.env` to set environment variables.
 make migrate
 ```
 
+数据库方言（TiDB / PostgreSQL）运维说明见 [`docs/database-dialect.md`](docs/database-dialect.md)；规格见仓库根目录 `fsd/`、`tsd/` 的 `2026-11-17-database-dialect.md`。
+
 ### Run development server
 
 ```bash

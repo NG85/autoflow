@@ -1,8 +1,7 @@
 import enum
 
-from sqlalchemy import Column, text
-from app.models.base import IntEnumType
-from sqlmodel import SQLModel, Field, Relationship as SQLRelationship
+from sqlalchemy import Column, DateTime, Enum, text
+from sqlmodel import SQLModel, Field, Index, Relationship as SQLRelationship
 from typing import Optional
 from datetime import UTC, datetime
 from uuid import UUID
@@ -41,7 +40,12 @@ class FilePermission(SQLModel, table=True):
 
     permission_type: PermissionType = Field(
         sa_column=Column(
-            IntEnumType(PermissionType),
+            Enum(
+                PermissionType,
+                native_enum=False,
+                length=32,
+                values_callable=lambda enum_cls: [member.value for member in enum_cls],
+            ),
             nullable=False,
             default=PermissionType.READ,
         ),
@@ -57,6 +61,7 @@ class FilePermission(SQLModel, table=True):
     granted_at: datetime = Field(
         sa_column=Column(
             "granted_at",
+            DateTime(timezone=True),
             nullable=False,
             server_default=text("now()"),
         ),
@@ -69,3 +74,8 @@ class FilePermission(SQLModel, table=True):
     )
 
     __tablename__ = "file_permissions"
+    __table_args__ = (
+        Index("ix_file_permissions_file_id", "file_id"),
+        Index("ix_file_permissions_user_id", "user_id"),
+        Index("ix_file_permissions_file_id_user_id", "file_id", "user_id"),
+    )

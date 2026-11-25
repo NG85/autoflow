@@ -16,6 +16,8 @@ dependencies = [
     "fastapi-pagination>=0.12.25",
     "pwdlib[argon2,bcrypt]>=0.2.1",
     "sqlmodel==0.0.19",
+    "psycopg[binary]>=3.2.0",
+    "pgvector>=0.3.6",
     "pymysql>=1.1.1",
     "asyncmy>=0.2.9",
     "tidb-vector>=0.0.14",

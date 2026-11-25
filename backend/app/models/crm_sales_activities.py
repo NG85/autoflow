@@ -1,7 +1,7 @@
 from typing import Optional, List
 from datetime import datetime, date
 from sqlalchemy import Index, select, String
-from sqlmodel import Field, Column, DateTime, Date, SQLModel, Text, Session, Relationship
+from sqlmodel import Field, Column, DateTime, Date, SQLModel, Text, Session, Relationship, func
 
 class CRMSalesActivities(SQLModel, table=True):
     model_config = {"from_attributes": True}
@@ -34,12 +34,12 @@ class CRMSalesActivities(SQLModel, table=True):
     creator: Optional[str] = Field(nullable=True, max_length=255, description="创建人")
     creator_id: Optional[str] = Field(nullable=True, max_length=255, description="创建人唯一性ID")
     create_time: datetime = Field(
-        sa_column=Column(DateTime, server_default="CURRENT_TIMESTAMP"),
+        sa_column=Column(DateTime, server_default=func.now()),
         description="创建时间"
     )
     last_modifier: Optional[str] = Field(nullable=True, max_length=255, description="最后修改人")
     last_modified_time: datetime = Field(
-        sa_column=Column(DateTime, server_default="CURRENT_TIMESTAMP", onupdate="CURRENT_TIMESTAMP"),
+        sa_column=Column(DateTime, server_default=func.now(), onupdate=func.now()),
         description="最后修改时间"
     )
 
@@ -51,8 +51,8 @@ class CRMSalesActivities(SQLModel, table=True):
         Index('idx_record_date', 'record_date'),
         Index('idx_correlation_id', 'correlation_id'),
         Index('idx_account_id', 'account_id'),
-        Index('idx_unique_id', 'unique_id'),
-        Index('idx_opportunity_id', 'opportunity_id'),
+        Index('idx_sales_activity_unique_id', 'unique_id'),
+        Index('idx_sales_activity_opportunity_id', 'opportunity_id'),
     )
     
     opportunity: Optional["CRMOpportunity"] = Relationship(

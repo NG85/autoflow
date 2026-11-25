@@ -91,9 +91,7 @@ def import_documents_from_kb_datasource(kb_id: int, data_source_id: int):
                 .options(load_only(Document.id, Document.file_id, Document.meta))
                 .where(
                     Document.knowledge_base_id == kb_id,
-                    func.json_unquote(
-                        func.json_extract(Document.meta, "$.category")
-                    )
+                    Document.meta["category"].as_string()
                     == DocumentCategory.CRM.value,
                 )
             ).all()

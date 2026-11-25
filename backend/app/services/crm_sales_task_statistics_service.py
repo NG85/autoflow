@@ -7,6 +7,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlmodel import Session, select
 
+from app.core.dialect_sql import upsert_statement
+
 from app.models.user_profile import UserProfile
 from app.repositories.user_department_relation import user_department_relation_repo
 from app.utils.uuid6 import uuid7
@@ -205,16 +207,27 @@ class CRMSalesTaskStatisticsService:
         if not rows:
             return 0
 
-        upsert_sql = text(
-            """
-            INSERT INTO crm_todos_weekly_metrics
-                (id, week_start, week_end, assignee_id, department_id, metric, data_source, value)
-            VALUES
-                (:id, :week_start, :week_end, :assignee_id, :department_id, :metric, :data_source, :value)
-            ON DUPLICATE KEY UPDATE
-                value = VALUES(value),
-                updated_at = CURRENT_TIMESTAMP
-            """
+        upsert_sql = upsert_statement(
+            "crm_todos_weekly_metrics",
+            [
+                "id",
+                "week_start",
+                "week_end",
+                "assignee_id",
+                "department_id",
+                "metric",
+                "data_source",
+                "value",
+            ],
+            [
+                "week_start",
+                "week_end",
+                "assignee_id",
+                "department_id",
+                "metric",
+                "data_source",
+            ],
+            ["value"],
         )
 
         for r in rows:

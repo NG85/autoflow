@@ -44,6 +44,19 @@ def retrieve_chunks(
         raise
 
 
+def _finish_knowledge_graph_retrieval(retriever, query: str) -> KnowledgeGraphRetrievalResult:
+    """The fusion retriever streams progress events and returns the graph at the end."""
+    generator = retriever.retrieve_knowledge_graph(query)
+    try:
+        while True:
+            next(generator)
+    except StopIteration as stop:
+        result = stop.value
+        if isinstance(result, KnowledgeGraphRetrievalResult):
+            return result
+    return KnowledgeGraphRetrievalResult()
+
+
 @router.post("/retrieve/knowledge_graph")
 def retrieve_knowledge_graph(
     db_session: SessionDep,
@@ -60,7 +73,7 @@ def retrieve_knowledge_graph(
             use_query_decompose=config.use_query_decompose,
             config=config.knowledge_graph,
         )
-        return retriever.retrieve_knowledge_graph(request.query)
+        return _finish_knowledge_graph_retrieval(retriever, request.query)
     except KBNotFound as e:
         raise e
     except Exception as e:

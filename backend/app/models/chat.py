@@ -4,10 +4,12 @@ from typing import Optional, Dict
 from pydantic import BaseModel
 from datetime import datetime
 
+from sqlalchemy import Enum
 from sqlmodel import (
     Field,
     Column,
     DateTime,
+    Index,
     JSON,
     String,
     Relationship as SQLRelationship,
@@ -67,7 +69,12 @@ class Chat(UUIDBaseModel, UpdatableBaseModel, table=True):
     )
     chat_type: ChatType = Field(
         sa_column=Column(
-            IntEnumType(ChatType),
+            Enum(
+                ChatType,
+                native_enum=False,
+                length=64,
+                values_callable=lambda enum_cls: [member.value for member in enum_cls],
+            ),
             nullable=False,
             default=ChatType.DEFAULT,
         )
@@ -83,6 +90,7 @@ class Chat(UUIDBaseModel, UpdatableBaseModel, table=True):
     )
 
     __tablename__ = "chats"
+    __table_args__ = (Index("idx_chats_chat_mode", "chat_mode"),)
 
 
 class ChatItem(BaseModel):

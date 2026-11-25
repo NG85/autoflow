@@ -10,7 +10,6 @@ from sqlalchemy import (
     JSON,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlmodel import (
     SQLModel,
     Field,
@@ -1098,22 +1097,22 @@ class CRMReviewOppBranchSnapshotCache(SQLModel, table=True):
 
     __table_args__ = (
         Index(
-            "idx_review_opp_branch_snapshot_opp_period",
+            "idx_review_opp_branch_snapshot_cache_opp_period",
             "opportunity_id",
             "snapshot_period",
             unique=True,
         ),
         Index(
-            "idx_review_opp_branch_snapshot_owner_period",
+            "idx_review_opp_branch_snapshot_cache_owner_period",
             "owner_id",
             "snapshot_period",
         ),
         Index(
-            "idx_review_opp_branch_snapshot_period",
+            "idx_review_opp_branch_snapshot_cache_period",
             "snapshot_period",
         ),
         Index(
-            "idx_review_opp_branch_snapshot_was_changed",
+            "idx_review_opp_branch_snapshot_cache_was_changed",
             "was_changed_to_commit",
         ),
     )
@@ -1828,7 +1827,7 @@ class CRMReviewCxoReport(SQLModel, table=True):
     )
     report_content: Optional[str] = Field(
         default=None,
-        sa_column=Column(MEDIUMTEXT),
+        sa_column=Column(Text),
         description="报告正文",
     )
     summary: Optional[str] = Field(
