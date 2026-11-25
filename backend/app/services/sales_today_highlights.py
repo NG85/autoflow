@@ -53,6 +53,7 @@ ITEM_NEXT_WEEK = "NEXT_WEEK_ACTION_CANDIDATE"
 FRIDAY = 4
 WEEK_TASK_LINK_LABEL = "本周待完成"
 WEEK_FOLLOWUP_LINK_LABEL = "本周已拜访"
+WEEK_SECTION_TITLE = "本周"
 INCOMPLETE_TASK_STATUSES = ("IN_PROGRESS", "PENDING")
 
 # 区块顺序与类型是销售卡合同。标题只从 card_links 快照读取。
@@ -399,7 +400,8 @@ def render_card_markdown(assembled: Mapping[str, Any]) -> str:
     lines.append(_card_line(key, items[0], None))
     more = _section_exit_link(section)
     if more:
-        lines.append(more)
+        # 引用会把下一行吞进去。出口蓝链先空一行，才能离开引用。
+        lines.extend(["", more])
     return "\n".join(lines)
 
 
@@ -498,7 +500,7 @@ def render_embedded_personal_markdown(assembled: Mapping[str, Any]) -> str:
         lines.append(_card_line("immediate_today", items[0], None))
         more = _section_exit_link(section)
         if more:
-            lines.append(more)
+            lines.extend(["", more])
     links = render_card_links(assembled)
     if links:
         lines.append(links)
@@ -537,7 +539,7 @@ def render_dingtalk_markdown(
     title: str,
     owner_name: str = "",
 ) -> str:
-    """钉钉 sampleMarkdown：一级标题、二级小节、引用说明。底部链接不用列表，避免看成「更多」的展开。"""
+    """钉钉 sampleMarkdown：一级标题、二级小节、引用说明。本周蓝链前加分隔线和标题。"""
     lines: list[str] = [f"# {title}"]
     section = _section_by_key(assembled, "immediate_today")
     items = list((section or {}).get("items") or [])
@@ -551,57 +553,44 @@ def render_dingtalk_markdown(
         if exit_link:
             lines.append(exit_link)
     body = "\n".join(lines)
-    tail_parts = [
-        part
-        for part in (
-            render_card_links(assembled),
-            render_action_buttons(card_action_buttons(assembled, owner_name=owner_name)),
-        )
-        if part
-    ]
-    if not tail_parts:
-        return body
-    return f"{body}\n\n\n" + "\n\n".join(tail_parts)
+    other_links = render_card_links(assembled)
+    week_links = render_action_buttons(card_action_buttons(assembled, owner_name=owner_name))
+    text = f"{body}\n\n\n{other_links}" if other_links else body
+    if not week_links:
+        return text
+    return f"{text}\n\n---\n\n**{WEEK_SECTION_TITLE}**\n{week_links}"
 
 
 def _dingtalk_item_lines(section_key: str, item: Mapping[str, Any]) -> list[str]:
+    if section_key == "immediate_today":
+        lines: list[str] = []
+        head = _text(item.get("claim"))
+        extra = _text(item.get("why_today"))
+        if head:
+            lines.append(head)
+        if extra:
+            lines.append(f"> {extra}")
+        return lines
     context = " · ".join(
         part
         for part in (_text(item.get("account_name")), _text(item.get("opportunity_name")))
         if part
     )
-    if section_key == "immediate_today":
-        head = _text(item.get("claim"))
-        extra = _text(item.get("why_today"))
-    elif section_key == "open_risks":
+    if section_key == "open_risks":
         claim = _text(item.get("claim"))
         head = f"已闭环：{claim}" if item.get("risk_change") == "resolved" else claim
         extra = ""
     else:
         head = _text(item.get("confirm_prompt")) or _text(item.get("claim"))
         extra = ""
-    lines: list[str] = []
+    lines = []
     if head:
         lines.append(head)
     if extra:
         lines.append(f"> {extra}")
     if context:
         lines.append(f"*{context}*")
-    if section_key == "immediate_today":
-        for label in _related_todo_labels(item):
-            lines.append(f"- {label}")
     return lines
-
-
-def _related_todo_labels(item: Mapping[str, Any]) -> list[str]:
-    labels: list[str] = []
-    for todo in item.get("related_todos") or []:
-        if not isinstance(todo, Mapping):
-            continue
-        label = _text(todo.get("title")) or _text(todo.get("unique_id"))
-        if label and label not in labels:
-            labels.append(label)
-    return labels
 
 
 def _report_day(assembled: Mapping[str, Any]) -> Optional[date]:
@@ -618,15 +607,19 @@ def _report_day(assembled: Mapping[str, Any]) -> Optional[date]:
 
 
 def _card_line(section_key: str, item: Mapping[str, Any], index: Optional[int]) -> str:
+    if section_key == "immediate_today":
+        head = _text(item.get("claim"))
+        extra = _text(item.get("why_today"))
+        lines = [head if index is None else f"{index}. {head}"] if head else []
+        if extra:
+            lines.append(f"> {extra}")
+        return "\n".join(lines)
     context = " · ".join(
         part
         for part in (_text(item.get("account_name")), _text(item.get("opportunity_name")))
         if part
     )
-    if section_key == "immediate_today":
-        head = _text(item.get("claim"))
-        extra = _text(item.get("why_today"))
-    elif section_key == "open_risks":
+    if section_key == "open_risks":
         claim = _text(item.get("claim"))
         head = f"已闭环：{claim}" if item.get("risk_change") == "resolved" else claim
         extra = ""
@@ -638,9 +631,6 @@ def _card_line(section_key: str, item: Mapping[str, Any], index: Optional[int]) 
         parts.append(f"   {context}")
     if extra:
         parts.append(f"   {extra}")
-    if section_key == "immediate_today":
-        for label in _related_todo_labels(item):
-            parts.append(f"   - {label}")
     return "\n".join(parts)
 
 

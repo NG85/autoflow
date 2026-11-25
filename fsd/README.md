@@ -64,3 +64,4 @@
 | `2026-11-24-leader-meeting-cxo-card.md` | 2026-11-24，例会管理评价卡片发给 CXO |
 | `2026-11-24-daily-report-billing-on-delivery.md` | 2026-11-24，日报只在真正发出后计费 |
 | `2026-11-24-weekly-report-billing-on-delivery.md` | 2026-11-24，周报只在卡片真正发出后计费 |
+| `2026-11-25-im-card-layout.md` | 2026-11-25，复盘和今日重点卡片排版 |

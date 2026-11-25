@@ -774,6 +774,7 @@ def test_sales_wecom_card_groups_jump_and_horizontal(monkeypatch):
     card = build_sales_wecom_template_card(assembled, owner_name="高娜")
     assert len(card["jump_list"]) <= JUMP_LIST_MAX
     assert card["jump_list"][0]["title"] == "查看"
+    assert "原因：B" in card["sub_title_text"]
     horizontal = card.get("horizontal_content_list") or []
     assert len(horizontal) <= HORIZONTAL_LINK_MAX
     assert all(row["keyname"] != row["value"] for row in horizontal)

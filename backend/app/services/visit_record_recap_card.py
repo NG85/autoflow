@@ -22,6 +22,8 @@ _TAB_TITLE = dict(RECAP_PAGE_TABS)
 DINGTALK_PARAGRAPH_GAP = "\u00a0"
 _RECAP_BODY_MAX_CHARS = 800
 _TITLE_MAX_LEN = 50
+_WECOM_TITLE_MAX_LEN = 36
+_CARD_TYPE_LABEL = "拜访复盘"
 _REVISED_NOTICE = "【修改后】"
 _VISIT_DETAIL_LABEL = "跟进详情"
 _RECAP_REPORT_LABEL = "完整复盘报告"
@@ -142,6 +144,30 @@ def format_entry_time(value: Any) -> str:
             return f"{parsed.month}月{parsed.day}日 {parsed.hour:02d}:{parsed.minute:02d}"
         return f"{parsed.month}月{parsed.day}日"
     return _text(value)
+
+
+def recap_card_title(quality: str, visit_date: str, account: str) -> str:
+    """标题以卡片类型开头，后面仍是质量、日期和客户。"""
+    prefix = f"{_CARD_TYPE_LABEL}｜"
+    subject = compose_recap_title(
+        quality,
+        visit_date,
+        account,
+        max_len=max(1, _TITLE_MAX_LEN - len(prefix)),
+    )
+    if not subject:
+        return _CARD_TYPE_LABEL
+    return f"{prefix}{subject}"[:_TITLE_MAX_LEN]
+
+
+def wecom_recap_title(title: str) -> str:
+    """企微标题建议不超过 36 字，类型已经写在标题下的灰色说明里，标题只留质量、日期和客户。"""
+    prefix = f"{_CARD_TYPE_LABEL}｜"
+    subject = title[len(prefix) :] if (title or "").startswith(prefix) else (title or "")
+    subject = subject.strip() or _CARD_TYPE_LABEL
+    if len(subject) <= _WECOM_TITLE_MAX_LEN:
+        return subject
+    return subject[: _WECOM_TITLE_MAX_LEN - 1].rstrip() + "…"
 
 
 def compose_recap_title(quality: str, visit_date: str, account: str, *, max_len: int = _TITLE_MAX_LEN) -> str:
@@ -343,6 +369,33 @@ def format_extract_card_lines(
     ]
 
 
+def dingtalk_quote(text: str) -> str:
+    """钉钉 sampleMarkdown 的引用。多行收成一行，中间留两个全角空格。"""
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    if not lines:
+        return ""
+    return "> " + "　　".join(lines)
+
+
+def dingtalk_visit_meta_quote(meta_lines: list[str]) -> str:
+    """拜访基础信息的引用。跟进人和创建时间同一行，商机单独一行。"""
+    identity: list[str] = []
+    opportunity: list[str] = []
+    for raw in meta_lines:
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("商机："):
+            opportunity.append(line)
+        else:
+            identity.append(line)
+    rows: list[str] = []
+    if identity:
+        rows.append("　　".join(identity))
+    rows.extend(opportunity)
+    return "\n".join(f"> {row}" for row in rows)
+
+
 def _format_extract_section(extract_lines: Optional[list[str]]) -> str:
     if not extract_lines:
         return ""
@@ -372,16 +425,24 @@ def _dingtalk_text(
     extract_lines: Optional[list[str]] = None,
 ) -> str:
     parts: list[str] = [f"### {title}"]
+    quote = dingtalk_visit_meta_quote(meta_lines)
+    if quote:
+        parts.append(quote)
     if is_revised:
         parts.extend([DINGTALK_PARAGRAPH_GAP, _REVISED_NOTICE])
-    if meta_lines:
-        parts.extend([DINGTALK_PARAGRAPH_GAP, "\n".join(meta_lines)])
-    parts.extend([DINGTALK_PARAGRAPH_GAP, recap_text or "--"])
+    summary = recap_text or "--"
+    if quote and not is_revised:
+        parts.append(summary)
+    else:
+        parts.extend([DINGTALK_PARAGRAPH_GAP, summary])
+    link_rows: list[str] = []
     if action_lines:
-        parts.extend([DINGTALK_PARAGRAPH_GAP, CARD_LINK_SEPARATOR.join(action_lines)])
+        link_rows.append(CARD_LINK_SEPARATOR.join(action_lines))
     extract_section = _format_extract_section(extract_lines)
     if extract_section:
-        parts.extend([DINGTALK_PARAGRAPH_GAP, extract_section])
+        link_rows.append(extract_section)
+    if link_rows:
+        parts.extend([DINGTALK_PARAGRAPH_GAP, CARD_LINK_SEPARATOR.join(link_rows)])
     return "\n".join(parts)
 
 
@@ -402,7 +463,7 @@ def build_recap_lite_card(
         record.get("visit_communication_date") or record.get("last_modified_time")
     )
     account = resolve_account_name(record)
-    title = compose_recap_title(quality, visit_date, account)
+    title = recap_card_title(quality, visit_date, account)
     entry_time = format_entry_time(record.get("last_modified_time") or record.get("visit_communication_date"))
     opportunity = _display_text(record.get("opportunity_name"))
     recap_text = resolve_recap_body_text(record, insight=insight)
@@ -532,9 +593,9 @@ def build_visit_recap_wecom_template_card(card: RecapLiteCard) -> dict[str, Any]
         action_url = extracts[0][1]
 
     return build_text_notice_card(
-        title=card.title,
+        title=wecom_recap_title(card.title),
         desc="拜访复盘",
-        sub_title_text="\n".join(body_parts) or "暂无复盘摘要。",
+        sub_title_text="\n\n".join(body_parts) or "暂无复盘摘要。",
         jump_links=jump_links,
         horizontal_links=extracts,
         card_action_url=action_url,

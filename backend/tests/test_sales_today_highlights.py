@@ -131,7 +131,8 @@ def test_thursday_drops_next_week_and_unchanged_risk_keeps_resolved(monkeypatch)
     assert risk_claims == ["窗口关掉了"]
     body = render_card_markdown(thursday)
     assert "确认排期" in body
-    assert "甲客户" in body and "乙商机" in body
+    assert "> 今天不定就延期\n\n[查看](" in body
+    assert "甲客户" not in body and "乙商机" not in body
     assert "已闭环" not in body
     assert "这件下周还做吗" not in body
     assert [label for label, _url in card_blue_links(thursday)] == ["关键发现"]
@@ -370,7 +371,7 @@ def test_same_claim_stays_two_tasks():
     ]
     body = render_card_markdown(assembled)
     assert body.count("收口两条待办") == 1
-    assert "案例触达" in body
+    assert "案例触达" not in body
     assert "清账" not in body
 
 
@@ -510,7 +511,7 @@ def test_dingtalk_card_puts_title_in_the_body(monkeypatch):
     assert "## 立即处理\n" in content
     assert "> 今天要定" in content
     assert "[查看](" in content
-    assert "\n\n\n[本周待完成]" in content
+    assert "\n\n---\n\n**本周**\n[本周待完成]" in content
     assert "- [本周待完成]" not in content
 
 
