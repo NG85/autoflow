@@ -1506,8 +1506,8 @@ class CRMStatisticsService:
                 )
                 
                 total_notifications += 1
-                
-                if result["success"]:
+
+                if self._daily_push_delivered(result):
                     successful_notifications += 1
                     logger.info(
                         f"成功为销售 {report['recorder']} 发送个人日报飞书通知，"
@@ -1521,6 +1521,13 @@ class CRMStatisticsService:
                         trace_key=f"sales-daily:{report_date_value}:{recorder_id}",
                         operator_user_id=recorder_id or None,
                         log_context=f"sales-daily:{report_date_value}:{recorder_id}",
+                    )
+                elif result.get("skipped"):
+                    logger.info(
+                        "Skip billing for sales daily report because push was skipped: "
+                        "recorder=%s reason=%s",
+                        report.get("recorder"),
+                        result.get("skip_reason"),
                     )
                 else:
                     logger.warning(
@@ -1645,8 +1652,8 @@ class CRMStatisticsService:
                     recipients=managers,
                 )
                 total_departments += 1
-                
-                if result["success"]:
+
+                if self._daily_push_delivered(result):
                     successful_departments += 1
                     if has_follow_up:
                         data_status = "有跟进(卡片)"
@@ -1678,6 +1685,14 @@ class CRMStatisticsService:
                             department_name,
                             target_date.isoformat(),
                         )
+                elif result.get("skipped"):
+                    logger.info(
+                        "Skip billing for department daily report because push was skipped: "
+                        "department=%s date=%s reason=%s",
+                        department_name,
+                        target_date.isoformat(),
+                        result.get("skip_reason"),
+                    )
                 else:
                     logger.warning(
                         f"部门 {department_report['department_name']} 的日报飞书通知发送失败: {result['message']}"
@@ -1776,7 +1791,7 @@ class CRMStatisticsService:
                 company_report_data=company_report
             )
             
-            if result["success"]:
+            if self._daily_push_delivered(result):
                 if has_follow_up:
                     push_kind = "有跟进(卡片)"
                 elif summary_missing:
@@ -1801,6 +1816,13 @@ class CRMStatisticsService:
                         "Skip billing for empty company daily report: date=%s",
                         target_date.isoformat(),
                     )
+            elif result.get("skipped"):
+                logger.info(
+                    "Skip billing for company daily report because push was skipped: "
+                    "date=%s reason=%s",
+                    target_date.isoformat(),
+                    result.get("skip_reason"),
+                )
             else:
                 logger.warning(f"公司日报飞书通知发送失败: {result['message']}")
                 
@@ -1832,6 +1854,21 @@ class CRMStatisticsService:
             "lead_yellow_count": 0,
             "lead_green_count": 0,
         }
+
+    @staticmethod
+    def _daily_push_delivered(result: Optional[Dict[str, Any]]) -> bool:
+        """推送是否真正发出至少一次。
+
+        kpi_card 关闭时返回 success=True、skipped=True、success_count=0，不能当发送成功。
+        """
+        if not isinstance(result, dict) or result.get("skipped"):
+            return False
+        if not result.get("success"):
+            return False
+        try:
+            return int(result.get("success_count") or 0) > 0
+        except (TypeError, ValueError):
+            return False
 
     @staticmethod
     def daily_report_has_follow_up(report_data: Optional[Dict[str, Any]]) -> bool:
@@ -1872,6 +1909,16 @@ class CRMStatisticsService:
         if isinstance(raw, (int, float)):
             return int(raw) == 1
         return str(raw or "").strip().lower() in {"true", "1", "yes"}
+
+    @staticmethod
+    def weekly_report_should_bill(
+        result: Optional[Dict[str, Any]],
+        report_data: Optional[Dict[str, Any]],
+    ) -> bool:
+        """周报卡片真正发出且本周已生成 KPI 时才计费。说明文本和跳过推送都不计。"""
+        return CRMStatisticsService._daily_push_delivered(
+            result
+        ) and CRMStatisticsService.weekly_report_has_data(report_data)
 
     @staticmethod
     def daily_report_summary_missing(report_data: Optional[Dict[str, Any]]) -> bool:

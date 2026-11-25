@@ -61,3 +61,5 @@
 | `2026-11-20-visit-opportunity-review-push.md` | 2026-11-20，本次拜访商机评估推送，默认关闭 |
 | `2026-11-20-leader-meeting-review-summary-b64.md` | 2026-11-20，例会复盘卡片解码带前缀的会议总结 |
 | `2026-11-24-leader-meeting-cxo-card.md` | 2026-11-24，例会管理评价卡片发给 CXO |
+| `2026-11-24-daily-report-billing-on-delivery.md` | 2026-11-24，日报只在真正发出后计费 |
+| `2026-11-24-weekly-report-billing-on-delivery.md` | 2026-11-24，周报只在卡片真正发出后计费 |
