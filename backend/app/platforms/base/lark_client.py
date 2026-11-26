@@ -270,7 +270,7 @@ class BaseLarkClient(BaseClient):
             return None
     
     def _get_minutes_content(self, token: str, access_token: str) -> Optional[str]:
-        """获取会议纪要内容"""
+        """导出妙记文字记录。失败时不改读智能纪要，由调用方提示用户改用文档链接。"""
         url = f"{self.base_url}/minutes/v1/minutes/{token}/transcript"
         headers = {"Authorization": f"Bearer {access_token}"}
         params = {

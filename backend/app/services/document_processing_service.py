@@ -21,6 +21,8 @@ from app.platforms.factory import get_client_by_url
 
 logger = logging.getLogger(__name__)
 
+MINUTES_TRANSCRIPT_UNAVAILABLE_MESSAGE = "未能读取该妙记的文字记录，请改用文档链接"
+
 
 class DocumentProcessingService:
     """通用文档处理服务，支持飞书、Lark、钉钉会议、钉钉听记和本地文件"""
@@ -201,9 +203,13 @@ class DocumentProcessingService:
                     document_url, access_token
                 )
                 if not original_content:
+                    if url_type == "minutes":
+                        message = MINUTES_TRANSCRIPT_UNAVAILABLE_MESSAGE
+                    else:
+                        message = f"未获取到{oauth_service.platform_name}内容，请检查链接或重新授权"
                     return {
                         "success": False,
-                        "message": f"未获取到{oauth_service.platform_name}内容，请检查链接或重新授权"
+                        "message": message
                     }
                 return {
                     "success": True,
@@ -224,9 +230,13 @@ class DocumentProcessingService:
             }
         except Exception as e:
             logger.error(f"Failed to get {oauth_service.platform_name} content: {e}")
+            if url_type == "minutes":
+                message = MINUTES_TRANSCRIPT_UNAVAILABLE_MESSAGE
+            else:
+                message = f"获取{oauth_service.platform_name}内容失败，请检查授权或重试"
             return {
                 "success": False,
-                "message": f"获取{oauth_service.platform_name}内容失败，请检查授权或重试"
+                "message": message
             }
     
     def _handle_dingtalk_conference(

@@ -65,3 +65,4 @@
 | `2026-11-24-daily-report-billing-on-delivery.md` | 2026-11-24，日报只在真正发出后计费 |
 | `2026-11-24-weekly-report-billing-on-delivery.md` | 2026-11-24，周报只在卡片真正发出后计费 |
 | `2026-11-25-im-card-layout.md` | 2026-11-25，复盘和今日重点卡片排版 |
+| `2026-11-25-minutes-transcript-error.md` | 2026-11-25，妙记文字记录读取失败时提示改用文档链接 |
