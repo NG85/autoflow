@@ -8,7 +8,7 @@ from datetime import date, datetime
 from uuid import UUID
 from app.core.config import settings
 from app.core.db import get_db_session
-from app.api.routes.crm.models import SimpleVisitRecordCreate, CompleteVisitRecordCreate
+from app.api.routes.crm.models import CompleteVisitRecordCreate, SimpleVisitRecordCreate
 from app.api.deps import CurrentUserDep, SessionDep
 from app.repositories.document_content import DocumentContentRepo
 from app.services.platform_notification_service import platform_notification_service
@@ -467,6 +467,9 @@ def fill_sales_visit_record_fields(sales_visit_record, db_session):
           if isinstance(url_val, str) and not (url_val.startswith(settings.STORAGE_PATH_PREFIX) or url_val.startswith("http://") or url_val.startwith("https://")):
               sanitized.pop("url", None)  # url 里如果不是链接（可能是base64）就删掉
           sales_visit_record["attachment"] = sanitized
+
+    # 相关文件资料只留在记录和查询里，不进入拜访卡片
+    sales_visit_record.pop("related_files", None)
     
     # 添加字段名映射，用于卡片展示
     from app.services.crm_config_service import add_field_mapping_to_data

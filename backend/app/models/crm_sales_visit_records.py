@@ -94,7 +94,12 @@ class CRMSalesVisitRecord(SQLModel, table=True):
     next_steps_quality_level_en: Optional[str] = Field(nullable=True, max_length=100, description="下一步计划等级（英文版）")
     next_steps_quality_reason_zh: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="下一步计划评判依据")
     next_steps_quality_reason_en: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="下一步计划评判依据（英文版）")
-    attachment: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="附件")
+    attachment: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="图片附件")
+    related_files: Optional[list[dict]] = Field(
+        default=None,
+        sa_column=Column(JSON, nullable=True),
+        description="相关文件资料（JSON数组。url 为在线链接或对象存储 key）",
+    )
     parent_record: Optional[str] = Field(nullable=True, max_length=255, description="父记录")
     remarks: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="备注")
 
