@@ -3887,9 +3887,7 @@ class PlatformNotificationService:
             header = body.split("\n", 1)[0].strip() if body else ""
         header = (header or "通知")[:50]
         color = (header_template or "blue").strip() or "blue"
-        elements: List[Dict[str, Any]] = [
-            {"tag": "markdown", "content": body or "--"},
-        ]
+        elements: List[Dict[str, Any]] = [{"tag": "markdown", "content": body or "--"}]
         for section in extra_sections or []:
             section_body = (section or "").strip()
             if not section_body:

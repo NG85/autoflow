@@ -1,6 +1,6 @@
 """DocumentProcessingService routing: 听记分支不影响原有类型。"""
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from app.platforms.utils.url_parser import (
     parse_bitable_url,
@@ -8,7 +8,10 @@ from app.platforms.utils.url_parser import (
     parse_dingtalk_transcribe_url,
     parse_platform_document_url,
 )
-from app.services.document_processing_service import DocumentProcessingService
+from app.services.document_processing_service import (
+    MINUTES_TRANSCRIPT_UNAVAILABLE_MESSAGE,
+    DocumentProcessingService,
+)
 
 
 def _service() -> DocumentProcessingService:
@@ -147,6 +150,44 @@ def test_local_storage_path_routes_to_local_handler():
     transcribe.assert_not_called()
     platform.assert_not_called()
     local.assert_called_once_with(url)
+
+
+def test_minutes_read_failure_asks_user_to_switch_to_document_link():
+    svc = _service()
+    url = "https://xcn4e0le81w4.feishu.cn/minutes/obcnfw63uq57957xholl3y6q"
+    client = MagicMock()
+    client.get_content_from_source_with_token.return_value = (None, "minutes")
+    with patch.object(
+        svc.feishu_oauth, "get_access_token_from_redis", return_value="token"
+    ), patch(
+        "app.services.document_processing_service.get_client_by_url",
+        return_value=client,
+    ):
+        result = svc.process_document_url(url, user_id="u1")
+
+    assert result == {
+        "success": False,
+        "message": MINUTES_TRANSCRIPT_UNAVAILABLE_MESSAGE,
+    }
+    client.get_content_from_source_with_token.assert_called_once_with(url, "token")
+
+
+def test_docx_read_failure_keeps_reauth_message():
+    svc = _service()
+    url = "https://example.feishu.cn/docx/abc123"
+    client = MagicMock()
+    client.get_content_from_source_with_token.return_value = (None, "docx")
+    with patch.object(
+        svc.feishu_oauth, "get_access_token_from_redis", return_value="token"
+    ), patch(
+        "app.services.document_processing_service.get_client_by_url",
+        return_value=client,
+    ):
+        result = svc.process_document_url(url, user_id="u1")
+
+    assert result["success"] is False
+    assert result["message"] == "未获取到feishu内容，请检查链接或重新授权"
+    client.get_content_from_source_with_token.assert_called_once_with(url, "token")
 
 
 def test_feishu_minutes_url_still_parsed_as_minutes():

@@ -9,6 +9,7 @@ from app.services.company_today_highlights import (
     highlights_for_viewer,
     insight_period_key,
     pick_report_sections,
+    render_card_link_line,
     render_card_markdown,
     render_card_plain_text,
     render_dingtalk_markdown,
@@ -131,11 +132,13 @@ def test_wednesday_card_omits_key_deals_when_that_insight_is_absent(monkeypatch)
     assert "**公司人效**" in body
     assert "公司：周三人效" not in body
     assert "周三人效" not in body
-    assert body.endswith(f"[公司人效]({sections[0]['url']})")
+    assert "[" not in body
+    assert render_card_link_line(assembled) == f"[公司人效]({sections[0]['url']})"
     assert "重点商机盘点" not in body
     dingtalk = render_dingtalk_markdown(assembled, title="CXO今日重点｜2026-11-11")
     assert dingtalk.startswith("# CXO今日重点｜2026-11-11")
     assert "周三人效" not in dingtalk
+    assert dingtalk.endswith(f"[公司人效]({sections[0]['url']})")
 
 
 def test_card_body_shows_summaries_and_keeps_report_links(monkeypatch):
@@ -184,13 +187,20 @@ def test_card_body_shows_summaries_and_keeps_report_links(monkeypatch):
             "**公司人效**",
             "公司：人效整体平稳",
             "华东：华东人均产出下降",
-            "[公司人效](https://example.com/cxo?date=2026-11-09&tab=cxo_efficiency_insight)",
             "",
             "**重点商机盘点**",
             "公司：三个大单待推进",
-            "[重点商机盘点](https://example.com/cxo?date=2026-11-09&tab=cxo_key_deal_review)",
         ]
     )
+    assert render_card_link_line(assembled) == (
+        "[公司人效](https://example.com/cxo?date=2026-11-09&tab=cxo_efficiency_insight)"
+        " ｜ "
+        "[重点商机盘点](https://example.com/cxo?date=2026-11-09&tab=cxo_key_deal_review)"
+    )
+    dingtalk = render_dingtalk_markdown(assembled, title="CXO今日重点｜2026-11-09")
+    assert "华东：华东人均产出下降\n\u00a0\n**重点商机盘点**" in dingtalk
+    assert dingtalk.endswith("\n\u00a0\n" + render_card_link_line(assembled))
+    assert "---" not in dingtalk
     assert "不进卡片" not in body
     assert "只有全文的商机不进正文" not in body
     plain = render_card_plain_text(assembled)
@@ -312,7 +322,19 @@ def test_monday_sends_one_card_to_named_recipients(monkeypatch):
     )
 
     def fake_send(session, recipient, assembled):
-        sent.append((recipient["user_id"], render_card_markdown(assembled)))
+        sent.append(
+            (
+                recipient["user_id"],
+                "\n\n".join(
+                    part
+                    for part in (
+                        render_card_markdown(assembled),
+                        render_card_link_line(assembled),
+                    )
+                    if part
+                ),
+            )
+        )
         return {"success": True}
 
     monkeypatch.setattr(

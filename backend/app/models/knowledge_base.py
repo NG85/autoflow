@@ -5,11 +5,11 @@ from uuid import UUID
 
 from pydantic import BaseModel
 from sqlalchemy import JSON, func
-from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlmodel import (
     Field,
     Column,
     DateTime,
+    Text,
     Relationship as SQLRelationship,
     SQLModel,
 )
@@ -121,7 +121,7 @@ class KnowledgeBase(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(max_length=255, nullable=False)
-    description: Optional[str] = Field(sa_column=Column(MEDIUMTEXT), default=None)
+    description: Optional[str] = Field(sa_column=Column(Text), default=None)
 
     # The config for chunking, the process to break down the document into smaller chunks.
     chunking_config: Dict = Field(

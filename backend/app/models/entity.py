@@ -10,12 +10,16 @@ from sqlmodel import (
     Text,
 )
 from pydantic import BaseModel
-from tidb_vector.sqlalchemy import VectorType
+from app.models.vector_type import vector_column_type
 from sqlalchemy import Index, Enum
 
 from sqlalchemy import Index
 from app.models.knowledge_base import KnowledgeBase
-from app.models.knowledge_base_scoped.table_naming import get_kb_vector_dims
+from app.core.config import DatabaseDialect, settings
+from app.models.knowledge_base_scoped.table_naming import (
+    get_kb_vector_dims,
+    scoped_index_name,
+)
 from app.utils.namespace import format_namespace
 from app.logger import logger
 from app.models.enums import GraphType
@@ -64,13 +68,39 @@ def get_dynamic_entity_model(
         name: str = Field(max_length=512)
         description: str = Field(sa_column=Column(Text))
         meta: dict = Field(default_factory=dict, sa_column=Column(JSON))
-        entity_type: EntityType = EntityType.original
+        entity_type: EntityType = Field(
+            default=EntityType.original,
+            sa_column=Column(
+                Enum(
+                    EntityType,
+                    native_enum=settings.DATABASE_DIALECT
+                    != DatabaseDialect.POSTGRESQL,
+                    length=32,
+                    values_callable=lambda enum_cls: [
+                        member.value for member in enum_cls
+                    ],
+                ),
+                nullable=False,
+                default=EntityType.original,
+            ),
+        )
         synopsis_info: List | Dict | None = Field(default=None, sa_column=Column(JSON))
-        description_vec: list[float] = Field(sa_type=VectorType(vector_dimension))
-        meta_vec: list[float] = Field(sa_type=VectorType(vector_dimension))
+        description_vec: list[float] = Field(
+            sa_type=vector_column_type(vector_dimension)
+        )
+        meta_vec: list[float] = Field(sa_type=vector_column_type(vector_dimension))
         graph_type: GraphType = Field(
             default=GraphType.general,
-            sa_column=Column(Enum(GraphType), nullable=False, server_default=GraphType.general.value)
+            sa_column=Column(
+                Enum(
+                    GraphType,
+                    native_enum=False,
+                    length=32,
+                    values_callable=lambda enum_cls: [member.value for member in enum_cls],
+                ),
+                nullable=False,
+                server_default=GraphType.general.value,
+            ),
         )
 
         def __hash__(self):
@@ -92,8 +122,14 @@ def get_dynamic_entity_model(
         {
             "__tablename__": entity_table_name,
             "__table_args__": (
-                Index("idx_entity_type", "entity_type"),
-                Index("idx_entity_name", "name"),
+                Index(scoped_index_name(entity_table_name, "idx_entity_type"), "entity_type"),
+                Index(scoped_index_name(entity_table_name, "idx_entity_name"), "name"),
+                Index(
+                    scoped_index_name(entity_table_name, "idx_entity_name_type_graph"),
+                    "name",
+                    "entity_type",
+                    "graph_type",
+                ),
                 {"extend_existing": True},
             ),
         },

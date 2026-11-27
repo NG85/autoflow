@@ -1,4 +1,4 @@
-"""例会复盘卡片：正文是会议总结，下面是抽取按钮，推给业务负责人和提交人。
+"""例会复盘卡片：正文先写负责人和提交人，再是会议总结，下面是抽取按钮。
 
 列表和报告页仍由 base-api 提供。卡片读 bi_reports.report_content.summary，
 明文直接展示，``__b64__:`` 开头的先按 base64 解码。
@@ -27,6 +27,7 @@ from app.platforms.constants import (
 from app.services.leader_intervention_actions import interaction_fields
 from app.services.sales_today_highlights import _recipient_from_profile, parse_report_date
 from app.services.today_highlights_format import CARD_LINK_SEPARATOR
+from app.services.visit_record_recap_card import dingtalk_quote
 from app.utils.date_utils import beijing_today_date
 from app.utils.push_page_urls import (
     build_leader_meeting_review_report_url,
@@ -350,9 +351,65 @@ def extract_action_buttons(assembled: Mapping[str, Any]) -> list[tuple[str, str]
     return buttons
 
 
+def profile_display_name(session: Session, oauth_id: str) -> str:
+    """档案姓名。没有档案或没有名字时为空，查询失败也不挡住发卡。"""
+    oauth_id = _text(oauth_id)
+    if not oauth_id or session is None:
+        return ""
+    from app.repositories.user_profile import user_profile_repo
+
+    try:
+        profile = user_profile_repo.get_by_oauth_user_id(session, oauth_id)
+    except Exception as exc:
+        logger.warning("例会复盘读取姓名失败 oauth_id=%s: %s", oauth_id, exc)
+        return ""
+    if profile is None:
+        return ""
+    return _text(getattr(profile, "name", None))
+
+
+def meeting_people_text(
+    owner_name: str,
+    creator_name: str = "",
+    *,
+    same_person: bool = False,
+) -> str:
+    """正文开头的负责人、提交人。同一人只写负责人。查不到名字的那一行不写。"""
+    lines: list[str] = []
+    owner = _text(owner_name)
+    creator = _text(creator_name)
+    if owner:
+        lines.append(f"负责人：{owner}")
+    if creator and not same_person:
+        lines.append(f"提交人：{creator}")
+    return "\n".join(lines)
+
+
+def card_body_blocks(assembled: Mapping[str, Any]) -> tuple[str, str]:
+    """人员行和会议总结。两段都没有时，总结用「--」。"""
+    people = _text(assembled.get("people_text"))
+    summary = _text(assembled.get("summary"))
+    if not people and not summary:
+        summary = "--"
+    return people, summary
+
+
+def people_fields(people: str) -> list[tuple[str, str]]:
+    """「负责人：王磊」拆成标签和姓名。"""
+    fields: list[tuple[str, str]] = []
+    for line in (people or "").splitlines():
+        label, sep, value = line.partition("：")
+        label = label.strip()
+        value = value.strip()
+        if sep and label and value:
+            fields.append((label, value))
+    return fields
+
+
 def feishu_card_parts(assembled: Mapping[str, Any]) -> tuple[str, str, list[tuple[str, str]]]:
-    """飞书：正文是总结，接着是报告链接，下面是抽取按钮。"""
-    body = _text(assembled.get("summary")) or "--"
+    """飞书正文是会议总结。负责人和提交人由发卡函数另起一块，不写进总结。"""
+    people, summary = card_body_blocks(assembled)
+    body = summary or ("--" if not people else "")
     if "report_link" in assembled:
         report = _text(assembled.get("report_link"))
     else:
@@ -361,16 +418,26 @@ def feishu_card_parts(assembled: Mapping[str, Any]) -> tuple[str, str, list[tupl
 
 
 def render_dingtalk_markdown(assembled: Mapping[str, Any], *, title: str) -> str:
-    """钉钉没有按钮组件。结构和拜访轻量卡一样：总结、报告链接、抽取蓝链（同行用｜分隔）。"""
-    body, report, buttons = feishu_card_parts(assembled)
-    parts = [f"### {title}", DINGTALK_PARAGRAPH_GAP, body]
+    """钉钉没有按钮组件。人员引用紧挨标题，总结紧挨引用。底部蓝链同一行，用｜隔开，和正文之间空一行。"""
+    people, summary = card_body_blocks(assembled)
+    _, report, buttons = feishu_card_parts(assembled)
+    parts = [f"### {title}"]
+    if people:
+        parts.append(dingtalk_quote(people))
+    if summary:
+        if people:
+            parts.append(summary)
+        else:
+            parts.extend([DINGTALK_PARAGRAPH_GAP, summary])
+    link_rows: list[str] = []
     if report:
-        parts.extend([DINGTALK_PARAGRAPH_GAP, report])
+        link_rows.append(report)
     if buttons:
-        extract_row = CARD_LINK_SEPARATOR.join(
-            f"[{label}]({url})" for label, url in buttons
+        link_rows.append(
+            CARD_LINK_SEPARATOR.join(f"[{label}]({url})" for label, url in buttons)
         )
-        parts.extend([DINGTALK_PARAGRAPH_GAP, extract_row])
+    if link_rows:
+        parts.extend([DINGTALK_PARAGRAPH_GAP, CARD_LINK_SEPARATOR.join(link_rows)])
     return "\n".join(parts)
 
 
@@ -385,12 +452,14 @@ def build_leader_meeting_wecom_template_card(
 ) -> dict[str, Any]:
     """例会复盘 → 企微 text_notice。
 
+    标题下灰色说明是卡片类型。正文只留会议总结。
+    负责人和提交人进横栏，无链接。抽取入口跟在后面，横栏合计不超过 6。
     jump：有报告地址时用卡片自带的跳转文案，否则用第一条抽取的文案。
-    horizontal：待办候选 / 经营事项 / 管理方法建议（左灰右蓝）。
     """
     from app.platforms.wecom.text_notice import build_text_notice_card, new_task_id
 
-    body = _text(assembled.get("summary")) or "--"
+    people, summary = card_body_blocks(assembled)
+    body = summary or ("--" if not people else "")
     if "report_url" in assembled:
         report_url = _text(assembled.get("report_url"))
     else:
@@ -415,9 +484,30 @@ def build_leader_meeting_wecom_template_card(
         desc=_text(assembled.get("wecom_desc")) or "例会复盘",
         sub_title_text=body,
         jump_links=jump_links,
+        horizontal_facts=people_fields(people),
         horizontal_links=extracts,
         card_action_url=action,
         task_id=new_task_id("lmr"),
+    )
+
+
+def build_leader_meeting_feishu_card(
+    assembled: Mapping[str, Any],
+    *,
+    title: str,
+) -> dict[str, Any]:
+    """飞书 / Lark：人员是总结上方的普通行，和拜访复盘的跟进人同一写法。"""
+    from app.services.platform_notification_service import platform_notification_service
+
+    people, summary = card_body_blocks(assembled)
+    _, report, buttons = feishu_card_parts(assembled)
+    return platform_notification_service.build_feishu_markdown_card(
+        people or summary,
+        title=title,
+        extra_sections=[summary] if people and summary else None,
+        footer=report or None,
+        footer_text_size="normal",
+        footer_buttons=buttons or None,
     )
 
 
@@ -427,14 +517,7 @@ def _demo_cc_leader_meeting_review(assembled: Mapping[str, Any]) -> None:
     from app.services.platform_notification_service import platform_notification_service
 
     title = f"例会复盘｜{assembled.get('report_date')}"
-    body, report_link, buttons = feishu_card_parts(assembled)
-    feishu_card = platform_notification_service.build_feishu_markdown_card(
-        body,
-        title=title,
-        footer=report_link or None,
-        footer_text_size="normal",
-        footer_buttons=buttons or None,
-    )
+    feishu_card = build_leader_meeting_feishu_card(assembled, title=title)
     platform_notification_service.mirror_demo_cc(
         source="leader meeting review card",
         feishu_card=feishu_card,
@@ -449,16 +532,9 @@ def deliver_card(db_session: Session, recipient: Mapping[str, Any], assembled: M
     from app.services.platform_notification_service import platform_notification_service
 
     title = _text(assembled.get("card_title")) or f"例会复盘｜{assembled.get('report_date')}"
-    body, report_link, buttons = feishu_card_parts(assembled)
     platform = _text(recipient.get("platform"))
     if platform in (PLATFORM_FEISHU, PLATFORM_LARK):
-        card = platform_notification_service.build_feishu_markdown_card(
-            body,
-            title=title,
-            footer=report_link or None,
-            footer_text_size="normal",
-            footer_buttons=buttons or None,
-        )
+        card = build_leader_meeting_feishu_card(assembled, title=title)
         tokens = platform_notification_service._get_platform_tokens([platform])
         if platform not in tokens:
             return {"success": False, "message": "Failed to get token"}
@@ -599,6 +675,11 @@ def handle_leader_meeting_review_card(
             pushed=False,
             reason="empty_extracts",
         )
+    assembled["people_text"] = meeting_people_text(
+        profile_display_name(db_session, owner),
+        profile_display_name(db_session, creator or ""),
+        same_person=not creator or creator == owner,
+    )
     from app.repositories.user_profile import user_profile_repo
 
     pushed_any = False

@@ -1,12 +1,19 @@
+import importlib
+import pkgutil
 from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 from sqlmodel import SQLModel
-from tidb_vector.sqlalchemy import VectorType
+from app.core.config import DatabaseDialect, settings
+import app.models as models_pkg
 
-from app.core.config import settings
-from app.models import *  # noqa
+# Package __init__ does not import every table module. Load them so the
+# baseline contains CRM and other models that are imported only by services.
+for module_info in pkgutil.walk_packages(models_pkg.__path__, models_pkg.__name__ + "."):
+    importlib.import_module(module_info.name)
+
+from app.alembic.external_tables import EXTERNAL_TABLES
 from app.models.knowledge_base_scoped.table_naming import (
     KB_CHUNKS_TABLE_PATTERN,
     KB_ENTITIES_TABLE_PATTERN,
@@ -36,6 +43,8 @@ def get_url():
 
 def include_name(name, type_, parent_names):
     if type_ == "table":
+        if name in EXTERNAL_TABLES:
+            return False
         return (
             not bool(KB_CHUNKS_TABLE_PATTERN.match(name))
             and not bool(KB_ENTITIES_TABLE_PATTERN.match(name))
@@ -86,7 +95,14 @@ def run_migrations_online():
     )
 
     with connectable.connect() as connection:
-        connection.dialect.ischema_names["vector"] = VectorType
+        if settings.DATABASE_DIALECT == DatabaseDialect.POSTGRESQL:
+            from pgvector.sqlalchemy import Vector
+
+            connection.dialect.ischema_names["vector"] = Vector
+        else:
+            from tidb_vector.sqlalchemy import VectorType
+
+            connection.dialect.ischema_names["vector"] = VectorType
         context.configure(
             connection=connection,
             target_metadata=target_metadata,

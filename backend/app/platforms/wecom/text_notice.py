@@ -28,8 +28,15 @@ _COUNT_SUFFIX_RE = re.compile(r"^(.+?)（(\d+)）$")
 _LABEL_KEY_VALUE: dict[str, tuple[str, str]] = {
     "本周待完成": ("本周任务", "待完成列表"),
     "本周已拜访": ("本周拜访", "已录入记录"),
-    "团队待完成": ("团队任务", "待完成列表"),
-    "团队已拜访": ("团队拜访", "已录入记录"),
+    "团队待完成": ("本周任务", "待完成列表"),
+    "团队已拜访": ("本周拜访", "已录入记录"),
+    "团队上周拜访": ("上周拜访", "已录入记录"),
+    "团队例会复盘": ("本周例会", "例会复盘"),
+    "团队重点商机": ("重点商机", "商机盘点"),
+    "团队人效": ("团队人效", "人效报告"),
+    "团队日报": ("团队日报", "昨日日报"),
+    "团队周报": ("团队周报", "上周周报"),
+    "团队经营趋势": ("经营趋势", "趋势报告"),
     "跟进详情": ("跟进", "打开详情页"),
     "完整复盘报告": ("复盘", "打开完整报告"),
     "关键发现": ("关键发现", "查看详情"),
@@ -150,6 +157,26 @@ def new_task_id(prefix: str = "tc") -> str:
     return f"{prefix}_{uuid.uuid4().hex[:16]}"
 
 
+def _horizontal_fact_rows(
+    facts: Sequence[tuple[str, str]],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """无链接的横栏。企微 keyname 建议不超过 5 个字，value 建议不超过 26 个字。"""
+    rows: list[dict[str, Any]] = []
+    if limit <= 0:
+        return rows
+    for keyname, value in facts:
+        keyname = _text(keyname)[:5]
+        value = _text(value)[:26]
+        if not keyname or not value:
+            continue
+        rows.append({"type": 0, "keyname": keyname, "value": value})
+        if len(rows) >= limit:
+            break
+    return rows
+
+
 def build_text_notice_card(
     *,
     title: str,
@@ -157,13 +184,15 @@ def build_text_notice_card(
     sub_title_text: str = "",
     jump_links: Sequence[tuple[str, str]] = (),
     horizontal_links: Sequence[HorizontalLink] = (),
+    horizontal_facts: Sequence[tuple[str, str]] = (),
     card_action_url: str = "",
     task_id: str = "",
 ) -> dict[str, Any]:
     """组装 text_notice。
 
+    - main_title.title：建议不超过 36 个字，由调用方截断
     - jump_list：主入口蓝链，≤3
-    - horizontal_content_list：次要入口（左灰右蓝），≤6；与 jump 同 url 去重
+    - horizontal_content_list：先放无链接事实，再放次要入口，合计 ≤6
     - card_action：整卡点击，默认与主入口同链
     """
     jumps = _jump_items(list(jump_links), limit=JUMP_LIST_MAX)
@@ -180,9 +209,10 @@ def build_text_notice_card(
         jumps = [{"type": 1, "title": "打开", "url": action}]
 
     jump_urls = {item["url"] for item in jumps}
-    horizontal = _horizontal_link_rows(
+    facts = _horizontal_fact_rows(list(horizontal_facts), limit=HORIZONTAL_LINK_MAX)
+    horizontal = facts + _horizontal_link_rows(
         list(horizontal_links),
-        limit=HORIZONTAL_LINK_MAX,
+        limit=HORIZONTAL_LINK_MAX - len(facts),
         exclude_urls=jump_urls,
     )
     card: dict[str, Any] = {

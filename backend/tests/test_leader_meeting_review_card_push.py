@@ -15,9 +15,11 @@ from app.api.routes.notification_schemas import (
 )
 from app.services.leader_meeting_review_card import (
     assemble_extracts,
+    build_leader_meeting_feishu_card,
     build_leader_meeting_wecom_template_card,
     extracts_for_viewer,
     feishu_card_parts,
+    meeting_people_text,
     render_dingtalk_markdown,
     summary_from_report_content,
 )
@@ -128,27 +130,53 @@ def test_card_puts_summary_then_report_link_then_extract_buttons(monkeypatch):
         ("经营事项", "https://example.com/management_events"),
     ]
     dingtalk = render_dingtalk_markdown(assembled, title="例会复盘｜2026-10-28")
-    assert dingtalk.startswith("### 例会复盘｜2026-10-28\n\u00a0\n团队周例会：推进 POC。\n")
-    assert "[完整复盘报告](https://example.com/v2/business/leader-meeting-review/RPT-1)" in dingtalk
+    assert dingtalk.startswith("### 例会复盘｜2026-10-28\n\u00a0\n团队周例会：推进 POC。\n\u00a0\n[完整复盘报告]")
     assert (
+        "[完整复盘报告](https://example.com/v2/business/leader-meeting-review/RPT-1)"
+        " ｜ "
         "[待办候选（2）](https://example.com/employee_todo_candidates)"
         " ｜ "
         "[经营事项](https://example.com/management_events)"
     ) in dingtalk
     assert "确认预算审批流程" not in dingtalk
     assert "经营事项不进正文" not in dingtalk
+    assembled["people_text"] = meeting_people_text("王磊", "李华")
+    body, report, buttons = feishu_card_parts(assembled)
+    assert body == "团队周例会：推进 POC。"
+    assert report == "[完整复盘报告](https://example.com/v2/business/leader-meeting-review/RPT-1)"
+    feishu = build_leader_meeting_feishu_card(assembled, title="例会复盘｜2026-10-28")
+    assert [element["content"] for element in feishu["body"]["elements"][:2]] == [
+        "负责人：王磊\n提交人：李华",
+        "团队周例会：推进 POC。",
+    ]
+    assert feishu["header"]["title"]["content"] == "例会复盘｜2026-10-28"
+    dingtalk = render_dingtalk_markdown(assembled, title="例会复盘｜2026-10-28")
+    assert dingtalk.startswith(
+        "### 例会复盘｜2026-10-28\n"
+        "> 负责人：王磊　　提交人：李华\n"
+        "团队周例会：推进 POC。\n"
+    )
+    assert meeting_people_text("王磊", "王磊", same_person=True) == "负责人：王磊"
+    assert meeting_people_text("", "李华") == "提交人：李华"
+    assert meeting_people_text("", "") == ""
     wecom = build_leader_meeting_wecom_template_card(
         assembled, title="例会复盘｜2026-10-28"
     )
     assert wecom["card_type"] == "text_notice"
     assert wecom["main_title"]["title"] == "例会复盘｜2026-10-28"
+    assert wecom["main_title"]["desc"] == "例会复盘"
     assert wecom["jump_list"][0]["title"] == "完整复盘"
     assert wecom["card_action"]["url"].endswith("/RPT-1")
     assert wecom["sub_title_text"] == "团队周例会：推进 POC。"
     assert "[" not in wecom["sub_title_text"]
     horizontal = wecom.get("horizontal_content_list") or []
-    assert all(row.get("type") == 1 and row["keyname"] != row["value"] for row in horizontal)
-    assert {row["url"] for row in horizontal} == {
+    assert horizontal[:2] == [
+        {"type": 0, "keyname": "负责人", "value": "王磊"},
+        {"type": 0, "keyname": "提交人", "value": "李华"},
+    ]
+    links = [row for row in horizontal if row.get("type") == 1]
+    assert all(row["keyname"] != row["value"] for row in links)
+    assert {row["url"] for row in links} == {
         "https://example.com/employee_todo_candidates",
         "https://example.com/management_events",
     }
@@ -278,6 +306,7 @@ def test_push_sends_when_the_uploader_can_be_reached(monkeypatch):
     assert result["pushed"] is True
     assert result["reason"] is None
     assert sent["recipient"]["open_id"] == "ou_1"
+    assert sent["assembled"]["people_text"] == "负责人：王经理"
     assert "employee_todo_candidates" in sent["assembled"]["items"]
     assert "management_events" not in sent["assembled"]["items"]
 
@@ -314,7 +343,7 @@ def test_push_sends_the_same_card_to_owner_and_creator(monkeypatch):
     )
 
     def fake_deliver(session, recipient, assembled):
-        sent.append(recipient["open_id"])
+        sent.append((recipient["open_id"], assembled.get("people_text")))
         return {"success": True}
 
     monkeypatch.setattr(
@@ -332,7 +361,10 @@ def test_push_sends_the_same_card_to_owner_and_creator(monkeypatch):
     assert both["pushed"] is True
     assert both["reason"] is None
     assert both["creator_id"] == "ops-1"
-    assert sent == ["ou_leader-1", "ou_ops-1"]
+    assert sent == [
+        ("ou_leader-1", "负责人：leader-1\n提交人：ops-1"),
+        ("ou_ops-1", "负责人：leader-1\n提交人：ops-1"),
+    ]
 
     sent.clear()
     same = _handle_leader_meeting_review_card_push(
@@ -344,7 +376,7 @@ def test_push_sends_the_same_card_to_owner_and_creator(monkeypatch):
         ),
     )
     assert same["pushed"] is True
-    assert sent == ["ou_leader-1"]
+    assert sent == [("ou_leader-1", "负责人：leader-1")]
 
     sent.clear()
     partial = _handle_leader_meeting_review_card_push(
@@ -357,4 +389,4 @@ def test_push_sends_the_same_card_to_owner_and_creator(monkeypatch):
     )
     assert partial["pushed"] is True
     assert partial["reason"] is None
-    assert sent == ["ou_leader-1"]
+    assert sent == [("ou_leader-1", "负责人：leader-1")]

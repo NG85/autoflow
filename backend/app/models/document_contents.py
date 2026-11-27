@@ -2,7 +2,6 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any, TYPE_CHECKING
 from uuid import UUID
 from sqlmodel import SQLModel, Field, Column, Text, DateTime, func, Index, Relationship as SQLRelationship, JSON
-from sqlalchemy.dialects.mysql import MEDIUMTEXT
 
 if TYPE_CHECKING:  # pragma: no cover
     from .auth import User
@@ -29,10 +28,10 @@ class DocumentContent(SQLModel, table=True):
     source_url: str = Field(sa_column=Column(Text, nullable=False), description="原文档URL")
     
     # 核心存储字段
-    raw_content: str = Field(sa_column=Column(MEDIUMTEXT, nullable=False), description="原始文档内容")
+    raw_content: str = Field(sa_column=Column(Text, nullable=False), description="原始文档内容")
     
     # 会议纪要总结（LLM生成）
-    meeting_summary: Optional[str] = Field(sa_column=Column(MEDIUMTEXT, nullable=True), description="会议纪要总结")
+    meeting_summary: Optional[str] = Field(sa_column=Column(Text, nullable=True), description="会议纪要总结")
     summary_status: Optional[str] = Field(max_length=20, nullable=True, description="总结状态: success, failed")
     
     # 问答对抽取结果（LLM生成）
@@ -49,7 +48,7 @@ class DocumentContent(SQLModel, table=True):
     
     # 风险信息提取结果（LLM生成）
     risk_info: Optional[str] = Field(
-        sa_column=Column(MEDIUMTEXT, nullable=True),
+        sa_column=Column(Text, nullable=True),
         description="从文档内容中提取的风险信息"
     )
     risk_extract_status: Optional[str] = Field(
@@ -72,4 +71,7 @@ class DocumentContent(SQLModel, table=True):
         Index("idx_visit_record_id", "visit_record_id"),
         Index("idx_created_at", "created_at"),
         Index("idx_user_type", "user_id", "document_type"),
+        Index("idx_qa_extract_status", "qa_extract_status"),
+        Index("idx_risk_extract_status", "risk_extract_status"),
+        Index("idx_summary_status", "summary_status"),
     ) 

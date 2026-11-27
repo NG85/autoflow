@@ -3,12 +3,12 @@
 from datetime import date, datetime
 
 from app.services.visit_record_recap_card import (
-    DINGTALK_PARAGRAPH_GAP,
     build_recap_lite_card,
     build_visit_recap_wecom_template_card,
     compose_recap_title,
     format_entry_time,
     format_visit_date_short,
+    recap_card_title,
     resolve_recap_quality,
 )
 from app.services.visit_record_insight_reader import VisitRecordInsight
@@ -37,6 +37,14 @@ def test_title_keeps_quality_date_account_and_truncates():
     assert title.startswith("正常 · 9月20日 · ")
     assert len(title) <= 50
     assert title.endswith("…")
+    labeled = recap_card_title(
+        "正常",
+        "9月20日",
+        "这是一个非常非常长的客户名称用来验证飞书卡片标题五十个字限制时必须截断处理吧",
+    )
+    assert labeled.startswith("拜访复盘｜正常 · 9月20日 · ")
+    assert len(labeled) <= 50
+    assert labeled.endswith("…")
 
 
 def test_build_recap_lite_card_feishu_and_dingtalk(monkeypatch):
@@ -64,19 +72,22 @@ def test_build_recap_lite_card_feishu_and_dingtalk(monkeypatch):
     )
     visit_detail = "[跟进详情](https://app.example/v2/behavior/rec-1)"
     report = "[完整复盘报告](https://app.example/v2/behavior/rec-1/recap)"
-    assert card.title == "正常 · 9月20日 · 星辰科技"
+    assert card.title == "拜访复盘｜正常 · 9月20日 · 星辰科技"
     assert card.header_template == "blue"
     assert card.feishu_body == "跟进人：李华\n创建时间：9月20日 19:05\n商机：年度续约"
     assert card.feishu_summary == "客户确认下季度扩容，下周出方案。"
     assert card.feishu_action_links == f"{visit_detail} ｜ {report}"
     assert "/recap" in report
-    assert "客户确认下季度扩容" in card.dingtalk_text
+    assert "客户确认下季度扩容，下周出方案。\n\u00a0\n[跟进详情]" in card.dingtalk_text
     assert f"{visit_detail} ｜ {report}" in card.dingtalk_text
     assert card.dingtalk_text.index("客户确认下季度扩容") < card.dingtalk_text.index(visit_detail)
     assert card.dingtalk_text.index(visit_detail) < card.dingtalk_text.index(report)
-    assert card.dingtalk_text.startswith("### 正常 · 9月20日 · 星辰科技")
-    assert DINGTALK_PARAGRAPH_GAP in card.dingtalk_text
-    assert "跟进人：李华\n创建时间：9月20日 19:05\n商机：年度续约" in card.dingtalk_text
+    assert card.dingtalk_text.startswith(
+        "### 拜访复盘｜正常 · 9月20日 · 星辰科技\n"
+        "> 跟进人：李华　　创建时间：9月20日 19:05\n"
+        "> 商机：年度续约\n"
+        "客户确认下季度扩容，下周出方案。\n"
+    )
 
 
 def test_blank_opportunity_is_omitted_from_lite_card(monkeypatch):
@@ -105,6 +116,7 @@ def test_blank_opportunity_is_omitted_from_lite_card(monkeypatch):
         assert "商机" not in card.feishu_body
         assert "商机" not in card.dingtalk_text
         assert card.feishu_body == "跟进人：高娜\n创建时间：9月24日 15:17"
+        assert "> 跟进人：高娜　　创建时间：9月24日 15:17\n" in card.dingtalk_text
         assert "[跟进详情](https://app.example/v2/behavior/rec-1)" in card.feishu_action_links
 
 
@@ -144,7 +156,7 @@ def test_build_recap_lite_card_uses_insight_summary_not_followup_record(monkeypa
     assert card.feishu_summary == "客户确认下季度扩容，下周出方案。"
     assert "销售自己填的跟进原文" not in card.feishu_summary
     assert "更长的完整复盘" not in card.feishu_summary
-    assert card.title.startswith("需关注 · ")
+    assert card.title.startswith("拜访复盘｜需关注 · ")
     assert card.header_template == "blue"
 
 
@@ -206,16 +218,21 @@ def test_sales_lite_card_appends_extract_links(monkeypatch):
         ("跟进详情", "https://app.example/v2/behavior/rec-1"),
         ("完整复盘报告", "https://app.example/v2/behavior/rec-1/recap"),
     )
-    assert extract_row in card.dingtalk_text
+    assert f"{report} ｜ {follow_ups}" in card.dingtalk_text
     assert card.dingtalk_text.index(report) < card.dingtalk_text.index(follow_ups)
     wecom = build_visit_recap_wecom_template_card(card)
     assert wecom["card_type"] == "text_notice"
+    assert card.title.startswith("拜访复盘｜")
+    assert wecom["main_title"]["title"] == "正常 · 9月20日 · 星辰科技"
+    assert len(wecom["main_title"]["title"]) <= 36
+    assert wecom["main_title"]["desc"] == "拜访复盘"
     assert wecom["jump_list"] == [
         {"type": 1, "title": "完整复盘", "url": "https://app.example/v2/behavior/rec-1/recap"},
         {"type": 1, "title": "跟进详情", "url": "https://app.example/v2/behavior/rec-1"},
     ]
     assert wecom["card_action"]["url"].endswith("/recap")
     assert "[" not in (wecom.get("sub_title_text") or "")
+    assert "创建时间：9月20日 19:05\n\n客户确认下季度扩容。" in (wecom.get("sub_title_text") or "")
     horizontal = wecom.get("horizontal_content_list") or []
     assert all(row["keyname"] != row["value"] for row in horizontal)
     horizontal_urls = {row["url"] for row in horizontal}
@@ -290,7 +307,7 @@ def test_lite_card_shows_both_summaries_and_keeps_two_links(monkeypatch):
     assert card.feishu_action_links == f"{visit_detail} ｜ {report}"
     assert "tab=" not in card.feishu_action_links
     assert "表现评价" not in card.feishu_action_links
-    assert card.title.startswith("正常 · ")
+    assert card.title.startswith("拜访复盘｜正常 · ")
     assert card.header_template == "blue"
     assert "## 业务推进\n客户确认下季度扩容。" in card.dingtalk_text
     assert "\u00a0\n## 销售表现\n销售本场问清了预算。" in card.dingtalk_text

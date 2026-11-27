@@ -1,7 +1,7 @@
 from uuid import UUID
 from typing import Optional
 
-from sqlalchemy import JSON
+from sqlalchemy import JSON, Computed, Index
 from sqlmodel import (
     Field,
     Column,
@@ -9,9 +9,18 @@ from sqlmodel import (
     Relationship as SQLRelationship,
 )
 
+from app.core.config import DatabaseDialect, settings
 from app.models.base import UpdatableBaseModel
 from app.types import MimeTypes
-from app.models.document import DocumentCategory, DocumentMetadata
+from app.models.document import DocumentMetadata
+
+if settings.DATABASE_DIALECT == DatabaseDialect.POSTGRESQL:
+    # PostgreSQL 16 only stores generated columns.
+    _CATEGORY_SQL = "(meta->>'category')"
+    _CATEGORY_PERSISTED = True
+else:
+    _CATEGORY_SQL = "(JSON_UNQUOTE(meta->'$.category'))"
+    _CATEGORY_PERSISTED = False
 
 class Upload(UpdatableBaseModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -27,18 +36,17 @@ class Upload(UpdatableBaseModel, table=True):
         },
     )
     meta: dict = Field(default={}, sa_column=Column(JSON))
-
-    @property
-    def category(self) -> DocumentCategory:
-        return DocumentCategory(self.meta.get('category', DocumentCategory.GENERAL.value))
-    
-    @category.setter
-    def category(self, value: DocumentCategory):
-        if not self.meta:
-            self.meta = {}
-        self.meta['category'] = value.value
+    # Derived from meta so file-permission filters can compare Upload.category.
+    category: Optional[str] = Field(
+        default=None,
+        sa_column=Column(
+            String(100),
+            Computed(_CATEGORY_SQL, persisted=_CATEGORY_PERSISTED),
+        ),
+    )
 
     __tablename__ = "uploads"
+    __table_args__ = (Index("ix_uploads_category", "category"),)
 
     def set_metadata(self, metadata: DocumentMetadata):
         self.meta = metadata.model_dump()

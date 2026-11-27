@@ -4,12 +4,13 @@ from datetime import datetime
 
 from llama_index.core.schema import Document as LlamaDocument
 from pydantic import ConfigDict, BaseModel
-from sqlalchemy.dialects.mysql import MEDIUMTEXT
+from sqlalchemy import Enum
 from sqlmodel import (
     Field,
     Column,
     Text,
     DateTime,
+    Index,
     JSON,
     String,
     Relationship as SQLRelationship,
@@ -50,7 +51,7 @@ class Document(UpdatableBaseModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     hash: str = Field(max_length=32)
     name: str = Field(max_length=256)
-    content: str = Field(sa_column=Column(MEDIUMTEXT))
+    content: str = Field(sa_column=Column(Text))
     mime_type: MimeTypes = Field(sa_column=Column(String(128), nullable=False))
     file_id: int = Field(foreign_key="uploads.id", nullable=True)
     file: "Upload" = SQLRelationship(  # noqa:F821
@@ -65,7 +66,15 @@ class Document(UpdatableBaseModel, table=True):
     last_modified_at: Optional[datetime] = Field(sa_column=Column(DateTime))
 
     # TODO: rename to vector_index_status, vector_index_result.
-    index_status: DocIndexTaskStatus = DocIndexTaskStatus.NOT_STARTED
+    # VARCHAR, same labels as the TiDB ENUM (member names, not .value).
+    index_status: DocIndexTaskStatus = Field(
+        default=DocIndexTaskStatus.NOT_STARTED,
+        sa_column=Column(
+            Enum(DocIndexTaskStatus, native_enum=False, length=32),
+            nullable=False,
+            default=DocIndexTaskStatus.NOT_STARTED,
+        ),
+    )
     index_result: str = Field(sa_column=Column(Text, nullable=True))
 
     # TODO: add kg_index_status, kg_index_result column, unify the index status.
@@ -87,6 +96,10 @@ class Document(UpdatableBaseModel, table=True):
     )
 
     __tablename__ = "documents"
+    __table_args__ = (
+        Index("ix_documents_file_id", "file_id"),
+        Index("ix_documents_name", "name"),
+    )
 
     def to_llama_document(self) -> LlamaDocument:
         return LlamaDocument(

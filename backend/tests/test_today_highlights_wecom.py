@@ -14,6 +14,10 @@ def test_split_horizontal_label_avoids_duplicate_copy():
     assert split_horizontal_label("本周待完成") == ("本周任务", "待完成列表")
     assert split_horizontal_label("本周已拜访") == ("本周拜访", "已录入记录")
     assert split_horizontal_label("跟进详情") == ("跟进", "打开详情页")
+    assert split_horizontal_label("团队重点商机") == ("重点商机", "商机盘点")
+    assert split_horizontal_label("团队人效") == ("团队人效", "人效报告")
+    assert split_horizontal_label("团队日报") == ("团队日报", "昨日日报")
+    assert split_horizontal_label("团队上周拜访") == ("上周拜访", "已录入记录")
 
 
 def test_text_notice_groups_jump_and_horizontal_with_distinct_key_value():
@@ -109,13 +113,36 @@ def test_team_wecom_card_puts_reports_in_horizontal(monkeypatch):
     assert card["card_type"] == "text_notice"
     assert card["jump_list"][0]["title"].startswith(("查看", "更多"))
     assert "张三" in card["sub_title_text"]
+    assert "原因：跟进 POC" in card["sub_title_text"]
     assert "[" not in card["sub_title_text"]
     horizontal = card.get("horizontal_content_list") or []
     assert all(row.get("type") == 1 and row.get("url") for row in horizontal)
     assert all(row["keyname"] != row["value"] for row in horizontal)
     urls = {row["url"] for row in horizontal}
-    assert "https://example.com/deal" in urls
-    assert "https://example.com/team-task" in urls
+    by_url = {row["url"]: row for row in horizontal}
+    jump_titles = [item["title"] for item in card["jump_list"]]
+    assert jump_titles[0].startswith(("查看", "更多"))
+    assert "昨日日报" in jump_titles
+    assert "本周待完成" not in jump_titles
+    assert "https://example.com/daily" not in urls
+    assert by_url["https://example.com/deal"]["keyname"] == "重点商机"
+    assert by_url["https://example.com/deal"]["value"] == "商机盘点"
+    assert by_url["https://example.com/eff"]["keyname"] == "团队人效"
+    assert by_url["https://example.com/eff"]["value"] == "人效报告"
+    assert by_url["https://example.com/team-task"]["keyname"] == "本周任务"
+    assert by_url["https://example.com/team-task"]["value"] == "待完成列表"
+    assert by_url["https://example.com/team-visit"]["keyname"] == "本周拜访"
+    assert by_url["https://example.com/team-visit"]["value"] == "已录入记录"
+    assert by_url["https://example.com/meeting"]["keyname"] == "本周例会"
+    assert by_url["https://example.com/meeting"]["value"] == "例会复盘"
+    assert horizontal.index(by_url["https://example.com/deal"]) < horizontal.index(
+        by_url["https://example.com/team-task"]
+    )
+    assert horizontal.index(by_url["https://example.com/team-task"]) < horizontal.index(
+        by_url["https://example.com/meeting"]
+    )
+    assert len(card["jump_list"]) <= 3
+    assert len(horizontal) <= 6
 
 
 def test_team_wecom_card_empty_state_jumps_to_date_only_page(monkeypatch):
@@ -126,11 +153,11 @@ def test_team_wecom_card_empty_state_jumps_to_date_only_page(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        "app.services.department_today_highlights.card_footer_buttons",
+        "app.services.today_highlights_wecom.card_footer_buttons",
         lambda assembled, owner_name="": [],
     )
     monkeypatch.setattr(
-        "app.services.department_today_highlights._team_tail_lines",
+        "app.services.today_highlights_wecom._team_tail_lines",
         lambda assembled, **kwargs: [
             "[团队日报](https://example.com/daily)",
         ],
@@ -150,13 +177,64 @@ def test_team_wecom_card_empty_state_jumps_to_date_only_page(monkeypatch):
         "visit_watch": None,
     }
     card = build_team_wecom_template_card(assembled, owner_name="王经理")
-    assert card["jump_list"] == [
-        {
-            "type": 1,
-            "title": "查看",
-            "url": "https://example.com/v2/department-highlights?date=2026-11-11",
-        }
-    ]
+    assert card["jump_list"][0] == {
+        "type": 1,
+        "title": "查看",
+        "url": "https://example.com/v2/department-highlights?date=2026-11-11",
+    }
+    assert card["jump_list"][1]["title"] == "昨日日报"
+    assert card["jump_list"][1]["url"] == "https://example.com/daily"
     assert card["card_action"]["url"].endswith("date=2026-11-11")
     assert "tab=" not in card["card_action"]["url"]
     assert "可以先看这些报告" in card["sub_title_text"]
+
+
+def test_monday_team_wecom_card_puts_last_week_visits_in_horizontal(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.department_today_highlights.build_task_list_page_url",
+        lambda **kwargs: "https://example.com/team-task",
+    )
+    monkeypatch.setattr(
+        "app.services.department_today_highlights.build_team_weekly_report_url",
+        lambda year, week: "https://example.com/weekly",
+    )
+    assembled = {
+        "report_date": "2026-11-23",
+        "department_name": "华东一区",
+        "sections": [
+            {
+                "key": "leader_intervene",
+                "title": "今日需介入",
+                "url": "https://example.com/intervene",
+                "items": [
+                    {
+                        "related_user_name": "张三",
+                        "claim": "跟进 POC",
+                        "leader_action": "今天对齐",
+                    }
+                ],
+            }
+        ],
+        "visit_watch": {
+            "label": "上周",
+            "visit_total": 3,
+            "department_names": ["华东一区"],
+            "url": "https://example.com/last-week-visits",
+        },
+    }
+    card = build_team_wecom_template_card(assembled, owner_name="王经理")
+    jump_titles = [item["title"] for item in card["jump_list"]]
+    assert jump_titles == ["查看", "上周周报"]
+    assert "https://example.com/last-week-visits" not in card["sub_title_text"]
+    assert "[" not in card["sub_title_text"]
+    assert "华东一区总拜访 3 条" in card["sub_title_text"]
+    horizontal = card["horizontal_content_list"]
+    by_url = {row["url"]: row for row in horizontal}
+    task = by_url["https://example.com/team-task"]
+    visits = by_url["https://example.com/last-week-visits"]
+    assert task["keyname"] == "本周任务"
+    assert visits["keyname"] == "上周拜访"
+    assert visits["value"] == "已录入记录"
+    assert horizontal.index(task) < horizontal.index(visits)
+    assert len(card["jump_list"]) <= 3
+    assert len(horizontal) <= 6

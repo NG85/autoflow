@@ -26,6 +26,7 @@ from app.platforms.constants import (
 )
 from app.policies.review_session_access import COMPANY_CXO_DEPARTMENT_ID
 from app.services.leader_insight_reports import report_entry_lines
+from app.services.today_highlights_format import CARD_LINK_SEPARATOR
 from app.services.notification_delivery_preference import filter_opted_out_recipients
 from app.services.notification_scene_catalog import (
     SCENE_COMPANY_HIGHLIGHTS,
@@ -105,26 +106,38 @@ def _card_sections(assembled: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     ]
 
 
-def render_card_markdown(assembled: Mapping[str, Any]) -> str:
-    """每个报告一块：标题、各条 summary、原蓝链。没有 sections 时仍只出蓝链。"""
-    sections = _card_sections(assembled)
-    if not sections:
-        lines = report_entry_lines(assembled.get("report_entries"))
-        return lines[0] if lines else ""
+def _section_bodies(assembled: Mapping[str, Any]) -> list[str]:
+    """每个报告一块正文：加粗标题和摘要。链接不写在块里。"""
     blocks: list[str] = []
-    for section in sections:
+    for section in _card_sections(assembled):
         title = _text(section.get("title"))
-        url = _text(section.get("url"))
         lines: list[str] = []
         if title:
             lines.append(f"**{title}**")
         lines.extend(_section_summary_lines(section))
-        if title and url:
-            lines.append(f"[{title}]({url})")
         block = "\n".join(line for line in lines if line)
         if block:
             blocks.append(block)
-    return "\n\n".join(blocks)
+    return blocks
+
+
+def render_card_link_line(assembled: Mapping[str, Any]) -> str:
+    """全部报告入口收成底栏一行，用｜隔开。没有 sections 时仍用 report_entries。"""
+    sections = _card_sections(assembled)
+    if not sections:
+        lines = report_entry_lines(assembled.get("report_entries"))
+        return lines[0] if lines else ""
+    links = [
+        f"[{title}]({url})"
+        for section in sections
+        if (title := _text(section.get("title"))) and (url := _text(section.get("url")))
+    ]
+    return CARD_LINK_SEPARATOR.join(links)
+
+
+def render_card_markdown(assembled: Mapping[str, Any]) -> str:
+    """飞书 / Lark 正文。链接由 render_card_link_line 放到卡片底部。"""
+    return "\n\n".join(_section_bodies(assembled))
 
 
 def render_card_plain_text(assembled: Mapping[str, Any]) -> str:
@@ -140,11 +153,40 @@ def render_card_plain_text(assembled: Mapping[str, Any]) -> str:
     return "\n\n".join(blocks)
 
 
+_DINGTALK_BLANK = "\u00a0"
+
+
+def _dingtalk_blank_rows(count: int) -> str:
+    """钉钉会折掉连续空行。用不断行空格撑出看得见的空段。"""
+    return "\n".join([_DINGTALK_BLANK] * count)
+
+
 def render_dingtalk_markdown(assembled: Mapping[str, Any], *, title: str) -> str:
-    body = render_card_markdown(assembled)
-    if not body:
+    """板块之间空一段。底栏蓝链同一行，用｜隔开，前面同样空一段。"""
+    bodies = _section_bodies(assembled)
+    links = render_card_link_line(assembled)
+    if not bodies and not links:
         return f"# {title}"
-    return f"# {title}\n\n{body}"
+    parts = [f"# {title}"]
+    if bodies:
+        parts.append(f"\n{_dingtalk_blank_rows(1)}\n".join(bodies))
+    text = "\n\n".join(parts)
+    if links:
+        text = f"{text}\n{_dingtalk_blank_rows(1)}\n{links}"
+    return text
+
+
+def _feishu_highlight_card(assembled: Mapping[str, Any], *, title: str) -> dict[str, Any]:
+    from app.services.platform_notification_service import platform_notification_service
+
+    body = render_card_markdown(assembled)
+    links = render_card_link_line(assembled)
+    return platform_notification_service.build_feishu_markdown_card(
+        body or links or "--",
+        title=title,
+        footer=links if body and links else None,
+        footer_text_size="normal",
+    )
 
 
 def pick_report_sections(
@@ -305,8 +347,7 @@ def _ops_cc_company_today_highlights(assembled: Mapping[str, Any]) -> None:
     title = f"{CXO_CARD_TITLE}｜{day}"
     try:
         if target_platform == PLATFORM_FEISHU:
-            body = render_card_markdown(assembled)
-            card = platform_notification_service.build_feishu_markdown_card(body, title=title)
+            card = _feishu_highlight_card(assembled, title=title)
             platform_notification_service._ops_cc_platform_card(
                 card,
                 scene=SCENE_COMPANY_HIGHLIGHTS,
@@ -314,8 +355,7 @@ def _ops_cc_company_today_highlights(assembled: Mapping[str, Any]) -> None:
             )
             return
         if target_platform == PLATFORM_DINGTALK:
-            body = render_card_markdown(assembled)
-            card = platform_notification_service.build_feishu_markdown_card(body, title=title)
+            card = _feishu_highlight_card(assembled, title=title)
             text_md = render_dingtalk_markdown(assembled, title=title)
             platform_notification_service._ops_cc_platform_card(
                 card,
@@ -354,12 +394,9 @@ def _demo_cc_company_today_highlights(assembled: Mapping[str, Any]) -> None:
 
     day = assembled.get("report_date")
     title = f"{CXO_CARD_TITLE}｜{day}"
-    body = render_card_markdown(assembled)
     platform_notification_service.mirror_demo_cc(
         source="company today highlights",
-        feishu_card=platform_notification_service.build_feishu_markdown_card(
-            body, title=title
-        ),
+        feishu_card=_feishu_highlight_card(assembled, title=title),
         wecom_card=build_cxo_wecom_template_card(assembled),
         markdown_text=render_dingtalk_markdown(assembled, title=title),
         title=title,
@@ -378,8 +415,7 @@ def deliver_company_highlight_card(
     title = f"{CXO_CARD_TITLE}｜{day}"
     platform = _text(recipient.get("platform"))
     if platform in (PLATFORM_FEISHU, PLATFORM_LARK):
-        body = render_card_markdown(assembled)
-        card = platform_notification_service.build_feishu_markdown_card(body, title=title)
+        card = _feishu_highlight_card(assembled, title=title)
         tokens = platform_notification_service._get_platform_tokens([platform])
         if platform not in tokens:
             return {"success": False, "message": "Failed to get token"}

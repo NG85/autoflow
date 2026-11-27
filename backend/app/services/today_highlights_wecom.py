@@ -18,10 +18,11 @@ from app.platforms.wecom.text_notice import (
 )
 from app.services.company_today_highlights import CXO_CARD_TITLE, render_card_plain_text
 from app.services.department_today_highlights import (
+    DAILY_REPORT_LINK_LABEL,
     INTERVENTION_TITLE,
     TEAM_CARD_TITLE,
+    WEEKLY_REPORT_LINK_LABEL,
     _dingtalk_item_lines as _team_item_lines,
-    _other_people_line,
     _section_exit_link as _team_section_exit_link,
     _team_tail_lines,
     _watch_section,
@@ -54,6 +55,45 @@ __all__ = [
 _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 
 
+def _wecom_reason_line(raw: str) -> str:
+    """企微没有引用栏。引用行去掉符号后加「原因：」。"""
+    text = (raw or "").strip()
+    quoted = text.startswith(">")
+    plain = plain_text(text)
+    if not plain:
+        return ""
+    if quoted:
+        return f"原因：{plain}"
+    return plain
+
+
+_JUMP_REPORT_TITLE = {
+    DAILY_REPORT_LINK_LABEL: "昨日日报",
+    WEEKLY_REPORT_LINK_LABEL: "上周周报",
+}
+
+
+def _team_jump_and_horizontal(
+    report_links: list[tuple[str, str]],
+    footer: list[tuple[str, str]],
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """跳转只放本日。横栏先放本日报告，再放本周入口。
+
+    调用方把「查看 / 更多」放在跳转最前，这里再接昨日日报或上周周报。
+    本周待完成、已拜访、例会留在横栏，排在报告后面。周一的「团队上周拜访」
+    由调用方接在这些入口后面。满员是 2 个跳转加 6 条横栏。
+    """
+    jump_tail: list[tuple[str, str]] = []
+    reports: list[tuple[str, str]] = []
+    for label, url in report_links:
+        title = _JUMP_REPORT_TITLE.get(label)
+        if title:
+            jump_tail.append((title, url))
+        else:
+            reports.append((label, url))
+    return jump_tail, [*reports, *footer]
+
+
 def _parse_md_link(raw: str) -> Optional[tuple[str, str]]:
     match = _MD_LINK_RE.fullmatch((raw or "").strip())
     if not match:
@@ -82,9 +122,12 @@ def build_sales_wecom_template_card(
         if heading:
             desc = heading
         body_lines.extend(
-            plain_text(line)
-            for line in _sales_item_lines("immediate_today", items[0])
-            if plain_text(line)
+            line
+            for line in (
+                _wecom_reason_line(raw)
+                for raw in _sales_item_lines("immediate_today", items[0])
+            )
+            if line
         )
 
     exit_pair = _parse_md_link(_sales_section_exit_link(section)) if section else None
@@ -120,8 +163,9 @@ def build_team_wecom_template_card(
 ) -> dict[str, Any]:
     """团队今日重点企微卡。
 
-    jump：查看 / 更多；无介入事项时落到团队重点页（仅 date）。
-    horizontal：团队待完成 / 已拜访 / 报告入口。
+    jump：查看 / 更多，然后是昨日日报或上周周报。
+    horizontal：重点商机、人效、经营趋势，然后是本周任务、拜访、例会。
+    周一没有本周拜访，横栏在本周任务后面补上周拜访。
     """
     day = assembled.get("report_date")
     title = f"{TEAM_CARD_TITLE}｜{day}"
@@ -134,17 +178,19 @@ def build_team_wecom_template_card(
     if section and items:
         body_lines.append(INTERVENTION_TITLE)
         body_lines.extend(
-            plain_text(line) for line in _team_item_lines(items[0]) if plain_text(line)
+            line
+            for line in (_wecom_reason_line(raw) for raw in _team_item_lines(items[0]))
+            if line
         )
-        others = plain_text(_other_people_line(items))
-        if others:
-            body_lines.append(others)
+    watch_links: list[tuple[str, str]] = []
     watch = _watch_section(assembled, dingtalk=True)
     if watch:
         if body_lines:
             body_lines.append("")
         for line in watch.split("\n"):
-            if line.strip().startswith("["):
+            parsed = _parse_md_link(line)
+            if parsed:
+                watch_links.append(parsed)
                 continue
             plain = plain_text(line)
             if plain:
@@ -166,6 +212,15 @@ def build_team_wecom_template_card(
         _parse_md_link(_team_section_exit_link(section)) if section and items else None
     )
     footer = card_footer_buttons(assembled, owner_name=owner_name)
+    seen_urls = {url for _, url in footer}
+    week_links = [
+        *footer,
+        *[
+            pair
+            for pair in watch_links
+            if pair[1] and pair[1] not in seen_urls
+        ],
+    ]
     # 空态只打开团队重点页（date），不指定 tab / department_id。
     default_page_url = build_department_highlights_url(str(day)) if day else ""
 
@@ -174,6 +229,8 @@ def build_team_wecom_template_card(
         jump_candidates.append(exit_pair)
     elif default_page_url:
         jump_candidates.append(("查看", default_page_url))
+    jump_tail, horizontal = _team_jump_and_horizontal(report_links, week_links)
+    jump_candidates.extend(jump_tail)
 
     action = ""
     if exit_pair:
@@ -190,7 +247,7 @@ def build_team_wecom_template_card(
         sub_title_text="\n".join(line for line in body_lines if line)
         or "今天没有需介入事项。",
         jump_links=jump_candidates,
-        horizontal_links=[*footer, *report_links],
+        horizontal_links=horizontal,
         card_action_url=action,
         task_id=new_task_id("th_t"),
     )

@@ -1,4 +1,6 @@
-"""Aldebaran crm_postvisit_extract_items：销售视角复盘结构化抽取。
+"""Aldebaran crm_postvisit_extract_items：经营复盘结构化抽取。
+
+统一报告和历史销售视角都落在 viewer_role=sales。历史负责人视角没有抽取行。
 
 抽取正文由 Aldebaran 写入。查询和赞踩、采纳/拒绝都走 CRMPostvisitExtractItem。查询失败返回空结果，不抬 500。
 赞踩写入 feedback 四列，采纳/拒绝写入 status、adopted_todo_id、reject_reason。
@@ -350,7 +352,7 @@ def load_visit_record_extract_response(
     viewer_role: str = VIEWER_ROLE_SALES,
     viewer_user_id: Any = None,
 ) -> dict[str, Any]:
-    """读取拜访销售视角有效抽取条目，组装 items + card_links。
+    """读取有效抽取条目，组装 items + card_links。默认 viewer_role=sales。
 
     赞或踩只在 feedback_user_id 是当前用户时返回。
     """

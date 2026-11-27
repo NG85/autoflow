@@ -56,9 +56,13 @@
 | `2026-11-12-visit-recap-audience.md` | 2026-11-12，拜访复盘谁能打开页面 |
 | `2026-11-16-sales-highlights-key-finding-type.md` | 2026-11-16，销售今日重点读取关键发现类型，tab 仍是 open_risks |
 | `2026-11-17-ops-demo-cc.md` | 2026-11-17，运维抄送扩展与演示旁路抄送 |
+| `2026-11-17-database-dialect.md` | 2026-11-17，TiDB / PostgreSQL 双方言实现（双迁移树与适配） |
 | `2026-11-18-cxo-highlights-card-summary.md` | 2026-11-18，CXO 今日重点卡片展示摘要 |
 | `2026-11-20-visit-opportunity-review-push.md` | 2026-11-20，本次拜访商机评估推送，默认关闭 |
 | `2026-11-20-leader-meeting-review-summary-b64.md` | 2026-11-20，例会复盘卡片解码带前缀的会议总结 |
 | `2026-11-24-leader-meeting-cxo-card.md` | 2026-11-24，例会管理评价卡片发给 CXO |
 | `2026-11-24-daily-report-billing-on-delivery.md` | 2026-11-24，日报只在真正发出后计费 |
 | `2026-11-24-weekly-report-billing-on-delivery.md` | 2026-11-24，周报只在卡片真正发出后计费 |
+| `2026-11-25-im-card-layout.md` | 2026-11-25，复盘和今日重点卡片排版 |
+| `2026-11-25-minutes-transcript-error.md` | 2026-11-25，妙记文字记录读取失败时提示改用文档链接 |
+| `2026-11-27-visit-recap-unified.md` | 2026-11-27，拜访复盘经营复盘优先统一报告 |

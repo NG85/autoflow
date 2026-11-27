@@ -12,8 +12,9 @@ from sqlmodel import Session, col, select
 from app.models.crm_entity_insight import CRMEntityInsight
 from app.models.crm_sales_visit_records import CRMSalesVisitRecord
 from app.services.visit_record_insight_reader import (
+    SALES_BUSINESS_RECAP_TYPES,
     VISIT_INSIGHT_ENTITY_TYPE,
-    VISIT_INSIGHT_SALES_TYPE,
+    select_one_business_recap_per_visit,
 )
 from app.utils.date_utils import get_week_range_from_date
 
@@ -36,7 +37,7 @@ def summarize_week_visit_recaps(
     record_ids: Sequence[str],
     insight_rows: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    """同一拜访只计最新一条销售视角复盘，再按 severity 计数。"""
+    """同一拜访只计一条经营复盘，再按 severity 计数。调用方先留下统一报告或历史销售视角。"""
     wanted = {_text(item) for item in record_ids if _text(item)}
     seen: set[str] = set()
     counts: dict[str, int] = {}
@@ -89,7 +90,7 @@ def load_week_visit_summary(
                     select(CRMEntityInsight)
                     .where(CRMEntityInsight.entity_type == VISIT_INSIGHT_ENTITY_TYPE)
                     .where(CRMEntityInsight.entity_id.in_(record_ids))
-                    .where(CRMEntityInsight.insight_type == VISIT_INSIGHT_SALES_TYPE)
+                    .where(CRMEntityInsight.insight_type.in_(SALES_BUSINESS_RECAP_TYPES))
                     .where(CRMEntityInsight.is_deleted == 0)
                     .where(
                         or_(
@@ -102,7 +103,10 @@ def load_week_visit_summary(
             )
         except Exception as exc:
             logger.warning("load week visit recaps failed recorder=%s: %s", recorder_id, exc)
-    summary = summarize_week_visit_recaps(record_ids, insight_rows)
+    summary = summarize_week_visit_recaps(
+        record_ids,
+        select_one_business_recap_per_visit(insight_rows),
+    )
     payload.update(summary)
     payload["visit_total"] = len(visit_rows)
     return payload

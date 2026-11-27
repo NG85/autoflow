@@ -1,6 +1,13 @@
 from typing import List, Optional
 
-from sqlalchemy import func, or_, text
+from sqlalchemy import or_, text
+
+from app.core.dialect_sql import (
+    json_array_object_id_equals,
+    json_object_field_is_array,
+    ordered_distinct_agg,
+    raise_group_concat_limit,
+)
 from sqlmodel import Session, select
 
 from app.models.crm_accounts import CRMAccount
@@ -62,14 +69,11 @@ class CRMAccountRepo(BaseRepo):
 
     def get_distinct_customer_levels(self, db_session: Session) -> List[str]:
         """查询 crm_accounts，聚合 customer_level 去重值。"""
-        db_session.exec(text("SET SESSION group_concat_max_len = 1048576"))
+        raise_group_concat_limit(db_session)
         row = db_session.exec(
             text(
-                """
-                SELECT
-                  GROUP_CONCAT(
-                    DISTINCT customer_level ORDER BY customer_level SEPARATOR :sep
-                  ) AS customer_levels
+                f"""
+                SELECT {ordered_distinct_agg("customer_level")}
                 FROM crm_accounts
                 WHERE (delete_flag = 0 OR delete_flag IS NULL)
                 """
@@ -82,7 +86,7 @@ class CRMAccountRepo(BaseRepo):
 
     def list_all_distinct_tags(self, db_session: Session) -> List[AccountTagOption]:
         not_deleted = or_(CRMAccount.delete_flag == 0, CRMAccount.delete_flag.is_(None))
-        has_tags_array = func.json_type(func.json_extract(CRMAccount.extra, "$.tags")) == "ARRAY"
+        has_tags_array = json_object_field_is_array(CRMAccount.extra, "tags")
         rows = db_session.exec(
             select(CRMAccount.extra)
             .where(not_deleted)
@@ -106,10 +110,10 @@ class CRMAccountRepo(BaseRepo):
             return []
 
         not_deleted = or_(CRMAccount.delete_flag == 0, CRMAccount.delete_flag.is_(None))
-        has_tags_array = func.json_type(func.json_extract(CRMAccount.extra, "$.tags")) == "ARRAY"
+        has_tags_array = json_object_field_is_array(CRMAccount.extra, "tags")
         tag_match = or_(
             *[
-                func.json_search(CRMAccount.extra, "one", tag_id, None, "$.tags[*].id").isnot(None)
+                json_array_object_id_equals(CRMAccount.extra, "tags", tag_id)
                 for tag_id in normalized
             ]
         )

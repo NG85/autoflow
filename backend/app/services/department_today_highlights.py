@@ -337,7 +337,7 @@ def department_highlights_payload(assembled: Mapping[str, Any]) -> dict[str, Any
 
 
 def _intervention_markdown(assembled: Mapping[str, Any]) -> str:
-    """介入块：标题、展开的一条、未展开的人名、出口链接。"""
+    """介入块：标题、展开的一条、出口链接。"""
     sections = list(assembled.get("sections") or [])
     if not sections:
         return ""
@@ -347,12 +347,10 @@ def _intervention_markdown(assembled: Mapping[str, Any]) -> str:
         return ""
     lines: list[str] = [f"**{INTERVENTION_TITLE}**"]
     lines.append(_card_line(items[0]))
-    others = _other_people_line(items)
-    if others:
-        lines.append(others)
     more = _section_exit_link(section)
     if more:
-        lines.append(more)
+        # 情况说明是引用。出口蓝链先空一行，避免被引用吞进去。
+        lines.extend(["", more])
     return "\n".join(lines)
 
 
@@ -489,19 +487,6 @@ def _section_exit_link(section: Mapping[str, Any]) -> str:
     return f"[{label}]({url})"
 
 
-def _other_people_line(items: Sequence[Mapping[str, Any]]) -> str:
-    """没展开的介入只写姓名，避免被看成「更多」的子项。"""
-    shown = _text(items[0].get("related_user_name")) or _text(items[0].get("related_user_id"))
-    names: list[str] = []
-    for item in list(items)[1:]:
-        name = _text(item.get("related_user_name")) or _text(item.get("related_user_id"))
-        if name and name != shown and name not in names:
-            names.append(name)
-    if not names:
-        return ""
-    return "还有" + "、".join(names)
-
-
 WEEK_SECTION_TITLE = "团队本周"
 TASK_BUTTON_LABEL = "团队待完成"
 VISIT_BUTTON_LABEL = "团队已拜访"
@@ -632,9 +617,6 @@ def render_dingtalk_markdown(
     if section and items:
         team.append(f"## {INTERVENTION_TITLE}")
         team.extend(_dingtalk_item_lines(items[0]))
-        others = _other_people_line(items)
-        if others:
-            team.append(others)
         exit_link = _section_exit_link(section)
         if exit_link:
             team.append(exit_link)
@@ -673,55 +655,47 @@ def render_dingtalk_markdown(
     return f"{body}\n\n---\n\n**{WEEK_SECTION_TITLE}**\n{tail}"
 
 
-def _dingtalk_item_lines(item: Mapping[str, Any]) -> list[str]:
-    who = _text(item.get("related_user_name")) or _text(item.get("related_user_id"))
-    claim = _text(item.get("claim"))
-    dept = _text(item.get("department_name"))
-    lines: list[str] = []
-    if who and dept:
-        lines.append(f"**{who}** · {dept}")
-    elif who:
-        lines.append(f"**{who}**")
-    if claim and claim != who:
-        lines.append(claim)
-    action = _text(item.get("leader_action"))
-    if action:
-        lines.append(f"> {action}")
+def _sales_name(item: Mapping[str, Any]) -> str:
+    return _text(item.get("related_user_name")) or _text(item.get("related_user_id"))
+
+
+def _sales_heading(item: Mapping[str, Any]) -> str:
+    """销售姓名后接客户和商机。没有客户商机时只写姓名。"""
+    who = _sales_name(item)
+    if not who:
+        return ""
     context = " · ".join(
         part
         for part in (_text(item.get("account_name")), _text(item.get("opportunity_name")))
         if part
     )
-    if context:
-        lines.append(f"*{context}*")
+    if not context:
+        return f"销售：{who}"
+    return f"销售：{who}　　{context}"
+
+
+def _intervention_lines(item: Mapping[str, Any]) -> list[str]:
+    """先写建议动作，情况说明用引用放在后面。"""
+    who = _sales_name(item)
+    claim = _text(item.get("claim"))
+    action = _text(item.get("leader_action"))
+    lines: list[str] = []
+    heading = _sales_heading(item)
+    if heading:
+        lines.append(heading)
+    if action:
+        lines.append(action)
+    if claim and claim != who:
+        lines.append(f"> {claim}")
     return lines
 
 
+def _dingtalk_item_lines(item: Mapping[str, Any]) -> list[str]:
+    return _intervention_lines(item)
+
+
 def _card_line(item: Mapping[str, Any]) -> str:
-    """人名单独加粗。情况说明和建议动作之间空一行，避免粘成一段。"""
-    who = _text(item.get("related_user_name")) or _text(item.get("related_user_id"))
-    claim = _text(item.get("claim"))
-    dept = _text(item.get("department_name"))
-    lines: list[str] = []
-    if who:
-        lines.append(f"**{who}** · {dept}" if dept else f"**{who}**")
-        if claim and claim != who:
-            lines.append(claim)
-    elif claim:
-        lines.append(f"{claim} · {dept}" if dept else claim)
-    action = _text(item.get("leader_action"))
-    if action:
-        if lines:
-            lines.append("")
-        lines.append(action)
-    context = " · ".join(
-        part
-        for part in (_text(item.get("account_name")), _text(item.get("opportunity_name")))
-        if part
-    )
-    if context:
-        lines.append(context)
-    return "\n".join(lines)
+    return "\n".join(_intervention_lines(item))
 
 
 def _subject_id(row: Any) -> str:

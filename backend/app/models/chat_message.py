@@ -2,6 +2,7 @@ from uuid import UUID
 from typing import Optional, List
 from datetime import datetime
 
+from sqlalchemy import text
 from sqlmodel import (
     Field,
     Column,
@@ -28,7 +29,7 @@ class ChatMessage(UpdatableBaseModel, table=True):
     trace_url: Optional[str] = Field(max_length=512)
     is_best_answer: bool = Field(
         default=False,
-        sa_column=Column(Boolean, nullable=False, default=False, server_default="0"),
+        sa_column=Column(Boolean, nullable=False, default=False, server_default=text("false")),
     )
     finished_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime))
     chat_id: UUID = Field(foreign_key="chats.id")

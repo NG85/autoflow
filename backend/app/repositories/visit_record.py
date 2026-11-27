@@ -19,6 +19,7 @@ from app.api.routes.crm.models import (
     VisitRecordRowPermissions,
 )
 from app.core.config import settings
+from app.core.dialect_sql import json_array_is_nonempty, ordered_distinct_agg, raise_group_concat_limit
 from app.repositories.crm_account import crm_account_repo
 from app.repositories.base_repo import BaseRepo
 from app.repositories.user_department_relation import user_department_relation_repo
@@ -474,6 +475,7 @@ def _fill_has_recap(
     from app.services.visit_record_insight_reader import (
         VISIT_INSIGHT_LEADER_TYPE,
         VISIT_INSIGHT_PERFORMANCE_LEADER_TYPE,
+        VISIT_INSIGHT_UNIFIED_TYPE,
         load_visit_recap_types_by_record_id,
         viewer_has_visible_recap,
     )
@@ -495,10 +497,14 @@ def _fill_has_recap(
         recorder_id = getattr(record, "recorder_id", None)
         recorder = context.is_recorder(recorder_id)
         present_types = {str(item).strip().upper() for item in present}
+        has_shared_or_leader_business = (
+            VISIT_INSIGHT_LEADER_TYPE.upper() in present_types
+            or VISIT_INSIGHT_UNIFIED_TYPE.upper() in present_types
+        )
         needs_performance_grant = (
             not recorder
             and VISIT_INSIGHT_PERFORMANCE_LEADER_TYPE.upper() in present_types
-            and VISIT_INSIGHT_LEADER_TYPE.upper() not in present_types
+            and not has_shared_or_leader_business
         )
         is_admin = context.is_company_manager() if needs_performance_grant else False
         is_leader = (
@@ -524,11 +530,7 @@ def _fill_has_recap(
 
 def _visit_record_has_comments_predicate():
     """构建 SQL 谓词：comments 数组是否非空（不区分 comment / task）。"""
-    comments_col = CRMSalesVisitRecord.comments
-    return and_(
-        comments_col.isnot(None),
-        func.json_length(comments_col) > 0,
-    )
+    return json_array_is_nonempty(CRMSalesVisitRecord.comments)
 
 
 class VisitRecordRepo(BaseRepo):
@@ -1104,15 +1106,11 @@ class VisitRecordRepo(BaseRepo):
             field_specs.extend(_VISIT_RECORD_COMPLETE_FILTER_FIELDS)
 
         select_parts = [
-            (
-                f"GROUP_CONCAT(DISTINCT `{column}` ORDER BY `{column}` "
-                f"SEPARATOR :sep) AS `{column}`"
-            )
-            for _response_key, column in field_specs
+            ordered_distinct_agg(column) for _response_key, column in field_specs
         ]
         sql = f"SELECT {', '.join(select_parts)} FROM crm_sales_visit_records"
 
-        session.exec(text("SET SESSION group_concat_max_len = 1048576"))
+        raise_group_concat_limit(session)
         row = session.exec(text(sql), params={"sep": _VISIT_RECORD_FILTER_OPTION_SEP}).one()
         if row is None:
             options = {response_key: [] for response_key, _ in field_specs}

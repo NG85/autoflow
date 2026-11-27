@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from sqlalchemy import Column, Date, Integer, String, UniqueConstraint
+from sqlalchemy import Column, Date, Index, Integer, String, UniqueConstraint
 from sqlmodel import Field
 
 from app.models.base import UUIDBaseModel, UpdatableBaseModel
@@ -30,6 +30,21 @@ class CRMTodosWeeklyMetrics(UUIDBaseModel, UpdatableBaseModel, table=True):
             "metric",
             "data_source",
             name="ux_crm_todos_weekly_metrics",
+        ),
+        Index(
+            "ix_week_start_week_end_dept_id_metric_data_source",
+            "week_start",
+            "week_end",
+            "department_id",
+            "metric",
+            "data_source",
+        ),
+        Index(
+            "ix_week_start_week_end_metric_data_source",
+            "week_start",
+            "week_end",
+            "metric",
+            "data_source",
         ),
     )
 

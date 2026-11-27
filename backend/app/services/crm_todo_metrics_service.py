@@ -9,6 +9,8 @@ from typing import Optional
 from sqlalchemy import text
 from sqlmodel import Session
 
+from app.core.dialect_sql import upsert_statement
+
 from app.services.crm_sales_task_statistics_service import crm_sales_task_statistics_service
 from app.utils.date_utils import beijing_today_date, convert_beijing_date_to_utc_range
 from app.utils.uuid6 import uuid7
@@ -20,52 +22,56 @@ _ASSIGNEE_ALL = "__ALL__"
 _DEPT_ALL = "__ALL__"
 _BATCH_UPSERT_SIZE = 500
 
-_WEEKLY_UPSERT_SQL = text(
-    """
-    INSERT INTO crm_todos_weekly_metrics
-        (id, week_start, week_end, assignee_id, department_id, metric, data_source, value)
-    VALUES
-        (:id, :week_start, :week_end, :assignee_id, :department_id, :metric, :data_source, :value)
-    ON DUPLICATE KEY UPDATE
-        value = VALUES(value),
-        updated_at = CURRENT_TIMESTAMP
-    """
+_WEEKLY_UPSERT_SQL = upsert_statement(
+    "crm_todos_weekly_metrics",
+    [
+        "id",
+        "week_start",
+        "week_end",
+        "assignee_id",
+        "department_id",
+        "metric",
+        "data_source",
+        "value",
+    ],
+    [
+        "week_start",
+        "week_end",
+        "assignee_id",
+        "department_id",
+        "metric",
+        "data_source",
+    ],
+    ["value"],
 )
 
-_FACT_UPSERT_SQL = text(
-    """
-    INSERT INTO crm_todo_metrics_facts
-        (
-            id,
-            anchor,
-            grain,
-            period_start,
-            period_end,
-            hour_of_day,
-            subject_type,
-            subject_id,
-            data_source,
-            metric,
-            value_int
-        )
-    VALUES
-        (
-            :id,
-            :anchor,
-            :grain,
-            :period_start,
-            :period_end,
-            :hour_of_day,
-            :subject_type,
-            :subject_id,
-            :data_source,
-            :metric,
-            :value_int
-        )
-    ON DUPLICATE KEY UPDATE
-        value_int = VALUES(value_int),
-        updated_at = CURRENT_TIMESTAMP
-    """
+_FACT_UPSERT_SQL = upsert_statement(
+    "crm_todo_metrics_facts",
+    [
+        "id",
+        "anchor",
+        "grain",
+        "period_start",
+        "period_end",
+        "hour_of_day",
+        "subject_type",
+        "subject_id",
+        "data_source",
+        "metric",
+        "value_int",
+    ],
+    [
+        "anchor",
+        "grain",
+        "period_start",
+        "period_end",
+        "hour_of_day",
+        "subject_type",
+        "subject_id",
+        "data_source",
+        "metric",
+    ],
+    ["value_int"],
 )
 
 

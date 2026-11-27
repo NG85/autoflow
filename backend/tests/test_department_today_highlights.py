@@ -264,12 +264,10 @@ def test_user_rows_stay_off_the_leader_card(monkeypatch):
     assert "霍涛" in render_card_markdown(named)
     assert "一线立即处理" not in str(items)
     body = render_card_markdown(assembled)
-    assert "张三" in body
-    assert "还有李四" in body
+    assert "销售：张三　　甲客户 · 乙商机" in body
+    assert "还有李四" not in body
     assert "合同卡在法务" not in body
-    assert "特价必须今天拍板" in body
-    assert "今天找张三确认折扣上限" in body
-    assert "甲客户" in body and "乙商机" in body
+    assert body.index("今天找张三确认折扣上限") < body.index("> 特价必须今天拍板")
     assert "一线立即处理" not in body
     assert (
         "[更多（1）](https://example.com/v2/department-highlights"
@@ -785,8 +783,8 @@ def test_leader_open_id_receives_every_item(monkeypatch):
     assert result["success_count"] == 1
     assert captured["recipient"]["open_id"] == "ou_leader"
     assert captured["recipient"]["user_id"] == leader_id
-    assert "张三" in captured["body"]
-    assert "还有李四" in captured["body"]
+    assert "销售：张三" in captured["body"]
+    assert "还有李四" not in captured["body"]
     assert "华北销售" not in captured["body"]
     assert (
         "[更多（1）](https://example.com/v2/department-highlights"
@@ -861,8 +859,8 @@ def test_one_leader_gets_one_card_for_their_items(monkeypatch):
     assert result["success_count"] == 1
     body = captured[0]["body"]
     assert captured[0]["user_id"] == "leader-1"
-    assert "张三" in body
-    assert "还有李四" in body
+    assert "销售：张三" in body
+    assert "还有李四" not in body
     assert "更多（1）" in body
     assert "department_id" not in body
 
@@ -965,7 +963,9 @@ def test_push_keeps_rows_from_every_department(monkeypatch):
     result = handle_department_today_highlights(MagicMock(), report_date=DAY)
     assert result["success_count"] == 1
     assert "华东事项" in captured["body"]
-    assert "张三" in captured["body"]
+    assert "销售：李四" in captured["body"]
+    assert "更多（1）" in captured["body"]
+    assert "张三" not in captured["body"]
 
 
 def test_leader_without_open_id_is_skipped(monkeypatch):
@@ -1244,7 +1244,7 @@ def test_feishu_card_keeps_team_highlights_in_one_section(monkeypatch):
         assembled,
     )
     assert "**团队今日需介入**" in captured["body"]
-    assert "**张三**" in captured["body"]
+    assert "销售：张三" in captured["body"]
     assert "**团队上周拜访**" not in captured["body"]
     watch = captured["extra_sections"][0]
     assert "**团队上周拜访**" in watch
