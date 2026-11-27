@@ -475,6 +475,7 @@ def _fill_has_recap(
     from app.services.visit_record_insight_reader import (
         VISIT_INSIGHT_LEADER_TYPE,
         VISIT_INSIGHT_PERFORMANCE_LEADER_TYPE,
+        VISIT_INSIGHT_UNIFIED_TYPE,
         load_visit_recap_types_by_record_id,
         viewer_has_visible_recap,
     )
@@ -496,10 +497,14 @@ def _fill_has_recap(
         recorder_id = getattr(record, "recorder_id", None)
         recorder = context.is_recorder(recorder_id)
         present_types = {str(item).strip().upper() for item in present}
+        has_shared_or_leader_business = (
+            VISIT_INSIGHT_LEADER_TYPE.upper() in present_types
+            or VISIT_INSIGHT_UNIFIED_TYPE.upper() in present_types
+        )
         needs_performance_grant = (
             not recorder
             and VISIT_INSIGHT_PERFORMANCE_LEADER_TYPE.upper() in present_types
-            and VISIT_INSIGHT_LEADER_TYPE.upper() not in present_types
+            and not has_shared_or_leader_business
         )
         is_admin = context.is_company_manager() if needs_performance_grant else False
         is_leader = (

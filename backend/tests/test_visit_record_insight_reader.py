@@ -12,12 +12,15 @@ from app.services.visit_record_insight_reader import (
     VISIT_INSIGHT_PERFORMANCE_LEADER_TYPE,
     VISIT_INSIGHT_PERFORMANCE_SALES_TYPE,
     VISIT_INSIGHT_SALES_TYPE,
+    VISIT_INSIGHT_UNIFIED_TYPE,
     VisitRecordInsight,
     has_visit_recap_insight,
     load_visit_recap_types_by_record_id,
     load_visit_record_insight,
     load_visit_record_insights_by_view,
+    pick_business_insight,
     pick_visit_record_insight,
+    select_one_business_recap_per_visit,
     recap_view_for_role,
     resolve_visit_record_detail_recap,
     viewer_has_visible_recap,
@@ -280,6 +283,103 @@ def test_has_insight_uses_view_resolver():
     assert picked is leader
 
 
+def test_unified_business_recap_is_shared_and_beats_older_views():
+    rows = [
+        _row(
+            unique_id="old-sales",
+            insight_type=VISIT_INSIGHT_SALES_TYPE,
+            summary="旧销售视角",
+            generated_at=datetime(2026, 11, 27, 12, 0, 0),
+        ),
+        _row(
+            unique_id="unified",
+            insight_type=VISIT_INSIGHT_UNIFIED_TYPE,
+            summary="统一经营复盘",
+            generated_at=datetime(2026, 11, 26, 8, 0, 0),
+        ),
+        _row(
+            unique_id="old-leader",
+            insight_type=VISIT_INSIGHT_LEADER_TYPE,
+            summary="旧上级视角",
+            generated_at=datetime(2026, 11, 27, 12, 0, 0),
+        ),
+    ]
+    sales = pick_business_insight(rows, fallback_type=VISIT_INSIGHT_SALES_TYPE)
+    leader = pick_business_insight(rows, fallback_type=VISIT_INSIGHT_LEADER_TYPE)
+    assert sales is not None and leader is not None
+    assert sales.unique_id == leader.unique_id == "unified"
+
+    historical = [
+        _row(unique_id="sales", insight_type=VISIT_INSIGHT_SALES_TYPE, summary="销售"),
+        _row(unique_id="leader", insight_type=VISIT_INSIGHT_LEADER_TYPE, summary="上级"),
+    ]
+    assert pick_business_insight(
+        historical, fallback_type=VISIT_INSIGHT_SALES_TYPE
+    ).unique_id == "sales"
+    assert pick_business_insight(
+        historical, fallback_type=VISIT_INSIGHT_LEADER_TYPE
+    ).unique_id == "leader"
+
+
+def test_load_insights_by_view_shares_unified_report_and_keeps_performance():
+    rows = [
+        _row(
+            unique_id="unified",
+            insight_type=VISIT_INSIGHT_UNIFIED_TYPE,
+            summary="统一经营复盘",
+        ),
+        _row(
+            unique_id="perf-sales",
+            insight_type=VISIT_INSIGHT_PERFORMANCE_SALES_TYPE,
+            summary="销售表现",
+        ),
+        _row(
+            unique_id="perf-leader",
+            insight_type=VISIT_INSIGHT_PERFORMANCE_LEADER_TYPE,
+            summary="上级表现",
+        ),
+    ]
+    result = MagicMock()
+    result.all.return_value = rows
+    session = MagicMock()
+    session.exec.return_value = result
+
+    insights = load_visit_record_insights_by_view(session, "rec-1")
+    assert insights[RECAP_VIEW_SALES].unique_id == "unified"
+    assert insights[RECAP_VIEW_LEADER].unique_id == "unified"
+    assert insights[PERFORMANCE_VIEW_SALES].unique_id == "perf-sales"
+    assert insights[PERFORMANCE_VIEW_LEADER].unique_id == "perf-leader"
+
+
+def test_select_one_business_recap_prefers_unified_over_newer_sales_view():
+    rows = [
+        _row(
+            entity_id="rec-1",
+            insight_type=VISIT_INSIGHT_SALES_TYPE,
+            severity="HIGH",
+            generated_at=datetime(2026, 11, 27, 12, 0, 0),
+        ),
+        _row(
+            entity_id="rec-1",
+            insight_type=VISIT_INSIGHT_UNIFIED_TYPE,
+            severity="LOW",
+            generated_at=datetime(2026, 11, 26, 8, 0, 0),
+        ),
+        _row(
+            entity_id="rec-2",
+            insight_type=VISIT_INSIGHT_SALES_TYPE,
+            severity="MEDIUM",
+            generated_at=datetime(2026, 11, 20, 8, 0, 0),
+        ),
+    ]
+    selected = select_one_business_recap_per_visit(rows)
+    by_visit = {row["entity_id"]: row["insight_type"] for row in selected}
+    assert by_visit == {
+        "rec-1": VISIT_INSIGHT_UNIFIED_TYPE,
+        "rec-2": VISIT_INSIGHT_SALES_TYPE,
+    }
+
+
 def test_viewer_has_visible_recap_follows_sales_or_leader_view():
     sales = [VISIT_INSIGHT_SALES_TYPE]
     leader = [VISIT_INSIGHT_LEADER_TYPE]
@@ -304,6 +404,10 @@ def test_viewer_has_visible_recap_follows_sales_or_leader_view():
     assert viewer_has_visible_recap(leader_performance, is_reporting_leader=True) is True
     assert viewer_has_visible_recap(leader_performance, is_recorder=True) is False
     assert viewer_has_visible_recap(leader_performance, is_sys_admin=True) is True
+    unified = [VISIT_INSIGHT_UNIFIED_TYPE]
+    assert viewer_has_visible_recap(unified) is True
+    assert viewer_has_visible_recap(unified, is_recorder=True) is True
+    assert viewer_has_visible_recap(unified, is_collaborative_participant=True) is True
 
 
 def test_load_visit_recap_types_groups_by_record_and_fails_closed():

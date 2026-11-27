@@ -2,7 +2,7 @@
 
 周一对照上一周（上周一到上周日），周五对照本周（本周一到本周日）。
 先写「{部门名}总拜访 N 条」，再点名。口径和一线「本周已拜访」一致：按录入人、拜访沟通日落在该周，
-复盘取每条拜访最新一条销售视角复盘。卡片点名只用 severity=HIGH（需关注）。
+复盘取每条拜访的统一经营复盘，没有则用历史销售视角。卡片点名只用 severity=HIGH（需关注）。
 
 - 拜访偏少：团队里有人录入时，这一周一条都没录入的成员。全员都是 0 时不点名。
   负责人本人计入团队总数，不参与点名。
@@ -25,8 +25,9 @@ from app.models.crm_sales_visit_records import CRMSalesVisitRecord
 from app.models.user_profile import UserProfile
 from app.services.sales_week_visits import summarize_week_visit_recaps
 from app.services.visit_record_insight_reader import (
+    SALES_BUSINESS_RECAP_TYPES,
     VISIT_INSIGHT_ENTITY_TYPE,
-    VISIT_INSIGHT_SALES_TYPE,
+    select_one_business_recap_per_visit,
 )
 from app.utils.date_utils import get_week_range_from_date
 from app.utils.push_page_urls import build_week_visit_list_url
@@ -200,7 +201,9 @@ def _member_counts(
             continue
         record_ids.append(record)
         record_owner[record] = owner
-    insight_rows = _sales_view_insights(session, record_ids)
+    insight_rows = select_one_business_recap_per_visit(
+        _sales_view_insights(session, record_ids)
+    )
     summary = summarize_week_visit_recaps(record_ids, insight_rows)
     summary["visit_total"] = sum(visit_totals.values())
     summary["member_count"] = len(by_user)
@@ -218,7 +221,7 @@ def _member_counts(
 
 
 def _sales_view_insights(session: Session, record_ids: Sequence[str]) -> list[CRMEntityInsight]:
-    """与一线本周拜访相同：未删除、未过期的销售视角复盘，新的在前。"""
+    """未删除、未过期的统一经营复盘和历史销售视角，新的在前。"""
     ids = [item for item in record_ids if item]
     if not ids:
         return []
@@ -227,7 +230,7 @@ def _sales_view_insights(session: Session, record_ids: Sequence[str]) -> list[CR
             select(CRMEntityInsight)
             .where(CRMEntityInsight.entity_type == VISIT_INSIGHT_ENTITY_TYPE)
             .where(CRMEntityInsight.entity_id.in_(ids))
-            .where(CRMEntityInsight.insight_type == VISIT_INSIGHT_SALES_TYPE)
+            .where(CRMEntityInsight.insight_type.in_(SALES_BUSINESS_RECAP_TYPES))
             .where(CRMEntityInsight.is_deleted == 0)
             .where(
                 or_(
@@ -241,7 +244,7 @@ def _sales_view_insights(session: Session, record_ids: Sequence[str]) -> list[CR
 
 
 def _high_counts(insight_rows: Sequence[Any], record_owner: Mapping[str, str]) -> dict[str, int]:
-    """每条拜访只看最新一条销售视角复盘，severity=HIGH 记到录入人名下。"""
+    """每条拜访一条经营复盘，severity=HIGH 记到录入人名下。"""
     seen: set[str] = set()
     counts: dict[str, int] = defaultdict(int)
     for row in insight_rows:

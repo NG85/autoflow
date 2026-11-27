@@ -1,10 +1,12 @@
 """只读 Aldebaran crm_entity_insight：拜访复盘（entity_type=VISIT）。
 
-同一拜访的结果：
-- POSTVISIT_REVIEW_SALES_VIEW 销售视角复盘
-- POSTVISIT_REVIEW_LEAD_VIEW 上级视角复盘
-- VISIT_SALES_PERFORMANCE_SALES_VIEW 销售视角表现评价
-- VISIT_SALES_PERFORMANCE_LEADER_VIEW 上级视角表现评价
+经营复盘：
+- POSTVISIT_REVIEW 现行统一报告，销售与上级看同一份
+- POSTVISIT_REVIEW_SALES_VIEW / POSTVISIT_REVIEW_LEAD_VIEW 历史双视角，没有统一报告时才用
+
+表现评价仍分视角：
+- VISIT_SALES_PERFORMANCE_SALES_VIEW
+- VISIT_SALES_PERFORMANCE_LEADER_VIEW
 
 通过 CRMEntityInsight 查询。查询失败不影响推卡主流程。
 """
@@ -24,12 +26,17 @@ from app.models.crm_entity_insight import CRMEntityInsight
 logger = logging.getLogger(__name__)
 
 VISIT_INSIGHT_ENTITY_TYPE = "VISIT"
+VISIT_INSIGHT_UNIFIED_TYPE = "POSTVISIT_REVIEW"
 VISIT_INSIGHT_SALES_TYPE = "POSTVISIT_REVIEW_SALES_VIEW"
 VISIT_INSIGHT_LEADER_TYPE = "POSTVISIT_REVIEW_LEAD_VIEW"
 VISIT_INSIGHT_PERFORMANCE_SALES_TYPE = "VISIT_SALES_PERFORMANCE_SALES_VIEW"
 VISIT_INSIGHT_PERFORMANCE_LEADER_TYPE = "VISIT_SALES_PERFORMANCE_LEADER_VIEW"
-# 兼容旧常量名
+# 兼容旧常量名。统计「销售侧经营复盘」时同时计入统一报告和历史销售视角。
 VISIT_INSIGHT_TYPE = VISIT_INSIGHT_SALES_TYPE
+SALES_BUSINESS_RECAP_TYPES = (
+    VISIT_INSIGHT_UNIFIED_TYPE,
+    VISIT_INSIGHT_SALES_TYPE,
+)
 
 RECAP_VIEW_SALES = "sales"
 RECAP_VIEW_LEADER = "leader"
@@ -43,6 +50,7 @@ RECAP_PAGE_TABS = (
 )
 _SALES_RECIPIENT_TYPES = frozenset({"recorder", "collaborative_participant"})
 _VISIT_PAGE_INSIGHT_TYPES = (
+    VISIT_INSIGHT_UNIFIED_TYPE,
     VISIT_INSIGHT_SALES_TYPE,
     VISIT_INSIGHT_LEADER_TYPE,
     VISIT_INSIGHT_PERFORMANCE_SALES_TYPE,
@@ -161,9 +169,25 @@ def viewer_is_leader_of_recorder(
 
 
 def insight_type_for_view(view: str) -> str:
+    """历史双视角类型。现行统一报告不按 view 拆开。"""
     if view == RECAP_VIEW_SALES:
         return VISIT_INSIGHT_SALES_TYPE
     return VISIT_INSIGHT_LEADER_TYPE
+
+
+def pick_business_insight(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    fallback_type: str,
+) -> Optional[VisitRecordInsight]:
+    """经营复盘：有统一报告就用最新一条，否则用该视角的历史报告。"""
+    unified = pick_visit_record_insight(
+        rows,
+        preferred_types=(VISIT_INSIGHT_UNIFIED_TYPE,),
+    )
+    if unified is not None:
+        return unified
+    return pick_visit_record_insight(rows, preferred_types=(fallback_type,))
 
 
 def performance_insight_type_for_view(view: str) -> str:
@@ -268,25 +292,28 @@ def load_visit_record_insight(
     preferred_types: Optional[Sequence[str]] = None,
     view: Optional[str] = None,
 ) -> Optional[VisitRecordInsight]:
-    """读取拜访一条未删除、未过期洞察。view=sales/leader 时按对应 insight_type。"""
+    """读取拜访一条未删除、未过期洞察。
+
+    view=sales/leader 时优先统一报告，没有再退回该视角的历史类型。
+    显式 preferred_types 仍按传入类型挑选，不套经营复盘优先级。
+    """
     rid = (record_id or "").strip()
     if session is None or not rid:
         return None
     rows = _query_visit_insight_rows(session, rid)
     if rows is None:
         return None
-    types = preferred_types
-    if types is None and view:
-        types = (insight_type_for_view(view),)
-    if types is None:
-        types = (VISIT_INSIGHT_SALES_TYPE,)
-    picked = pick_visit_record_insight(rows, preferred_types=types)
+    if preferred_types is not None:
+        picked = pick_visit_record_insight(rows, preferred_types=preferred_types)
+    else:
+        fallback = insight_type_for_view(view) if view else VISIT_INSIGHT_SALES_TYPE
+        picked = pick_business_insight(rows, fallback_type=fallback)
     if picked is None:
         logger.info(
-            "No visit entity insight found, record_id=%s view=%s types=%s",
+            "No visit entity insight found, record_id=%s view=%s preferred=%s",
             rid,
             view,
-            types,
+            preferred_types,
         )
     return picked
 
@@ -304,7 +331,11 @@ def load_visit_record_insights_by_view(
     session: Optional[Session],
     record_id: str,
 ) -> dict[str, Optional[VisitRecordInsight]]:
-    """一次查出同一拜访的销售/上级复盘，以及两个视角的表现评价。"""
+    """一次查出经营复盘和两个视角的表现评价。
+
+    有 POSTVISIT_REVIEW 时，销售和上级槽位是同一份经营复盘。
+    没有时，各自退回历史销售视角、上级视角。表现评价不合并。
+    """
     empty = _empty_visit_insights()
     rid = (record_id or "").strip()
     if session is None or not rid:
@@ -313,8 +344,14 @@ def load_visit_record_insights_by_view(
     if not rows:
         return empty
     return {
-        RECAP_VIEW_SALES: pick_visit_record_insight(rows, preferred_types=(VISIT_INSIGHT_SALES_TYPE,)),
-        RECAP_VIEW_LEADER: pick_visit_record_insight(rows, preferred_types=(VISIT_INSIGHT_LEADER_TYPE,)),
+        RECAP_VIEW_SALES: pick_business_insight(
+            rows,
+            fallback_type=VISIT_INSIGHT_SALES_TYPE,
+        ),
+        RECAP_VIEW_LEADER: pick_business_insight(
+            rows,
+            fallback_type=VISIT_INSIGHT_LEADER_TYPE,
+        ),
         PERFORMANCE_VIEW_SALES: pick_visit_record_insight(
             rows,
             preferred_types=(VISIT_INSIGHT_PERFORMANCE_SALES_TYPE,),
@@ -363,6 +400,8 @@ def viewer_has_visible_recap(
     }
     if not present:
         return False
+    if VISIT_INSIGHT_UNIFIED_TYPE.upper() in present:
+        return True
     sales_types = {
         VISIT_INSIGHT_SALES_TYPE.upper(),
         VISIT_INSIGHT_PERFORMANCE_SALES_TYPE.upper(),
@@ -453,3 +492,51 @@ def resolve_visit_record_detail_recap(
     if chosen not in (RECAP_VIEW_SALES, RECAP_VIEW_LEADER):
         return None
     return chosen, insights.get(chosen)
+
+
+def _row_entity_id(row: Any) -> str:
+    if isinstance(row, Mapping):
+        return _text(row.get("entity_id"))
+    return _text(getattr(row, "entity_id", None))
+
+
+def _row_insight_type(row: Any) -> str:
+    if isinstance(row, Mapping):
+        return _text(row.get("insight_type"))
+    return _text(getattr(row, "insight_type", None))
+
+
+def _row_generated_at(row: Any) -> datetime:
+    if isinstance(row, Mapping):
+        value = row.get("generated_at")
+    else:
+        value = getattr(row, "generated_at", None)
+    if isinstance(value, datetime):
+        return value
+    return datetime.min
+
+
+def select_one_business_recap_per_visit(
+    rows: Sequence[Any],
+    *,
+    fallback_type: str = VISIT_INSIGHT_SALES_TYPE,
+) -> list[Any]:
+    """每个拜访留一条经营复盘：统一报告优先于历史视角，同类型留最新一条。"""
+    grouped: dict[str, list[Any]] = {}
+    for row in rows or []:
+        entity_id = _row_entity_id(row)
+        if entity_id:
+            grouped.setdefault(entity_id, []).append(row)
+    selected: list[Any] = []
+    unified = VISIT_INSIGHT_UNIFIED_TYPE.upper()
+    fallback = fallback_type.upper()
+    for group in grouped.values():
+        preferred = [row for row in group if _row_insight_type(row).upper() == unified]
+        pool = preferred or [
+            row for row in group if _row_insight_type(row).upper() == fallback
+        ]
+        if not pool:
+            continue
+        pool.sort(key=_row_generated_at, reverse=True)
+        selected.append(pool[0])
+    return selected
