@@ -277,6 +277,15 @@ class VisitAttachment(BaseModel):
         return cls(url=str(v))
 
 
+class VisitRelatedFile(BaseModel):
+    """拜访记录相关文件资料。与图片附件 attachment 分开存储。"""
+
+    name: Optional[str] = Field(default=None, description="文件名")
+    url: str = Field(
+        description="文件位置，原样保存。可以是在线链接，或上传到当前对象存储（TOS / MinIO / UFile）后得到的 key",
+    )
+
+
 # 拜访记录公共字段（所有表单类型都包含）
 class VisitRecordBase(BaseModel):
     account_name: Optional[str] = None # 客户名称
@@ -336,7 +345,11 @@ class VisitRecordBase(BaseModel):
     next_steps_quality_reason_en: Optional[str] = None # 下一步计划质量原因（英文版）
     attachment: Optional[VisitAttachment] = Field(
         default=None,
-        description="附件信息，兼容旧字符串格式（base64 / URL）与新 JSON 结构"
+        description="图片附件，兼容旧字符串格式（base64 / URL）与新 JSON 结构"
+    )
+    related_files: Optional[List[VisitRelatedFile]] = Field(
+        default=None,
+        description="相关文件资料。每项 url 是在线链接（http/https），或上传到当前对象存储（TOS / MinIO / UFile）后得到的 key",
     )
     parent_record: Optional[str] = None # 父记录
     remarks: Optional[str] = None # 备注
@@ -681,7 +694,11 @@ class VisitRecordResponse(BaseModel):
     next_steps_quality_level_en: Optional[str] = Field(default=None, description="下一步计划等级（英文版）")
     next_steps_quality_reason_zh: Optional[str] = Field(default=None, description="下一步计划评判依据")
     next_steps_quality_reason_en: Optional[str] = Field(default=None, description="下一步计划评判依据（英文版）")
-    attachment: Optional[VisitAttachment] = Field(default=None, description="原始附件字段（字符串或JSON）")
+    attachment: Optional[VisitAttachment] = Field(default=None, description="图片附件（字符串或JSON）")
+    related_files: Optional[List[VisitRelatedFile]] = Field(
+        default=None,
+        description="相关文件资料。每项 url 是在线链接（http/https），或上传到当前对象存储（TOS / MinIO / UFile）后得到的 key",
+    )
     parent_record: Optional[str] = Field(default=None, description="父记录")
     remarks: Optional[str] = Field(default=None, description="备注")
     comments: Optional[List[Dict[str, Any]]] = Field(default=None, description="评论列表（人工可编辑，JSON数组）")
